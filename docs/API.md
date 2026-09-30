@@ -121,7 +121,9 @@ body, or a scan held the index for more than 30 s).
 
 A post can be marked **kept**. Deciding to trash it is just `/api/delete`.
 Decisions live in their own table, untouched by rescans, and are also written
-to `<data_directory>/decisions.json` so they survive rebuilding the index.
+to `<data_directory>/userdata/decisions.json` (2 s after the last change) so
+they survive rebuilding the index. An older `<data_directory>/decisions.json`
+is still read when the new file does not exist.
 
 | Method | Path | Returns |
 |---|---|---|

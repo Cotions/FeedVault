@@ -139,6 +139,9 @@ def schema_version(conn):
     if version == 0 and conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").fetchone():
         row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        # A meta table without a version row reads as 0, so migrate() treats
+        # the file as new: no backup, and MIGRATIONS[0] runs on it. That is
+        # safe only because _migrate_1 is all CREATE IF NOT EXISTS; keep it so.
         version = int(row[0]) if row and str(row[0]).isdigit() else 0
     return version
 
