@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { getPosts, getAuthors, deleteItems, setDecision } from "../lib/api";
 import { useApi } from "../lib/useApi";
+import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { KINDS, platformLabel, fmtBytes } from "../lib/fmt";
@@ -9,6 +10,7 @@ import PostCard from "../components/PostCard";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
+import SelectionBar from "../components/SelectionBar";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
@@ -77,58 +79,14 @@ export default function Feed() {
 
   /* ── Select mode ─────────────────────────────────────── */
   const toast = useToast();
-  const [selectMode, setSelectMode] = useState(false);
-  const [selected,   setSelected]   = useState(() => new Set());
-  const [anchor,     setAnchor]     = useState(null);   // last clicked index, for shift ranges
   const [confirmDel, setConfirmDel] = useState(false);
   const [deleting,   setDeleting]   = useState(false);
   const [dlgError,   setDlgError]   = useState(null);
   const [delErrors,  setDelErrors]  = useState(null);
-
-  // A new filter shows different cards: drop a selection the user can no
-  // longer see (adjusting state during render, not in an effect).
-  const [selKey, setSelKey] = useState(filterKey);
-  if (selKey !== filterKey) {
-    setSelKey(filterKey);
-    if (selected.size) setSelected(new Set());
-    setAnchor(null);
-  }
-
-  const exitSelect = useCallback(() => {
-    setSelectMode(false);
-    setSelected(new Set());
-    setAnchor(null);
-  }, []);
-
-  useEffect(() => {
-    if (!selectMode) return;
-    function onKey(e) {
-      if (e.key === "Escape" && !confirmDel && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) exitSelect();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selectMode, confirmDel, exitSelect]);
-
-  function toggle(index, shift) {
-    const id = posts[index]?.id;
-    if (!id) return;
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (shift && anchor != null && anchor < posts.length) {
-        const [a, b] = anchor < index ? [anchor, index] : [index, anchor];
-        for (let i = a; i <= b; i++) next.add(posts[i].id);
-      } else if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-    setAnchor(index);
-  }
-
-  const selectedPosts = posts.filter(p => selected.has(p.id));
-  const selectedCount = selectedPosts.length;
+  // A new filter shows different cards: drop a selection the user can no longer see.
+  const sel = useSelection(posts, { resetKey: filterKey, escapeBlocked: confirmDel });
+  const selectedPosts = sel.selectedItems;
+  const selectedCount = sel.count;
 
   const [keeping, setKeeping] = useState(false);
   async function runKeep() {
@@ -147,8 +105,7 @@ export default function Feed() {
           : prev.posts.map(p => (done.has(p.id) ? { ...p, decision: "keep" } : p)),
         total: leaves ? Math.max(0, prev.total - done.size) : prev.total,
       }));
-      setSelected(new Set());
-      setAnchor(null);
+      sel.clear();
       toast(`${done.size} post${done.size === 1 ? "" : "s"} marked as kept.`);
     } catch (e) {
       toast(e.message, "err");
@@ -170,8 +127,7 @@ export default function Feed() {
         posts: prev.posts.filter(p => !gone.has(p.id)),
         total: Math.max(0, prev.total - gone.size),
       }));
-      setSelected(prev => new Set([...prev].filter(id => !gone.has(id))));
-      setAnchor(null);
+      sel.drop(gone);
       setConfirmDel(false);
       setDelErrors(r.errors?.length ? r.errors : null);
       if (gone.size) {
@@ -311,13 +267,13 @@ export default function Feed() {
         {posts.length > 0 && (
           <button
             type="button"
-            className={`btn-secondary select-toggle${selectMode ? " is-on" : ""}`}
-            onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
-            aria-pressed={selectMode}
-            title={selectMode ? "Leave select mode (Esc)" : "Select posts to delete"}
+            className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
+            onClick={() => (sel.active ? sel.exit() : sel.enter())}
+            aria-pressed={sel.active}
+            title={sel.active ? "Leave select mode (Esc)" : "Select posts to delete"}
           >
-            <Icon name={selectMode ? "close" : "check"} size={14} />
-            {selectMode ? "Done" : "Select"}
+            <Icon name={sel.active ? "close" : "check"} size={14} />
+            {sel.active ? "Done" : "Select"}
           </button>
         )}
       </div>
@@ -369,9 +325,9 @@ export default function Feed() {
                 key={p.id}
                 post={p}
                 index={i}
-                selectMode={selectMode}
-                selected={selected.has(p.id)}
-                onToggle={toggle}
+                selectMode={sel.active}
+                selected={sel.isSelected(p.id)}
+                onToggle={sel.toggle}
               />
             ))}
           </div>
@@ -382,24 +338,15 @@ export default function Feed() {
               </button>
             </div>
           )}
-          {selectMode && (
-            <div className="select-bar" role="toolbar" aria-label="Selection">
-              <span className="select-count"><b>{selectedCount}</b> selected</span>
-              <button type="button" className="btn-ghost" onClick={() => setSelected(new Set(posts.map(p => p.id)))}>
-                Select all loaded ({posts.length})
-              </button>
-              <button type="button" className="btn-ghost" onClick={() => { setSelected(new Set()); setAnchor(null); }} disabled={!selectedCount}>
-                Clear
-              </button>
-              <div className="page-head-spacer" />
-              <span className="select-hint">Shift-click selects a range · Esc exits</span>
+          {sel.active && (
+            <SelectionBar selection={sel} loaded={posts.length}>
               <button type="button" className="btn-keep" onClick={runKeep} disabled={!selectedCount || keeping}>
                 <Icon name="check" size={14} />{keeping ? "Keeping…" : "Keep"}
               </button>
               <button type="button" className="btn-danger" onClick={() => { setDlgError(null); setConfirmDel(true); }} disabled={!selectedCount}>
                 <Icon name="trash" size={14} />Delete…
               </button>
-            </div>
+            </SelectionBar>
           )}
           {current && !hasMore && posts.length > PAGE && (
             <div className="feed-end">end of feed · {posts.length.toLocaleString()} posts</div>

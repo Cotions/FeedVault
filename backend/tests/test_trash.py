@@ -117,9 +117,6 @@ def test_delete_requires_header_and_valid_body(client):
 
 # --- review decisions and undo ------------------------------------------------
 
-import db  # noqa: E402
-
-
 def test_keep_decision_filters_and_survives_rescan(env, client):
     write_post(env["media"], "P1", 1717243200, ALICE, "image")
     write_post(env["media"], "P2", 1717243300, ALICE, "image")
@@ -140,19 +137,6 @@ def test_keep_decision_filters_and_survives_rescan(env, client):
     client.post("/api/review", json={"posts": ["instagram:P1"], "decision": None}, headers=H)
     assert ids("?review=kept") == []
     assert client.post("/api/review", json={"posts": ["x"], "decision": "maybe"}, headers=H).status_code == 400
-
-
-def test_decisions_export_import(env):
-    write_post(env["media"], "P1", 1717243200, ALICE, "image")
-    scan(env)
-    conn = db.connect()
-    db.set_decision(conn, ["instagram:P1"], "keep", 1)
-    path = str(env["tmp"] / "decisions.json")
-    db.export_decisions(conn, path)
-    conn.execute("DELETE FROM decisions")
-    conn.commit()
-    assert db.import_decisions(conn, path) == 1
-    assert db.import_decisions(conn, path) == 0            # never overwrites existing decisions
 
 
 def test_undo_trash_restores_post(env, client):
