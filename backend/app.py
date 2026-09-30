@@ -1,0 +1,374 @@
+"""FeedVault backend: a catalog of downloaded social posts.
+
+Run from source with ./run.sh, or directly: python backend/app.py
+"""
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+import webbrowser
+
+from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+
+import config
+import db
+import scanner
+import thumbs
+import trash
+
+app = Flask(__name__, static_folder=None)
+
+# ---------------------------------------------------------------------------
+# Origin lockdown (same design as ChannelVault)
+#
+# The server binds to 127.0.0.1, but any website open in the same browser can
+# still script requests to localhost. Two rules close that off without a login:
+#
+#   1. The Host header must name this machine, which blocks DNS rebinding.
+#   2. Every /api request must carry X-FeedVault, whatever the method. A
+#      cross-origin page cannot add a custom header without a CORS preflight,
+#      and no CORS is ever granted. The dashboard is same-origin and the
+#      userscript uses GM_xmlhttpRequest, so both can send it.
+#
+# /media is exempt because <img> and <video> cannot send headers; a
+# cross-origin page cannot read those bytes anyway.
+# ---------------------------------------------------------------------------
+
+ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+CSRF_HEADER = "X-FeedVault"
+
+
+def _host_only(host_header):
+    host = (host_header or "").strip().lower()
+    if host.startswith("["):
+        return host.split("]")[0] + "]"
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+@app.before_request
+def _origin_guard():
+    if _host_only(request.headers.get("Host")) not in ALLOWED_HOSTS:
+        return jsonify({"ok": False, "error": "forbidden host"}), 403
+    if request.path.startswith("/api/") and request.method != "OPTIONS" \
+            and not request.headers.get(CSRF_HEADER):
+        return jsonify({"ok": False, "error": f"missing {CSRF_HEADER} header"}), 403
+    return None
+
+
+def _roots():
+    return config.load()["media_roots"]
+
+
+# ---------------------------------------------------------------------------
+# Posts
+# ---------------------------------------------------------------------------
+
+def _int_arg(name, default, lo, hi):
+    try:
+        v = int(request.args.get(name, default))
+    except ValueError:
+        v = default
+    return max(lo, min(hi, v))
+
+
+@app.get("/api/posts")
+def list_posts():
+    sort = request.args.get("sort", "posted")
+    total, posts = db.list_posts(
+        db.connect(),
+        q=request.args.get("q", "").strip() or None,
+        platform=request.args.get("platform") or None,
+        author=request.args.get("author") or None,
+        kind=request.args.get("kind") or None,
+        sort=sort if sort in ("posted", "saved") else "posted",
+        order="asc" if request.args.get("order") == "asc" else "desc",
+        review=request.args.get("review") if request.args.get("review") in ("unreviewed", "kept") else None,
+        offset=_int_arg("offset", 0, 0, 10**9),
+        limit=_int_arg("limit", 60, 1, 200),
+    )
+    return jsonify({"total": total, "posts": posts})
+
+
+@app.get("/api/posts/<platform>/<post_id>")
+def get_post(platform, post_id):
+    post = db.get_post(db.connect(), platform, post_id)
+    if post is None:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    return jsonify(post)
+
+
+@app.get("/api/authors")
+def list_authors():
+    return jsonify(db.authors(db.connect()))
+
+
+@app.get("/api/stats")
+def get_stats():
+    return jsonify(db.stats(db.connect()))
+
+
+@app.get("/api/unmatched")
+def list_unmatched():
+    return jsonify(db.unmatched(db.connect()))
+
+
+@app.post("/api/saved")
+def saved():
+    body = request.get_json(silent=True) or {}
+    ids = body.get("ids")
+    if not isinstance(ids, list):
+        return jsonify({"ok": False, "error": "ids must be a list"}), 400
+    return jsonify({"saved": db.saved_ids(db.connect(), ids)})
+
+
+# ---------------------------------------------------------------------------
+# Delete and trash
+# ---------------------------------------------------------------------------
+
+@app.post("/api/delete")
+def delete_items():
+    body = request.get_json(silent=True) or {}
+    posts = body.get("posts") or []
+    media = body.get("media") or []
+    if not isinstance(posts, list) or not all(isinstance(p, str) for p in posts) \
+            or not isinstance(media, list) or not all(isinstance(m, int) and not isinstance(m, bool) for m in media):
+        return jsonify({"ok": False, "error": "posts must be a list of ids, media a list of numbers"}), 400
+    if not posts and not media:
+        return jsonify({"ok": False, "error": "nothing to delete"}), 400
+    cfg = config.load()
+    report = trash.delete(posts[:5000], media[:5000], cfg["media_roots"], cfg["data_directory"])
+    if report["posts"] or report["media"]:
+        print(f"[trash] removed {len(report['posts'])} posts, {len(report['media'])} items, "
+              f"{report['files']} files → trash")
+    return jsonify(report)
+
+
+@app.post("/api/trash/restore")
+def trash_restore():
+    body = request.get_json(silent=True) or {}
+    posts = body.get("posts")
+    if not isinstance(posts, list) or not posts or not all(isinstance(p, str) for p in posts):
+        return jsonify({"ok": False, "error": "posts must be a non-empty list of ids"}), 400
+    return jsonify(trash.restore(posts[:500], _roots()))
+
+
+# ---------------------------------------------------------------------------
+# Review decisions
+# ---------------------------------------------------------------------------
+
+_export_timer = None
+_export_lock = threading.Lock()
+
+
+def _decisions_path():
+    return os.path.join(config.load()["data_directory"], "decisions.json")
+
+
+def _schedule_export():
+    """Mirror decisions to disk shortly after the last change, not on every key."""
+    global _export_timer
+
+    def run():
+        db.export_decisions(db.connect(), _decisions_path())
+
+    with _export_lock:
+        if _export_timer:
+            _export_timer.cancel()
+        _export_timer = threading.Timer(2.0, run)
+        _export_timer.daemon = True
+        _export_timer.start()
+
+
+@app.post("/api/review")
+def review():
+    body = request.get_json(silent=True) or {}
+    posts = body.get("posts")
+    decision = body.get("decision")
+    if not isinstance(posts, list) or not all(isinstance(p, str) for p in posts):
+        return jsonify({"ok": False, "error": "posts must be a list of ids"}), 400
+    if decision not in ("keep", None):
+        return jsonify({"ok": False, "error": 'decision must be "keep" or null'}), 400
+    ids = db.set_decision(db.connect(), posts[:5000], decision, int(time.time()))
+    _schedule_export()
+    return jsonify({"ok": True, "posts": ids})
+
+
+@app.get("/api/trash")
+def trash_usage():
+    return jsonify(trash.usage(_roots()))
+
+
+@app.post("/api/trash/empty")
+def trash_empty():
+    result = trash.empty(_roots())
+    print(f"[trash] emptied: {result['files']} files, {result['bytes']} bytes deleted permanently")
+    return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# Scan and config
+# ---------------------------------------------------------------------------
+
+@app.get("/api/scan")
+def scan_status():
+    return jsonify(scanner.status())
+
+
+@app.post("/api/scan")
+def scan_start():
+    if not scanner.start(_roots()):
+        return jsonify({"ok": False, "error": "already running"})
+    return jsonify({"ok": True})
+
+
+def _public_config(cfg):
+    return {"media_roots": cfg["media_roots"], "data_directory": cfg["data_directory"],
+            "version": config.__version__}
+
+
+@app.get("/api/config")
+def get_config():
+    return jsonify(_public_config(config.load()))
+
+
+@app.post("/api/config")
+def set_config():
+    body = request.get_json(silent=True) or {}
+    cfg = config.load()
+    if "media_roots" in body:
+        roots, error = config.clean_roots(body["media_roots"])
+        if error:
+            return jsonify({"ok": False, "error": error})
+        changed = roots != cfg["media_roots"]
+        cfg["media_roots"] = roots
+        config.save(cfg)
+        if changed:
+            scanner.start(roots)
+    return jsonify({"ok": True, "config": _public_config(cfg)})
+
+
+@app.get("/api/browse")
+def browse():
+    if not shutil.which("zenity"):
+        return jsonify({"ok": False, "error": "zenity is not installed", "path": None})
+    try:
+        out = subprocess.run(
+            ["zenity", "--file-selection", "--directory", "--title=Select a media folder"],
+            capture_output=True, text=True, timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"path": None})
+    path = out.stdout.strip() if out.returncode == 0 else ""
+    return jsonify({"path": path or None})
+
+
+@app.post("/api/quit")
+def quit_app():
+    threading.Timer(0.3, lambda: os._exit(0)).start()
+    print("[api] Shutdown requested from the dashboard")
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Media
+#
+# Only paths recorded by the scanner are ever served; the URL carries a row id,
+# never a path.
+# ---------------------------------------------------------------------------
+
+def _send(path):
+    if not path or not os.path.isfile(path):
+        abort(404)
+    resp = send_file(path, conditional=True, max_age=3600)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.get("/media/<int:media_id>")
+def serve_media(media_id):
+    row = db.media_row(db.connect(), media_id)
+    return _send(row["path"] if row else None)
+
+
+@app.get("/media/<int:media_id>/thumb")
+def serve_thumb(media_id):
+    """Small JPEG for grids. Falls back to the original image if one cannot be made."""
+    row = db.media_row(db.connect(), media_id)
+    if row is None:
+        abort(404)
+    path = thumbs.thumb_for(config.load()["data_directory"], row)
+    if path:
+        return _send(path)
+    if row["kind"] == "image":
+        return _send(row["path"])
+    abort(404)
+
+
+@app.get("/media/<int:media_id>/poster")
+def serve_poster(media_id):
+    row = db.media_row(db.connect(), media_id)
+    return _send(row["poster_path"] if row else None)
+
+
+@app.get("/userscript/feedvault.user.js")
+def serve_userscript():
+    folder = os.path.join(config.BUNDLE_DIR, "userscript") if config.FROZEN \
+        else os.path.join(config.REPO_DIR, "userscript")
+    return send_from_directory(folder, "feedvault.user.js", mimetype="text/javascript", max_age=0)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard (single-page app)
+# ---------------------------------------------------------------------------
+
+@app.get("/", defaults={"path": ""})
+@app.get("/<path:path>")
+def spa(path):
+    if path.startswith(("api/", "media/", "userscript/")):
+        abort(404)
+    static = config.static_dir()
+    if static is None:
+        return ("FeedVault backend is running, but the dashboard is not built. "
+                "Run ./run.sh --build.", 200, {"Content-Type": "text/plain"})
+    if path and os.path.isfile(os.path.join(static, path)):
+        return send_from_directory(static, path)
+    return send_from_directory(static, "index.html")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def _port_busy(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def main():
+    if "--version" in sys.argv:
+        print(f"FeedVault {config.__version__}")
+        return
+    cfg = config.load()
+    db.init(config.db_path(cfg))
+    restored = db.import_decisions(db.connect(), os.path.join(cfg["data_directory"], "decisions.json"))
+    if restored:
+        print(f"[init] Restored {restored} review decisions from decisions.json")
+    url = f"http://localhost:{config.PORT}"
+    if _port_busy(config.PORT):
+        print(f"[api] Port {config.PORT} already in use — FeedVault may already be running.")
+        sys.exit(1)
+    scanner.start(cfg["media_roots"])
+    if "--no-browser" not in sys.argv and os.environ.get("FEEDVAULT_NO_BROWSER") != "1":
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    print(f"[api] FeedVault {config.__version__}")
+    print(f"[api] Dashboard → {url}")
+    print(f"[api] Config      {config.config_path()}")
+    print(f"[api] Database    {config.db_path(cfg)}")
+    app.run(host="127.0.0.1", port=config.PORT, debug=False, threaded=True)
+
+
+if __name__ == "__main__":
+    main()
