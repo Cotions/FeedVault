@@ -401,26 +401,6 @@ def set_decision(conn, post_ids, decision, now):
     return ids
 
 
-def export_decisions(conn, path):
-    rows = conn.execute("SELECT post_id, decision, at FROM decisions ORDER BY post_id").fetchall()
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "decisions": [dict(r) for r in rows]}, f)
-    os.replace(tmp, path)
-
-
-def import_decisions(conn, path):
-    """Restore decisions after the index was rebuilt from scratch."""
-    if conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] or not os.path.exists(path):
-        return 0
-    with open(path, encoding="utf-8") as f:
-        rows = json.load(f).get("decisions", [])
-    conn.executemany("INSERT OR IGNORE INTO decisions(post_id, decision, at) VALUES (?, ?, ?)",
-                     [(r["post_id"], r["decision"], r["at"]) for r in rows])
-    conn.commit()
-    return len(rows)
-
-
 def authors(conn):
     # Handle and name come from the most recent post, since handles change.
     rows = conn.execute("""

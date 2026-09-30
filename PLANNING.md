@@ -117,7 +117,8 @@ Deleting is always the user's explicit action, and always goes through a trash:
   trash the post, trash one carousel item, skip, undo. Scoped by creator, kind
   and order. Only undecided posts are queued, so progress carries over.
 - **Decisions** ("kept") are user data: their own table, never touched by
-  rescans, mirrored to `decisions.json` and restored from it after a rebuild.
+  rescans, mirrored to `userdata/decisions.json` and restored from it after a
+  rebuild (see `backend/userdata.py`, which every user table goes through).
 - **Trash**: files move to `<media_root>/.feedvault-trash/` with the same
   relative path (a rename, instant on the same disk), logged in a manifest.
   Undo restores the latest deletion of a post and re-indexes just its folder.

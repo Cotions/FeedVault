@@ -22,7 +22,14 @@ def env(tmp_path, monkeypatch):
     cfg["media_roots"] = [str(media)]
     config.save(cfg)
     db.init(config.db_path(cfg))
-    return {"tmp": tmp_path, "media": media, "roots": [str(media)]}
+    yield {"tmp": tmp_path, "media": media, "roots": [str(media)]}
+    # A userdata write still pending would fire after FEEDVAULT_CONFIG is
+    # restored, into the real data directory.
+    import userdata
+    with userdata._lock:
+        for timer in userdata._timers.values():
+            timer.cancel()
+        userdata._timers.clear()
 
 
 @pytest.fixture

@@ -2,8 +2,10 @@
 
 Run from source with ./run.sh, or directly: python backend/app.py
 """
+import atexit
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -18,6 +20,7 @@ import db
 import scanner
 import thumbs
 import trash
+import userdata
 
 app = Flask(__name__, static_folder=None)
 
@@ -140,6 +143,8 @@ def delete_items():
         return jsonify({"ok": False, "error": "nothing to delete"}), 400
     cfg = config.load()
     report = trash.delete(posts[:5000], media[:5000], cfg["media_roots"], cfg["data_directory"])
+    if report["posts"]:
+        userdata.changed("decisions")          # a removed post takes its decision with it
     if report["posts"] or report["media"]:
         print(f"[trash] removed {len(report['posts'])} posts, {len(report['media'])} items, "
               f"{report['files']} files → trash")
@@ -159,29 +164,6 @@ def trash_restore():
 # Review decisions
 # ---------------------------------------------------------------------------
 
-_export_timer = None
-_export_lock = threading.Lock()
-
-
-def _decisions_path():
-    return os.path.join(config.load()["data_directory"], "decisions.json")
-
-
-def _schedule_export():
-    """Mirror decisions to disk shortly after the last change, not on every key."""
-    global _export_timer
-
-    def run():
-        db.export_decisions(db.connect(), _decisions_path())
-
-    with _export_lock:
-        if _export_timer:
-            _export_timer.cancel()
-        _export_timer = threading.Timer(2.0, run)
-        _export_timer.daemon = True
-        _export_timer.start()
-
-
 @app.post("/api/review")
 def review():
     body = request.get_json(silent=True) or {}
@@ -192,7 +174,7 @@ def review():
     if decision not in ("keep", None):
         return jsonify({"ok": False, "error": 'decision must be "keep" or null'}), 400
     ids = db.set_decision(db.connect(), posts[:5000], decision, int(time.time()))
-    _schedule_export()
+    userdata.changed("decisions")
     return jsonify({"ok": True, "posts": ids})
 
 
@@ -267,7 +249,11 @@ def browse():
 
 @app.post("/api/quit")
 def quit_app():
-    threading.Timer(0.3, lambda: os._exit(0)).start()
+    def stop():
+        userdata.flush()
+        os._exit(0)
+
+    threading.Timer(0.3, stop).start()
     print("[api] Shutdown requested from the dashboard")
     return jsonify({"ok": True})
 
@@ -362,9 +348,10 @@ def main():
     except db.SchemaTooNew as e:
         print(f"[db] {e}")
         sys.exit(1)
-    restored = db.import_decisions(db.connect(), os.path.join(cfg["data_directory"], "decisions.json"))
-    if restored:
-        print(f"[init] Restored {restored} review decisions from decisions.json")
+    userdata.restore_all(db.connect(), cfg["data_directory"])
+    # Ctrl+C and SIGTERM still write the last few seconds of user data.
+    atexit.register(userdata.flush)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     scanner.start(cfg["media_roots"])
     if "--no-browser" not in sys.argv and os.environ.get("FEEDVAULT_NO_BROWSER") != "1":
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
