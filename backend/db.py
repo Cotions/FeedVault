@@ -1,9 +1,11 @@
 """The SQLite index.
 
 Everything here is derived from the media folders and can be rebuilt by a
-rescan. Tags and creator links will be the exception once they exist; they get
-their own export file so a rebuild can restore them.
+rescan, except the user's own tables (review decisions, later tags and
+people). Those are mirrored to JSON files by userdata.py so a rebuild can
+restore them.
 """
+import glob
 import json
 import os
 import sqlite3
@@ -11,9 +13,9 @@ import threading
 
 import thumbs
 
-SCHEMA_VERSION = 1
-
-SCHEMA = """
+# Version 1: the schema as first released. Its CREATE statements are kept as
+# they were; every later change is a new function in MIGRATIONS below.
+SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -83,6 +85,36 @@ CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
 );
 """
 
+
+class SchemaTooNew(RuntimeError):
+    """The database was written by a newer FeedVault than this one."""
+
+
+def _statements(sql):
+    """Split a script into statements. executescript() would commit halfway
+    through a migration, so migrations run statement by statement."""
+    out, buf = [], ""
+    for line in sql.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            out.append(buf.strip())
+            buf = ""
+    if buf.strip():
+        out.append(buf.strip())
+    return out
+
+
+def _migrate_1(conn):
+    for stmt in _statements(SCHEMA_V1):
+        conn.execute(stmt)
+
+
+# Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
+# Append only; never edit one that has shipped.
+MIGRATIONS = [_migrate_1]
+
+BACKUPS_KEPT = 3
+
 _local = threading.local()
 # Held by a scan for its whole run and by deletions, so a scan never re-adds a
 # post that is halfway through being deleted.
@@ -91,16 +123,87 @@ _path = None
 
 
 def init(path):
-    """Open (and create) the database at ``path`` for this process."""
+    """Open (and create or migrate) the database at ``path`` for this process."""
     global _path
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    migrate(path)
     _path = path
     _local.__dict__.clear()
-    conn = connect()
-    conn.executescript(SCHEMA)
-    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
-                 (str(SCHEMA_VERSION),))
-    conn.commit()
+    connect()
+
+
+def schema_version(conn):
+    """PRAGMA user_version, except for databases made before migrations
+    existed: those say 0 there and keep their version in the meta table."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version == 0 and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").fetchone():
+        row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        version = int(row[0]) if row and str(row[0]).isdigit() else 0
+    return version
+
+
+def migrate(path):
+    """Bring the file at ``path`` up to len(MIGRATIONS), one transaction per step.
+
+    An existing database is copied to ``<path>.bak-v<old>`` first. A failed
+    step rolls back, so the file stays at the last version that succeeded.
+    """
+    target = len(MIGRATIONS)
+    # Autocommit mode: transactions below are opened and closed explicitly.
+    # foreign_keys stays off here, as SQLite recommends for table rebuilds.
+    conn = sqlite3.connect(path, timeout=30, isolation_level=None)
+    try:
+        current = schema_version(conn)
+        if current > target:
+            raise SchemaTooNew(
+                f"{path} is at schema version {current}, but this FeedVault only knows "
+                f"up to {target}. It was opened by a newer FeedVault; update this one, "
+                f"or restore a backup ({os.path.basename(path)}.bak-v*).")
+        if current == 1 and conn.execute("PRAGMA user_version").fetchone()[0] == 0:
+            # Made before migrations. Older builds re-ran the v1 script on
+            # every start, so re-run it once (it only adds what is missing,
+            # e.g. the decisions table on a very early file), then stamp it.
+            _step(conn, _migrate_1, 1)
+        if current == target:
+            return
+        if current > 0:
+            backup(conn, f"{path}.bak-v{current}")
+        for version in range(current, target):
+            _step(conn, MIGRATIONS[version], version + 1)
+            print(f"[db] Schema migrated to version {version + 1}")
+    finally:
+        conn.close()
+
+
+def _step(conn, fn, version):
+    """Run one migration and record ``version``, all in one transaction."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        fn(conn)
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
+                     (str(version),))
+        conn.execute(f"PRAGMA user_version = {version}")
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:                # some errors already rolled back
+            conn.execute("ROLLBACK")
+        raise
+
+
+def backup(conn, dest):
+    """Consistent copy through SQLite's backup API (safe with a WAL file
+    alongside), then prune all but the newest BACKUPS_KEPT copies."""
+    out = sqlite3.connect(dest)
+    try:
+        conn.backup(out)
+    finally:
+        out.close()
+    print(f"[db] Backup before migrating → {dest}")
+    base = dest.rsplit(".bak-v", 1)[0]
+    old = sorted(glob.glob(glob.escape(base) + ".bak-v*"), key=os.path.getmtime, reverse=True)
+    for stale in old[BACKUPS_KEPT:]:
+        os.remove(stale)
 
 
 def connect():

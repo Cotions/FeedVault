@@ -352,14 +352,19 @@ def main():
         print(f"FeedVault {config.__version__}")
         return
     cfg = config.load()
-    db.init(config.db_path(cfg))
-    restored = db.import_decisions(db.connect(), os.path.join(cfg["data_directory"], "decisions.json"))
-    if restored:
-        print(f"[init] Restored {restored} review decisions from decisions.json")
     url = f"http://localhost:{config.PORT}"
+    # Before touching the database: a running instance must not see it migrated.
     if _port_busy(config.PORT):
         print(f"[api] Port {config.PORT} already in use — FeedVault may already be running.")
         sys.exit(1)
+    try:
+        db.init(config.db_path(cfg))
+    except db.SchemaTooNew as e:
+        print(f"[db] {e}")
+        sys.exit(1)
+    restored = db.import_decisions(db.connect(), os.path.join(cfg["data_directory"], "decisions.json"))
+    if restored:
+        print(f"[init] Restored {restored} review decisions from decisions.json")
     scanner.start(cfg["media_roots"])
     if "--no-browser" not in sys.argv and os.environ.get("FEEDVAULT_NO_BROWSER") != "1":
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
