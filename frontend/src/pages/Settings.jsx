@@ -1,9 +1,11 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED } from "../lib/jobs";
+import { useToast } from "../lib/toast";
+import { JobLog } from "./Jobs";
 import { fmtAgo, fmtBytes, fmtFullDate, plural } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -256,22 +258,71 @@ function TrashCard() {
   );
 }
 
-/* One tool: its last check (a tool-version job, read from the shared jobs
-   poll, so it survives leaving the page) and the path to run it from. */
-function ToolRow({ tool, saved, check, onSaved }) {
+/* A command to run yourself (an install or an update FeedVault cannot do),
+   with a copy button. Never run from here. */
+function CopyCommand({ command }) {
+  const toast = useToast();
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      toast("Copied.");
+    } catch {
+      toast("Could not copy; select the command instead.", "err");
+    }
+  }
+  return (
+    <span className="dl-command">
+      <code>{command}</code>
+      <button type="button" className="del-btn" onClick={copy} aria-label={`Copy ${command}`} title="Copy">
+        <Icon name="copy" size={14} />
+      </button>
+    </span>
+  );
+}
+
+// How a tool signs in, from its sync settings (docs/API.md "Downloaders").
+function LoginStatus({ tool, login }) {
+  if (!login) return <span className="dim">no login needed</span>;
+  if (login.mode === "cookies") return <span>{login.browser}&rsquo;s cookies</span>;
+  if (login.mode === "login") {
+    return login.session_file
+      ? <span>saved session of <b>{login.user}</b></span>
+      : <span className="dl-warn">no saved session for <b>{login.user}</b>: run <CopyCommand command={`instaloader --login ${login.user}`} /></span>;
+  }
+  return <span className="dim">none (public only){tool === "ffmpeg" ? "" : " · set one in its sync card below"}</span>;
+}
+
+function JobStatus({ job, what }) {
+  if (!job) return null;
+  const running = !ENDED.has(job.state);
+  return (
+    <span className={`tool-status${job.state === "done" ? " is-ok" : running ? "" : " is-err"}`}
+          title={job.ended_at ? `${fmtFullDate(job.ended_at)}${job.result?.line ? `\n${job.result.line}` : ""}` : undefined}>
+      {running ? <><Icon name="refresh" size={12} className="spin" /> {job.state === "queued" ? `${what} queued (waits for its tool's other jobs)` : `${what}…`}</>
+        : <>{what}: {job.message || job.state}{job.ended_at ? <span className="dim"> · {fmtAgo(job.ended_at)}</span> : null}</>}
+    </span>
+  );
+}
+
+/* One tool: found or not, how it is installed, its version against PyPI's,
+   its login, the path to run it from, and the Test and Update jobs (read
+   from the shared jobs poll, so they survive leaving the page). */
+function DownloaderRow({ info, saved, test, update, onSaved, shownLog, showLog }) {
   const { started } = useJobs();
   const [path,   setPath]   = useState(saved || "");
   const [saving, setSaving] = useState(false);
   const [msg,    setMsg]    = useState(null);
-  const checking = check && !ENDED.has(check.state);
   const dirty = path.trim() !== (saved || "");
+  const tool = info.tool;
+  const testing  = test && !ENDED.has(test.state);
+  const updating = update && !ENDED.has(update.state);
 
-  async function runCheck() {
+  async function run(kind) {
     setMsg(null);
     try {
-      const r = await startJob("tool-version", { tool });
-      if (r?.ok) started(r.job);
-      else setMsg({ ok: false, text: r?.error || "Could not start the check." });
+      const r = await startJob(kind, { tool });
+      if (r?.ok) { started(r.job); showLog(r.job.id); }
+      else setMsg({ ok: false, text: r?.error || "Could not start it." });
     } catch (e) {
       setMsg({ ok: false, text: e.message });
     }
@@ -282,7 +333,7 @@ function ToolRow({ tool, saved, check, onSaved }) {
     setMsg(null);
     try {
       const r = await saveToolPaths({ [tool]: path.trim() });
-      if (r?.ok) { onSaved(); runCheck(); }
+      if (r?.ok) onSaved();
       else setMsg({ ok: false, text: r?.error || "Save failed." });
     } catch (e) {
       setMsg({ ok: false, text: e.message });
@@ -291,55 +342,161 @@ function ToolRow({ tool, saved, check, onSaved }) {
     }
   }
 
+  const latest = info.latest;
+  const logJob = [test, update].find(j => j && j.id === shownLog);
   return (
-    <li className="tool-row">
-      <code className="tool-name">{tool}</code>
-      <span
-        className={`tool-status${check?.state === "done" ? " is-ok" : check && ENDED.has(check.state) ? " is-err" : ""}`}
-        title={check?.ended_at ? `checked ${fmtAgo(check.ended_at)}` : undefined}
-      >
-        {checking ? <><Icon name="refresh" size={12} className="spin" /> checking…</>
-          : check ? check.message || check.state : <span className="dim">not checked</span>}
-      </span>
+    <li className="dl-row">
+      <div className="dl-head">
+        <code className="tool-name">{tool}</code>
+        <span className={`chip dl-install dl-install-${info.install}`}>{info.install}</span>
+        <span className={`tool-status${info.version ? " is-ok" : " is-err"}`}>
+          {info.version || (info.found ? info.version_error || "no version" : "not found")}
+        </span>
+        {latest && (latest.version
+          ? (info.outdated
+            ? <span className="chip dl-outdated" title={`checked ${fmtAgo(latest.checked_at)}`}>update available: {latest.version}</span>
+            : <span className="dim dl-latest" title={`checked ${fmtAgo(latest.checked_at)}`}>latest {latest.version}{info.outdated === false ? " · up to date" : ""}</span>)
+          : <span className="dim dl-latest" title={latest.error}>could not check PyPI</span>)}
+        <div className="page-head-spacer" />
+        {tool !== "ffmpeg" && (
+          <button type="button" className="btn-secondary" onClick={() => run("tool-test")} disabled={!info.found || testing}
+                  title="Run it once on a public item with its sync's login, to see whether it works">
+            <Icon name="play" size={13} />Test
+          </button>
+        )}
+        {info.update.possible && (
+          <button type="button" className="btn-secondary" onClick={() => run("tool-update")} disabled={updating}
+                  title={info.update.command}>
+            <Icon name="arrowUp" size={13} />Update
+          </button>
+        )}
+      </div>
+      <div className="kv-row">
+        <span className="kv-key">path</span>
+        <span className="kv-val">
+          {info.path ? <code title={info.real_path ? `links to ${info.real_path}` : undefined}>{info.path}</code> : <span className="dim">—</span>}
+          {info.real_path && <span className="dim"> → <code>{info.real_path}</code></span>}
+        </span>
+      </div>
+      {tool !== "ffmpeg" && (
+        <div className="kv-row">
+          <span className="kv-key">login</span>
+          <span className="kv-val"><LoginStatus tool={tool} login={info.login} /></span>
+        </div>
+      )}
+      {!info.found && info.install_hint && (
+        <div className="kv-row">
+          <span className="kv-key">install</span>
+          <span className="kv-val"><CopyCommand command={info.install_hint} /></span>
+        </div>
+      )}
+      {info.found && !info.update.possible && (
+        <div className="kv-row">
+          <span className="kv-key">update</span>
+          <span className="kv-val dl-update">
+            <span className="dim">{info.update.reason}</span>
+            {info.update.command && <CopyCommand command={info.update.command} />}
+          </span>
+        </div>
+      )}
+      {(test || update) && (
+        <div className="dl-jobs">
+          <JobStatus job={test} what="test" />
+          <JobStatus job={update} what="update" />
+          {[test, update].filter(Boolean).map(j => (
+            <button key={j.id} type="button" className="btn-ghost" onClick={() => showLog(shownLog === j.id ? null : j.id)}>
+              {shownLog === j.id ? "Hide log" : `${j.kind === "tool-test" ? "Test" : "Update"} log`}
+            </button>
+          ))}
+        </div>
+      )}
+      {logJob && <JobLog key={logJob.id} jobId={logJob.id} />}
       <form className="tool-path" onSubmit={e => { e.preventDefault(); if (dirty) save(); }}>
         <input
           type="text"
-          placeholder="found on PATH"
+          placeholder={`found on PATH; or the path to ${tool}`}
           aria-label={`Path to ${tool}`}
           value={path}
           onChange={e => { setPath(e.target.value); setMsg(null); }}
         />
         {dirty && <button type="submit" className="btn-secondary" disabled={saving}>{saving ? "Saving…" : "Save"}</button>}
       </form>
-      <button type="button" className="btn-secondary" onClick={runCheck} disabled={checking}>
-        <Icon name="check" size={13} />Check
-      </button>
       {msg && <div className={`msg ${msg.ok ? "ok" : "err"} tool-msg`} role="alert">{msg.text}</div>}
     </li>
   );
 }
 
-function ToolsCard({ saved, onSaved }) {
+/* Settings → Downloaders: what each tool is, and what to do about it. A
+   failed sync links here (#downloaders). */
+function DownloadersCard({ saved, onSaved }) {
   const { list } = useJobs();
-  // The tools are the choices of the tool-version kind: one list, the backend's.
-  const { data: kinds, error } = useApi(getJobKinds);
-  const tools = kinds?.find(k => k.kind === "tool-version")?.params.tool.choices || [];
-  // The newest check of each tool (the list is newest first).
-  const checks = {};
+  const location = useLocation();
+  const { data, error, reload } = useApi(getDownloaders);
+  const [busy,    setBusy]    = useState(null);    // "check" | "updates"
+  const [msg,     setMsg]     = useState(null);
+  const [shownLog, setShownLog] = useState(null);
+  const ref = useRef(null);
+
+  // The newest test and update of each tool (the list is newest first).
+  const tests = {}, updates = {};
   for (const j of list?.jobs || []) {
-    if (j.kind === "tool-version" && !(j.params.tool in checks)) checks[j.params.tool] = j;
+    const into = j.kind === "tool-test" ? tests : j.kind === "tool-update" ? updates : null;
+    if (into && !(j.params.tool in into)) into[j.params.tool] = j;
   }
+  // An update that has ended: the backend found its tool again, show it.
+  const updated = Object.values(updates).filter(j => ENDED.has(j.state)).map(j => j.id).join(",");
+  const seen = useRef(updated);
+  useEffect(() => {
+    if (updated !== seen.current) { seen.current = updated; reload(); }
+  }, [updated, reload]);
+
+  const loaded = !!data;
+  useEffect(() => {
+    if (loaded && location.hash === "#downloaders") ref.current?.scrollIntoView({ block: "start" });
+  }, [loaded, location.hash, location.key]);
+
+  async function act(what, fn) {
+    setBusy(what);
+    setMsg(null);
+    try {
+      const r = await fn();
+      if (r?.ok === false) setMsg({ ok: false, text: r.error || "Failed." });
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setBusy(null);
+      reload();
+    }
+  }
+
   return (
-    <div className="card">
-      <div className="card-title">Tools</div>
+    <div className="card" id="downloaders" ref={ref}>
+      <div className="card-title">Downloaders</div>
       <p className="page-lede">
-        The downloaders FeedVault runs, and ffmpeg for video frames. Each is looked up on your PATH;
-        set a path for one installed elsewhere (a virtualenv, say). The file must be named after the tool.
+        The tools FeedVault runs, and ffmpeg for video frames. Each is looked up on your PATH, or at the path
+        set here (the file must be named after the tool). <b>Test</b> runs one on a public item with its sync&rsquo;s
+        login; <b>Update</b> upgrades one installed with pipx or in a virtualenv. Their output shows below the tool and
+        on the <Link to="/jobs" className="text-link">Jobs</Link> page.
       </p>
-      {!kinds && <div className="dim">{error ? `Could not load the tools: ${error.message}` : "Loading…"}</div>}
-      <ul className="tool-list">
-        {tools.map(t => (
-          <ToolRow key={`${t}:${saved[t] || ""}`} tool={t} saved={saved[t]} check={checks[t]} onSaved={onSaved} />
+      <div className="settings-actions">
+        <label className="dl-toggle" title="Asks pypi.org at most once a day per tool; nothing else is sent">
+          <input type="checkbox" checked={!!data?.check_updates} disabled={!data || !!busy}
+                 onChange={e => act("updates", () => saveSettings({ check_updates: e.target.checked }))} />
+          <span>Check PyPI for new versions <span className="dim">(once a day)</span></span>
+        </label>
+        <div className="page-head-spacer" />
+        {data?.checked_at && <span className="dim" title={fmtFullDate(data.checked_at)}>checked {fmtAgo(data.checked_at)}</span>}
+        <button type="button" className="btn-secondary" onClick={() => act("check", checkDownloaders)} disabled={!!busy}>
+          <Icon name="refresh" size={13} className={busy ? "spin" : ""} />{busy === "check" ? "Checking…" : "Check again"}
+        </button>
+      </div>
+      {msg && <div className="msg err" role="alert">{msg.text}</div>}
+      {!data && <div className="dim">{error ? `Could not check the tools: ${error.message}` : "Checking the tools…"}</div>}
+      <ul className="dl-list">
+        {(data?.tools || []).map(t => (
+          <DownloaderRow key={`${t.tool}:${saved[t.tool] || ""}`} info={t} saved={saved[t.tool]}
+                         test={tests[t.tool]} update={updates[t.tool]} shownLog={shownLog} showLog={setShownLog}
+                         onSaved={() => { onSaved(); reload(); }} />
         ))}
       </ul>
     </div>
@@ -726,7 +883,7 @@ export default function Settings() {
             msg={msg}
             setMsg={setMsg}
           />
-          <ToolsCard saved={config.tools || {}} onSaved={reload} />
+          <DownloadersCard saved={config.tools || {}} onSaved={reload} />
           <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} />
           {Object.keys(COOKIE_TOOLS).map(t => (
             <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
