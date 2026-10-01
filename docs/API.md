@@ -1261,3 +1261,45 @@ other tools are left as they are. A path must be absolute, an executable
 file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); anything else is
 refused. A set path that stops working makes jobs fail with "not found"
 rather than fall back to `PATH`.
+
+### Downloaders
+
+What FeedVault knows of each tool, for the Downloaders card in Settings.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/downloaders` | `{ "checked_at": 1727500000, "tools": [tool, …] }`, one per tool, in the order `instaloader`, `gallery-dl`, `yt-dlp`, `ffmpeg` |
+| POST | `/api/downloaders/check` | the same with `"ok": true`, every tool found again (Check again) |
+
+A tool:
+
+```json
+{
+  "tool": "yt-dlp",
+  "found": true,
+  "path": "/home/me/.local/bin/yt-dlp",
+  "real_path": "/home/me/.local/share/pipx/venvs/yt-dlp/bin/yt-dlp",
+  "configured": null,
+  "install": "pipx",
+  "venv": "/home/me/.local/share/pipx/venvs/yt-dlp",
+  "version": "2026.08.06",
+  "version_error": null
+}
+```
+
+- `path`: the executable a job would run (the path set in Settings, else the
+  first on `PATH`); `null` when there is none, or the path set no longer
+  works. `real_path`: where it really is when `path` is a symlink, else `null`.
+- `configured`: the path set in Settings, or `null`.
+- `install`, read from `real_path`: `venv` (in the `bin/` folder of a
+  virtualenv: `pyvenv.cfg` beside that folder), `pipx` (the same, the
+  virtualenv inside pipx's `venvs` folder: `$PIPX_HOME/venvs`, else
+  `~/.local/share/pipx/venvs` or `~/.local/pipx/venvs`), `system` (anything
+  else: `/usr/bin`, `pip install --user`, a standalone binary) or `missing`.
+  `venv`: the virtualenv's folder for `venv` and `pipx`, else `null`.
+- `version`: the first line `<path> --version` prints (`ffmpeg -version`, up
+  to its copyright notice), run without a shell and stopped after 10
+  seconds; else `null` and `version_error` says why.
+
+The tools are found once and kept in memory; they are found again when the
+tools set in Settings (or `PATH`) change, and on `POST /api/downloaders/check`.

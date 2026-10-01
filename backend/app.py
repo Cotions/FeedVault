@@ -17,6 +17,7 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 import config
 import db
+import downloaders
 import duplicates
 import hashing
 import info_cookies
@@ -891,6 +892,17 @@ def set_config():
     if changed:
         scanner.start(roots)
     return jsonify({"ok": True, "config": _public_config(cfg)})
+
+
+@app.get("/api/downloaders")
+def get_downloaders():
+    return jsonify(downloaders.status())
+
+
+@app.post("/api/downloaders/check")
+def check_downloaders():
+    """Find every tool again (Check again)."""
+    return jsonify({"ok": True, **downloaders.status(refresh=True)})
 
 
 @app.post("/api/yt-dlp/info-json-cookies")
