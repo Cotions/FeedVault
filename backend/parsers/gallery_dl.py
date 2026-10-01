@@ -239,33 +239,49 @@ def _post_from(category, entries, dirpath):
     head = (main or files or entries)[0]
     d = head[1]
 
-    media, side_files, pending_posters = [], [], []
+    media, side_files = [], []
     expected = []                              # kinds the JSONs list, present or not
+    # A thumbnail belongs to the video right before it (twitter writes each
+    # preview just after its video) or, when it comes first, to the next one
+    # (tiktok's cover shares the video's num and sorts before it). Positions
+    # count whether or not the files are there, so one missing file does not
+    # shift the others.
+    video = None                               # the video a following thumbnail belongs to
+    early = []                                 # thumbnails waiting for a video
     for name, fd, fname in files:
         ftype = fd.get("type")
         ext = (fd.get("extension") or ext_of(fname or "")).lower()
+        path = os.path.join(dirpath, fname) if fname else None
         if ftype in sides or (ext not in IMAGE_EXT and ext not in VIDEO_EXT):
-            if fname:
-                side_files.append(os.path.join(dirpath, fname))
+            if path:
+                side_files.append(path)
             continue
         if ftype in posters and ext in IMAGE_EXT:
-            if fname:
-                pending_posters.append(os.path.join(dirpath, fname))
+            if video is not None:
+                if video[0] and path:
+                    video[0].poster_path = path
+                video = None
+            else:
+                early.append(path)
             continue
         kind = "video" if ext in VIDEO_EXT else "image"
         expected.append(kind)
-        if fname:                              # idx counts missing files too, so it stays put
-            media.append(Media(len(expected), kind, os.path.join(dirpath, fname)))
-    # A thumbnail goes to a video without one, in order (twitter writes each
-    # preview right after its video, tiktok the cover beside the video).
+        m = Media(len(expected), kind, path) if path else None    # idx counts missing files too
+        if m:
+            media.append(m)
+        video = None
+        if kind == "video":
+            if early:
+                poster = early.pop(0)
+                if m and poster:
+                    m.poster_path = poster
+            else:
+                video = [m]                    # in a list: the file itself may be missing
     # Thumbnails with no video to belong to are pictures in their own right.
-    for p in pending_posters:
-        video = next((m for m in media if m.kind == "video" and m.poster_path is None), None)
-        if video:
-            video.poster_path = p
-        else:
-            expected.append("image")
-            media.append(Media(len(expected), "image", p))
+    for path in early:
+        expected.append("image")
+        if path:
+            media.append(Media(len(expected), "image", path))
 
     pid = _group_key(d, site)
     text = _first(d, _paths(site.get("text")))
@@ -317,9 +333,10 @@ def parse_dir(root, dirpath, names):
         try:
             d = _load(path)
         except (OSError, ValueError) as e:
-            # Only complain about a JSON named after a file beside it.
-            stem = n[:-5]
-            if stem in names_set or any(m.rsplit(".", 1)[0] == stem for m in names_set if m != n):
+            # Only complain about a JSON named after a file beside it. (instaloader,
+            # which runs first, already reports those next to media; this is for
+            # the rest, such as a TikTok slideshow's music.)
+            if n[:-5] in names_set:
                 result.errors.append((path, f"unreadable metadata: {e}"))
                 result.claimed.add(n)
             continue

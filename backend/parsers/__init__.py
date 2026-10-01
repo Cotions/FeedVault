@@ -73,7 +73,9 @@ class DirResult:
 
 from . import instaloader, gallery_dl  # noqa: E402
 
-PARSERS = [instaloader, gallery_dl]
+# Parsers that read metadata first; guessing posts from file names comes last,
+# on whatever is left.
+PARSERS = [instaloader.parse_dir, gallery_dl.parse_dir, instaloader.parse_filenames]
 
 
 def parse_dir(root, dirpath, names):
@@ -84,8 +86,8 @@ def parse_dir(root, dirpath, names):
     """
     result = DirResult()
     remaining = list(names)
-    for parser in PARSERS:
-        r = parser.parse_dir(root, dirpath, remaining)
+    for parse in PARSERS:
+        r = parse(root, dirpath, remaining)
         result.posts.extend(r.posts)
         result.claimed |= r.claimed
         result.errors.extend(r.errors)

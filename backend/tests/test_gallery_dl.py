@@ -2,7 +2,7 @@ import json
 import os
 
 from conftest import H
-from fakes import GALLERY_DL, gallery_dl_case, png, write_post, owner
+from fakes import GALLERY_DL, fake_video, gallery_dl_case, png, write_post, owner
 from parsers import gallery_dl, parse_dir
 
 
@@ -389,3 +389,42 @@ def test_tiktok_trash_takes_the_music(env, client):
     r = client.post("/api/delete", json={"posts": ["tiktok:5228323407601338200"]}, headers=H).get_json()
     assert r["ok"] and r["files"] == 6 and r["errors"] == []
     assert os.listdir(folder) == []
+
+
+def _video_tweet(folder, files):
+    """A tweet with ``files``: (num, ext, type, present) each."""
+    tpl = fixture("twitter/video")
+    for num, ext, ftype, present in files:
+        d = {**tpl, "num": num, "extension": ext, "type": ftype, "count": len(files)}
+        name = f"5_{num}.{ext}"
+        jdump(folder / (name + ".json"), d)
+        if present:
+            (fake_video if ext == "mp4" else png)(str(folder / name))
+
+
+def test_twitter_previews_pair_by_position(tmp_path):
+    # The first video's preview is missing: the second preview is still the second video's.
+    _video_tweet(tmp_path, [(1, "mp4", "video", True), (2, "jpg", "preview", False),
+                            (3, "mp4", "video", True), (4, "jpg", "preview", True)])
+    p = parse(tmp_path).posts[0]
+    assert [(m.idx, os.path.basename(m.path), m.poster_path and os.path.basename(m.poster_path))
+            for m in p.media] == [(1, "5_1.mp4", None), (2, "5_3.mp4", "5_4.jpg")]
+
+
+def test_twitter_preview_of_a_missing_video(tmp_path):
+    _video_tweet(tmp_path, [(1, "mp4", "video", False), (2, "jpg", "preview", True)])
+    p = parse(tmp_path).posts[0]
+    assert p.kind == "video" and p.media == []
+
+
+def test_rescan_picks_up_a_new_side_file(env, client):
+    import scanner
+    folder = env["media"] / "twitter" / "example_user2"
+    gallery_dl_case("twitter/four_photos", folder)
+    scanner.scan(env["roots"])
+    # A post-level JSON written by a later run: same metadata path, one more side file.
+    post = {k: v for k, v in fixture("twitter/four_photos").items() if k not in ("num", "filename", "extension")}
+    jdump(folder / "491623932184993703.json", post)
+    assert scanner.scan(env["roots"])["updated"] == 1
+    r = client.post("/api/delete", json={"posts": ["twitter:491623932184993703"]}, headers=H).get_json()
+    assert r["files"] == 9 and os.listdir(folder) == []

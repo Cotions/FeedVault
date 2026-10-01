@@ -340,12 +340,13 @@ def parse_dir(root, dirpath, names):
         # Profile folders also hold an "id" file.
         result.claimed |= {n for n in names if n == "id"}
     result.claimed |= {n for n in names if _SIDE_RE.fullmatch(n)}
+    return result
 
-    # A file with a JSON of its own beside it ("x.jpg.json", "x.json") came
-    # from another tool (gallery-dl); it is not a filename-only post.
-    rest = [n for n in names if n not in result.claimed
-            and n + ".json" not in names_set and n.rsplit(".", 1)[0] + ".json" not in names_set]
-    posts, claimed = _filename_posts(root, dirpath, rest)
-    result.posts.extend(posts)
-    result.claimed |= claimed
+
+def parse_filenames(root, dirpath, names):
+    """Posts rebuilt from file names, for the files no parser with metadata
+    claimed: it runs last (see parsers.PARSERS), so a gallery-dl file whose
+    name happens to fit the pattern stays gallery-dl's."""
+    result = DirResult()
+    result.posts, result.claimed = _filename_posts(root, dirpath, names)
     return result
