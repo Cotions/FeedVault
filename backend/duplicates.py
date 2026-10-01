@@ -17,9 +17,13 @@ file changed since it was hashed.
 import hashlib
 import json
 import os
+import time
 
 import db
+import hashing
+import scanner
 import thumbs
+import trash
 
 KINDS = ("copies", "content")
 
@@ -258,3 +262,95 @@ def listing(conn, kind, offset=0, limit=50):
                                   (kind,)).fetchone()[0],
         "groups": [_public(g) for g in gs[offset:offset + limit]],
     }
+
+
+# ---------------------------------------------------------------------------
+# Resolving and dismissing
+# ---------------------------------------------------------------------------
+
+def find(conn, gid):
+    for kind in KINDS:
+        for g in groups(conn, kind):
+            if g["id"] == gid:
+                return g
+    return None
+
+
+def dismiss(conn, gid):
+    """Mark a group "not a duplicate". False if there is no such group."""
+    g = find(conn, gid)
+    if g is None:
+        return False
+    conn.execute("INSERT OR REPLACE INTO dismissed_duplicates(key, kind, at) VALUES (?, ?, ?)",
+                 (g["key"], g["kind"], int(time.time())))
+    conn.commit()
+    return True
+
+
+def _check(g, keep, keepers, hashes):
+    """Why this group cannot be resolved keeping ``keep`` right now, or None."""
+    if g is None:
+        return "this group changed since it was loaded; reload"
+    member = next((m for m in g["members"] if m["id"] == keep), None)
+    if member is None:
+        return "the member to keep is not in this group"
+    if g["pending"]:
+        return "still being hashed; try again when hashing is done"
+    if any(m["id"] in keepers for m in g["members"] if m is not member):
+        return "a member to trash is the one kept in another group"
+    for m in g["members"]:
+        for i in m["items"]:
+            now = hashing.stat(i["path"])
+            if now is None:
+                if m is member:
+                    return f"a file of the member to keep is gone: {i['path']}"
+                continue                        # already gone: nothing to move
+            h = hashes.get(i["path"])
+            if h is not None and (h[0], h[1]) != now:
+                return "a file changed since it was hashed; wait for the next pass"
+    return None
+
+
+def resolve(choices, roots, data_dir):
+    """Keep one member of each group and trash the others. ``choices`` is
+    [(group id, member id to keep)]. Every group is rebuilt and checked under
+    the same lock as the move (see _check); a group that fails is skipped
+    whole."""
+    skipped, planned, promote = [], [], []
+
+    def pick(conn):
+        current = {g["id"]: g for kind in KINDS for g in all_groups(conn, kind)}
+        hashes = _hashes(conn)
+        keepers = {keep for _, keep in choices}
+        posts, copies = [], []
+        for gid, keep in choices:
+            g = current.get(gid)
+            error = _check(g, keep, keepers, hashes)
+            if error:
+                skipped.append({"group": gid, "error": error})
+                continue
+            others = [m for m in g["members"] if m["id"] != keep]
+            posts += [m["post_id"] for m in others if m["type"] == "post"]
+            copies += [m["copy_id"] for m in others if m["type"] == "copy"]
+            planned.append((gid, others))
+            kept = next(m for m in g["members"] if m["id"] == keep)
+            if kept["type"] == "copy":
+                promote.append((kept["post_id"], kept["folder"], kept["kept"]))
+        return posts, copies
+
+    report = trash.delete([], [], roots, data_dir, pick=pick)
+    report.pop("media", None)
+    if "error" in report:
+        return {**report, "resolved": [], "skipped": skipped}
+    gone = set(report["posts"]) | {f"copy:{c}" for c in report["copies"]}
+    resolved = [gid for gid, others in planned if all(m["id"] in gone for m in others)]
+
+    # A kept copy whose post went to the trash becomes the post now, not at
+    # the next scan, and takes the post's decision with it.
+    moved = [(pid, folder, kept) for pid, folder, kept in promote if pid in report["posts"]]
+    if moved:
+        scanner.index_dirs(roots, [folder for _, folder, _ in moved])
+        conn = db.connect()
+        db.set_decision(conn, [pid for pid, _, kept in moved if kept], "keep", int(time.time()))
+    return {**report, "ok": bool(resolved) or not (skipped or report["errors"]),
+            "resolved": resolved, "skipped": skipped}

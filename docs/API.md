@@ -89,6 +89,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/<id>` | the media file bytes (Range supported, for video) |
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
+| GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
 
 ## Deleting
 
@@ -140,6 +141,10 @@ Every file moved to the trash gets one line in its trash folder's
   "role": "media", "idx": 2, "media_kind": "image", "size": 204800 }
 ```
 
+A file of an extra copy (see [Duplicates](#duplicates)) gets the same line
+plus `"copy": "<the copy's metadata path>"`; `post` is the id of the post it
+is a copy of. Its entry is separate from the post's, even in the same batch.
+
 `batch` is one `/api/delete` call. The trashed post is gone from the index, so
 the line carries what the Trash page shows: `platform`, `author`, `kind` and
 `posted_at` of the post, `items` (its media count when it was deleted),
@@ -161,7 +166,7 @@ deletion first:
     { "key": "9b1f0c7d2e4a6b8c0d1e", "post": "instagram:C8x…", "platform": "instagram", "post_id": "C8x…",
       "batch": "3f2a…", "at": 1727500000, "author": { "id": "123456", "handle": "somebody" },
       "kind": "carousel", "posted_at": 1727481600, "files": 1, "bytes": 204800,
-      "items": 1, "of": 5, "partial": true, "missing": false, "thumb_url": "/trash/9b1f0c7d2e4a6b8c0d1e/thumb" }
+      "items": 1, "of": 5, "partial": true, "copy": false, "missing": false, "thumb_url": "/trash/9b1f0c7d2e4a6b8c0d1e/thumb" }
   ]
 }
 ```
@@ -179,6 +184,9 @@ deletion first:
   was deleted (`null` for old lines).
 - `partial`: only some media items of the post were deleted; the rest is still
   in the index. Not set when the same call went on to delete the whole post.
+- `copy`: the entry is an extra copy of a post (trashed from Duplicates).
+  Restoring it puts the folder back and the scanner records it as a copy
+  again, or as the post if the post itself is gone.
 - `missing`: at least one of the entry's files is no longer in the trash
   (moved or deleted by hand). Purging the entry drops its lines.
 - `author` is `null` when the line predates author fields.
@@ -279,6 +287,130 @@ Scan status:
 ```
 
 `last` is `null` before the first scan. A scan runs on startup.
+
+## Duplicates
+
+Exact duplicates come in two kinds:
+
+- `copies`: the same post downloaded again into another folder (a typo'd
+  profile folder, a second download). Only the first copy is indexed as the
+  post; the scanner records every other one as an **extra copy** with its
+  files, and still lists its metadata file on Unmatched as
+  `duplicate of <post id> (<path of the indexed one>)`. A copy whose files
+  are gone disappears on the next scan. Items are compared by position:
+  same size and same sha1 of the first and last MiB is the same file (a
+  full sha1 decides when both sides have one).
+- `content`: different posts (a repost saved under another id) sharing at
+  least one media file with the same size and full sha1. Posts linked
+  through any shared file form one group.
+
+Hashes are computed by a background worker after every scan, at the lowest
+CPU and disk priority, and cached by path, size and mtime. Only files whose
+size another file shares are read. It pauses while a scan or a delete runs.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/duplicates?kind=&offset=&limit=` | groups of one kind, see below |
+| GET | `/api/duplicates/status` | the hashing worker's progress, see below |
+| POST | `/api/duplicates/resolve` | body `{ "group": "…", "keep": "…" }`, or `{ "groups": [{ "group": "…", "keep": "…" }, …] }` (at most 500): trashes every other member, see below |
+| POST | `/api/duplicates/dismiss` | body `{ "group": "…" }` → `{ "ok": true }`: "not a duplicate", for good |
+
+`GET /api/duplicates`: `kind` is `copies` (default) or `content`, `offset`
+(default 0), `limit` (default 50, max 500). Groups come biggest saving first.
+
+```json
+{
+  "kind": "copies", "total": 120, "identical": 118, "pending": 0,
+  "frees": 2147483648, "identical_frees": 2040109465, "dismissed": 1,
+  "groups": [{
+    "id": "4c1d9e0b7a2f3e5d6c8b", "kind": "copies",
+    "identical": true, "pending": false, "differs": [],
+    "suggested": "instagram:C8x…", "frees": 5242880, "bytes": 10485760,
+    "members": [
+      { "id": "instagram:C8x…", "type": "post", "post_id": "instagram:C8x…", "post": { "…": "post summary" },
+        "folder": "/abs/cherrieskyl", "meta_path": "/abs/cherrieskyl/….json",
+        "paths": ["/abs/cherrieskyl/…_1.jpg"], "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…" }],
+        "files": 1, "bytes": 5242880, "saved_at": 1727500000, "kept": false, "thumb_url": "/media/17/thumb" },
+      { "id": "copy:3", "type": "copy", "copy_id": 3, "post_id": "instagram:C8x…", "post": null,
+        "folder": "/abs/cherrrieskyl", "meta_path": "/abs/cherrrieskyl/…_1.jpg",
+        "paths": ["/abs/cherrrieskyl/…_1.jpg"], "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…" }],
+        "files": 1, "bytes": 5242880, "saved_at": 1727400000, "kept": false, "thumb_url": "/media/copy/3/thumb" }
+    ]
+  }]
+}
+```
+
+- `id` names the group for resolve and dismiss. It is derived from the
+  members, so it changes when a member comes or goes.
+- Members: a post (`type: "post"`, `post` is its summary) or an extra copy
+  (`type: "copy"`, `post: null`). `id` is the post id or `copy:<n>`.
+  `folder` is the folder of the metadata file (for posts rebuilt from file
+  names, of the first media file). `items`, `paths`, `files` and `bytes`
+  cover media files that are on disk (posters and side files are moved with
+  them but not counted). `saved_at` is the post's, or the copy's metadata
+  file mtime.
+- `kept`: the post has the "keep" decision. In a `copies` group every member
+  shares the post's decision, and it stays with whichever member is kept.
+- `identical`: `true` when every member has the same files; `false` when
+  something differs, and `differs` says what:
+  `[{ "member": "copy:3", "idx": 2, "reason": "missing" }]`, with reasons
+  `missing` (the post has the item, the copy does not), `extra` (the
+  other way round), `size`, `content` (same size, other bytes), and for
+  `content` groups `only here` (no other member has this file). `null`
+  while some files are not hashed yet (`pending: true`).
+- `suggested`: the member to keep: the one marked kept, then the one with
+  more media, then the oldest `saved_at`, then the shortest path.
+  (Resolution is not taken into account yet.)
+- `frees`: the bytes of every member but the suggested one.
+- Top level: `total`, `identical`, `pending` count groups; `frees` and
+  `identical_frees` add up all groups (or the identical ones), all pages.
+  `dismissed` counts groups of this kind marked "not a duplicate".
+
+`GET /api/duplicates/status`:
+
+```json
+{ "running": true, "paused": false, "phase": "partial", "done": 1200, "total": 7496,
+  "bytes": 2516582400, "hashed": 6900, "started_at": 1727500000, "finished_at": null,
+  "errors": [{ "path": "/abs/x.mp4", "error": "Permission denied" }] }
+```
+
+`phase` is `partial` or `full` (`null` when idle), `done` and `total` count
+files in that phase, `bytes` what was read, `hashed` the rows in the cache,
+`finished_at` when the last complete pass ended, `errors` the last 20
+files that could not be read.
+
+`POST /api/duplicates/resolve` keeps one member of each group and moves
+every other one to the trash, exactly like `/api/delete` (a copy's files go
+the same way, with a `copy` field in the manifest, so the Trash page lists
+and restores it). Under the same lock as the move, each group is rebuilt
+from the index and checked first, and refused (listed in `skipped`, nothing
+of it moved) when:
+
+- it no longer exists with these members (a scan or another resolve
+  changed it): reload;
+- it is still being hashed;
+- a file of any member changed (size or mtime) since it was hashed;
+- a file of the member to keep is gone;
+- a member to trash is the one kept in another group of the same call.
+
+When the kept member is a copy and the post is trashed, the copy becomes the
+post at once, and the post's "keep" decision moves with it.
+
+```json
+{ "ok": true, "resolved": ["4c1d9e0b7a2f3e5d6c8b"],
+  "skipped": [{ "group": "…", "error": "a file changed since it was hashed; wait for the next pass" }],
+  "posts": ["instagram:R9…"], "copies": [3], "files": 7, "bytes": 10485760, "errors": [] }
+```
+
+`errors` lists files that could not be moved, as in `/api/delete`. `ok` is
+`false` only when nothing could be done (every group skipped, a bad body,
+or a scan held the index for more than 30 s).
+
+`POST /api/duplicates/dismiss` stores the group as "not a duplicate". It is
+user data, written to `<data_directory>/userdata/dismissed_duplicates.json`
+like decisions, and keyed by the members' post ids and copy metadata paths,
+so it survives rebuilding the index. A group that gains a member shows again.
+Unknown group: 404 `{ "ok": false, "error": "…" }`.
 
 ## Storage
 

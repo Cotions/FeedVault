@@ -93,10 +93,14 @@ def _media_files(m):
 def _post_files(conn, post):
     """Every file that belongs to a post: media, posters, metadata, side files,
     as (path, manifest fields)."""
+    return _files(conn.execute("SELECT * FROM media WHERE post_id = ? ORDER BY idx", (post["id"],)),
+                  post["meta_path"])
+
+
+def _files(media, meta):
     files = []
-    for m in conn.execute("SELECT * FROM media WHERE post_id = ? ORDER BY idx", (post["id"],)):
+    for m in media:
         files.extend(_media_files(m))
-    meta = post["meta_path"]
     files.append((meta, {"role": "meta"}))
     for ext in (".json.xz", ".json"):
         if meta.endswith(ext):
@@ -130,14 +134,26 @@ def _move_all(files, roots, post_id, info, report, data_dir):
     return ok
 
 
-def delete(post_ids, media_ids, roots, data_dir):
-    report = {"ok": True, "posts": [], "media": [], "files": 0, "bytes": 0, "errors": [],
+def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
+    """Move posts, media items and extra copies (db.save_copies) to the trash.
+
+    ``pick(conn)``, when given, runs under the write lock before anything
+    moves and returns the (post ids, copy ids) to delete instead, so a caller
+    can check the index and the files in the same lock as the move."""
+    report = {"ok": True, "posts": [], "media": [], "copies": [], "files": 0, "bytes": 0, "errors": [],
               "batch": uuid.uuid4().hex}
     if not db.write_lock.acquire(timeout=30):
         report.pop("batch")
         return {**report, "ok": False, "error": "a scan is running; try again in a moment"}
     try:
         conn = db.connect()
+        if pick is not None:
+            post_ids, copy_ids = pick(conn)
+        for cid in dict.fromkeys(copy_ids):
+            copy = db.copy_row(conn, cid)
+            if copy is not None:
+                _delete_copy(conn, copy, roots, data_dir, report)
+
         for pid in dict.fromkeys(post_ids):
             post = conn.execute("SELECT * FROM posts WHERE id = ?", (pid,)).fetchone()
             if post is None:
@@ -183,6 +199,25 @@ def _delete_post(conn, post, roots, data_dir, report):
         thumbs.forget(data_dir, f)
     db.remove_post(conn, post["id"])
     report["posts"].append(post["id"])
+
+
+def _delete_copy(conn, copy, roots, data_dir, report):
+    """An extra copy of a post: its files go like a post's, with the copy's
+    metadata path on each manifest line so the Trash page keeps it apart."""
+    post = conn.execute("SELECT * FROM posts WHERE id = ?", (copy["post_id"],)).fetchone()
+    platform, _, _ = copy["post_id"].partition(":")
+    info = _post_info(post, len(copy["media"]), False) if post else \
+        {"platform": platform, "author": None, "kind": None, "posted_at": None,
+         "items": len(copy["media"]), "partial": False}
+    files = _files(copy["media"], copy["meta_path"])
+    if not _move_all(files, roots, copy["post_id"], {**info, "copy": copy["meta_path"]}, report, data_dir):
+        conn.commit()
+        return
+    for f, _ in files:
+        thumbs.forget(data_dir, f)
+    conn.execute("DELETE FROM copies WHERE id = ?", (copy["id"],))
+    conn.execute("DELETE FROM unmatched WHERE path = ?", (copy["meta_path"],))
+    report["copies"].append(copy["id"])
 
 
 def usage(roots):
@@ -293,7 +328,10 @@ def entry_key(root, post, batch):
 
 
 def _line_key(root, line):
-    return entry_key(root, line.get("post"), line.get("batch"))
+    batch = line.get("batch")
+    if isinstance(line.get("copy"), str):     # an extra copy: its own entry, even in the post's batch
+        batch = f"{batch}\0copy\0{line['copy']}"
+    return entry_key(root, line.get("post"), batch)
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +403,7 @@ def _group(root, lines):
             # with it, in the same call: the whole post is gone, not partial.
             "partial": any(line.get("partial") is True for line in ls)
             and not any(line.get("partial") is False for line in ls),
+            "copy": isinstance(first.get("copy"), str),
         }
     return list(groups.values())
 

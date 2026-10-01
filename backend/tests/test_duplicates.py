@@ -314,3 +314,182 @@ def test_dismissals_are_user_data(env):
     assert duplicates.all_groups(conn, "copies") == []
     # the key names members by post id and metadata path, not by row ids
     assert json.loads(g["key"]) == sorted(["instagram:P1", g["members"][1]["meta_path"]])
+
+
+# ---------------------------------------------------------------------------
+# Step 3: the API, resolve through the trash, dismiss
+# ---------------------------------------------------------------------------
+
+from conftest import H  # noqa: E402
+
+
+def hashed_copies(env, **kw):
+    a, copy_base = two_folders(env, **kw)
+    run_scan(env)
+    hashing.run_pass(db.connect())
+    return a, copy_base
+
+
+def listing(client, kind="copies"):
+    r = client.get(f"/api/duplicates?kind={kind}", headers=H)
+    assert r.status_code == 200
+    return r.get_json()
+
+
+def test_api_needs_the_header_and_a_known_kind(env, client):
+    assert client.get("/api/duplicates").status_code == 403
+    assert client.post("/api/duplicates/resolve", json={}).status_code == 403
+    assert client.post("/api/duplicates/dismiss", json={}).status_code == 403
+    assert client.get("/api/duplicates?kind=nope", headers=H).status_code == 400
+    for body in ({}, {"group": 1, "keep": "x"}, {"groups": []}, {"groups": [{"group": "g"}]},
+                 {"groups": [{"group": "g", "keep": "k"}] * 501}):
+        r = client.post("/api/duplicates/resolve", json=body, headers=H)
+        assert r.status_code == 400 and r.get_json()["ok"] is False
+    assert client.post("/api/duplicates/dismiss", json={"group": 5}, headers=H).status_code == 400
+    assert client.post("/api/duplicates/dismiss", json={"group": "nope"}, headers=H).status_code == 404
+
+
+def test_listing_and_status(env, client):
+    hashed_copies(env, slides=[False, True])
+    r = listing(client)
+    assert (r["total"], r["identical"], r["pending"], r["dismissed"]) == (1, 1, 0, 0)
+    g = r["groups"][0]
+    assert r["frees"] == r["identical_frees"] == g["frees"]
+    post, copy = g["members"]
+    assert post["post"]["id"] == "instagram:P1" and copy["post"] is None
+    assert copy["thumb_url"] == f"/media/copy/{copy['copy_id']}/thumb"
+    assert client.get(copy["thumb_url"]).status_code == 200
+    assert all("poster_path" not in i for i in copy["items"])
+    assert listing(client, "content")["total"] == 0
+    assert client.get("/api/duplicates?limit=0&offset=5", headers=H).get_json()["groups"] == []
+    st = client.get("/api/duplicates/status", headers=H).get_json()
+    assert st["running"] is False and st["hashed"] >= 4
+
+
+def test_copy_thumb_only_serves_recorded_copies(env, client):
+    assert client.get("/media/copy/999/thumb").status_code == 404
+
+
+def test_resolve_keep_post_trashes_the_copy_and_restores(env, client):
+    _, copy_base = hashed_copies(env, slides=[False, True])
+    g = listing(client)["groups"][0]
+    copy_files = sorted(os.listdir(env["media"] / "alicee"))
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": g["suggested"]}, headers=H).get_json()
+    assert r["ok"] and r["resolved"] == [g["id"]] and r["skipped"] == [] and r["errors"] == []
+    assert r["posts"] == [] and r["copies"] == [g["members"][1]["copy_id"]]
+    assert r["files"] == len(copy_files) and os.listdir(env["media"] / "alicee") == []
+    assert sorted(os.listdir(env["media"] / ".feedvault-trash" / "alicee")) == copy_files
+    assert listing(client)["total"] == 0 and copies() == [] and db.unmatched(db.connect()) == []
+    assert client.get("/api/posts/instagram/P1", headers=H).status_code == 200
+    # the Trash page lists the copy on its own, and restores it as a copy
+    items = client.get("/api/trash/items", headers=H).get_json()
+    [e] = items["entries"]
+    assert e["copy"] is True and e["post"] == "instagram:P1" and e["items"] == 2
+    r = client.post("/api/trash/restore", json={"keys": [e["key"]]}, headers=H).get_json()
+    assert r["files"] == len(copy_files) and r["errors"] == []
+    assert len(copies()) == 1 and len(db.unmatched(db.connect())) == 1
+    hashing.run_pass(db.connect())
+    assert listing(client)["identical"] == 1
+
+
+def test_resolve_keep_copy_promotes_it_with_the_decision(env, client):
+    _, copy_base = hashed_copies(env, kind="image")
+    db.set_decision(db.connect(), ["instagram:P1"], "keep", 1)
+    g = listing(client)["groups"][0]
+    copy = g["members"][1]
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": copy["id"]}, headers=H).get_json()
+    assert r["ok"] and r["posts"] == ["instagram:P1"] and r["copies"] == []
+    post = client.get("/api/posts/instagram/P1", headers=H).get_json()
+    assert post["source"]["meta_path"] == copy_base + ".json" and post["decision"] == "keep"
+    assert copies() == [] and listing(client)["total"] == 0
+    assert run_scan(env)["added"] == 0                             # the scan agrees
+
+
+def test_resolve_refuses_a_changed_file(env, client):
+    _, copy_base = hashed_copies(env, kind="image")
+    g = listing(client)["groups"][0]
+    t = time.time() + 10
+    os.utime(copy_base + ".jpg", (t, t))
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": g["suggested"]}, headers=H).get_json()
+    assert r["ok"] is False and r["resolved"] == [] and r["files"] == 0
+    assert r["skipped"] == [{"group": g["id"], "error": "a file changed since it was hashed; wait for the next pass"}]
+    assert os.path.exists(copy_base + ".jpg")
+
+
+def test_resolve_refuses_pending_stale_and_missing_keeper(env, client):
+    a, copy_base = two_folders(env, kind="image")
+    run_scan(env)
+    g = listing(client)["groups"][0]
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": g["suggested"]}, headers=H).get_json()
+    assert "still being hashed" in r["skipped"][0]["error"]
+    hashing.run_pass(db.connect())
+    g = listing(client)["groups"][0]
+    r = client.post("/api/duplicates/resolve", json={"group": "0" * 20, "keep": g["suggested"]}, headers=H).get_json()
+    assert "reload" in r["skipped"][0]["error"]
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": "copy:999"}, headers=H).get_json()
+    assert "not in this group" in r["skipped"][0]["error"]
+    os.remove(a + ".jpg")
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": "instagram:P1"}, headers=H).get_json()
+    assert "member to keep is gone" in r["skipped"][0]["error"]
+    assert os.path.exists(copy_base + ".jpg")
+
+
+def test_bulk_resolve_skips_conflicts(env, client):
+    """A post kept in one group must not be trashed by another in the same call."""
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    b = write_post(env["media"] / "bob", "R9", TS + 99, owner("bob", 222), "image")
+    shutil.copyfile(a + ".jpg", b + ".jpg")
+    shutil.copytree(env["media"] / "alice", env["media"] / "alicee")
+    run_scan(env)
+    hashing.run_pass(db.connect())
+    cg = listing(client)["groups"][0]
+    tg = listing(client, "content")["groups"][0]
+    body = {"groups": [{"group": cg["id"], "keep": "instagram:P1"},      # keep P1, trash its copy
+                       {"group": tg["id"], "keep": "instagram:R9"}]}     # would trash P1
+    r = client.post("/api/duplicates/resolve", json=body, headers=H).get_json()
+    assert r["resolved"] == [cg["id"]] and r["skipped"][0]["group"] == tg["id"]
+    assert os.path.exists(a + ".jpg") and r["posts"] == []
+
+
+def test_resolve_partial_failure_keeps_the_copy(env, client):
+    _, copy_base = hashed_copies(env, kind="image")
+    g = listing(client)["groups"][0]
+    folder = env["media"] / "alicee"
+    os.chmod(folder, 0o555)                                        # nothing can be moved out
+    try:
+        r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": g["suggested"]},
+                        headers=H).get_json()
+    finally:
+        os.chmod(folder, 0o755)
+    if os.geteuid() == 0:                                          # root ignores the mode
+        return
+    assert r["resolved"] == [] and r["errors"] and r["copies"] == []
+    assert len(copies()) == 1
+
+
+def test_resolve_never_follows_a_symlink_out_of_the_roots(env, client, tmp_path):
+    outside = tmp_path / "outside.jpg"
+    _, copy_base = two_folders(env, kind="image")
+    shutil.copyfile(copy_base + ".jpg", outside)
+    os.remove(copy_base + ".jpg")
+    os.symlink(outside, copy_base + ".jpg")
+    run_scan(env)
+    hashing.run_pass(db.connect())
+    g = listing(client)["groups"][0]
+    assert g["identical"] is True
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": "instagram:P1"}, headers=H).get_json()
+    assert any("outside the media roots" in e["error"] for e in r["errors"])
+    assert outside.exists() and os.path.islink(copy_base + ".jpg")
+
+
+def test_dismiss(env, client):
+    hashed_copies(env, kind="image")
+    g = listing(client)["groups"][0]
+    assert client.post("/api/duplicates/dismiss", json={"group": g["id"]}, headers=H).get_json() == {"ok": True}
+    r = listing(client)
+    assert (r["total"], r["dismissed"]) == (0, 1)
+    userdata.flush()
+    saved = json.load(open(userdata.path(str(env["tmp"] / "data"), "dismissed_duplicates")))
+    [row] = saved["rows"]
+    assert row["kind"] == "copies" and json.loads(row["key"]) == sorted(
+        ["instagram:P1", g["members"][1]["meta_path"]])

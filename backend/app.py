@@ -17,6 +17,8 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 import config
 import db
+import duplicates
+import hashing
 import scanner
 import thumbs
 import trash
@@ -230,6 +232,57 @@ def trash_purge():
 
 
 # ---------------------------------------------------------------------------
+# Duplicates
+# ---------------------------------------------------------------------------
+
+@app.get("/api/duplicates")
+def list_duplicates():
+    kind = request.args.get("kind") or "copies"
+    if kind not in duplicates.KINDS:
+        return jsonify({"ok": False, "error": "kind must be copies or content"}), 400
+    return jsonify(duplicates.listing(db.connect(), kind,
+                                      offset=_int_arg("offset", 0, 0, 10**9),
+                                      limit=_int_arg("limit", 50, 1, 500)))
+
+
+@app.get("/api/duplicates/status")
+def duplicates_status():
+    return jsonify(hashing.status())
+
+
+def _choice(c):
+    return isinstance(c, dict) and isinstance(c.get("group"), str) and isinstance(c.get("keep"), str)
+
+
+@app.post("/api/duplicates/resolve")
+def duplicates_resolve():
+    body = request.get_json(silent=True) or {}
+    choices = body.get("groups") if "groups" in body else [body]
+    if not isinstance(choices, list) or not choices or len(choices) > 500 or not all(map(_choice, choices)):
+        return jsonify({"ok": False, "error": "send { group, keep } or groups: [{ group, keep }] (at most 500)"}), 400
+    cfg = config.load()
+    report = duplicates.resolve([(c["group"], c["keep"]) for c in choices],
+                                cfg["media_roots"], cfg["data_directory"])
+    if report.get("posts"):
+        userdata.changed("decisions")          # a trashed post takes its decision along, or hands it on
+    if report.get("posts") or report.get("copies"):
+        print(f"[duplicates] resolved {len(report['resolved'])} groups: {len(report['posts'])} posts, "
+              f"{len(report['copies'])} copies, {report['files']} files → trash")
+    return jsonify(report)
+
+
+@app.post("/api/duplicates/dismiss")
+def duplicates_dismiss():
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("group"), str):
+        return jsonify({"ok": False, "error": "group must be a group id"}), 400
+    if not duplicates.dismiss(db.connect(), body["group"]):
+        return jsonify({"ok": False, "error": "no such group; reload"}), 404
+    userdata.changed("dismissed_duplicates")
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
 # Review decisions
 # ---------------------------------------------------------------------------
 
@@ -367,6 +420,22 @@ def serve_thumb(media_id):
 def serve_poster(media_id):
     row = db.media_row(db.connect(), media_id)
     return _send(row["poster_path"] if row else None)
+
+
+@app.get("/media/copy/<int:copy_id>/thumb")
+def serve_copy_thumb(copy_id):
+    """Thumbnail of an extra copy's first item: only paths the scanner
+    recorded for that copy are read, as for /media."""
+    copy = db.copy_row(db.connect(), copy_id)
+    if copy is None or not copy["media"]:
+        abort(404)
+    first = min(copy["media"], key=lambda m: m["idx"])
+    path = thumbs.thumb_for(config.load()["data_directory"], first)
+    if path:
+        return _send(path)
+    if first["kind"] == "image":
+        return _send(first["path"])
+    abort(404)
 
 
 @app.get("/trash/<key>/thumb")
