@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { getPosts, getPost, getAuthors, getTags, applyTags, deleteItems, setDecision, restorePosts } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
-import { KINDS, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, authorFeedPath } from "../lib/fmt";
+import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, authorFeedPath } from "../lib/fmt";
 import { sameTag, tagsMatch, withTags } from "../lib/tags";
 import RichText from "../components/RichText";
 import TagChips from "../components/TagChips";
@@ -492,7 +492,7 @@ function ReviewSession({ scope, scopeControls }) {
               <time dateTime={fmtIso(cur.posted_at)}>{fmtFullDate(cur.posted_at)}</time>
               {m?.size != null && <span className="dim"> · {fmtBytes(m.size)}</span>}
             </div>
-            {post?.album && <div className="review-album"><span className="dim">Highlight</span> {post.album}</div>}
+            {post?.album && <div className="review-album"><span className="dim">{albumLabel(post.platform)}</span> {post.album}</div>}
             {cur.text
               ? <div className="review-caption"><RichText text={cur.text} /></div>
               : <p className="dim review-caption">No caption.</p>}
