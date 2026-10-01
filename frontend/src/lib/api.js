@@ -137,10 +137,11 @@ export function restorePosts(posts) { return post("/api/trash/restore", { posts 
 
 // kind: "copies" | "content" | "similar" (+ threshold) → { kind, threshold, total, reposts, identical, pending, frees, identical_frees, dismissed, groups }
 export function getDuplicates(params = {}) { return get(`/api/duplicates${qs(params)}`); }
-// The background hashing worker → { running, paused, phase, done, total, bytes, hashed, finished_at, errors }
+// The background hashing worker → { running, paused, phase, done, total, bytes, hashed, fingerprinted, finished_at, errors }
 export function getDuplicatesStatus() { return get("/api/duplicates/status"); }
 // [{ group, keep }] → keeps one member per group, trashes the others
 // → { ok, resolved, skipped: [{ group, error }], posts, copies, files, bytes, errors }
-export function resolveDuplicates(groups) { return post("/api/duplicates/resolve", { groups }); }
+// A similar group goes alone, with the threshold it was listed at.
+export function resolveDuplicates(groups, threshold) { return post("/api/duplicates/resolve", { groups, threshold }); }
 // "Not a duplicate", stored for good → { ok }
-export function dismissDuplicate(group) { return post("/api/duplicates/dismiss", { group }); }
+export function dismissDuplicate(group, threshold) { return post("/api/duplicates/dismiss", { group, threshold }); }

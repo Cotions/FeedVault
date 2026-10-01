@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useSearchParams } from "react-router-dom";
 import { dismissDuplicate, getDuplicates, getDuplicatesStatus, resolveDuplicates } from "../lib/api";
 import { useScan } from "../lib/scan";
@@ -13,13 +14,19 @@ import SelectionBar from "../components/SelectionBar";
 const PAGE = 50;
 const MAX_PAGE = 500;      // the backend's limit; a reload refetches what was loaded
 const STATUS_POLL_MS = 2000;
+const THRESHOLD_MAX = 10;  // the backend's; see docs/API.md "Duplicates"
+const SLIDER_DELAY_MS = 300;
 
 const KINDS = [
   { value: "copies",  label: "Same post, two folders",
     lede: "The same post downloaded again into another folder (a typo'd profile folder, a second download). Only the first copy is in the feed; the others are listed on Unmatched as \"duplicate of\"." },
   { value: "content", label: "Same file, different posts",
     lede: "Different posts (a repost, the same picture in two carousels) holding byte-for-byte the same file." },
+  { value: "similar", label: "Looks the same",
+    lede: "Different posts with a picture that looks the same though the files differ: a resized or recompressed repost, a re-upload. Nothing here is certain, so each group is resolved by hand, never in bulk." },
 ];
+
+const PHASES = { partial: "Hashing files", full: "Hashing whole files", dhash: "Fingerprinting pictures", probe: "Measuring videos" };
 
 const plural = (n, word, many = `${word}s`) => `${fmtInt(n)} ${n === 1 ? word : many}`;
 const lastPart = path => path.split("/").filter(Boolean).pop() || path;
@@ -42,6 +49,7 @@ function differsText(g, memberId) {
 // what it has that the post lacks or holds differently, and keeping a copy
 // loses the post's version of whatever that copy lacks or holds differently.
 function lostItems(g, keep) {
+  if (g.kind === "similar") return g.differs.filter(d => d.member !== keep).length;
   if (g.kind === "content") {
     const held = new Set(g.members.find(m => m.id === keep)?.items.filter(i => i.hash).map(i => `${i.size}:${i.hash}`));
     return g.members.filter(m => m.id !== keep)
@@ -50,16 +58,24 @@ function lostItems(g, keep) {
   return g.differs.filter(d => (d.member === keep ? d.reason !== "extra" : d.reason !== "missing")).length;
 }
 
-function Member({ m, group, chosen, onChoose, disabled }) {
+const matchOf = m => m.items.find(i => i.idx === m.match) || m.items[0];
+const resolution = i => (i?.width && i?.height ? `${i.width}×${i.height}` : null);
+
+function Member({ m, group, chosen, onChoose, onView, disabled }) {
   const [broken, setBroken] = useState(false);
   const suggested = group.suggested === m.id;
   const diff = differsText(group, m.id);
   const who = m.post?.author?.handle ? `@${m.post.author.handle}` : null;
   // Different posts: who posted it and when tells the original from a repost.
   const posts = group.kind !== "copies";
+  const match = posts ? matchOf(m) : null;
   return (
     <label className={`big-file dup-member${chosen ? " is-chosen" : ""}`}>
-      <span className="big-file-link">
+      <span
+        className={`big-file-link${onView ? " is-viewable" : ""}`}
+        onClick={onView ? e => { e.preventDefault(); onView(); } : undefined}
+        title={onView ? "View full size and compare" : undefined}
+      >
         {m.thumb_url && !broken ? (
           <img src={m.thumb_url} alt="" loading="lazy" onError={() => setBroken(true)} />
         ) : (
@@ -90,6 +106,11 @@ function Member({ m, group, chosen, onChoose, disabled }) {
             : <span title={`Saved ${fmtFullDate(m.saved_at)}`}>saved {fmtShortDate(m.saved_at)}</span>}
           {" · "}{plural(m.files, "file")}
         </span>
+        {match && (
+          <span className="dup-member-sub mono" title="The picture that matched: its resolution and file size">
+            {resolution(match) || "size unknown"} · {fmtBytes(match.size)}
+          </span>
+        )}
         {diff && <span className="dup-diff">{diff}</span>}
       </span>
     </label>
@@ -97,6 +118,7 @@ function Member({ m, group, chosen, onChoose, disabled }) {
 }
 
 function Group({ g, index, busy, selectMode, selectable: canSelect, selected, onToggle, onResolve, onDismiss }) {
+  const [viewing, setViewing] = useState(null);       // index of the member open in the compare view
   const [keep, setKeep] = useState(g.suggested);
   const [seenSuggested, setSeenSuggested] = useState(g.suggested);
   if (g.suggested !== seenSuggested) {               // a reload changed the suggestion: follow it
@@ -126,7 +148,11 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
             {selected && <Icon name="check" size={14} />}
           </button>
         )}
-        {g.identical ? (
+        {g.kind === "similar" ? (
+          <span className="dup-state is-similar" title="Perceptual fingerprints this many bits apart, of 64">
+            looks the same · {g.distance === 0 ? "0 bits" : `≤ ${plural(g.distance, "bit")}`}
+          </span>
+        ) : g.identical ? (
           <span className="dup-state is-identical"><Icon name="check" size={13} />identical</span>
         ) : g.pending ? (
           <span className="dup-state is-pending">hashing…</span>
@@ -138,7 +164,9 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
             repost
           </span>
         )}
-        <span className="dup-group-sub">{plural(g.members.length, "copy", "copies")} · {fmtBytes(g.bytes)}</span>
+        <span className="dup-group-sub">
+          {g.kind === "copies" ? plural(g.members.length, "copy", "copies") : plural(g.members.length, "post")} · {fmtBytes(g.bytes)}
+        </span>
         <div className="page-head-spacer" />
         {!selectMode && (
           <>
@@ -159,11 +187,95 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
         )}
       </div>
       <div className="dup-members" onClick={selectable ? toggle : undefined}>
-        {g.members.map(m => (
-          <Member key={m.id} m={m} group={g} chosen={m.id === kept.id} onChoose={setKeep} disabled={busy || selectMode} />
+        {g.members.map((m, i) => (
+          <Member key={m.id} m={m} group={g} chosen={m.id === kept.id} onChoose={setKeep} disabled={busy || selectMode}
+            onView={g.kind === "similar" && !selectMode ? () => setViewing(i) : undefined} />
         ))}
       </div>
+      {viewing != null && g.members[viewing] && (
+        <Compare
+          g={g}
+          at={viewing}
+          keep={kept.id}
+          onMove={step => setViewing(v => (v + step + g.members.length) % g.members.length)}
+          onKeep={id => setKeep(id)}
+          onClose={() => setViewing(null)}
+        />
+      )}
     </section>
+  );
+}
+
+/* Full-size side-by-side for a similar group: one member at a time, ←/→
+   between them, Esc closes. "Keep this one" only picks the radio; trashing
+   still goes through the group's button and its confirmation. */
+function Compare({ g, at, keep, onMove, onKeep, onClose }) {
+  const boxRef = useRef(null);
+  const m = g.members[at];
+  const item = matchOf(m);
+  const who = m.post?.author?.handle ? `@${m.post.author.handle}` : m.folder;
+
+  useEffect(() => {
+    const prev = document.activeElement;
+    boxRef.current?.focus();
+    return () => { if (prev && prev.focus && document.contains(prev)) prev.focus(); };
+  }, []);
+
+  function onKeyDown(e) {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      onMove(e.key === "ArrowLeft" ? -1 : 1);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    }
+  }
+
+  return createPortal(
+    <div className="modal-overlay dup-compare" onKeyDown={onKeyDown}
+      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={boxRef} className="dup-compare-box" role="dialog" aria-modal="true" tabIndex={-1}
+        aria-label={`Compare: ${at + 1} of ${g.members.length}`}>
+        <div className="dup-compare-head">
+          <span className="mono">{at + 1} / {g.members.length}</span>
+          <strong>{who}</strong>
+          <span title={fmtFullDate(m.posted_at)}>posted {fmtShortDate(m.posted_at)}</span>
+          <span className="mono">{resolution(item) || "size unknown"} · {fmtBytes(item?.size)}</span>
+          {g.suggested === m.id && <span className="trash-badge dup-badge-suggested">suggested</span>}
+          {m.kept && <span className="trash-badge dup-badge-kept">kept</span>}
+          <div className="page-head-spacer" />
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Icon name="close" size={16} /></button>
+        </div>
+        <div className="dup-compare-stage">
+          <button type="button" className="dup-compare-nav" onClick={() => onMove(-1)} aria-label="Previous member">
+            <Icon name="chevLeft" size={22} />
+          </button>
+          {!item?.url ? (
+            <span className="big-file-ph"><Icon name="image" size={40} /></span>
+          ) : item.kind === "video" ? (
+            <video key={item.url} src={item.url} controls muted loop autoPlay playsInline />
+          ) : (
+            <img key={item.url} src={item.url} alt="" />
+          )}
+          <button type="button" className="dup-compare-nav" onClick={() => onMove(1)} aria-label="Next member">
+            <Icon name="chevRight" size={22} />
+          </button>
+        </div>
+        <div className="dup-compare-foot">
+          <span className="dup-folder" title={m.meta_path}>{lastPart(m.folder)}/</span>
+          {m.post && <Link to={postPath(m.post)} className="text-link">Open post</Link>}
+          <span className="dup-member-sub">← → to switch · Esc to close</span>
+          <div className="page-head-spacer" />
+          {keep === m.id ? (
+            <span className="dup-state is-identical"><Icon name="check" size={13} />keeping this one</span>
+          ) : (
+            <button type="button" className="btn-secondary" onClick={() => onKeep(m.id)}>Keep this one</button>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -172,25 +284,39 @@ export default function Duplicates() {
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const kind = KINDS.some(k => k.value === params.get("kind")) ? params.get("kind") : "copies";
+  const similar = kind === "similar";
+  // The similar threshold lives in the URL (?t=), the config's default until moved.
+  const tParam = similar && /^\d+$/.test(params.get("t") || "") ? Math.min(THRESHOLD_MAX, +params.get("t")) : null;
+  const view = similar ? `${kind}:${tParam ?? ""}` : kind;
 
   const [result,  setResult]  = useState(null);     // the last /api/duplicates answer, groups accumulated
-  const [loaded,  setLoaded]  = useState(null);     // kind the result belongs to
+  const [loaded,  setLoaded]  = useState(null);     // view (kind and threshold) the result belongs to
   const [error,   setError]   = useState(null);
   const [tick,    setTick]    = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [status,  setStatus]  = useState(null);
 
-  const shown = loaded === kind ? result?.groups.length ?? 0 : 0;
+  const shown = loaded === view ? result?.groups.length ?? 0 : 0;
   useEffect(() => {
     let alive = true;
-    getDuplicates({ kind, offset: 0, limit: Math.min(MAX_PAGE, Math.max(PAGE, shown)) }).then(
-      r => { if (alive) { setResult(r); setLoaded(kind); setError(null); } },
+    const threshold = tParam ?? undefined;
+    getDuplicates({ kind, threshold, offset: 0, limit: Math.min(MAX_PAGE, Math.max(PAGE, shown)) }).then(
+      r => { if (alive) { setResult(r); setLoaded(view); setError(null); } },
       e => { if (alive) setError(e); },
     );
     return () => { alive = false; };
     // `shown` is read, not watched: loading more must not refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, refreshKey, tick]);
+  }, [view, refreshKey, tick]);
+
+  // The slider moves at once; the list follows once it rests.
+  const [slider, setSlider] = useState(null);
+  useEffect(() => {
+    if (slider == null || slider === tParam) return;
+    const t = setTimeout(() => setParams({ kind: "similar", t: String(slider) }, { replace: true }), SLIDER_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [slider, tParam, setParams]);
+  const threshold = slider ?? tParam ?? (loaded === view ? result?.threshold : null) ?? 6;
   const reload = useCallback(() => setTick(t => t + 1), []);
 
   // Hashing runs in the background after every scan: follow it, and reload
@@ -215,7 +341,7 @@ export default function Duplicates() {
   async function loadMore() {
     setLoadingMore(true);
     try {
-      const r = await getDuplicates({ kind, offset: result.groups.length, limit: PAGE });
+      const r = await getDuplicates({ kind, threshold: tParam ?? undefined, offset: result.groups.length, limit: PAGE });
       setResult(prev => ({ ...r, groups: [...prev.groups, ...r.groups.filter(g => !prev.groups.some(p => p.id === g.id))] }));
     } catch (e) {
       toast(e.message, "err");
@@ -224,7 +350,7 @@ export default function Duplicates() {
     }
   }
 
-  const current = loaded === kind;
+  const current = loaded === view;
   const groups = (current && result?.groups) || [];
   // Bulk select takes identical groups, but a repost only when asked for:
   // one click must never trash another account's post unseen.
@@ -253,7 +379,7 @@ export default function Duplicates() {
     setDlgError(null);
     setErrors(null);
     try {
-      const r = await resolveDuplicates(choices);
+      const r = await resolveDuplicates(choices, similar ? result.threshold : undefined);
       if (!r?.ok) {
         const why = r?.skipped?.[0]?.error || r?.error || "Nothing could be moved to the trash.";
         if (confirm) setDlgError(why); else toast(why, "err");
@@ -274,14 +400,15 @@ export default function Duplicates() {
   }
 
   // One click for an identical group; a group that differs asks first when
-  // the members to trash hold something the kept one lacks.
+  // the members to trash hold something the kept one lacks. A similar group
+  // always asks: its posts only look alike.
   function resolveOne(g, keep) {
     const lost = lostItems(g, keep);
     const bytes = g.members.reduce((n, m) => n + (m.id === keep ? 0 : m.bytes), 0);
     const choices = [{ group: g.id, keep }];
-    if (g.identical || lost === 0) { run(choices); return; }
+    if (g.kind !== "similar" && (g.identical || lost === 0)) { run(choices); return; }
     setDlgError(null);
-    setConfirm({ choices, count: 1, bytes, lost });
+    setConfirm({ choices, count: 1, bytes, lost, similar: g.kind === "similar", others: g.members.length - 1 });
   }
 
   function askBulk() {
@@ -292,7 +419,7 @@ export default function Duplicates() {
   async function dismiss(g) {
     setBusy(true);
     try {
-      const r = await dismissDuplicate(g.id);
+      const r = await dismissDuplicate(g.id, similar ? result.threshold : undefined);
       if (!r?.ok) { toast(r?.error || "Could not dismiss.", "err"); reload(); return; }
       drop([g.id]);
       toast("Marked not a duplicate. It will not show again.");
@@ -338,12 +465,13 @@ export default function Duplicates() {
   const progress = status?.running ? (
     <span className="dup-status is-running">
       <Icon name="refresh" size={13} className="spin" />
-      {status.paused ? "Hashing paused while the index is busy" : `Hashing ${status.phase === "full" ? "whole files" : "files"}`}
+      {status.paused ? "Hashing paused while the index is busy" : PHASES[status.phase] || "Hashing"}
       {" "}{fmtInt(status.done)} / {fmtInt(status.total)}…
     </span>
   ) : status ? (
     <span className="dup-status" title={status.finished_at ? `Last pass ${fmtFullDate(status.finished_at)}` : ""}>
-      {plural(status.hashed, "file")} hashed{status.errors?.length ? ` · ${plural(status.errors.length, "file")} unreadable` : ""}
+      {similar ? `${plural(status.fingerprinted ?? 0, "picture")} fingerprinted` : `${plural(status.hashed, "file")} hashed`}
+      {status.errors?.length ? ` · ${plural(status.errors.length, "file")} unreadable` : ""}
     </span>
   ) : null;
 
@@ -358,7 +486,7 @@ export default function Duplicates() {
             role="tab"
             aria-selected={kind === x.value}
             className={`btn-secondary select-toggle${kind === x.value ? " is-on" : ""}`}
-            onClick={() => setParams(x.value === "copies" ? {} : { kind: x.value }, { replace: true })}
+            onClick={() => { setSlider(null); setParams(x.value === "copies" ? {} : { kind: x.value }, { replace: true }); }}
           >
             {x.label}
           </button>
@@ -366,10 +494,31 @@ export default function Duplicates() {
         <div className="page-head-spacer" />
         {progress}
       </div>
+      {similar && (
+        <div className="dup-threshold">
+          <label htmlFor="dup-threshold">How alike</label>
+          <span className="dup-threshold-end">tighter</span>
+          <input
+            id="dup-threshold"
+            type="range"
+            min={0}
+            max={THRESHOLD_MAX}
+            step={1}
+            value={threshold}
+            onChange={e => setSlider(+e.target.value)}
+            aria-valuetext={`${threshold} of 64 bits may differ`}
+          />
+          <span className="dup-threshold-end">looser</span>
+          <span className="dup-threshold-value mono" title="Fingerprint bits (of 64) that may differ">{plural(threshold, "bit")}</span>
+          {loaded !== view && <span className="dup-status">updating…</span>}
+        </div>
+      )}
       <p className="page-lede">
         {k.lede} Keeping one moves the others to the trash, so you can restore them from{" "}
-        <Link to="/trash" className="text-link">Trash</Link>. Files are compared by content, read in the background
-        after each scan.
+        <Link to="/trash" className="text-link">Trash</Link>.{" "}
+        {similar
+          ? "Pictures are fingerprinted in the background after each scan; click one to compare them full size."
+          : "Files are compared by content, read in the background after each scan."}
       </p>
       {error && <div className="msg err" role="alert">Could not load duplicates: {error.message}{" "}
         <button type="button" className="btn-link" onClick={reload}>Retry</button></div>}
@@ -381,7 +530,9 @@ export default function Duplicates() {
       ) : groups.length === 0 ? (
         <div className="card">
           <div className="empty">
-            {hashing || scanning ? "Nothing found yet: files are still being compared." : `No ${kind === "copies" ? "doubled downloads" : "shared files"} found.`}
+            {hashing || scanning ? "Nothing found yet: files are still being compared."
+              : similar ? `No pictures that look the same at ${plural(result.threshold, "bit")}.`
+              : `No ${kind === "copies" ? "doubled downloads" : "shared files"} found.`}
             {result.dismissed > 0 && ` ${plural(result.dismissed, "group")} marked not a duplicate.`}
           </div>
         </div>
@@ -390,7 +541,9 @@ export default function Duplicates() {
           {current && result.identical > 0 && !sel.active && (
             <div className="dup-summary">
               {plural(result.identical, "identical group")} would free {fmtBytes(result.identical_frees)}.
-              {" "}Use <strong>Select</strong> to resolve them with the suggested copy in one go
+              {identical.length > 0
+                ? <> Use <strong>Select</strong> to resolve them with the suggested copy in one go</>
+                : " Select leaves reposts out"}
               {reposts > 0 && !withReposts ? ` (${plural(reposts, "repost")} left out: turn on Include reposts)` : ""}.
             </div>
           )}
@@ -437,12 +590,21 @@ export default function Duplicates() {
         danger
         busy={busy}
         error={dlgError}
-        title={confirm?.lost ? "Trash copies that differ?" : `Resolve ${plural(confirm?.count ?? 0, "group")}?`}
+        title={confirm?.similar ? `Trash ${plural(confirm.others, "other post")}?`
+          : confirm?.lost ? "Trash copies that differ?" : `Resolve ${plural(confirm?.count ?? 0, "group")}?`}
         confirmLabel={`Move ${fmtBytes(confirm?.bytes ?? 0)} to the trash`}
         onConfirm={() => run(confirm.choices)}
         onCancel={() => setConfirm(null)}
       >
-        {confirm?.lost ? (
+        {confirm?.similar ? (
+          <p>
+            These posts only <strong>look</strong> alike: their files differ, and each has its own caption and
+            author. {confirm.others === 1 ? "The other post goes" : `The ${fmtInt(confirm.others)} other posts go`} to
+            the trash ({fmtBytes(confirm.bytes)})
+            {confirm.lost > 0 && <>, with <strong>{plural(confirm.lost, "item")}</strong> that nothing in the kept post
+            resembles</>}. You can restore them from the Trash page.
+          </p>
+        ) : confirm?.lost ? (
           <p>
             The members to trash hold <strong>{plural(confirm.lost, "item")}</strong> the one you keep does not
             have. They go to the trash with the rest ({fmtBytes(confirm.bytes)}), where you can still restore them.
