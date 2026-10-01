@@ -310,8 +310,11 @@ Duplicates come in three kinds, two exact and one visual:
   its bytes differ (a resized or recompressed repost, a re-upload). Two
   pictures match when their perceptual hashes are at most `threshold` bits
   apart (of 64; the config file's `similar_threshold`, 6 by default, or the
-  `threshold` parameter, 0 to 10). Posts linked through any match form one
-  group, except posts already in one `content` group, flat pictures (a
+  `threshold` parameter, 0 to 10). A group is a post and the posts with a
+  picture matching one of its own, so every member looks like that centre
+  (matches are not chained: A like B like C does not make A like C). The
+  post with the most matches is the first centre, then the next among the
+  rest. Left out: posts already in one `content` group, flat pictures (a
   solid colour, a smooth gradient, a black frame: 6 bits or fewer set, or
   unset) and a picture that matches more than 20 other posts. Similar groups
   are never `identical`, so they are resolved one by one, never in bulk.
@@ -389,8 +392,8 @@ group at the threshold they are given, so send the one it was listed at.
   shares the post's decision, and it stays with whichever member is kept.
 - `repost`: the members are posts by different accounts, so one is most
   likely a repost of another. Only `content` and `similar` groups can be.
-- `distance` (similar groups only): the most bits apart two linked
-  pictures of the group are.
+- `distance` (similar groups only): the most bits apart a member's
+  picture is from the centre's it matches.
 - `identical`: `true` when every member has the same files; `false` when
   something differs, and `differs` says what:
   `[{ "member": "copy:3", "idx": 2, "reason": "missing" }]`, with reasons

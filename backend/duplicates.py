@@ -19,6 +19,7 @@ Nothing here reads a media file: resolve() only stats them, to refuse when a
 file changed since it was hashed.
 """
 import hashlib
+import heapq
 import json
 import os
 import time
@@ -388,16 +389,44 @@ def _near_links(conn, hashes, threshold):
     return [link for link in links if len(near[link[0]]) <= MAX_SHARED and len(near[link[1]]) <= MAX_SHARED]
 
 
+def _stars(links):
+    """Split posts linked by near pictures into groups around a centre, so
+    every member looks like the centre itself. Connected components chain
+    (A near B near C...) into groups of hundreds of unrelated pictures.
+    Greedy: the post with the most unassigned neighbours takes them all,
+    ties to the smaller id; repeat. -> [(centre, {member: bits from centre})]."""
+    near = {}
+    for a, b, d in links:
+        for x, y in ((a[0], b[0]), (b[0], a[0])):
+            mine = near.setdefault(x, {})
+            mine[y] = min(mine.get(y, 64), d)
+    out, taken = [], set()
+    heap = [(-len(others), p) for p, others in near.items()]
+    heapq.heapify(heap)
+    while heap:
+        n, c = heapq.heappop(heap)
+        if c in taken:
+            continue
+        group = {q: d for q, d in near[c].items() if q not in taken}
+        if len(group) != -n:                       # stale count: queue it again
+            if group:
+                heapq.heappush(heap, (-len(group), c))
+            continue
+        taken |= {c, *group}
+        out.append((c, group))
+    return out
+
+
 def _similar_groups(conn, hashes, threshold):
     links = _near_links(conn, hashes, threshold)
-    matched, bits = {}, {}
-    for a, b, d in links:
-        matched.setdefault(a[0], set()).add(a[1])
-        matched.setdefault(b[0], set()).add(b[1])
-        bits[a[0]] = max(bits.get(a[0], 0), d)
-        bits[b[0]] = max(bits.get(b[0], 0), d)
     out = []
-    for ids in _components((a[0], b[0]) for a, b, _ in links):
+    for centre, near in _stars(links):
+        ids = {centre, *near}
+        matched = {}
+        for a, b, _ in links:                      # the pictures that matched, within the group
+            if a[0] in ids and b[0] in ids and centre in (a[0], b[0]):
+                matched.setdefault(a[0], set()).add(a[1])
+                matched.setdefault(b[0], set()).add(b[1])
         rows = [conn.execute(f"{db._SELECT} WHERE p.id = ?", (i,)).fetchone() for i in sorted(ids)]
         members = [_post_member(conn, r, hashes) for r in rows if r is not None]
         if len(members) < 2:
@@ -407,8 +436,7 @@ def _similar_groups(conn, hashes, threshold):
             _set_match(m, matched[m["id"]])
             differs += [{"member": m["id"], "idx": i["idx"], "reason": "only here"}
                         for i in m["items"] if i["idx"] not in matched[m["id"]]]
-        out.append(_finish("similar", members, differs, False, hashes,
-                           distance=max(bits[m["id"]] for m in members)))
+        out.append(_finish("similar", members, differs, False, hashes, distance=max(near.values())))
     return out
 
 

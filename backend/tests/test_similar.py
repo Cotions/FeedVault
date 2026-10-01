@@ -392,6 +392,25 @@ def test_a_picture_near_too_many_posts_links_nothing(env):
     assert len(g["members"]) == 2
 
 
+def test_a_chain_is_split_around_centres(env):
+    """A near B near C near D, 5 bits per step: not one group of pictures
+    that do not look alike end to end, but groups around a centre."""
+    paths = []
+    for i in range(4):
+        paths.append(write_post(env["media"] / f"u{i}", f"P{i}", TS + i, owner(f"u{i}", 1000 + i), "image") + ".jpg")
+        photo(paths[-1], i)
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    base = 0x0F0F_3C3C_5A5A_6969
+    for n, p in enumerate(paths):
+        set_dhash(p, base ^ ((1 << (5 * n)) - 1))
+    [g] = duplicates.all_groups(db.connect(), "similar", threshold=6)
+    assert [m["id"] for m in g["members"]] == ["instagram:P0", "instagram:P1", "instagram:P2"]   # around P1
+    assert g["distance"] == 5                                      # P0 and P2 are 10 apart, 5 from P1
+    [g] = duplicates.all_groups(db.connect(), "similar", threshold=10)
+    assert len(g["members"]) == 4 and g["distance"] == 10          # P1 is within 10 of every other
+
+
 def test_videos_in_groups_are_measured_once(env, monkeypatch):
     a = write_post(env["media"] / "alice", "V1", TS, ALICE, "video")
     b = write_post(env["media"] / "bob", "V2", TS + 99, BOB, "video")
