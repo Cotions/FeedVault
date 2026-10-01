@@ -96,6 +96,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
 | GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" } }, "yt-dlp": { "session": { "mode": "none" } }, "youtube_max_seconds": 180, "routes": {…} }` |
 | POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
 | POST | `/api/quit` | stops the backend |
@@ -1031,10 +1032,43 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
 | `{ "mode": "cookies", "browser": "firefox" }` | `--cookies-from-browser firefox` | The tool reads that browser's cookies itself. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
 
 FeedVault only passes the browser's name on. It never stores, reads or
-sends cookies. Note that yt-dlp copies the cookies it sent for a video into
-that video's info JSON (`cookies` key), in the media folder.
+sends cookies.
 
 `youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
+
+#### Cookies in info JSONs
+
+yt-dlp copies the cookies it sent for a video into that video's info JSON
+(`cookies` in each format and at the top, a `Cookie` line in their
+`http_headers`), in the media folder. So after a `yt-dlp-sync` job that
+passed `--cookies-from-browser`, once yt-dlp has exited (cancelled or not)
+and before the folder is indexed, FeedVault rewrites the info JSONs right in
+the source's folder changed since the job started: every `cookies` key at
+any depth and every `Cookie` header inside an `http_headers` are dropped,
+everything else stays as it was once parsed. The rewrite is atomic (a
+temporary file in the same folder renamed over the JSON) and keeps the
+file's mode and mtime. Only regular files (never a symlink) that parse as
+yt-dlp's (`extractor_key`, `id`, `webpage_url`) are touched. The job log
+says `cookies removed from N info JSONs`; a file that cannot be rewritten
+gets a log line and does not change how the sync ended.
+
+gallery-dl's metadata JSONs hold no cookies: it keeps request headers and
+cookies in private `_http_*` keys, which `--write-metadata` leaves out.
+
+`POST /api/yt-dlp/info-json-cookies` does the same for every `*.info.json`
+under the media roots (symlinked folders not followed), for folders
+synced before this:
+
+```json
+{ "ok": true, "applied": false, "checked": 120, "files": 37, "failures": 0, "failed": [] }
+```
+
+`checked`: info JSONs looked at; `files`: yt-dlp ones holding cookies
+(with `apply`, cleaned); `failed`: the first 20 `{ path, error }` that
+could not be read or rewritten, `failures` how many in all. `400` for an
+`apply` that is not a boolean, `409` while a yt-dlp sync runs or another
+check is under way. Settings counts first (`apply` false), then asks to
+confirm.
 
 ## Storage
 

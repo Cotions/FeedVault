@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds, saveInstaloaderSettings, saveSettings } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED } from "../lib/jobs";
@@ -508,7 +508,8 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
               <span className="creator-sub">
                 {tool} reads the cookies of the browser where you are logged in to {sites} (<code>--cookies-from-browser</code>).
                 Close that browser first if it fails.
-                {youtube && <> yt-dlp copies the cookies it used into each video&rsquo;s <code>.info.json</code>, in your media folder.</>}
+                {youtube && <> yt-dlp copies the cookies it used into each video&rsquo;s <code>.info.json</code>; FeedVault
+                  removes them from the files right after each sync.</>}
               </span>
             </span>
           </label>
@@ -533,6 +534,79 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
         </div>
         {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="alert">{msg.text}</div>}
       </form>
+      {youtube && <InfoJsonCookies />}
+    </div>
+  );
+}
+
+const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+
+/* Info JSONs written before FeedVault removed the cookies after each sync:
+   counted first (a dry run), then cleaned once confirmed. */
+function InfoJsonCookies() {
+  const [found,   setFound]   = useState(null);   // the dry run's answer, while the dialog is open
+  const [busy,    setBusy]    = useState(false);
+  const [dlgErr,  setDlgErr]  = useState(null);
+  const [msg,     setMsg]     = useState(null);
+
+  async function check() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await cleanInfoJsonCookies(false);
+      if (!r?.ok) setMsg({ ok: false, text: r?.error || "Could not check the info JSONs." });
+      else if (!r.files) setMsg({ ok: true, text: `No yt-dlp info JSON holds cookies (${plural(r.checked, "info JSON")} checked).` });
+      else { setDlgErr(null); setFound(r); }
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function run() {
+    setBusy(true);
+    setDlgErr(null);
+    try {
+      const r = await cleanInfoJsonCookies(true);
+      if (!r?.ok) { setDlgErr(r?.error || "Could not clean the info JSONs."); return; }
+      setFound(null);
+      const failed = r.failures ? ` ${plural(r.failures, "file")} could not be changed: ${r.failed.map(f => `${f.path} (${f.error})`).join(", ")}${r.failures > r.failed.length ? ", …" : ""}` : "";
+      setMsg({ ok: !r.failures, text: `Removed the cookies from ${plural(r.files, "info JSON")}.${failed}` });
+    } catch (err) {
+      setDlgErr(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="info-cookies">
+      <p className="page-lede">
+        Videos synced with cookies before FeedVault did this still have them in their <code>.info.json</code>.
+        This looks through every yt-dlp info JSON under your media roots and counts those first.
+      </p>
+      <div className="settings-actions">
+        <button type="button" className="btn-secondary" onClick={check} disabled={busy}>
+          <Icon name="search" size={14} />{busy && !found ? "Checking…" : "Remove cookies from existing yt-dlp info JSONs…"}
+        </button>
+      </div>
+      {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="status">{msg.text}</div>}
+      <ConfirmDialog
+        open={!!found}
+        busy={busy}
+        error={dlgErr}
+        title={`Remove the cookies from ${plural(found?.files ?? 0, "info JSON")}?`}
+        confirmLabel="Remove cookies"
+        onConfirm={run}
+        onCancel={() => setFound(null)}
+      >
+        <p>
+          {plural(found?.files ?? 0, "yt-dlp info JSON")} of the {plural(found?.checked ?? 0, "info JSON")} under your
+          media roots hold cookies. Each is rewritten without its <code>cookies</code> and <code>Cookie</code> headers;
+          everything else in it, and its date, stay the same.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

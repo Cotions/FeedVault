@@ -19,6 +19,7 @@ import config
 import db
 import duplicates
 import hashing
+import info_cookies
 import jobs
 import organize
 import people
@@ -890,6 +891,25 @@ def set_config():
     if changed:
         scanner.start(roots)
     return jsonify({"ok": True, "config": _public_config(cfg)})
+
+
+@app.post("/api/yt-dlp/info-json-cookies")
+def clean_info_json_cookies():
+    """Take the cookies out of every yt-dlp info JSON under the media roots
+    (info_cookies.py); ``apply`` false (the default) only counts them."""
+    body = request.get_json(silent=True) or {}
+    apply = body.get("apply", False)
+    if not isinstance(apply, bool):
+        return jsonify({"ok": False, "error": "apply must be true or false"}), 400
+    if any(j["kind"] == sync.KINDS["yt-dlp"] and j["state"] == "running" for j in jobs.active()):
+        return jsonify({"ok": False, "error": "a yt-dlp sync is running; try again once it ends"}), 409
+    try:
+        r = info_cookies.sweep(_roots(), apply)
+    except info_cookies.Busy as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    if apply:
+        print(f"[cookies] removed from {r['files']} info JSON(s), {r['failures']} failed")
+    return jsonify({"ok": True, "applied": apply, **r})
 
 
 # ---------------------------------------------------------------------------

@@ -35,6 +35,8 @@ gallery-dl and yt-dlp (archives.py):
 - metadata on (``--write-metadata``; ``--write-info-json --write-thumbnail``),
   into the source's folder; YouTube videos longer than ``youtube_max_seconds``
   are not downloaded (ChannelVault's).
+- after a yt-dlp sync with a browser's cookies, the info JSONs it wrote are
+  rewritten without them (info_cookies.py), before the folder is indexed.
 
 How it went is read from the output (login required, private, not found,
 rate limited) and stored on the source. instaloader syncs pause between two
@@ -52,6 +54,7 @@ from urllib.parse import urlsplit
 import archives
 import config
 import db
+import info_cookies
 import jobs
 import people
 import sources
@@ -559,6 +562,19 @@ def _start_archive(tool):
     return start
 
 
+def _strip_cookies(job, note):
+    """After a yt-dlp run with a browser's cookies: take them out of the
+    info JSONs it wrote. A failure is logged; the sync goes on."""
+    if "--cookies-from-browser" not in job["argv"] or not job["rescan"] or job["started_at"] is None:
+        return
+    # A second early: the file system's clock may lag behind time.time().
+    cleaned, failed = info_cookies.after_sync(job["rescan"], job["started_at"] - 1)
+    if cleaned:
+        note(f"cookies removed from {cleaned} info JSON{'' if cleaned == 1 else 's'}")
+    for path, error in failed:
+        note(f"could not remove the cookies from {path}: {error}")
+
+
 def _describe(label):
     def describe(params, argv):
         if not argv:
@@ -572,7 +588,7 @@ jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "gallery-dl"),
               ended=_ended, describe=_describe("Sync with gallery-dl"))
 jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
-              build=_build_yt_dlp, group="yt-dlp", start=_start_archive("yt-dlp"),
+              build=_build_yt_dlp, group="yt-dlp", start=_start_archive("yt-dlp"), after=_strip_cookies,
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "yt-dlp"),
               ended=_ended, describe=_describe("Sync with yt-dlp"))
 
