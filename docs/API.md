@@ -697,7 +697,7 @@ Built-in kinds:
 
 | Kind | Params | Runs | Group |
 |---|---|---|---|
-| `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version`; `result` `{ "version" }` (the first line) | `tool-version` |
+| `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
 
 Download kinds come with profile sync (#4) and the userscript (#10).
 

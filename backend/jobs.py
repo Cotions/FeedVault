@@ -119,7 +119,8 @@ def _first_line(lines):
 
 register("tool-version", label="Check a tool's version",
          params={"tool": {"type": "choice", "choices": list(TOOLS)}},
-         build=lambda p: {"tool": p["tool"], "args": ["--version"]},
+         # ffmpeg prints its version for -version and fails on --version.
+         build=lambda p: {"tool": p["tool"], "args": ["-version" if p["tool"] == "ffmpeg" else "--version"]},
          group="tool-version", summarize=_first_line)
 
 

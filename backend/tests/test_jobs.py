@@ -170,6 +170,13 @@ def test_configured_tool_path(runner, monkeypatch):
     assert job["state"] == "failed" and "not found" in job["message"]
 
 
+def test_tool_version_argv(runner, monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    argv = {t: ended(jobs.submit("tool-version", {"tool": t})["id"])["argv"] for t in jobs.TOOLS}
+    assert argv == {"instaloader": ["instaloader", "--version"], "gallery-dl": ["gallery-dl", "--version"],
+                    "yt-dlp": ["yt-dlp", "--version"], "ffmpeg": ["ffmpeg", "-version"]}
+
+
 def test_clean_tools():
     import config
     ok, err = config.clean_tools({"ffmpeg": sys.executable}, jobs.TOOLS)
