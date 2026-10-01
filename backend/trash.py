@@ -7,17 +7,21 @@ back as posts or show up as unmatched. Emptying the trash is the only step that
 removes files for good.
 
 Each move is logged in the trash folder's ``.manifest.jsonl`` (original path,
-trash path, post id, time), so a restore can be added without guesswork.
+trash path, post id, time, and what the Trash page shows about the post, which
+is gone from the index by then). Restore and purge work from those lines.
 """
+import hashlib
 import json
 import os
 import shutil
+import threading
 import time
 import uuid
 
 import db
 import scanner
 import thumbs
+from parsers import IMAGE_EXT, VIDEO_EXT, ext_of
 
 TRASH_NAME = ".feedvault-trash"
 MANIFEST = ".manifest.jsonl"
@@ -55,10 +59,10 @@ def _free_name(dest):
     return f"{stem} ({n}){ext}"
 
 
-def _move(path, roots, post_id, batch):
-    """Move one file to its root's trash. Returns its size."""
+def _move(path, roots, line):
+    """Move one file to its root's trash and log it. Returns (size, trash path)."""
     root, rel = _root_for(path, roots)
-    size = os.path.getsize(path)
+    size = os.lstat(path).st_size
     dest = _free_name(os.path.join(trash_dir(root), rel))
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     try:
@@ -66,39 +70,59 @@ def _move(path, roots, post_id, batch):
     except OSError as e:
         raise TrashError(f"could not move to the trash: {e.strerror or e}") from e
     with open(os.path.join(trash_dir(root), MANIFEST), "a", encoding="utf-8") as f:
-        f.write(json.dumps({"from": path, "to": dest, "post": post_id, "batch": batch,
-                            "at": int(time.time())}) + "\n")
-    return size
+        f.write(json.dumps({"from": path, "to": dest, **line, "at": int(time.time()), "size": size}) + "\n")
+    return size, dest
+
+
+def _post_info(post, items, partial):
+    """What a manifest line keeps about the post, for the Trash page."""
+    return {"platform": post["platform"],
+            "author": {"id": post["author_id"], "handle": post["author_handle"]}
+            if post["author_id"] or post["author_handle"] else None,
+            "kind": post["kind"], "posted_at": post["posted_at"], "items": items, "partial": partial}
+
+
+def _media_files(m):
+    """A media row's files, each with its manifest fields."""
+    out = [(m["path"], {"role": "media", "idx": m["idx"], "media_kind": m["kind"]})]
+    if m["poster_path"]:
+        out.append((m["poster_path"], {"role": "poster", "idx": m["idx"], "media_kind": "image"}))
+    return out
 
 
 def _post_files(conn, post):
-    """Every file that belongs to a post: media, posters, metadata, side files."""
+    """Every file that belongs to a post: media, posters, metadata, side files,
+    as (path, manifest fields)."""
     files = []
-    for m in conn.execute("SELECT path, poster_path FROM media WHERE post_id = ? ORDER BY idx", (post["id"],)):
-        files.append(m["path"])
-        if m["poster_path"]:
-            files.append(m["poster_path"])
+    for m in conn.execute("SELECT * FROM media WHERE post_id = ? ORDER BY idx", (post["id"],)):
+        files.extend(_media_files(m))
     meta = post["meta_path"]
-    files.append(meta)
+    files.append((meta, {"role": "meta"}))
     for ext in (".json.xz", ".json"):
         if meta.endswith(ext):
             base = meta[: -len(ext)]
-            files.extend(base + s for s in _SIDE_SUFFIXES)
+            files.extend((base + s, {"role": "side"}) for s in _SIDE_SUFFIXES)
             break
-    return list(dict.fromkeys(files))
+    # Filename-only posts use their first media file as the metadata path:
+    # the first mention wins.
+    out = {}
+    for path, fields in files:
+        out.setdefault(path, fields)
+    return list(out.items())
 
 
-def _move_all(files, roots, post_id, report):
-    batch = report["batch"]
+def _move_all(files, roots, post_id, info, report, data_dir):
     """Move every existing file; all-or-nothing is not possible across renames,
     so report per file and tell the caller whether everything went."""
     ok = True
-    for path in files:
+    for path, fields in files:
         if not os.path.lexists(path):
             continue                            # already gone: nothing to move
         try:
-            report["bytes"] += _move(path, roots, post_id, batch)
+            size, dest = _move(path, roots, {"post": post_id, "batch": report["batch"], **info, **fields})
+            report["bytes"] += size
             report["files"] += 1
+            thumbs.move(data_dir, path, dest)   # the Trash page shows it from there
         except (TrashError, OSError) as e:
             ok = False
             report["errors"].append({"path": path, "error": str(e)})
@@ -131,10 +155,10 @@ def delete(post_ids, media_ids, roots, data_dir):
                 if post["id"] in report["posts"]:
                     report["media"].append(mid)
                 continue
-            files = [m["path"]] + ([m["poster_path"]] if m["poster_path"] else [])
-            if not _move_all(files, roots, post["id"], report):
+            files = _media_files(m)
+            if not _move_all(files, roots, post["id"], _post_info(post, len(others) + 1, True), report, data_dir):
                 continue
-            for f in files:
+            for f, _ in files:
                 thumbs.forget(data_dir, f)
             conn.execute("DELETE FROM media WHERE id = ?", (mid,))
             # Filename-only posts use their first media file as the metadata path.
@@ -150,10 +174,11 @@ def delete(post_ids, media_ids, roots, data_dir):
 
 def _delete_post(conn, post, roots, data_dir, report):
     files = _post_files(conn, post)
-    if not _move_all(files, roots, post["id"], report):
+    items = conn.execute("SELECT COUNT(*) FROM media WHERE post_id = ?", (post["id"],)).fetchone()[0]
+    if not _move_all(files, roots, post["id"], _post_info(post, items, False), report, data_dir):
         conn.commit()                           # keep the index in step with what did move
         return
-    for f in files:
+    for f, _ in files:
         thumbs.forget(data_dir, f)
     db.remove_post(conn, post["id"])
     report["posts"].append(post["id"])
@@ -179,58 +204,304 @@ def usage(roots):
     return out
 
 
-def empty(roots):
+def empty(roots, data_dir=None):
     """Permanently delete every trash folder under the media roots."""
     with db.write_lock:
         before = usage(roots)
         for r in before["roots"]:
+            if data_dir:
+                for line in _read_manifest(r["root"]):
+                    if isinstance(line.get("to"), str):
+                        thumbs.forget(data_dir, line["to"])
             if os.path.isdir(r["path"]) and os.path.basename(r["path"]) == TRASH_NAME:
                 shutil.rmtree(r["path"])
     return {"ok": True, "files": before["files"], "bytes": before["bytes"]}
 
 
-def _read_manifest(root):
-    path = os.path.join(trash_dir(root), MANIFEST)
-    entries = []
+# ---------------------------------------------------------------------------
+# The manifest
+#
+# One JSON line per trashed file. Delete appends, restore and purge rewrite it;
+# all three hold db.write_lock. Reads do not: an append in progress at worst
+# leaves a half line, which is skipped and read whole next time (the file's
+# size changed, so the cache misses).
+# ---------------------------------------------------------------------------
+
+_cache = {}                     # manifest path -> ((mtime_ns, size, inode), lines, entries)
+_cache_lock = threading.Lock()
+
+
+def _manifest_path(root):
+    return os.path.join(trash_dir(root), MANIFEST)
+
+
+def _parse(path):
+    lines = []
     try:
         with open(path, encoding="utf-8") as f:
-            for line in f:
+            for raw in f:
                 try:
-                    entries.append(json.loads(line))
+                    line = json.loads(raw)
                 except ValueError:
-                    pass
+                    continue
+                if isinstance(line, dict) and isinstance(line.get("to"), str) \
+                        and isinstance(line.get("from"), str):
+                    lines.append(line)
     except OSError:
         pass
-    return entries
+    return lines
 
 
-def _write_manifest(root, entries):
-    path = os.path.join(trash_dir(root), MANIFEST)
+def _load(root):
+    """(lines, entries) of one root's manifest, parsed once per version of the
+    file. Shared between callers: never mutate them."""
+    path = _manifest_path(root)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return [], []
+    sig = (st.st_mtime_ns, st.st_size, st.st_ino)
+    with _cache_lock:
+        hit = _cache.get(path)
+    if hit and hit[0] == sig:
+        return hit[1], hit[2]
+    lines = _parse(path)
+    entries = _group(root, lines)
+    with _cache_lock:
+        _cache[path] = (sig, lines, entries)
+    return lines, entries
+
+
+def _read_manifest(root):
+    return _load(root)[0]
+
+
+def _write_manifest(root, lines):
+    path = _manifest_path(root)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        for e in entries:
-            f.write(json.dumps(e) + "\n")
+        for line in lines:
+            f.write(json.dumps(line) + "\n")
     os.replace(tmp, path)
 
 
-def restore(post_ids, roots):
-    """Put back the files of each post's most recent deletion, then re-index them."""
+def entry_key(root, post, batch):
+    # Opaque on purpose: the URL of a trash thumbnail must never carry a path.
+    return hashlib.sha1(f"{root}\0{post}\0{batch}".encode("utf-8", "surrogateescape")).hexdigest()[:20]
+
+
+def _line_key(root, line):
+    return entry_key(root, line.get("post"), line.get("batch"))
+
+
+# ---------------------------------------------------------------------------
+# Entries: one per (trash folder, post, batch)
+# ---------------------------------------------------------------------------
+
+def _media_kind(line):
+    if line.get("media_kind") in ("image", "video"):
+        return line["media_kind"]
+    ext = ext_of(line["to"])
+    return "video" if ext in VIDEO_EXT else "image" if ext in IMAGE_EXT else None
+
+
+def _roles(lines):
+    """Each line's role. Lines written before roles were recorded: a video's
+    image with the same stem is its poster (instaloader's layout)."""
+    if all(line.get("role") for line in lines):
+        return [line["role"] for line in lines]
+    stems = {os.path.splitext(line["to"])[0] for line in lines if _media_kind(line) == "video"}
+    out = []
+    for line in lines:
+        if line.get("role"):
+            out.append(line["role"])
+            continue
+        kind = _media_kind(line)
+        if kind == "image" and os.path.splitext(line["to"])[0] in stems:
+            out.append("poster")
+        elif kind:
+            out.append("media")
+        elif line["to"].endswith((".json", ".json.xz")):
+            out.append("meta")
+        else:
+            out.append("side")
+    return out
+
+
+def _group(root, lines):
+    groups = {}
+    for seq, line in enumerate(lines):
+        key = _line_key(root, line)
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {"key": key, "root": root, "lines": []}
+        g["lines"].append(line)
+        g["seq"] = seq                           # later in the file: deleted later, within one second
+    for g in groups.values():
+        ls = g["lines"]
+        roles = _roles(ls)
+        g["roles"] = roles
+        g["at"] = max((line.get("at") or 0) for line in ls)
+        media = sorted((i for i, r in enumerate(roles) if r == "media"),
+                       key=lambda i: (ls[i].get("idx") or 0, ls[i]["to"]))
+        g["media"] = [ls[i] for i in media]
+        first = ls[0]
+        post = first.get("post") or ""
+        platform, _, post_id = post.partition(":") if ":" in post else (None, "", post)
+        author = first.get("author") if isinstance(first.get("author"), dict) else None
+        kinds = [_media_kind(m) for m in g["media"]]
+        g["public"] = {
+            "key": g["key"], "post": first.get("post"),
+            "platform": first.get("platform") or platform or None, "post_id": post_id or None,
+            "batch": first.get("batch"), "at": g["at"],
+            "author": {"id": author.get("id"), "handle": author.get("handle")} if author else None,
+            "kind": first.get("kind") or ("carousel" if len(kinds) > 1 else kinds[0] if kinds else None),
+            "posted_at": first.get("posted_at"),
+            "items": len(g["media"]),
+            "of": max((line["items"] for line in ls if isinstance(line.get("items"), int)), default=None),
+            "partial": any(line.get("partial") is True for line in ls),
+        }
+    return list(groups.values())
+
+
+def _all_entries(roots):
+    out = []
+    for root in roots:
+        out.extend(_load(root)[1])
+    out.sort(key=lambda g: (-g["at"], -g["seq"], g["key"]))
+    return out
+
+
+def _author_key(a):
+    return (a or {}).get("id") or (a or {}).get("handle")
+
+
+def _measure(g):
+    """(bytes on disk, missing) of an entry, from the files as they are now."""
+    size, missing = 0, False
+    for line in g["lines"]:
+        try:
+            st = os.lstat(line["to"])
+        except OSError:
+            missing = True
+            continue
+        size += line["size"] if isinstance(line.get("size"), int) else st.st_size
+    return size, missing
+
+
+def _matches(g, author=None, since=None):
+    p = g["public"]
+    if author is not None and _author_key(p["author"]) != author:
+        return False
+    if since is not None and p["at"] < since:
+        return False
+    return True
+
+
+def items(roots, author=None, since=None, offset=0, limit=60):
+    entries = _all_entries(roots)
+    out = {"total": 0, "files": 0, "bytes": 0,
+           "trash": {"entries": len(entries), "files": 0, "bytes": 0}, "authors": [], "entries": []}
+    authors = {}
+    for g in entries:
+        size, missing = _measure(g)
+        p = g["public"]
+        out["trash"]["files"] += len(g["lines"])
+        out["trash"]["bytes"] += size
+        ak = _author_key(p["author"])
+        if ak is not None:
+            a = authors.setdefault((p["platform"], ak), {
+                "platform": p["platform"], "id": p["author"].get("id"), "handle": p["author"].get("handle"),
+                "entries": 0, "bytes": 0})
+            a["entries"] += 1
+            a["bytes"] += size
+        if not _matches(g, author, since):
+            continue
+        out["total"] += 1
+        out["files"] += len(g["lines"])
+        out["bytes"] += size
+        if offset < out["total"] <= offset + limit:
+            out["entries"].append({**p, "files": len(g["lines"]), "bytes": size, "missing": missing,
+                                   "thumb_url": f"/trash/{g['key']}/thumb" if _thumb_source(g) else None})
+    out["authors"] = sorted(authors.values(), key=lambda a: (-a["bytes"], a["handle"] or ""))
+    return out
+
+
+def _find(roots, keys):
+    wanted = set(keys)
+    return [g for g in _all_entries(roots) if g["key"] in wanted]
+
+
+# ---------------------------------------------------------------------------
+# Serving thumbnails of trashed files
+# ---------------------------------------------------------------------------
+
+def _inside_trash(path, root):
+    """Whether ``path`` (symlinks followed) is a file inside ``root``'s trash folder."""
+    base = os.path.realpath(trash_dir(root))
+    real = os.path.realpath(path)
+    return real.startswith(base + os.sep) and real != os.path.join(base, MANIFEST)
+
+
+def _thumb_source(g):
+    """(media line, poster path or None) to make the entry's thumbnail from."""
+    if not g["media"]:
+        return None
+    m = g["media"][0]
+    if _media_kind(m) == "image":
+        return m, None
+    for line, role in zip(g["lines"], g["roles"]):
+        if role == "poster" and (line.get("idx") == m.get("idx") if "idx" in m
+                                 else os.path.splitext(line["to"])[0] == os.path.splitext(m["to"])[0]):
+            return m, line["to"]
+    return (m, None) if thumbs.have_ffmpeg() else None
+
+
+def thumb(roots, key, data_dir):
+    """(path to send, is a generated thumbnail) for an entry, or None.
+
+    Only files listed in a manifest, and only those that resolve inside that
+    root's trash folder, are ever read."""
+    for g in _find(roots, [key]):
+        src = _thumb_source(g)
+        if src is None:
+            return None
+        m, poster = src
+        if not _inside_trash(m["to"], g["root"]) or (poster and not _inside_trash(poster, g["root"])):
+            return None
+        row = {"path": m["to"], "kind": _media_kind(m), "poster_path": poster}
+        out = thumbs.thumb_for(data_dir, row)
+        if out:
+            return out
+        return m["to"] if row["kind"] == "image" else None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Restore and purge
+# ---------------------------------------------------------------------------
+
+def restore(post_ids, roots, data_dir=None, keys=None):
+    """Put files back, then re-index them: each post's most recent deletion
+    (``post_ids``), or exactly the entries named by ``keys``."""
     report = {"ok": True, "posts": [], "files": 0, "errors": []}
-    wanted = set(post_ids)
+    wanted = set(post_ids or ())
+    wanted_keys = set(keys or ())
     touched_dirs = set()
     with db.write_lock:
         for root in roots:
-            entries = _read_manifest(root)
-            if not entries:
+            lines = _read_manifest(root)
+            if not lines:
                 continue
             latest = {}                          # post -> batch of its latest deletion
-            for e in entries:
+            for e in lines:
                 if e.get("post") in wanted:
                     latest[e["post"]] = e.get("batch")
             keep = []
-            for e in entries:
+            for e in lines:
                 pid = e.get("post")
-                if pid not in latest or e.get("batch") != latest[pid]:
+                if not (pid in latest and e.get("batch") == latest[pid]) \
+                        and _line_key(root, e) not in wanted_keys:
                     keep.append(e)
                     continue
                 src, dest = e["to"], e["from"]
@@ -243,12 +514,69 @@ def restore(post_ids, roots):
                     os.rename(src, dest)
                     report["files"] += 1
                     touched_dirs.add(os.path.dirname(dest))
+                    if data_dir:
+                        thumbs.move(data_dir, src, dest)
                     if pid not in report["posts"]:
                         report["posts"].append(pid)
                 except (TrashError, OSError) as err:
                     report["errors"].append({"path": dest, "error": str(err)})
                     keep.append(e)
-            _write_manifest(root, keep)
+            if len(keep) != len(lines):
+                _write_manifest(root, keep)
     if touched_dirs:
         scanner.index_dirs(roots, touched_dirs)
+    return report
+
+
+def _prune_dirs(path, root):
+    """Remove folders left empty by a purge, up to (not including) the trash folder."""
+    top = os.path.realpath(trash_dir(root))
+    d = os.path.dirname(path)
+    while os.path.realpath(d).startswith(top + os.sep):
+        try:
+            os.rmdir(d)
+        except OSError:
+            return
+        d = os.path.dirname(d)
+
+
+def purge(roots, keys, data_dir):
+    """Permanently delete the files of the given entries and drop their lines."""
+    report = {"ok": True, "entries": 0, "keys": [], "files": 0, "bytes": 0, "dropped": 0, "errors": []}
+    wanted = set(keys)
+    with db.write_lock:
+        for root in roots:
+            lines = _read_manifest(root)
+            if not any(_line_key(root, e) in wanted for e in lines):
+                continue
+            keep, failed, done = [], set(), set()
+            for e in lines:
+                key = _line_key(root, e)
+                if key not in wanted:
+                    keep.append(e)
+                    continue
+                path = e["to"]
+                try:
+                    if not os.path.lexists(path):
+                        report["dropped"] += 1
+                        done.add(key)
+                        continue
+                    if not _inside_trash(path, root):
+                        raise TrashError("outside the trash folder")
+                    if os.path.isdir(path):
+                        raise TrashError("not a file")
+                    size = os.lstat(path).st_size
+                    os.remove(path)
+                    report["files"] += 1
+                    report["bytes"] += size
+                    done.add(key)
+                    thumbs.forget(data_dir, path)
+                    _prune_dirs(path, root)
+                except (TrashError, OSError) as err:
+                    report["errors"].append({"path": path, "error": str(err)})
+                    failed.add(key)
+                    keep.append(e)
+            report["keys"].extend(sorted(done - failed))
+            report["entries"] += len(done - failed)
+            _write_manifest(root, keep)
     return report

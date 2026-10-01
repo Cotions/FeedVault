@@ -170,13 +170,45 @@ def delete_items():
     return jsonify(report)
 
 
+def _str_list(value):
+    return isinstance(value, list) and bool(value) and all(isinstance(v, str) for v in value)
+
+
 @app.post("/api/trash/restore")
 def trash_restore():
     body = request.get_json(silent=True) or {}
-    posts = body.get("posts")
-    if not isinstance(posts, list) or not posts or not all(isinstance(p, str) for p in posts):
-        return jsonify({"ok": False, "error": "posts must be a non-empty list of ids"}), 400
-    return jsonify(trash.restore(posts[:500], _roots()))
+    posts, keys = body.get("posts"), body.get("keys")
+    if posts is not None and not _str_list(posts) or keys is not None and not _str_list(keys) \
+            or posts is None and keys is None:
+        return jsonify({"ok": False, "error": "posts or keys must be a non-empty list of ids"}), 400
+    cfg = config.load()
+    return jsonify(trash.restore((posts or [])[:500], cfg["media_roots"], cfg["data_directory"],
+                                 keys=(keys or [])[:5000]))
+
+
+@app.get("/api/trash/items")
+def trash_items():
+    since = request.args.get("since")
+    return jsonify(trash.items(
+        _roots(),
+        author=request.args.get("author") or None,
+        since=_int_arg("since", 0, 0, 2**53) if since else None,
+        offset=_int_arg("offset", 0, 0, 10**9),
+        limit=_int_arg("limit", 60, 1, 500),
+    ))
+
+
+@app.post("/api/trash/purge")
+def trash_purge():
+    body = request.get_json(silent=True) or {}
+    keys = body.get("keys")
+    if not _str_list(keys):
+        return jsonify({"ok": False, "error": "keys must be a non-empty list"}), 400
+    cfg = config.load()
+    result = trash.purge(cfg["media_roots"], keys[:5000], cfg["data_directory"])
+    print(f"[trash] purged {result['entries']} entries: {result['files']} files, "
+          f"{result['bytes']} bytes deleted permanently")
+    return jsonify(result)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +236,8 @@ def trash_usage():
 
 @app.post("/api/trash/empty")
 def trash_empty():
-    result = trash.empty(_roots())
+    cfg = config.load()
+    result = trash.empty(cfg["media_roots"], cfg["data_directory"])
     print(f"[trash] emptied: {result['files']} files, {result['bytes']} bytes deleted permanently")
     return jsonify(result)
 
@@ -316,6 +349,16 @@ def serve_thumb(media_id):
 def serve_poster(media_id):
     row = db.media_row(db.connect(), media_id)
     return _send(row["poster_path"] if row else None)
+
+
+@app.get("/trash/<key>/thumb")
+def serve_trash_thumb(key):
+    """Thumbnail of a trashed entry. The key is opaque; trash.thumb only reads
+    files listed in a manifest that resolve inside their trash folder."""
+    if len(key) != 20 or not all(c in "0123456789abcdef" for c in key):
+        abort(404)
+    cfg = config.load()
+    return _send(trash.thumb(cfg["media_roots"], key, cfg["data_directory"]))
 
 
 @app.get("/userscript/feedvault.user.js")

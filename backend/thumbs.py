@@ -119,3 +119,14 @@ def forget(data_dir, media_path):
             os.remove(path)
         except OSError:
             pass
+
+
+def move(data_dir, old_path, new_path):
+    """Keep a cached thumbnail when its file moves (to the trash and back)."""
+    old, new = _cache_path(data_dir, old_path), _cache_path(data_dir, new_path)
+    for a, b in ((old, new), (old + ".failed", new + ".failed")):
+        try:
+            os.makedirs(os.path.dirname(b), exist_ok=True)
+            os.replace(a, b)
+        except OSError:
+            pass

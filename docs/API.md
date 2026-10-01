@@ -95,13 +95,16 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 Deleting never destroys a file directly. Files move to a trash folder inside
 the media root they came from (`<root>/.feedvault-trash/`, same relative path),
 which is an instant rename on the same disk. The scanner skips that folder.
-Only **Empty trash** removes files for good.
+Only **Empty trash** and **purge** (below) remove files for good.
 
 | Method | Path | Returns |
 |---|---|---|
 | POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
 | GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }` |
 | POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }` |
+| GET | `/api/trash/items?offset=&limit=&author=&since=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
+| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
+| GET | `/trash/<key>/thumb` | small JPEG of a trashed entry (no header needed, like `/media`) |
 
 `/api/delete` removes each listed post with all its files (media, posters,
 metadata JSON, caption and side files), and each listed media item on its own.
@@ -123,6 +126,89 @@ already gone is simply dropped from the index. Response:
 item with any file that could not be moved stays in the index, and the reason
 is in `errors`. `ok` is `false` only when nothing could be done at all (bad
 body, or a scan held the index for more than 30 s).
+
+### Trash contents
+
+Every file moved to the trash gets one line in its trash folder's
+`.manifest.jsonl`:
+
+```json
+{ "from": "/abs/alice/2024-06-01_12-00-00_UTC.jpg", "to": "/abs/.feedvault-trash/alice/2024-06-01_12-00-00_UTC.jpg",
+  "post": "instagram:C8x…", "batch": "3f2a…", "at": 1727500000,
+  "platform": "instagram", "author": { "id": "123456", "handle": "somebody" },
+  "kind": "carousel", "posted_at": 1727481600, "items": 5, "partial": true,
+  "role": "media", "idx": 2, "media_kind": "image", "size": 204800 }
+```
+
+`batch` is one `/api/delete` call. The trashed post is gone from the index, so
+the line carries what the Trash page shows: `platform`, `author`, `kind` and
+`posted_at` of the post, `items` (its media count when it was deleted),
+`partial` (`true` when only some media items were deleted, not the post),
+`role` (`media`, `poster`, `meta` or `side`), `idx` and `media_kind` for media
+and posters, and `size` in bytes. Lines written before these fields existed
+still work: the platform comes from the post id, the media kind from the file
+extension, the size from the file on disk, and `author` is `null`.
+
+`GET /api/trash/items` groups the lines by trash folder, post and batch, newest
+deletion first:
+
+```json
+{
+  "total": 3, "files": 9, "bytes": 15728640,
+  "trash": { "entries": 7, "files": 21, "bytes": 52428800 },
+  "authors": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "entries": 4, "bytes": 31457280 }],
+  "entries": [
+    { "key": "9b1f0c7d2e4a6b8c0d1e", "post": "instagram:C8x…", "platform": "instagram", "post_id": "C8x…",
+      "batch": "3f2a…", "at": 1727500000, "author": { "id": "123456", "handle": "somebody" },
+      "kind": "carousel", "posted_at": 1727481600, "files": 1, "bytes": 204800,
+      "items": 1, "of": 5, "partial": true, "missing": false, "thumb_url": "/trash/9b1f0c7d2e4a6b8c0d1e/thumb" }
+  ]
+}
+```
+
+- Query parameters, all optional: `author` (an author id, or a handle for
+  authors without one), `since` (Unix seconds: deleted at or after),
+  `offset` (default 0), `limit` (default 60, max 500).
+- `total`, `files` and `bytes` add up every entry the filters match, not just
+  one page. `trash` and `authors` cover the whole trash, whatever the filters.
+- `key` is opaque. It names one entry and is what restore and purge take.
+- `files` counts the entry's lines, `bytes` the size of those still in the
+  trash. `items` counts its media items, `of` the post's media count when it
+  was deleted (`null` for old lines).
+- `partial`: only some media items of the post were deleted; the rest is still
+  in the index.
+- `missing`: at least one of the entry's files is no longer in the trash
+  (moved or deleted by hand). Purging the entry drops its lines.
+- `author` is `null` when the line predates author fields.
+- `thumb_url` is `null` when the entry has no image or video, or its first
+  item is a video with neither a poster nor ffmpeg to grab a frame.
+
+`GET /trash/<key>/thumb` serves a thumbnail of the entry's first media item
+(its poster for a video). It only ever reads a file listed in a manifest that
+resolves (symlinks followed) inside that root's `.feedvault-trash` folder.
+Thumbnails are cached under the trash path in the data directory, and dropped
+when the entry is restored or purged.
+
+`POST /api/trash/restore` also takes `{ "keys": ["…"] }`: puts back exactly
+those entries (partial deletes included), then re-indexes. Same response as
+with `posts`. Either `posts` or `keys` must be a non-empty list.
+
+`POST /api/trash/purge` with `{ "keys": ["…"] }` (at most 5000) permanently
+deletes the files of those entries and drops their lines from the manifest.
+Unknown keys are ignored. A file is only deleted when its real path is inside
+the trash folder of a configured media root; anything else is refused and
+reported. Lines of files already gone are dropped. Response:
+
+```json
+{ "ok": true, "entries": 2, "keys": ["…", "…"], "files": 4, "bytes": 5242880, "dropped": 1,
+  "errors": [{ "path": "/abs/.feedvault-trash/x.jpg", "error": "outside the trash folder" }] }
+```
+
+`entries` counts the entries fully purged and `keys` names them, `dropped`
+the lines removed for files that were already missing. An entry with an error
+keeps its lines.
+Delete, restore and purge never run at the same time (they share the
+manifest).
 
 ## Review (keep or trash)
 
