@@ -19,6 +19,7 @@ import time
 import uuid
 
 import db
+import organize
 import scanner
 import thumbs
 from parsers import IMAGE_EXT, VIDEO_EXT, ext_of
@@ -244,14 +245,26 @@ def empty(roots, data_dir=None):
     """Permanently delete every trash folder under the media roots."""
     with db.write_lock:
         before = usage(roots)
+        gone = set()
         for r in before["roots"]:
-            if data_dir:
-                for line in _read_manifest(r["root"]):
-                    if isinstance(line.get("to"), str):
-                        thumbs.forget(data_dir, line["to"])
+            for line in _read_manifest(r["root"]):
+                gone.add(line.get("post"))
+                if data_dir and isinstance(line.get("to"), str):
+                    thumbs.forget(data_dir, line["to"])
             if os.path.isdir(r["path"]) and os.path.basename(r["path"]) == TRASH_NAME:
                 shutil.rmtree(r["path"])
-    return {"ok": True, "files": before["files"], "bytes": before["bytes"]}
+        forgotten = _forget_gone(roots, gone)
+    return {"ok": True, "files": before["files"], "bytes": before["bytes"], "forgotten": forgotten}
+
+
+def _forget_gone(roots, gone):
+    """Forget the tags and the like of the posts in ``gone`` (whose trash
+    entries were just deleted for good) that are now neither in the index nor
+    in any manifest. Only these: a post whose trash sits on a root that is
+    offline right now is never a candidate. Returns the user data tables that
+    changed."""
+    trashed = {line.get("post") for root in roots for line in _read_manifest(root)}
+    return organize.forget_gone(db.connect(), [p for p in gone if isinstance(p, str) and p not in trashed])
 
 
 # ---------------------------------------------------------------------------
@@ -616,16 +629,18 @@ def purge(roots, keys, data_dir, match=None):
         if match is not None:
             keys = [g["key"] for g in _all_entries(roots) if _matches(g, **match)]
         wanted = set(keys)
+        gone = set()
         for root in roots:
             lines = _read_manifest(root)
             if not any(_line_key(root, e) in wanted for e in lines):
                 continue
-            keep, failed, done = [], set(), set()
+            keep, failed, done, posts = [], set(), set(), {}
             for e in lines:
                 key = _line_key(root, e)
                 if key not in wanted:
                     keep.append(e)
                     continue
+                posts[key] = e.get("post")
                 path = e["to"]
                 try:
                     if not os.path.lexists(path):
@@ -647,7 +662,9 @@ def purge(roots, keys, data_dir, match=None):
                     report["errors"].append({"path": path, "error": str(err)})
                     failed.add(key)
                     keep.append(e)
+            gone.update(posts[k] for k in done - failed)
             report["keys"].extend(sorted(done - failed))
             report["entries"] += len(done - failed)
             _write_manifest(root, keep)
+        report["forgotten"] = _forget_gone(roots, gone) if gone else []
     return report

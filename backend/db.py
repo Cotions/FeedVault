@@ -1,14 +1,16 @@
 """The SQLite index.
 
 Everything here is derived from the media folders and can be rebuilt by a
-rescan, except the user's own tables (review decisions, later tags and
-people). Those are mirrored to JSON files by userdata.py so a rebuild can
-restore them.
+rescan, except the user's own tables (review decisions, tags,
+collections, later people). Those are mirrored to JSON files by
+userdata.py so a rebuild can restore them.
 """
 import glob
 import json
 import os
+import re
 import sqlite3
+import string
 import threading
 
 import thumbs
@@ -187,9 +189,53 @@ def _migrate_5(conn):
     conn.execute("ALTER TABLE media_hash_v5 RENAME TO media_hash")
 
 
+def _migrate_6(conn):
+    """Tags: user data, never touched by scans and mirrored to JSON by
+    userdata.py. Keyed by post id, not removed with the post, so a post
+    restored from the trash finds its tags again (organize.py)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tags (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            color      TEXT,
+            created_at INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS post_tags (
+            post_id TEXT NOT NULL,
+            tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            at      INTEGER NOT NULL,
+            PRIMARY KEY (post_id, tag_id)
+        ) WITHOUT ROWID""")
+    conn.execute("CREATE INDEX IF NOT EXISTS post_tags_tag ON post_tags(tag_id, post_id)")
+
+
+def _migrate_7(conn):
+    """Collections: named, ordered sets of posts. User data with the same
+    rules as tags (organize.py)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS collections (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            cover_post TEXT,                        -- a post id, or NULL: the first post
+            created_at INTEGER NOT NULL,
+            position   INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS collection_posts (
+            collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+            post_id       TEXT NOT NULL,
+            position      INTEGER NOT NULL,
+            at            INTEGER NOT NULL,
+            PRIMARY KEY (collection_id, post_id)
+        ) WITHOUT ROWID""")
+    conn.execute("CREATE INDEX IF NOT EXISTS collection_posts_order ON collection_posts(collection_id, position)")
+    conn.execute("CREATE INDEX IF NOT EXISTS collection_posts_post ON collection_posts(post_id)")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
-MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5]
+MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7]
 
 BACKUPS_KEPT = 3
 
@@ -428,7 +474,7 @@ def _cover(conn, post_id):
     return {"kind": "image", "url": f"/media/{m['id']}/thumb"}
 
 
-def summary(conn, row):
+def summary(conn, row, tags=None):
     count, size = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(CASE WHEN missing = 0 THEN size END), 0) FROM media "
         "WHERE post_id = ?", (row["id"],)).fetchone()
@@ -448,7 +494,26 @@ def summary(conn, row):
         "cover": _cover(conn, row["id"]),
         "missing": bool(row["missing"]),
         "decision": row["decision"] if "decision" in row.keys() else None,
+        "tags": post_tags(conn, row["id"]) if tags is None else tags,
     }
+
+
+def summaries(conn, rows):
+    """summary() of each row, the tags of all of them read in one query."""
+    tags = {}
+    ids = [r["id"] for r in rows]
+    if ids:
+        for pid, name in conn.execute(
+                "SELECT pt.post_id, t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
+                f"WHERE pt.post_id IN ({', '.join('?' for _ in ids)}) ORDER BY t.name COLLATE NOCASE", ids):
+            tags.setdefault(pid, []).append(name)
+    return [summary(conn, r, tags.get(r["id"], [])) for r in rows]
+
+
+def post_tags(conn, post_id):
+    return [r[0] for r in conn.execute(
+        "SELECT t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
+        "WHERE pt.post_id = ? ORDER BY t.name COLLATE NOCASE", (post_id,))]
 
 
 def full(conn, row):
@@ -466,6 +531,9 @@ def full(conn, row):
     out["location"] = row["location"]
     out["album"] = row["album"]
     out["hashtags"] = json.loads(row["hashtags"] or "[]")
+    out["collections"] = [{"id": r[0], "name": r[1]} for r in conn.execute(
+        "SELECT c.id, c.name FROM collection_posts cp JOIN collections c ON c.id = cp.collection_id "
+        "WHERE cp.post_id = ? ORDER BY c.name COLLATE NOCASE", (row["id"],))]
     out["source"] = {"tool": row["tool"], "version": row["tool_version"], "meta_path": row["meta_path"]}
     return out
 
@@ -479,6 +547,25 @@ def fts_query(q):
     terms = [f'"{w}"' for w in words]
     terms[-1] += "*"
     return " AND ".join(terms)
+
+
+# tag:name or tag:"two words"; an unclosed quote runs to the end (still typing).
+_ASCII_FOLD = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)   # what NOCASE folds
+_TAG_TERM = re.compile(r'(?<!\S)tag:(?:"([^"]*)"?|(\S*))', re.IGNORECASE)
+
+
+def parse_search(q):
+    """Split the search box text into (the words left, [tag names])."""
+    tags = []
+
+    def take(m):
+        name = m.group(1) if m.group(1) is not None else m.group(2)
+        name = " ".join(name.split())
+        if name:
+            tags.append(name)
+        return " "
+
+    return _TAG_TERM.sub(take, q).strip(), tags
 
 
 _FROM = "FROM posts p LEFT JOIN decisions d ON d.post_id = p.id"
@@ -515,17 +602,33 @@ def _memo(conn, key, compute):
     return value
 
 
-def post_filter(q=None, platform=None, author=None, kind=None, review=None):
+def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False):
     """WHERE clause and arguments for the /api/posts filters, over _FROM.
     None when the search text can match nothing. Shared by list_posts and
-    post_summary so a count and its size can never disagree."""
+    post_summary so a count and its size can never disagree.
+
+    ``tags``: the post must have every one; ``tag:`` terms in ``q`` add to them."""
     where, args = [], []
+    tags = list(tags or ())
+    if q:
+        q, more = parse_search(q)
+        tags += more
     if q:
         match = fts_query(q)
         if match is None:
             return None
         where.append("p.n IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)")
         args.append(match)
+    # With search text the matches drive the query and tags only filter them
+    # (+ keeps SQLite from probing the index for every tag x match pair).
+    col = "+p.id" if q else "p.id"
+    for name in {t.translate(_ASCII_FOLD): t for t in tags}.values():
+        # tags.name is COLLATE NOCASE, so = ignores case, of ASCII letters only (like UNIQUE).
+        where.append(f"{col} IN (SELECT pt.post_id FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
+                     "WHERE t.name = ?)")
+        args.append(name)
+    if untagged:
+        where.append("p.id NOT IN (SELECT post_id FROM post_tags)")
     if platform:
         where.append("p.platform = ?")
         args.append(platform)
@@ -543,8 +646,8 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None):
 
 
 def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted",
-               offset=0, limit=60, review=None, order="desc"):
-    f = post_filter(q, platform, author, kind, review)
+               offset=0, limit=60, review=None, order="desc", tags=(), untagged=False):
+    f = post_filter(q, platform, author, kind, review, tags, untagged)
     if f is None:
         return 0, []
     clause, args = f
@@ -554,12 +657,12 @@ def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted
     total = conn.execute(f"SELECT COUNT(*) {_FROM} {clause}", args).fetchone()[0]
     rows = conn.execute(f"{_SELECT} {clause} ORDER BY {order_by} LIMIT ? OFFSET ?",
                         (*args, limit, offset)).fetchall()
-    return total, [summary(conn, r) for r in rows]
+    return total, summaries(conn, rows)
 
 
-def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None):
+def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False):
     """Posts, media and bytes matched by the /api/posts filters, all pages."""
-    f = post_filter(q, platform, author, kind, review)
+    f = post_filter(q, platform, author, kind, review, tags, untagged)
     if f is None:
         return {"posts": 0, "media": 0, "bytes": 0}
     clause, args = f

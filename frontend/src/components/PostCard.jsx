@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import Icon from "./Icon";
+import TagChips from "./TagChips";
 import { excerpt, fmtShortDate, fmtFullDate, platformLabel, platformShort, postPath, authorFeedPath } from "../lib/fmt";
 
 /* One tile in the masonry feed. The cover keeps its natural aspect ratio (the
@@ -98,6 +99,7 @@ export default function PostCard({ post, index = 0, selectMode = false, selected
         {cover && text && (
           <Link to={to} className="post-excerpt">{text}</Link>
         )}
+        <TagChips tags={post.tags} max={3} compact />
       </div>
     </article>
   );

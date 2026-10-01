@@ -114,3 +114,8 @@ export function fmtStamp(ts) {
   const p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+// The feed filtered by one tag.
+export function tagFeedPath(name) {
+  return `/?${new URLSearchParams({ tag: name })}`;
+}

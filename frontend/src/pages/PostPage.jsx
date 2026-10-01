@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { getPost, deleteItems } from "../lib/api";
+import { getPost, deleteItems, getTags, applyTags } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
@@ -10,6 +10,41 @@ import RichText from "../components/RichText";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
+import TagChips from "../components/TagChips";
+import TagInput from "../components/TagInput";
+import CollectionDialog from "../components/CollectionDialog";
+
+/* The post's tags: remove with ×, add with autocomplete. */
+function PostTags({ post, onChanged }) {
+  const toast = useToast();
+  const tagsApi = useApi(getTags, 0);
+  const [busy, setBusy] = useState(false);
+
+  async function change(body) {
+    setBusy(true);
+    try {
+      const r = await applyTags([post.id], body);
+      if (!r?.ok) { toast(r?.error || "Could not change the tags.", "err"); return; }
+      onChanged();
+      tagsApi.reload();
+    } catch (e) {
+      toast(e.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const tags = post.tags || [];
+  return (
+    <div className="card post-tags">
+      <div className="card-title"><Icon name="tag" size={13} />Tags</div>
+      {tags.length > 0
+        ? <TagChips tags={tags} onRemove={name => change({ remove: [name] })} busy={busy} />
+        : <p className="dim post-tags-none">No tags yet.</p>}
+      <TagInput tags={tagsApi.data || []} exclude={tags} onAdd={name => change({ add: [name] })} />
+    </div>
+  );
+}
 
 function CopyField({ label, value }) {
   const [copied, setCopied] = useState(false);
@@ -45,6 +80,7 @@ export default function PostPage() {
   const [busy,      setBusy]      = useState(false);
   const [dlgError,  setDlgError]  = useState(null);
   const [delErrors, setDelErrors] = useState(null);
+  const [collecting, setCollecting] = useState(false);
 
   // Back returns to the feed exactly as it was (filters, scroll) when we came
   // from inside the app; a direct link has no history, so go to the feed.
@@ -243,6 +279,30 @@ export default function PostPage() {
               ))}
             </div>
           )}
+
+          <PostTags post={post} onChanged={reload} />
+
+          <div className="card post-collections">
+            <div className="card-title"><Icon name="bookmark" size={13} />Collections</div>
+            {post.collections?.length > 0 ? (
+              <ul className="tag-chips">
+                {post.collections.map(c => (
+                  <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`}>{c.name}</Link></li>
+                ))}
+              </ul>
+            ) : <p className="dim post-tags-none">In no collection.</p>}
+            <button type="button" className="btn-secondary" onClick={() => setCollecting(true)}>
+              <Icon name="plus" size={14} />Add to collection…
+            </button>
+            {collecting && (
+              <CollectionDialog
+                posts={[post.id]}
+                member={(post.collections || []).map(c => c.id)}
+                onChanged={reload}
+                onClose={() => setCollecting(false)}
+              />
+            )}
+          </div>
 
           <div className="card post-source">
             <div className="card-title">Source</div>

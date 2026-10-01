@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPosts, getPostsSummary, getAuthors, deleteItems, setDecision } from "../lib/api";
+import { getPosts, getPostsSummary, getAuthors, getTags, deleteItems, setDecision } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { KINDS, platformLabel, fmtBytes, fmtInt } from "../lib/fmt";
+import { sameTag, searchTags, tagsMatch, withTags } from "../lib/tags";
 import PostCard from "../components/PostCard";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
 import SelectionBar from "../components/SelectionBar";
+import BulkTagDialog from "../components/BulkTagDialog";
+import CollectionDialog from "../components/CollectionDialog";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
-const FILTERS = ["platform", "kind", "author", "review", "sort"];
+const FILTERS = ["platform", "kind", "author", "review", "tag", "untagged", "sort"];
 const SUMMARY_DELAY = 250;
 
 export default function Feed() {
@@ -29,8 +32,12 @@ export default function Feed() {
   const sort     = params.get("sort") === "saved" ? "saved" : "posted";
   const reviewP  = params.get("review");
   const review   = reviewP === "unreviewed" || reviewP === "kept" ? reviewP : "";
+  const tagKey   = JSON.stringify(params.getAll("tag").filter(t => t.trim()));
+  const untagged = params.get("untagged") === "1";
 
-  const filters = useMemo(() => ({ q, platform, kind, author, review, sort }), [q, platform, kind, author, review, sort]);
+  const filters = useMemo(() => ({ q, platform, kind, author, review, tag: JSON.parse(tagKey), untagged, sort }),
+    [q, platform, kind, author, review, tagKey, untagged, sort]);
+  const tagFilter = filters.tag;
   const filterKey = JSON.stringify(filters);
 
   // One result object tagged with the filters it answers. While a new filter
@@ -59,8 +66,8 @@ export default function Feed() {
   // Only with a filter: unfiltered, it is the whole archive (see Storage).
   // Built from the cleaned values, so ?review=bogus or a blank q is no filter.
   const anyFilter  = !!(rawQ || FILTERS.some(f => f !== "sort" && params.get(f)));
-  const summaryKey = q || platform || kind || author || review
-    ? JSON.stringify({ q, platform, kind, author, review }) : null;
+  const summaryKey = q || platform || kind || author || review || tagFilter.length || untagged
+    ? JSON.stringify({ q, platform, kind, author, review, tag: tagFilter, untagged }) : null;
   const [summary, setSummary] = useState({ key: null, data: null });
   const [summaryTick, setSummaryTick] = useState(0);    // bumped after a delete or keep
   useEffect(() => {
@@ -104,11 +111,13 @@ export default function Feed() {
   /* ── Select mode ─────────────────────────────────────── */
   const toast = useToast();
   const [confirmDel, setConfirmDel] = useState(false);
+  const [tagging,    setTagging]    = useState(false);
+  const [collecting, setCollecting] = useState(false);
   const [deleting,   setDeleting]   = useState(false);
   const [dlgError,   setDlgError]   = useState(null);
   const [delErrors,  setDelErrors]  = useState(null);
   // A new filter shows different cards: drop a selection the user can no longer see.
-  const sel = useSelection(posts, { resetKey: filterKey, escapeBlocked: confirmDel });
+  const sel = useSelection(posts, { resetKey: filterKey, escapeBlocked: confirmDel || tagging || collecting });
   const selectedPosts = sel.selectedItems;
   const selectedCount = sel.count;
   const selectedBytes = selectedPosts.reduce((n, p) => n + (p.bytes || 0), 0);
@@ -138,6 +147,26 @@ export default function Feed() {
     } finally {
       setKeeping(false);
     }
+  }
+
+  function onTagged(r, add, remove) {
+    setTagging(false);
+    const done = new Set(r.posts || []);
+    // Tag names as the server spells them, for those that already existed.
+    const known = tagsApi.data || [];
+    add = add.map(a => known.find(t => sameTag(t.name, a))?.name || a);
+    // A post whose tags no longer pass the tag filters leaves the list.
+    const wanted = [...tagFilter, ...searchTags(q)];
+    setResult(prev => {
+      const posts = prev.posts.map(p => (done.has(p.id) ? { ...p, tags: withTags(p.tags, add, remove) } : p));
+      const kept = posts.filter(p => !done.has(p.id) || tagsMatch(p.tags, wanted, untagged));
+      return { ...prev, posts: kept, total: Math.max(0, prev.total - (posts.length - kept.length)) };
+    });
+    tagsApi.reload();
+    setSummaryTick(t => t + 1);
+    const parts = [r.added && `${r.added} tag${r.added === 1 ? "" : "s"} added`,
+                   r.removed && `${r.removed} removed`].filter(Boolean);
+    toast(`${done.size} post${done.size === 1 ? "" : "s"}: ${parts.join(", ") || "nothing to change"}.`);
   }
 
   async function runDelete() {
@@ -182,6 +211,8 @@ export default function Feed() {
   }, [hasMore, loadMore]);
 
   const authorsApi = useApi(getAuthors, refreshKey);
+  const tagsApi    = useApi(getTags, refreshKey);
+  const allTags    = tagsApi.data || [];
   const authors    = useMemo(() => authorsApi.data || [], [authorsApi.data]);
   const platforms  = useMemo(() => {
     const set = new Set(authors.map(a => a.platform).filter(Boolean));
@@ -192,9 +223,16 @@ export default function Feed() {
   function setParam(changes) {
     const next = new URLSearchParams(params);
     for (const [k, v] of Object.entries(changes)) {
-      if (v) next.set(k, v); else next.delete(k);
+      next.delete(k);
+      if (Array.isArray(v)) v.forEach(x => next.append(k, x));
+      else if (v) next.set(k, v);
     }
     setParams(next);
+  }
+
+  function onTagFilter(value) {
+    if (value === "__untagged") setParam({ untagged: "1", tag: [] });
+    else if (value) setParam({ tag: [...tagFilter, value], untagged: "" });
   }
 
   // Author ids are only unique within a platform, so the select carries both.
@@ -223,7 +261,8 @@ export default function Feed() {
     <div className="card feed">
       <div className="page-head">
         <h2 className="page-title">
-          {q ? "Results" : selectedAuthor ? `@${selectedAuthor.handle}` : "Feed"}
+          {q ? "Results" : selectedAuthor ? `@${selectedAuthor.handle}`
+            : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span> : "Feed"}
         </h2>
         <span className="page-count">
           {current && !error
@@ -265,6 +304,34 @@ export default function Feed() {
             ))}
           </select>
         </label>
+        <label className="filter filter-tags">
+          <span>Tags</span>
+          <select className="sort-select" value="" onChange={e => onTagFilter(e.target.value)}>
+            <option value="">{untagged ? "Untagged" : tagFilter.length ? "Add another…" : "Any"}</option>
+            {!untagged && <option value="__untagged">Untagged only</option>}
+            {allTags.filter(t => !tagFilter.some(f => sameTag(f, t.name))).map(t => (
+              <option key={t.name} value={t.name}>{t.name} ({t.count})</option>
+            ))}
+          </select>
+        </label>
+        {(tagFilter.length > 0 || untagged) && (
+          <ul className="tag-chips filter-tag-chips" aria-label="Tag filters">
+            {untagged && (
+              <li className="tag-chip"><span>untagged</span>
+                <button type="button" className="tag-chip-x" onClick={() => setParam({ untagged: "" })} aria-label="Remove the untagged filter">
+                  <Icon name="close" size={10} />
+                </button>
+              </li>
+            )}
+            {tagFilter.map(t => (
+              <li key={t} className="tag-chip"><span><Icon name="tag" size={11} />{t}</span>
+                <button type="button" className="tag-chip-x" onClick={() => setParam({ tag: tagFilter.filter(x => x !== t) })} aria-label={`Remove the ${t} filter`}>
+                  <Icon name="close" size={10} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <label className="filter">
           <span>Review</span>
           <select className="sort-select" value={review} onChange={e => setParam({ review: e.target.value })}>
@@ -301,7 +368,7 @@ export default function Feed() {
             className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
             onClick={() => (sel.active ? sel.exit() : sel.enter())}
             aria-pressed={sel.active}
-            title={sel.active ? "Leave select mode (Esc)" : "Select posts to delete"}
+            title={sel.active ? "Leave select mode (Esc)" : "Select posts to tag, keep or delete"}
           >
             <Icon name={sel.active ? "close" : "check"} size={14} />
             {sel.active ? "Done" : "Select"}
@@ -374,6 +441,12 @@ export default function Feed() {
               {selectedCount > 0 && (
                 <span className="select-size mono" title="Media files of the selected posts">{fmtBytes(selectedBytes)}</span>
               )}
+              <button type="button" className="btn-secondary" onClick={() => setTagging(true)} disabled={!selectedCount}>
+                <Icon name="tag" size={14} />Tag…
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => setCollecting(true)} disabled={!selectedCount}>
+                <Icon name="bookmark" size={14} />Collection…
+              </button>
               <button type="button" className="btn-keep" onClick={runKeep} disabled={!selectedCount || keeping}>
                 <Icon name="check" size={14} />{keeping ? "Keeping…" : "Keep"}
               </button>
@@ -386,6 +459,14 @@ export default function Feed() {
             <div className="feed-end">end of feed · {posts.length.toLocaleString()} posts</div>
           )}
         </>
+      )}
+
+      {tagging && (
+        <BulkTagDialog posts={selectedPosts} tags={allTags} onApplied={onTagged} onCancel={() => setTagging(false)} />
+      )}
+
+      {collecting && (
+        <CollectionDialog posts={selectedPosts.map(p => p.id)} onClose={() => setCollecting(false)} />
       )}
 
       <ConfirmDialog

@@ -1,7 +1,7 @@
 """The user's own data, mirrored to JSON.
 
 The index is derived from the media folders and rebuilds from a rescan. A few
-tables are not: review decisions now, later tags, people, sources. Each one is
+tables are not: review decisions, tags, collections, later people, sources. Each one is
 registered here once, and gets the same treatment:
 
 - written to ``<data_dir>/userdata/<name>.json`` shortly after it changes
@@ -33,14 +33,19 @@ class Table:
     key: tuple                  # primary key columns, also the export order
     legacy: str = None          # older file, relative to the data dir, read when <name>.json is missing
     legacy_rows: str = "rows"   # the list's key in that older file
+    # For rows that point at another user table by id: the export query (its
+    # columns are ``columns``, ids replaced by names) and the statements that
+    # put one row back, with :column parameters.
+    select: str = None
+    insert: tuple = ()
 
 
 REGISTRY = {}
 
 
-def register(name, table, columns, key, legacy=None, legacy_rows="rows"):
+def register(name, table, columns, key, legacy=None, legacy_rows="rows", select=None, insert=()):
     key = (key,) if isinstance(key, str) else tuple(key)
-    REGISTRY[name] = Table(name, table, tuple(columns), key, legacy, legacy_rows)
+    REGISTRY[name] = Table(name, table, tuple(columns), key, legacy, legacy_rows, select, tuple(insert))
 
 
 register("decisions", "decisions", ("post_id", "decision", "at"), "post_id",
@@ -48,6 +53,30 @@ register("decisions", "decisions", ("post_id", "decision", "at"), "post_id",
 # "Not a duplicate": the key names the group's members (post ids, and the
 # metadata paths of extra copies), so a group that gains a member shows again.
 register("dismissed_duplicates", "dismissed_duplicates", ("key", "kind", "at"), "key")
+# Tags by name, not id: ids are not kept when the index is rebuilt. Order
+# matters, tags load before the posts that use them (a tag missing from
+# tags.json is created again from post_tags.json).
+register("tags", "tags", ("name", "color", "created_at"), "name")
+register("post_tags", "post_tags", ("post_id", "tag", "at"), ("post_id", "tag"),
+         select="SELECT pt.post_id, t.name, pt.at FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
+                "ORDER BY pt.post_id, t.name",
+         insert=("INSERT OR IGNORE INTO tags(name, created_at) VALUES (:tag, COALESCE(:at, 0))",
+                 "INSERT OR IGNORE INTO post_tags(post_id, tag_id, at) "
+                 "SELECT :post_id, id, COALESCE(:at, 0) FROM tags WHERE name = :tag"))
+# Collections the same way: by name, before the posts in them.
+register("collections", "collections", ("name", "cover_post", "created_at", "position"), "name",
+         insert=("INSERT OR IGNORE INTO collections(name, cover_post, created_at, position) "
+                 "VALUES (:name, :cover_post, COALESCE(:created_at, 0), "
+                 "COALESCE(:position, (SELECT COALESCE(MAX(position), 0) + 1 FROM collections)))",))
+register("collection_posts", "collection_posts", ("collection", "post_id", "position", "at"),
+         ("collection", "post_id"),
+         select="SELECT c.name, cp.post_id, cp.position, cp.at FROM collection_posts cp "
+                "JOIN collections c ON c.id = cp.collection_id ORDER BY c.name, cp.position",
+         insert=("INSERT OR IGNORE INTO collections(name, created_at, position) "
+                 "VALUES (:collection, COALESCE(:at, 0), (SELECT COALESCE(MAX(position), 0) + 1 FROM collections))",
+                 "INSERT OR IGNORE INTO collection_posts(collection_id, post_id, position, at) "
+                 "SELECT id, :post_id, COALESCE(:position, 0), COALESCE(:at, 0) FROM collections "
+                 "WHERE name = :collection"))
 
 
 def path(data_dir, name):
@@ -57,8 +86,8 @@ def path(data_dir, name):
 def export(conn, name, data_dir):
     """Write one table to its JSON file (atomically). Returns the row count."""
     t = REGISTRY[name]
-    rows = conn.execute(f"SELECT {', '.join(t.columns)} FROM {t.table} "
-                        f"ORDER BY {', '.join(t.key)}").fetchall()
+    rows = conn.execute(t.select or f"SELECT {', '.join(t.columns)} FROM {t.table} "
+                                    f"ORDER BY {', '.join(t.key)}").fetchall()
     out = path(data_dir, name)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     tmp = out + ".tmp"
@@ -84,13 +113,17 @@ def load(conn, name, data_dir):
         rows = json.load(f).get(rows_key)
     if not isinstance(rows, list):
         raise ValueError(f"no {rows_key!r} list")
-    values = [tuple(r.get(c) for c in t.columns) for r in rows
-              if isinstance(r, dict) and all(r.get(k) is not None for k in t.key)]
-    marks = ", ".join("?" for _ in t.columns)
+    rows = [r for r in rows if isinstance(r, dict) and all(r.get(k) is not None for k in t.key)]
     with conn:
+        if t.insert:
+            for r in rows:
+                for stmt in t.insert:
+                    conn.execute(stmt, {c: r.get(c) for c in t.columns})
+            return conn.execute(f"SELECT COUNT(*) FROM {t.table}").fetchone()[0]
         before = conn.total_changes
+        marks = ", ".join("?" for _ in t.columns)
         conn.executemany(f"INSERT OR IGNORE INTO {t.table} ({', '.join(t.columns)}) "
-                         f"VALUES ({marks})", values)
+                         f"VALUES ({marks})", [tuple(r.get(c) for c in t.columns) for r in rows])
         return conn.total_changes - before
 
 

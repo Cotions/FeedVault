@@ -29,7 +29,9 @@ A **post summary** (list endpoints):
   "media_count": 3,
   "bytes": 5447680,
   "cover": { "kind": "image", "url": "/media/17" },
-  "missing": false
+  "missing": false,
+  "decision": null,
+  "tags": ["outfits", "summer"]
 }
 ```
 
@@ -45,6 +47,8 @@ A **post summary** (list endpoints):
   The Feed adds these up to show the size of a selection in select mode, so
   no extra request is needed for it.
 
+- `tags`: the post's tag names, sorted (see [Tags](#tags)); `[]` when none.
+
 `url` is `null` when the post has no public address (highlight items).
 `text` is an empty string when the downloader saved no caption.
 
@@ -59,11 +63,14 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
   "location": "Paris, France",
   "album": "Summer trip",
   "hashtags": ["travel", "paris"],
+  "collections": [{ "id": 3, "name": "Moodboard" }],
   "source": { "tool": "instaloader", "version": "4.15.1", "meta_path": "/abs/path/2024-06-01_12-00-00_UTC.json" }
 }
 ```
 
 - `album`: highlight title (or other collection name), `null` otherwise
+- `collections`: the user's collections this post is in (see
+  [Collections](#collections)), `[{ "id": 3, "name": "Moodboard" }]`, by name
 - `source.tool` is `"instaloader (filenames)"` when the post was rebuilt from
   file names alone (downloads made with `save_metadata=False`); `meta_path`
   is then the first media file
@@ -72,9 +79,9 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&kind=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&kind=&tag=&untagged=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&kind=&review=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/posts/summary?q=&platform=&author=&kind=&review=&tag=&untagged=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/authors` | `[{ "platform", "id", "handle", "name", "count", "bytes" }]`, most posts first |
 | GET | `/api/storage` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
@@ -252,7 +259,13 @@ post id; after a keep, call `/api/review` with `decision: null`.
 `/api/posts` query parameters, all optional:
 
 - `q`: full-text search over post text, author handle, author name and album (SQLite
-  FTS5; plain words, prefix match on the last word)
+  FTS5; plain words, prefix match on the last word). `tag:name` and
+  `tag:"two words"` in it are tag filters, not words (see [Tags](#tags)), and
+  mix freely with text: `tag:outfits red dress`
+- `tag`: a tag name, matched without regard to (ASCII) case. Repeat it for several:
+  a post must have all of them (`tag=a&tag=b`). Combined with any `tag:` in `q`;
+  a value that cannot be a tag name matches nothing
+- `untagged=1`: only posts with no tag
 - `platform`: e.g. `instagram`
 - `author`: author id (from `/api/authors`)
 - `kind`: one of the kinds above
@@ -262,7 +275,7 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `offset` (default 0), `limit` (default 60, max 200)
 
 `/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
-`platform`, `author`, `kind`, `review`; `sort`, `order`, `offset` and `limit`
+`platform`, `author`, `kind`, `review`, `tag`, `untagged`; `sort`, `order`, `offset` and `limit`
 are ignored) and totals everything they match, not just one page: `posts` is
 always equal to the `total` that `/api/posts` returns for the same filters,
 `media` and `bytes` count the media items of those posts that are not missing.
@@ -469,6 +482,98 @@ so it survives rebuilding the index. It also covers the
 same group after a member leaves; a group that gains a member shows again.
 Unknown group: 404 `{ "ok": false, "error": "…" }`.
 
+## Tags
+
+Free-form labels, many per post. They are the user's own data: kept in the
+`tags` and `post_tags` tables, never touched by a rescan, and written to
+`<data_directory>/userdata/tags.json` and `post_tags.json` (2 s after the
+last change, `post_tags.json` naming tags by name, not id) so a rebuilt
+index gets them back.
+
+- Names are compared without regard to case for ASCII letters only (`Outfits` and `outfits` are one
+  tag, the first spelling kept; `Été` and `été` are two). Spaces inside a name are collapsed, and
+  a name is 1 to 64 characters with no `"` and no control characters.
+- Tags are keyed by post id. A post moved to the trash keeps its tags, so
+  restoring it, or a duplicate copy taking its place (Duplicates, keep the
+  copy), brings them back. When the trash is emptied or entries purged, the
+  posts whose entries were deleted lose their tags if they are neither in the
+  index nor in another trash entry (a post out of the index for another
+  reason, such as its root being offline, keeps them).
+- Duplicates, keeping one post of a "same content" group (another post id):
+  the kept post also gets the tags and collection places of the posts
+  trashed for it.
+- Counts only cover posts in the index (not those in the trash).
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/tags` | `[{ "name": "outfits", "color": null, "count": 12 }]`, most used first |
+| POST | `/api/tags/apply` | body `{ "posts": ["instagram:C8x…"], "add": ["outfits"], "remove": ["todo"] }` → see below |
+| POST | `/api/tags/rename` | body `{ "from": "outfit", "to": "outfits" }` → `{ "ok": true, "name": "outfits", "merged": true }` |
+| POST | `/api/tags/delete` | body `{ "name": "outfits" }` → `{ "ok": true, "posts": 12 }`: removes the tag from every post |
+
+`/api/tags/apply` adds and removes tags on up to 5000 posts at once (more is
+a 400). `add` and `remove` are lists of names, either may be omitted but not
+both; a name in `add` that does not exist yet is created. Ids that are not
+in the index are ignored. Response:
+
+```json
+{ "ok": true, "posts": ["instagram:C8x…"], "added": 3, "removed": 1, "created": ["outfits"] }
+```
+
+`posts` lists the ids that exist, `added` and `removed` count the links that
+actually changed, `created` the new tags.
+
+`/api/tags/rename` renames a tag. When `to` already names another tag, the
+two are merged: every post of `from` gets `to`, and `from` is gone
+(`merged: true`). Changing only the case of a name is a rename. An unknown
+`from` is a 404, a bad `to` a 400. `/api/tags/delete` of an unknown name is a
+404.
+
+`color` is reserved for later and always `null` for now.
+
+## Collections
+
+Named, ordered sets of posts, with a cover. A post can be in several. User
+data like tags: tables `collections` and `collection_posts`, untouched by
+rescans, written to `<data_directory>/userdata/collections.json` and
+`collection_posts.json` (posts keyed by post id, collections by name), and
+the same trash rules: a post in the trash keeps its places, and loses them
+when its trash entries are deleted for good (emptied or purged) and it is
+neither indexed nor in another trash entry. Names are unique without regard to (ASCII) case, 1 to 64
+characters, no `"` or control characters.
+
+A **collection**:
+
+```json
+{ "id": 3, "name": "Moodboard", "count": 24, "created_at": 1727500000,
+  "cover_post": "instagram:C8x…", "cover": { "kind": "image", "url": "/media/17/thumb" } }
+```
+
+- `count` covers posts in the index (not those in the trash).
+- `cover_post` is the post chosen as cover, `null` when none is chosen; then
+  `cover` is that of the first post in the collection. `cover` is a post
+  summary's `cover` (see [Post](#post)), `null` for an empty collection.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/collections` | `[collection, …]`, in the order they were created |
+| POST | `/api/collections` | body `{ "name": "Moodboard" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
+| GET | `/api/collections/<id>?offset=&limit=` | `{ "collection": {…}, "total": 24, "posts": [summary, …] }` in the collection's order; `limit` default 60, max 200; 404 if unknown |
+| POST | `/api/collections/<id>/rename` | body `{ "name": "…" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
+| POST | `/api/collections/<id>/delete` | → `{ "ok": true, "posts": 24 }`; the posts stay |
+| POST | `/api/collections/<id>/add` | body `{ "posts": ["instagram:C8x…"] }` (at most 5000) → `{ "ok": true, "added": ["instagram:C8x…"] }`, appended at the end in the order given; posts not in the index or already there are skipped |
+| POST | `/api/collections/<id>/remove` | body `{ "posts": […] }` → `{ "ok": true, "removed": 2 }` |
+| POST | `/api/collections/<id>/order` | body `{ "posts": […] }` → `{ "ok": true }`, see below |
+| POST | `/api/collections/<id>/cover` | body `{ "post": "instagram:C8x…" }`, or `null` for the first post → `{ "ok": true, "collection": {…} }`; 400 if the post is not in it |
+
+Every `/api/collections/<id>/…` call answers 404 `{ "ok": false, "error": … }`
+for an unknown id.
+
+`/order` takes posts of the collection in their new order and puts them in
+the places those same posts held before, the rest staying where they are.
+Sending one page in its new order reorders that page; sending every post
+reorders the whole collection. Ids not in the collection are ignored.
+
 ## Storage
 
 `GET /api/storage`:
@@ -520,4 +625,4 @@ measured on disk instead.
 `/api/storage`, `/api/authors` and `/api/posts/summary` are computed in SQL
 from the index, never by walking the media folders (only the trash total is
 read from disk). Their answers are cached until anything in the index changes
-(a scan, a delete, a restore, a review decision).
+(a scan, a delete, a restore, a review decision, a tag change).
