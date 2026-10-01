@@ -158,13 +158,17 @@ def _build(params):
         raise jobs.BadRequest("the source's target is not a profile name")
     if folder is None:
         raise jobs.BadRequest("the source's folder is not inside a media root")
-    os.makedirs(folder, exist_ok=True)
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError as e:
+        raise jobs.BadRequest(f"cannot create the source's folder: {e.strerror or e}")
     options = _options(src)
     session = options["session"] or settings(cfg)["session"]
     pattern, _ = detect_pattern(folder)
     return {"tool": "instaloader", "rescan": folder, "args": [
         "--latest-stamps", stamps_path(cfg),
-        "--fast-update",
+        # Full history walks the whole profile: past posts already there too.
+        *([] if options["full_history"] else ["--fast-update"]),
         "--no-compress-json",
         "--dirname-pattern", _escape(folder),
         "--filename-pattern", pattern,
@@ -183,6 +187,14 @@ def _options(src):
     return sources.clean_options(stored if isinstance(stored, dict) else None) or sources.clean_options(None)
 
 
+def _write_stamps(stamps, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        stamps.write(f)
+    os.replace(tmp, path)
+
+
 def _start(params, note):
     """Right before instaloader starts (no other instaloader runs): seed the
     stamps file on a source's first sync."""
@@ -195,10 +207,13 @@ def _start(params, note):
     stamps = configparser.ConfigParser(interpolation=None)
     stamps.read(path, encoding="utf-8")
     target = src["target"]
-    if stamps.has_option(target, "post-timestamp"):
-        return
     if options["full_history"]:
-        note(f"first sync of {target}: full history")
+        note(f"{target}: full history, every post not in the folder yet")
+        if stamps.has_option(target, "post-timestamp"):
+            stamps.remove_option(target, "post-timestamp")
+            _write_stamps(stamps, path)
+        return
+    if stamps.has_option(target, "post-timestamp"):
         return
     newest = None
     if src["author_id"] is not None:
@@ -213,11 +228,7 @@ def _start(params, note):
     stamps.set(target, "post-timestamp", datetime.fromtimestamp(newest, timezone.utc).strftime(STAMP_FORMAT))
     if key[1].isdigit() and not stamps.has_option(target, "profile-id"):
         stamps.set(target, "profile-id", key[1])
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        stamps.write(f)
-    os.replace(tmp, path)
+    _write_stamps(stamps, path)
     note(f"first sync of {target}: starting after its newest indexed post, "
          f"{datetime.fromtimestamp(newest, timezone.utc):%Y-%m-%d %H:%M} UTC")
 
@@ -227,7 +238,7 @@ def _start(params, note):
 # login pages and missing profiles. A 403 is Instagram refusing an anonymous
 # client, after which instaloader says the profile does not exist.
 FAILURES = [(error, re.compile(words, re.I)) for error, words in [
-    ("rate_limited", r"\b429\b|too many requests|please wait a few minutes|rate limit"),
+    ("rate_limited", r"\b429 too many|too many requests|please wait a few minutes|rate limit"),
     ("private", r"private but not followed|privateprofilenotfollowedexception|profile is private"),
     ("login_required", r"login required|loginrequiredexception|redirected to login|use --login|"
                        r"session file does not exist|checkpoint_required|challenge_required|login_required|"
@@ -280,6 +291,10 @@ def _ended(job):
             "line": r.get("line"), "added": r.get("added", 0), "job": job["id"]}):
         return
     changed = {"sources"}
+    src = sources.row(conn, sid)
+    options = _options(src)
+    if job["state"] == "done" and options["full_history"]:
+        sources.update(conn, sid, {**options, "full_history": False})     # once is enough
     if job["state"] in ("done", "failed"):
         changed.update(sources.adopt(conn, sid, config.load()["media_roots"], job["ended_at"]))
     for name in sorted(changed):

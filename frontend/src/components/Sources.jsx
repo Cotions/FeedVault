@@ -164,7 +164,7 @@ export function AddSource({ person = null, onAdded }) {
         value={target}
         onChange={e => { setTarget(e.target.value); setError(null); }}
       />
-      <label className="source-check" title="Without it, the first sync starts after the newest post FeedVault already has">
+      <label className="source-check" title="The first sync fetches the whole profile, not only what is newer than the posts FeedVault already has">
         <input type="checkbox" checked={full} onChange={e => setFull(e.target.checked)} />
         Full history
       </label>

@@ -531,3 +531,126 @@ def test_settings_api(env, client):
         assert r["ok"] is False, bad
     assert get(client, "/api/config")["instaloader"]["pause"] == 5
     assert "password" not in json.dumps(config.load())
+
+
+# ---------------------------------------------------------------------------
+# Review fixes
+# ---------------------------------------------------------------------------
+
+def test_full_history_is_once_and_fills_older_gaps(env, client, fake):
+    folder = carol_archive(env)
+    fake.set(carol_profile(new=1))
+    s = add_source(client)
+    sync_now(client, s["id"])                                  # seeded: the newest only
+    # An old post was never downloaded; ask for the whole profile once.
+    profile = carol_profile(new=1)
+    profile["carol.cooks"]["posts"].append({"shortcode": "COLDPOST001", "ts": TS - 30 * DAY, "caption": "old"})
+    fake.set(profile)
+    post(client, f"/api/sources/{s['id']}", {"options": {"full_history": True}})
+    job = sync_now(client, s["id"])
+    assert "--fast-update" not in job["argv"] and job["message"] == "1 new post"
+    assert any("COLDPOST001" in n for n in os.listdir(folder))
+    assert stamps(env).get("carol.cooks", "post-timestamp").startswith("2024-06-04")
+    # Done once: the option is off again and the next sync is incremental.
+    assert get(client, f"/api/sources/{s['id']}")["options"]["full_history"] is False
+    job = sync_now(client, s["id"])
+    assert "--fast-update" in job["argv"] and job["message"] == "0 new posts"
+
+
+def test_full_history_stays_on_after_a_failure(env, client, fake):
+    carol_archive(env)
+    fake.set(carol_profile(), fail="429")
+    s = add_source(client, options={"full_history": True})
+    assert sync_now(client, s["id"])["state"] == "failed"
+    assert get(client, f"/api/sources/{s['id']}")["options"]["full_history"] is True
+
+
+def test_progress_counters_are_not_a_rate_limit():
+    lines = list(enumerate(["[429/1200] carol.cooks-2024-06-01-CCCCCCCCCC0.jpg json",
+                            "[ 12/429] something", "x: Login required."], 1))
+    assert sync.classify(lines)[0] == "login_required"
+
+
+def test_folder_that_cannot_be_made_is_a_400(env, client, fake):
+    locked = env["media"] / "locked"
+    locked.mkdir()
+    s = add_source(client, "carol.cooks", folder=str(locked / "carol.cooks"))
+    other = add_source(client, "aa.one")
+    locked.chmod(0o555)
+    try:
+        assert "cannot create" in post(client, f"/api/sources/{s['id']}/sync", status=400)["error"]
+        r = post(client, "/api/sources/sync-all")
+        assert [j["label"] for j in r["jobs"]] == ["Sync @aa.one"]
+        assert [e["source"] for e in r["errors"]] == [s["id"]]
+        ended(r["jobs"][0]["id"])
+    finally:
+        locked.chmod(0o755)
+    assert other
+
+
+def test_ended_is_listed_only_once_its_effects_are_in(env, client, fake, monkeypatch):
+    s = add_source(client, "aa.one")
+    fake.set({"aa.one": {"id": 1, "posts": [{"shortcode": "AAPOST00001", "ts": TS}]}})
+    gate, inside = threading.Event(), threading.Event()
+    real = jobs._kinds[sync.KIND].ended
+
+    def slow(public):
+        inside.set()
+        gate.wait(10)
+        real(public)
+    monkeypatch.setattr(jobs._kinds[sync.KIND], "ended", slow)
+    job = post(client, f"/api/sources/{s['id']}/sync")["job"]
+    inside.wait(10)
+    listed = next(j for j in jobs.listing()["jobs"] if j["id"] == job["id"])
+    assert listed["state"] == "running" and get(client, f"/api/sources/{s['id']}")["last_result"] is None
+    gate.set()
+    assert ended(job["id"])["state"] == "done"
+    assert get(client, f"/api/sources/{s['id']}")["last_result"]["state"] == "done"
+
+
+def test_quitting_mid_sync_records_it_once_and_does_not_index(env, client, fake, monkeypatch):
+    carol_archive(env)
+    fake.set(carol_profile(new=3), delay=0.3)
+    s = add_source(client)
+    calls = []
+    real = sources.record
+    monkeypatch.setattr(sources, "record", lambda *a: calls.append(a[-1]["state"]) or real(*a))
+    job = post(client, f"/api/sources/{s['id']}/sync")["job"]
+    wait_for(lambda: any(n.startswith("carol.cooks-2024-06-04") for n in os.listdir(env["media"] / "carol.cooks")))
+    jobs.shutdown()
+    for t in threading.enumerate():
+        if t.name == f"job-{job['id']}":
+            t.join(10)
+    assert calls == ["interrupted"]
+    assert jobs.get(job["id"])["state"] == "interrupted"
+    assert get(client, "/api/posts?author=carol.cooks&limit=50")["total"] == 3      # not indexed on the way out
+
+
+def test_renaming_a_person_exports_sources(env, client, monkeypatch):
+    import userdata
+    changed = []
+    monkeypatch.setattr(userdata, "changed", changed.append)
+    p = post(client, "/api/people", {"name": "Carol"})["person"]
+    add_source(client, "carol.cooks", person=p["id"])
+    changed.clear()
+    post(client, f"/api/people/{p['id']}", {"name": "Carol C"})
+    assert "sources" in changed
+    changed.clear()
+    assert client.delete(f"/api/people/{p['id']}", headers=H).status_code == 200
+    assert "sources" in changed
+
+
+def test_symlinked_root_is_rescanned_under_its_own_name(env, client, fake, tmp_path):
+    real = tmp_path / "real-media"
+    real.mkdir()
+    link = tmp_path / "linked-media"
+    link.symlink_to(real)
+    set_config(media_roots=[str(link)], instaloader={"pause": 0})
+    write_filename_post(link / "carol.cooks", "carol.cooks", "CCCCCCCCCC0", TS)
+    scanner.run([str(link)])
+    fake.set(carol_profile(new=1))
+    s = add_source(client)
+    job = sync_now(client, s["id"])
+    assert job["rescan"] == str(link / "carol.cooks") and job["message"] == "3 new posts"
+    scanner.run([str(link)])                                   # the same files, the same posts
+    assert get(client, "/api/posts?author=carol.cooks&limit=50")["total"] == 4

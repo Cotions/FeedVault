@@ -540,10 +540,11 @@ _BAD_ACCOUNTS = f"accounts must be a list of at most {people.MAX_ACCOUNTS} {{ pl
 
 
 def _people_changed(names=False):
-    """Links changed (and, with ``names``, the people themselves: links are
-    exported by person name)."""
+    """Links changed (and, with ``names``, the people themselves: links and
+    sources are exported by person name)."""
     if names:
         userdata.changed("people")
+        userdata.changed("sources")
     userdata.changed("person_accounts")
 
 

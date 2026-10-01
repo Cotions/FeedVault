@@ -107,13 +107,18 @@ export function useSyncAll() {
     const jobs = ids.map(id => list.jobs.find(j => j.id === id)).filter(Boolean);
     const ended = jobs.filter(j => ENDED.has(j.state));
     const current = jobs.find(j => j.state === "running") || jobs.find(j => j.state === "queued") || null;
+    // A job not listed is either long over (older than the history kept)
+    // or newer than the last poll.
+    const oldest = list.jobs.length ? Math.min(...list.jobs.map(j => j.id)) : 0;
+    const missing = ids.filter(id => !jobs.some(j => j.id === id));
+    const pruned = missing.filter(id => id < oldest).length;
     batch = {
       total: ids.length,
-      ended: ended.length + (ids.length - jobs.length),          // pruned from the history: long over
+      ended: ended.length + pruned,
       failed: ended.filter(j => j.state === "failed").length,
       added: ended.reduce((n, j) => n + (j.result?.added || 0), 0),
       current,
-      done: !current,
+      done: !current && missing.length === pruned,
       jobs: jobs.filter(j => !ENDED.has(j.state)),
     };
   }

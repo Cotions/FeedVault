@@ -763,7 +763,9 @@ no person yet.
 - `options`:
   - `full_history`: `false` (default): the first sync starts after the
     newest post FeedVault already has for the account, see below. `true`:
-    the first sync downloads the whole profile.
+    the next sync walks the whole profile and downloads every post not in
+    the folder yet (without `--fast-update`, the stamp dropped first); once
+    it succeeds, it is set back to `false`.
   - `session`: `null` to use the global setting (see
     [Settings](#instaloader-settings)), or one of the session values.
 - `last_sync_at`: when the last sync ended (any outcome), or `null`.
@@ -773,7 +775,10 @@ no person yet.
     `login_required` (Instagram wants a logged-in session),
     `private` (a private profile the session does not follow),
     `not_found` (no such profile: renamed or deleted),
-    `rate_limited` (HTTP 429, "Please wait a few minutes"), or `generic`
+    `rate_limited` (HTTP 429, "Please wait a few minutes"), or `generic`.
+    An HTTP 403 counts as `login_required`: it is how Instagram turns away
+    an anonymous client, after which instaloader reports the profile as
+    missing
   - `message`: one line for people; `line`: the tool's last line of output
     behind it, or `null`
   - `added`: new posts indexed (also after a failure: what was downloaded

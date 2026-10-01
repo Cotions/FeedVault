@@ -163,8 +163,11 @@ class Job:
         self.cancelled = False
         self.exited = False
         self.interrupted = False
+        self.shown = None                      # what public() says while it is finishing
 
-    def public(self):
+    def public(self, live=False):
+        if self.shown is not None and not live:
+            return self.shown
         waits = _cool.get(self.group) if self.state == "queued" and _pauses(self.kind) else None
         return {"id": self.id, "kind": self.kind, "label": _label(self.kind, self.params, self.argv),
                 "params": self.params, "argv": self.argv, "cwd": self.cwd, "group": self.group,
@@ -214,9 +217,11 @@ def submit(kind_name, params):
     cfg = config.load()
     rescan = spec.get("rescan")
     if rescan is not None:
-        rescan = _under_root(rescan, cfg["media_roots"])
-        if rescan is None:
+        if _under_root(rescan, cfg["media_roots"]) is None:
             raise BadRequest("the job's folder is not inside a media root")
+        # As given, not resolved: the scanner names files under the root as
+        # configured, symlinks and all, and so must a rescan.
+        rescan = os.path.normpath(os.path.abspath(rescan))
     cwd = spec.get("cwd") or cfg["data_directory"]
     os.makedirs(cwd, exist_ok=True)
     if _closing:
@@ -331,6 +336,8 @@ def _run(job):
         job.exit_code = code
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")
+        elif job.interrupted:                  # FeedVault is stopping: no indexing on the way out
+            _finish(job, "interrupted")
         elif kind.outcome:
             index = None
             if job.rescan:
@@ -447,16 +454,28 @@ def _last_line(job):
 
 def _finish(job, state, result=None, message=None):
     kind = _kinds.get(job.kind)
+    pause = 0
+    if kind and kind.pause and job.proc is not None:         # it ran, so it reached the site
+        try:
+            pause = max(0, kind.pause())
+        except Exception as e:                 # reads config.json: never left holding the queue
+            print(f"[jobs] #{job.id}: no pause: {e}")
     with _lock:
-        if job.interrupted:
-            state, message = "interrupted", INTERRUPTED
-        job.state, job.result, job.message = state, result, message
-        job.ended_at = int(time.time())
+        recorded = job.interrupted and job.ended_at is not None
+        if not recorded:
+            # Listed as it was until its effects are in (_ended): whoever
+            # sees it ended sees them.
+            job.shown = job.public()
+            if job.interrupted:
+                state, message = "interrupted", INTERRUPTED
+            job.state, job.result, job.message = state, result, message
+            job.ended_at = int(time.time())
         tail = list(job.lines)[-TAIL_KEPT:]
-        if kind and kind.pause and job.proc is not None:     # it ran, so it reached the site
-            _cool[job.group] = time.time() + max(0, kind.pause())
-    _save(job, tail)                           # before leaving _active: the log never has a gap
-    _ended(job.public())                       # also before: whoever sees it ended sees its effects
+        if pause:
+            _cool[job.group] = time.time() + pause
+    if not recorded:                           # else shutdown() saved it and ran _ended
+        _save(job, tail)                       # before leaving _active: the log never has a gap
+        _ended(job.public(live=True))
     with _lock:
         _active.pop(job.id, None)
         job.lines.clear()
