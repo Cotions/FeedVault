@@ -341,7 +341,11 @@ def parse_dir(root, dirpath, names):
         result.claimed |= {n for n in names if n == "id"}
     result.claimed |= {n for n in names if _SIDE_RE.fullmatch(n)}
 
-    posts, claimed = _filename_posts(root, dirpath, [n for n in names if n not in result.claimed])
+    # A file with a JSON of its own beside it ("x.jpg.json", "x.json") came
+    # from another tool (gallery-dl); it is not a filename-only post.
+    rest = [n for n in names if n not in result.claimed
+            and n + ".json" not in names_set and n.rsplit(".", 1)[0] + ".json" not in names_set]
+    posts, claimed = _filename_posts(root, dirpath, rest)
     result.posts.extend(posts)
     result.claimed |= claimed
     return result

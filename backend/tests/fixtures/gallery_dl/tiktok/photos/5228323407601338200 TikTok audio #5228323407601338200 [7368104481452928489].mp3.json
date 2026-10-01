@@ -1,0 +1,96 @@
+{
+    "id": "5228323407601338200",
+    "desc": "",
+    "createTime": "1758640196",
+    "video": {
+        "id": "5228323407601338200",
+        "height": 0,
+        "width": 0,
+        "duration": 0,
+        "ratio": "",
+        "cover": "https://example.invalid/89cca1e955a8a662",
+        "originCover": "https://example.invalid/89cca1e955a8a662",
+        "dynamicCover": "",
+        "playAddr": "",
+        "downloadAddr": ""
+    },
+    "author": {
+        "id": "8029800461867672418",
+        "shortId": "",
+        "uniqueId": "example_user8",
+        "nickname": "Example User 7",
+        "avatarThumb": "https://example.invalid/245b7feea966a3c1",
+        "signature": "Example text",
+        "createTime": 1634041843,
+        "verified": true,
+        "secUid": "c8bfd19c90d7eb9365c2a1775e96bab26c03f029c8bfd19c90d7eb9365c2a1775e96bab26c03",
+        "privateAccount": false
+    },
+    "music": {
+        "id": "7368104481452928489",
+        "title": "Example text",
+        "playUrl": "https://example.invalid/5ccefbbb69c0bb7c",
+        "authorName": "Example User 8",
+        "original": true,
+        "duration": 16
+    },
+    "challenges": [],
+    "stats": {
+        "diggCount": 1439,
+        "shareCount": 39,
+        "commentCount": 23,
+        "playCount": 14100,
+        "collectCount": "44"
+    },
+    "statsV2": {
+        "diggCount": "1439",
+        "shareCount": "39",
+        "commentCount": "23",
+        "playCount": "14100",
+        "collectCount": "44",
+        "repostCount": "0"
+    },
+    "textExtra": [],
+    "isAd": false,
+    "imagePost": {
+        "images": [
+            {
+                "imageURL": {
+                    "urlList": [
+                        "https://example.invalid/89cca1e955a8a662",
+                        "https://example.invalid/de6c3db5b536a932"
+                    ]
+                },
+                "imageWidth": 1290,
+                "imageHeight": 824
+            },
+            {
+                "imageURL": {
+                    "urlList": [
+                        "https://example.invalid/f2c39469649140bd",
+                        "https://example.invalid/7a9f30a68f99265e"
+                    ]
+                },
+                "imageWidth": 1440,
+                "imageHeight": 2470
+            }
+        ],
+        "title": ""
+    },
+    "locationCreated": "GB",
+    "user": "example_user8",
+    "date": "2025-09-23 15:09:56",
+    "post_type": "image",
+    "category": "tiktok",
+    "subcategory": "post",
+    "filename": "",
+    "extension": "mp3",
+    "type": "audio",
+    "image": null,
+    "title": "TikTok audio #5228323407601338200",
+    "num": 0,
+    "file_id": "7368104481452928489",
+    "width": 0,
+    "height": 0,
+    "duration": 16
+}

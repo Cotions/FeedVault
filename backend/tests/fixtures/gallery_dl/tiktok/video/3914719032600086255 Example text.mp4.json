@@ -1,0 +1,87 @@
+{
+    "id": "3914719032600086255",
+    "desc": "Example text",
+    "createTime": "1734520379",
+    "video": {
+        "id": "3914719032600086255",
+        "height": 1024,
+        "width": 576,
+        "duration": 11,
+        "ratio": "540p",
+        "cover": "https://example.invalid/508e0758fc42c5e2",
+        "originCover": "https://example.invalid/6c486e7f143075a9",
+        "dynamicCover": "https://example.invalid/4087c781d42c3ddd",
+        "playAddr": "https://example.invalid/bdfa921208d8f888",
+        "downloadAddr": "https://example.invalid/0da0d6dd792c7a44",
+        "format": "mp4",
+        "definition": "540p",
+        "size": "769535"
+    },
+    "author": {
+        "id": "8419594197139637801",
+        "shortId": "",
+        "uniqueId": "example_user6",
+        "nickname": "Example User 6",
+        "avatarThumb": "https://example.invalid/f829ee8a7fb6e19c",
+        "signature": "Example text",
+        "createTime": 1559382838,
+        "verified": true,
+        "secUid": "ac10a6823fb91dfaf7c4d417e8592e6fe07d5550ac10a6823fb91dfaf7c4d417e8592e6fe07d",
+        "privateAccount": false
+    },
+    "music": {
+        "id": "9323839328595919407",
+        "title": "Example text",
+        "playUrl": "https://example.invalid/4b3939f9dbe5b0cd",
+        "authorName": "Example User 6",
+        "original": true,
+        "duration": 11
+    },
+    "challenges": [],
+    "stats": {
+        "diggCount": 3900000,
+        "shareCount": 881200,
+        "commentCount": 11000,
+        "playCount": 32700000,
+        "collectCount": "323073"
+    },
+    "statsV2": {
+        "diggCount": "3900000",
+        "shareCount": "881200",
+        "commentCount": "11000",
+        "playCount": "32700000",
+        "collectCount": "323073",
+        "repostCount": "0"
+    },
+    "textExtra": [
+        {
+            "awemeId": "",
+            "start": 39,
+            "end": 44,
+            "hashtagName": "",
+            "type": 0,
+            "subType": 0,
+            "userId": "1496798356542465512",
+            "isCommerce": false,
+            "userUniqueId": "example_user7",
+            "secUid": "c9317aab56f7af2a27d9bcf65cda8766ba4c1654c9317aab56f7af2a27d9bcf65cda8766ba4c"
+        }
+    ],
+    "isAd": false,
+    "locationCreated": "GB",
+    "user": "example_user6",
+    "date": "2024-12-18 11:12:59",
+    "post_type": "video",
+    "category": "tiktok",
+    "subcategory": "post",
+    "filename": "",
+    "extension": "mp4",
+    "type": "video",
+    "image": null,
+    "title": "Example text",
+    "duration": 11,
+    "num": 0,
+    "file_id": "",
+    "width": 576,
+    "height": 1024
+}

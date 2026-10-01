@@ -22,7 +22,7 @@ import db
 import organize
 import scanner
 import thumbs
-from parsers import IMAGE_EXT, VIDEO_EXT, ext_of
+from parsers import IMAGE_EXT, VIDEO_EXT, ext_of, gallery_dl
 
 TRASH_NAME = ".feedvault-trash"
 MANIFEST = ".manifest.jsonl"
@@ -91,18 +91,36 @@ def _media_files(m):
     return out
 
 
-def _post_files(conn, post):
+def _post_files(conn, post, sides):
     """Every file that belongs to a post: media, posters, metadata, side files,
     as (path, manifest fields)."""
     return _files(conn.execute("SELECT * FROM media WHERE post_id = ? ORDER BY idx", (post["id"],)),
-                  post["meta_path"])
+                  post["meta_path"], _side_files(post["meta_path"], post["tool"], sides))
 
 
-def _files(media, meta):
+def _side_files(meta, tool, cache):
+    """gallery-dl writes a JSON per file, plus music and subtitles: files the
+    index does not keep, so the post's folder is read again to find them (once
+    per folder and delete call; ``cache`` maps folder -> {meta path: files}).
+    Left behind, they would bring the post back on the next scan."""
+    if tool != gallery_dl.TOOL:
+        return []
+    d = os.path.dirname(meta)
+    if d not in cache:
+        try:
+            names = [n for n in os.listdir(d) if not n.startswith(".") and os.path.isfile(os.path.join(d, n))]
+        except OSError:
+            names = []
+        cache[d] = {p.meta_path: p.side_files for p in gallery_dl.parse_dir(d, d, names).posts}
+    return cache[d].get(meta, [])
+
+
+def _files(media, meta, sides=()):
     files = []
     for m in media:
         files.extend(_media_files(m))
     files.append((meta, {"role": "meta"}))
+    files.extend((p, {"role": "side"}) for p in sides)
     for ext in (".json.xz", ".json"):
         if meta.endswith(ext):
             base = meta[: -len(ext)]
@@ -143,6 +161,7 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
     can check the index and the files in the same lock as the move."""
     report = {"ok": True, "posts": [], "media": [], "copies": [], "files": 0, "bytes": 0, "errors": [],
               "batch": uuid.uuid4().hex}
+    sides = {}
     if not db.write_lock.acquire(timeout=30):
         report.pop("batch")
         return {**report, "ok": False, "error": "a scan is running; try again in a moment"}
@@ -153,13 +172,13 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
         for cid in dict.fromkeys(copy_ids):
             copy = db.copy_row(conn, cid)
             if copy is not None:
-                _delete_copy(conn, copy, roots, data_dir, report)
+                _delete_copy(conn, copy, roots, data_dir, report, sides)
 
         for pid in dict.fromkeys(post_ids):
             post = conn.execute("SELECT * FROM posts WHERE id = ?", (pid,)).fetchone()
             if post is None:
                 continue
-            _delete_post(conn, post, roots, data_dir, report)
+            _delete_post(conn, post, roots, data_dir, report, sides)
 
         for mid in dict.fromkeys(media_ids):
             m = conn.execute("SELECT * FROM media WHERE id = ?", (mid,)).fetchone()
@@ -169,7 +188,7 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
             others = conn.execute("SELECT path FROM media WHERE post_id = ? AND id != ? ORDER BY idx",
                                   (m["post_id"], mid)).fetchall()
             if not others:                      # the last item: the post goes with it
-                _delete_post(conn, post, roots, data_dir, report)
+                _delete_post(conn, post, roots, data_dir, report, sides)
                 if post["id"] in report["posts"]:
                     report["media"].append(mid)
                 continue
@@ -190,8 +209,8 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
     return report
 
 
-def _delete_post(conn, post, roots, data_dir, report):
-    files = _post_files(conn, post)
+def _delete_post(conn, post, roots, data_dir, report, sides):
+    files = _post_files(conn, post, sides)
     items = conn.execute("SELECT COUNT(*) FROM media WHERE post_id = ?", (post["id"],)).fetchone()[0]
     if not _move_all(files, roots, post["id"], _post_info(post, items, False), report, data_dir):
         conn.commit()                           # keep the index in step with what did move
@@ -202,7 +221,7 @@ def _delete_post(conn, post, roots, data_dir, report):
     report["posts"].append(post["id"])
 
 
-def _delete_copy(conn, copy, roots, data_dir, report):
+def _delete_copy(conn, copy, roots, data_dir, report, sides):
     """An extra copy of a post: its files go like a post's, with the copy's
     metadata path on each manifest line so the Trash page keeps it apart."""
     post = conn.execute("SELECT * FROM posts WHERE id = ?", (copy["post_id"],)).fetchone()
@@ -210,7 +229,9 @@ def _delete_copy(conn, copy, roots, data_dir, report):
     info = _post_info(post, len(copy["media"]), False) if post else \
         {"platform": platform, "author": None, "kind": None, "posted_at": None,
          "items": len(copy["media"]), "partial": False}
-    files = _files(copy["media"], copy["meta_path"])
+    # A copy of a post is downloaded by the same tool, as a rule.
+    tool = post["tool"] if post else (gallery_dl.TOOL if platform != "instagram" else None)
+    files = _files(copy["media"], copy["meta_path"], _side_files(copy["meta_path"], tool, sides))
     if not _move_all(files, roots, copy["post_id"], {**info, "copy": copy["meta_path"]}, report, data_dir):
         conn.commit()
         return
