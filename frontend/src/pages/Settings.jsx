@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { getConfig, saveConfig, browse, getTrash, emptyTrash } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
@@ -198,7 +199,8 @@ function TrashCard() {
       <div className="card-title">Trash</div>
       <p className="page-lede">
         Deleting a post or item moves its files to a <code>.feedvault-trash</code> folder inside
-        the media root it came from. They stay there until you empty the trash.
+        the media root it came from. They stay there until you empty the trash, or delete them
+        one by one on the <Link to="/trash" className="text-link">Trash</Link> page.
       </p>
       {!trash ? (
         <div className="dim">{error ? `Could not read the trash: ${error.message}` : "Loading…"}</div>
@@ -226,6 +228,9 @@ function TrashCard() {
         </>
       )}
       <div className="settings-actions">
+        <Link to="/trash" className="btn-secondary" title="See what is in the trash, restore or delete single posts">
+          <Icon name="search" size={14} />Browse the trash
+        </Link>
         <button type="button" className="btn-danger" onClick={() => { setDlgErr(null); setMsg(null); setConfirm(true); }} disabled={!files}>
           <Icon name="trash" size={14} />Empty trash…
         </button>

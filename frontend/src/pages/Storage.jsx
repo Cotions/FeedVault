@@ -214,8 +214,9 @@ export default function Storage() {
     <p className="storage-note">
       <Icon name="trash" size={13} />
       <span>
-        {fmtBytes(s.trash.bytes)} in the trash is not freed until the trash is emptied,
-        in <Link to="/settings" className="text-link">Settings</Link>.
+        {fmtBytes(s.trash.bytes)} in the <Link to="/trash" className="text-link">trash</Link> is not
+        freed until it is deleted for good there, or the trash is emptied in{" "}
+        <Link to="/settings" className="text-link">Settings</Link>.
       </span>
     </p>
   );
@@ -248,7 +249,7 @@ export default function Storage() {
     { num: fmtBytes(s.totals.bytes), label: "on disk" },
     { num: fmtInt(s.totals.media),   label: "media files" },
     { num: fmtInt(s.totals.posts),   label: "posts" },
-    { num: fmtBytes(s.trash.bytes),  label: `in the trash · ${fmtInt(s.trash.files)} files`, warn: s.trash.bytes > 0, to: "/settings", title: "Empty the trash in Settings" },
+    { num: fmtBytes(s.trash.bytes),  label: `in the trash · ${fmtInt(s.trash.files)} files`, warn: s.trash.bytes > 0, to: "/trash", title: "See what is in the trash" },
   ];
 
   return (
