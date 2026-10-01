@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPosts, getAuthors, deleteItems, setDecision } from "../lib/api";
+import { getPosts, getPostsSummary, getAuthors, deleteItems, setDecision } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
-import { KINDS, platformLabel, fmtBytes } from "../lib/fmt";
+import { KINDS, platformLabel, fmtBytes, fmtInt } from "../lib/fmt";
 import PostCard from "../components/PostCard";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -15,6 +15,7 @@ import SelectionBar from "../components/SelectionBar";
 const PAGE = 60;
 const MAX_LIMIT = 200;
 const FILTERS = ["platform", "kind", "author", "review", "sort"];
+const SUMMARY_DELAY = 250;
 
 export default function Feed() {
   const { refreshKey, running, start } = useScan();
@@ -54,6 +55,29 @@ export default function Feed() {
     return () => { alive = false; };
   }, [filters, filterKey, refreshKey]);
 
+  /* ── "Would free": size of everything the filters match ─ */
+  // Only with a filter: unfiltered, it is the whole archive (see Storage).
+  // Built from the cleaned values, so ?review=bogus or a blank q is no filter.
+  const anyFilter  = !!(rawQ || FILTERS.some(f => f !== "sort" && params.get(f)));
+  const summaryKey = q || platform || kind || author || review
+    ? JSON.stringify({ q, platform, kind, author, review }) : null;
+  const [summary, setSummary] = useState({ key: null, data: null });
+  const [summaryTick, setSummaryTick] = useState(0);    // bumped after a delete or keep
+  useEffect(() => {
+    if (!summaryKey) return;
+    // Debounced with the filters and cancelled when they change again, so a
+    // run of quick changes ends in one request whose answer cannot be stale.
+    const ctrl = new AbortController();
+    const t = setTimeout(() => {
+      getPostsSummary(JSON.parse(summaryKey), { signal: ctrl.signal }).then(
+        data  => setSummary({ key: summaryKey, data }),
+        error => { if (error.name !== "AbortError") setSummary({ key: summaryKey, data: null }); },
+      );
+    }, SUMMARY_DELAY);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [summaryKey, refreshKey, summaryTick]);
+  const freeable = summary.key === summaryKey ? summary.data : null;
+
   const current = result.key === filterKey;
   const posts   = result.posts;
   const hasMore = current && !result.error && posts.length < result.total;
@@ -87,6 +111,7 @@ export default function Feed() {
   const sel = useSelection(posts, { resetKey: filterKey, escapeBlocked: confirmDel });
   const selectedPosts = sel.selectedItems;
   const selectedCount = sel.count;
+  const selectedBytes = selectedPosts.reduce((n, p) => n + (p.bytes || 0), 0);
 
   const [keeping, setKeeping] = useState(false);
   async function runKeep() {
@@ -106,6 +131,7 @@ export default function Feed() {
         total: leaves ? Math.max(0, prev.total - done.size) : prev.total,
       }));
       sel.clear();
+      setSummaryTick(t => t + 1);
       toast(`${done.size} post${done.size === 1 ? "" : "s"} marked as kept.`);
     } catch (e) {
       toast(e.message, "err");
@@ -128,6 +154,7 @@ export default function Feed() {
         total: Math.max(0, prev.total - gone.size),
       }));
       sel.drop(gone);
+      if (gone.size) setSummaryTick(t => t + 1);
       setConfirmDel(false);
       setDelErrors(r.errors?.length ? r.errors : null);
       if (gone.size) {
@@ -182,7 +209,6 @@ export default function Feed() {
   const authorKnown = !author || authors.some(a => `${a.platform}:${a.id}` === authorValue);
   const selectedAuthor = authors.find(a => `${a.platform}:${a.id}` === authorValue);
 
-  const anyFilter = !!(rawQ || FILTERS.some(f => f !== "sort" && params.get(f)));
   function clearFilters() {
     const next = new URLSearchParams();
     if (sort === "saved") next.set("sort", "saved");
@@ -204,6 +230,11 @@ export default function Feed() {
             ? q ? `${result.total.toLocaleString()} for “${q}”` : result.total.toLocaleString()
             : "…"}
         </span>
+        {freeable && (
+          <span className="page-count would-free" title="What deleting every match would move to the trash (media files only)">
+            {fmtInt(freeable.posts)} post{freeable.posts === 1 ? "" : "s"} · {fmtBytes(freeable.bytes)}
+          </span>
+        )}
         <div className="page-head-spacer" />
       </div>
 
@@ -340,6 +371,9 @@ export default function Feed() {
           )}
           {sel.active && (
             <SelectionBar selection={sel} loaded={posts.length}>
+              {selectedCount > 0 && (
+                <span className="select-size mono" title="Media files of the selected posts">{fmtBytes(selectedBytes)}</span>
+              )}
               <button type="button" className="btn-keep" onClick={runKeep} disabled={!selectedCount || keeping}>
                 <Icon name="check" size={14} />{keeping ? "Keeping…" : "Keep"}
               </button>
@@ -367,7 +401,7 @@ export default function Feed() {
         <p>
           Move {selectedCount === 1 ? "this post" : `these ${selectedCount} posts`} and
           all {selectedCount === 1 ? "its" : "their"} files
-          ({selectedPosts.reduce((n, p) => n + (p.media_count || 0), 0)} media) to the trash?
+          ({selectedPosts.reduce((n, p) => n + (p.media_count || 0), 0)} media, {fmtBytes(selectedBytes)}) to the trash?
           You can empty the trash from Settings.
         </p>
       </ConfirmDialog>

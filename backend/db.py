@@ -109,13 +109,30 @@ def _migrate_1(conn):
         conn.execute(stmt)
 
 
+def _migrate_2(conn):
+    """Storage view: size sums per post read from the index alone, and an
+    index for the largest files. media_post is widened rather than joined by
+    a second index on post_id, which slowed a first scan by another 10%."""
+    conn.execute("DROP INDEX IF EXISTS media_post")
+    conn.execute("CREATE INDEX IF NOT EXISTS media_post_size ON media(post_id, idx, missing, size)")
+    # Not partial (WHERE missing = 0): the planner then picked it for every
+    # missing = 0 filter, ten times slower than media_post_size.
+    conn.execute("CREATE INDEX IF NOT EXISTS media_size ON media(size)")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
-MIGRATIONS = [_migrate_1]
+MIGRATIONS = [_migrate_1, _migrate_2]
 
 BACKUPS_KEPT = 3
 
 _local = threading.local()
+# (path, key) -> (data_version, value); see _memo.
+_cache = {}
+_cache_lock = threading.Lock()
+CACHE_MAX = 128
+_watch = None                                 # (path, connection) that only reads data_version
+_watch_lock = threading.Lock()
 # Held by a scan for its whole run and by deletions, so a scan never re-adds a
 # post that is halfway through being deleted.
 write_lock = threading.Lock()
@@ -129,7 +146,22 @@ def init(path):
     migrate(path)
     _path = path
     _local.__dict__.clear()
+    with _cache_lock:
+        _cache.clear()
     connect()
+
+
+def _data_version():
+    """Changes whenever any other connection commits to the database. Read
+    on a connection of its own that never writes, since request threads come
+    and go and each opens its own."""
+    global _watch
+    with _watch_lock:
+        if _watch is None or _watch[0] != _path:
+            if _watch:
+                _watch[1].close()
+            _watch = (_path, sqlite3.connect(_path, check_same_thread=False))
+        return _watch[1].execute("PRAGMA data_version").fetchone()[0]
 
 
 def schema_version(conn):
@@ -297,7 +329,9 @@ def _cover(conn, post_id):
 
 
 def summary(conn, row):
-    count = conn.execute("SELECT COUNT(*) FROM media WHERE post_id = ?", (row["id"],)).fetchone()[0]
+    count, size = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN missing = 0 THEN size END), 0) FROM media "
+        "WHERE post_id = ?", (row["id"],)).fetchone()
     return {
         "id": row["id"],
         "platform": row["platform"],
@@ -310,6 +344,7 @@ def summary(conn, row):
         "text": row["text"],
         "stats": {"likes": row["likes"], "comments": row["comments"], "views": row["views"]},
         "media_count": count,
+        "bytes": size,
         "cover": _cover(conn, row["id"]),
         "missing": bool(row["missing"]),
         "decision": row["decision"] if "decision" in row.keys() else None,
@@ -346,17 +381,49 @@ def fts_query(q):
     return " AND ".join(terms)
 
 
-_SELECT = ("SELECT p.*, d.decision AS decision FROM posts p "
-           "LEFT JOIN decisions d ON d.post_id = p.id")
+_FROM = "FROM posts p LEFT JOIN decisions d ON d.post_id = p.id"
+_SELECT = f"SELECT p.*, d.decision AS decision {_FROM}"
 
 
-def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted",
-               offset=0, limit=60, review=None, order="desc"):
+def _memo(conn, key, compute):
+    """``compute(conn)``, cached until anything is committed to the database
+    (a scan, a delete, a restore, a decision), whichever code path wrote it.
+
+    The version is read before the read transaction starts, so a commit
+    landing in between can only make the cached value newer than its label,
+    never older. Callers must not modify the result.
+    """
+    key = (_path, key)
+    own = not conn.in_transaction
+    gen = _data_version()
+    with _cache_lock:
+        hit = _cache.get(key)
+    if own and hit and hit[0] == gen:
+        return hit[1]
+    if own:
+        conn.execute("BEGIN")
+    try:
+        value = compute(conn)
+    finally:
+        if own:
+            conn.commit()
+    if own:                                   # never cache what an open write may still roll back
+        with _cache_lock:
+            if len(_cache) >= CACHE_MAX:
+                _cache.clear()
+            _cache[key] = (gen, value)
+    return value
+
+
+def post_filter(q=None, platform=None, author=None, kind=None, review=None):
+    """WHERE clause and arguments for the /api/posts filters, over _FROM.
+    None when the search text can match nothing. Shared by list_posts and
+    post_summary so a count and its size can never disagree."""
     where, args = [], []
     if q:
         match = fts_query(q)
         if match is None:
-            return 0, []
+            return None
         where.append("p.n IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)")
         args.append(match)
     if platform:
@@ -372,15 +439,39 @@ def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted
         where.append("d.post_id IS NULL")
     elif review == "kept":
         where.append("d.decision = 'keep'")
-    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    return ("WHERE " + " AND ".join(where)) if where else "", args
+
+
+def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted",
+               offset=0, limit=60, review=None, order="desc"):
+    f = post_filter(q, platform, author, kind, review)
+    if f is None:
+        return 0, []
+    clause, args = f
     direction = "ASC" if order == "asc" else "DESC"
     first, second = ("saved_at", "posted_at") if sort == "saved" else ("posted_at", "saved_at")
     order_by = f"p.{first} {direction}, p.{second} {direction}, p.id {direction}"
-    total = conn.execute(f"SELECT COUNT(*) FROM posts p LEFT JOIN decisions d ON d.post_id = p.id {clause}",
-                         args).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) {_FROM} {clause}", args).fetchone()[0]
     rows = conn.execute(f"{_SELECT} {clause} ORDER BY {order_by} LIMIT ? OFFSET ?",
                         (*args, limit, offset)).fetchall()
     return total, [summary(conn, r) for r in rows]
+
+
+def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None):
+    """Posts, media and bytes matched by the /api/posts filters, all pages."""
+    f = post_filter(q, platform, author, kind, review)
+    if f is None:
+        return {"posts": 0, "media": 0, "bytes": 0}
+    clause, args = f
+
+    def compute(conn):
+        posts = conn.execute(f"SELECT COUNT(*) {_FROM} {clause}", args).fetchone()[0]
+        media, size = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM media WHERE missing = 0 "
+            f"AND post_id IN (SELECT p.id {_FROM} {clause})", args).fetchone()
+        return {"posts": posts, "media": media, "bytes": size}
+
+    return _memo(conn, ("summary", clause, tuple(args)), compute)
 
 
 def get_post(conn, platform, post_id):
@@ -404,20 +495,108 @@ def set_decision(conn, post_ids, decision, now):
     return ids
 
 
+# Handle and name come from the most recent post, since handles change.
+_NEWEST_NAMES = """
+    (SELECT author_handle FROM posts p2 WHERE p2.platform = p.platform
+       AND p2.author_id = p.author_id ORDER BY posted_at DESC LIMIT 1) AS handle,
+    (SELECT author_name FROM posts p2 WHERE p2.platform = p.platform
+       AND p2.author_id = p.author_id ORDER BY posted_at DESC LIMIT 1) AS name"""
+
+
 def authors(conn):
-    # Handle and name come from the most recent post, since handles change.
-    rows = conn.execute("""
-        SELECT platform, author_id, COUNT(*) AS count,
-               (SELECT author_handle FROM posts p2 WHERE p2.platform = p.platform
-                  AND p2.author_id = p.author_id ORDER BY posted_at DESC LIMIT 1) AS handle,
-               (SELECT author_name FROM posts p2 WHERE p2.platform = p.platform
-                  AND p2.author_id = p.author_id ORDER BY posted_at DESC LIMIT 1) AS name
+    return _memo(conn, ("authors",), _authors)
+
+
+def _authors(conn):
+    rows = conn.execute(f"""
+        SELECT platform, author_id, COUNT(*) AS count, {_NEWEST_NAMES},
+               (SELECT COALESCE(SUM(m.size), 0) FROM posts p3
+                  JOIN media m ON m.post_id = p3.id AND m.missing = 0
+                  WHERE p3.platform = p.platform AND p3.author_id = p.author_id) AS bytes
         FROM posts p WHERE author_id IS NOT NULL
         GROUP BY platform, author_id
         ORDER BY count DESC, handle
     """).fetchall()
     return [{"platform": r["platform"], "id": r["author_id"], "handle": r["handle"],
-             "name": r["name"], "count": r["count"]} for r in rows]
+             "name": r["name"], "count": r["count"], "bytes": r["bytes"]} for r in rows]
+
+
+LARGEST = 100
+
+
+def storage(conn):
+    """Disk use by creator, kind and year, and the largest files. Media
+    marked missing are left out. The trash total is added by the caller."""
+    return _memo(conn, ("storage",), _storage)
+
+
+def _storage(conn):
+    # One pass over the posts, grouped as finely as any table below needs and
+    # rolled up here: three separate GROUP BY queries took three times as long.
+    rows = conn.execute(f"""
+        SELECT p.platform, p.author_id, p.kind,
+               CAST(strftime('%Y', p.posted_at, 'unixepoch') AS INTEGER) AS year,
+               d.decision, COUNT(*) AS posts,
+               COALESCE(SUM(pm.media), 0) AS media, COALESCE(SUM(pm.bytes), 0) AS bytes
+        {_FROM}
+        LEFT JOIN (SELECT post_id, COUNT(*) AS media, SUM(size) AS bytes FROM media
+                   WHERE missing = 0 GROUP BY post_id) pm ON pm.post_id = p.id
+        GROUP BY 1, 2, 3, 4, 5
+    """).fetchall()
+
+    def bucket(table, key, **extra):
+        if key not in table:
+            table[key] = {**extra, "posts": 0, "media": 0, "bytes": 0}
+        return table[key]
+
+    totals = {"posts": 0, "media": 0, "bytes": 0}
+    by_author, by_kind, by_year = {}, {}, {}
+    # Not authors(): its byte sums would add half again to a cold load.
+    names = {(r["platform"], r["author_id"]): r for r in conn.execute(f"""
+        SELECT platform, author_id, {_NEWEST_NAMES} FROM posts p
+        WHERE author_id IS NOT NULL GROUP BY platform, author_id""")}
+    for r in rows:
+        targets = [totals, bucket(by_kind, r["kind"], kind=r["kind"]),
+                   bucket(by_year, r["year"], year=r["year"])]
+        if r["author_id"] is not None:
+            a = names[(r["platform"], r["author_id"])]
+            row = bucket(by_author, (r["platform"], r["author_id"]),
+                         platform=r["platform"], id=r["author_id"], handle=a["handle"], name=a["name"])
+            row.setdefault("kept_bytes", 0)
+            row.setdefault("unreviewed_bytes", 0)
+            if r["decision"] == "keep":
+                row["kept_bytes"] += r["bytes"]
+            elif r["decision"] is None:
+                row["unreviewed_bytes"] += r["bytes"]
+            targets.append(row)
+        for t in targets:
+            t["posts"] += r["posts"]
+            t["media"] += r["media"]
+            t["bytes"] += r["bytes"]
+
+    largest = []
+    for m in conn.execute("""
+            SELECT m.id, m.post_id, m.kind, m.size, m.poster_path,
+                   p.platform, p.post_id AS short_id, p.author_id, p.author_handle
+            FROM media m JOIN posts p ON p.id = m.post_id
+            WHERE m.missing = 0 AND m.size IS NOT NULL
+            ORDER BY m.size DESC LIMIT ?""", (LARGEST,)):
+        thumb = m["kind"] != "video" or m["poster_path"] or thumbs.have_ffmpeg()
+        largest.append({
+            "media_id": m["id"], "post": m["post_id"], "platform": m["platform"],
+            "post_id": m["short_id"], "author": {"id": m["author_id"], "handle": m["author_handle"]},
+            "kind": m["kind"], "bytes": m["size"],
+            "thumb_url": f"/media/{m['id']}/thumb" if thumb else None,
+        })
+
+    by_size = lambda t: sorted(t.values(), key=lambda r: -r["bytes"])  # noqa: E731
+    return {
+        "totals": totals,
+        "by_author": by_size(by_author),
+        "by_kind": by_size(by_kind),
+        "by_year": sorted(by_year.values(), key=lambda r: (r["year"] is None, r["year"] or 0)),
+        "largest": largest,
+    }
 
 
 def stats(conn):
@@ -427,7 +606,7 @@ def stats(conn):
         "media": one("SELECT COUNT(*) FROM media"),
         "authors": one("SELECT COUNT(DISTINCT platform || ':' || author_id) FROM posts "
                        "WHERE author_id IS NOT NULL"),
-        "bytes": one("SELECT COALESCE(SUM(size), 0) FROM media"),
+        "bytes": one("SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0"),
         "missing": one("SELECT COUNT(*) FROM posts WHERE missing = 1"),
         "kept": one("SELECT COUNT(*) FROM decisions d JOIN posts p ON p.id = d.post_id "
                     "WHERE d.decision = 'keep'"),

@@ -1,39 +1,9 @@
-import { Link } from "react-router-dom";
 import { getStats } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { fmtBytes, fmtInt, platformLabel } from "../lib/fmt";
-
-function Bars({ title, entries, label, linkFor, delay = 0 }) {
-  const max = entries.length ? Math.max(...entries.map(([, c]) => c), 1) : 1;
-  return (
-    <div className="card">
-      <div className="card-title">{title}</div>
-      {entries.length === 0 ? (
-        <div className="empty">No data yet.</div>
-      ) : (
-        <div className="channel-bars">
-          {entries.map(([name, count], i) => {
-            const d = `${delay + i * 50}ms`;
-            const inner = (
-              <>
-                <span className="channel-bar-name">{label(name)}</span>
-                <span className="channel-bar-track" aria-hidden="true">
-                  <span className="channel-bar-fill" style={{ width: `${(count / max) * 100}%` }} />
-                </span>
-                <span className="channel-bar-count">{fmtInt(count)}</span>
-              </>
-            );
-            const props = { className: "channel-bar-row", style: { "--d": d, animationDelay: d } };
-            return linkFor
-              ? <Link key={name} to={linkFor(name)} {...props} title={`Show ${label(name)} posts`}>{inner}</Link>
-              : <div key={name} {...props}>{inner}</div>;
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
+import Bars from "../components/Bars";
+import StatsHero from "../components/StatsHero";
 
 export default function Stats() {
   const { refreshKey } = useScan();
@@ -63,20 +33,7 @@ export default function Stats() {
   return (
     <div className="stats-page">
       <div className="page-head page-head-bare"><h2 className="page-title">Stats</h2></div>
-      <div className="stats-hero">
-        {hero.map((h, i) => {
-          const body = (
-            <>
-              <span className={`stats-hero-num${h.warn ? " is-warn" : ""}`}>{h.num}</span>
-              <span className="stats-hero-label">{h.label}</span>
-            </>
-          );
-          const style = { animationDelay: `${i * 90}ms` };
-          return h.to
-            ? <Link key={h.label} to={h.to} className="stats-hero-cell is-link" style={style}>{body}</Link>
-            : <div key={h.label} className="stats-hero-cell" style={style}>{body}</div>;
-        })}
-      </div>
+      <StatsHero cells={hero} />
       <div className="stats-split">
         <Bars
           title="Posts per platform"

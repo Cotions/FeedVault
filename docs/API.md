@@ -27,6 +27,7 @@ A **post summary** (list endpoints):
   "text": "caption text, may be long, may be empty string",
   "stats": { "likes": 120, "comments": 4, "views": null },
   "media_count": 3,
+  "bytes": 5447680,
   "cover": { "kind": "image", "url": "/media/17" },
   "missing": false
 }
@@ -39,6 +40,10 @@ A **post summary** (list endpoints):
   `true` when there is a poster file or ffmpeg can grab a frame, `false` when
   neither, and then `cover.url` points at the video itself.
 - `missing`: the metadata file is gone from disk. The post stays in the index.
+- `bytes`: sum of `size` over the post's media items that are not missing
+  (see [Sizes](#sizes)). `media_count` counts every item, missing ones too.
+  The Feed adds these up to show the size of a selection in select mode, so
+  no extra request is needed for it.
 
 `url` is `null` when the post has no public address (highlight items).
 `text` is an empty string when the downloader saved no caption.
@@ -69,8 +74,10 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 |---|---|---|
 | GET | `/api/posts?q=&platform=&author=&kind=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/authors` | `[{ "platform", "id", "handle", "name", "count" }]`, most posts first |
-| GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }` |
+| GET | `/api/posts/summary?q=&platform=&author=&kind=&review=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/authors` | `[{ "platform", "id", "handle", "name", "count", "bytes" }]`, most posts first |
+| GET | `/api/storage` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
+| GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
@@ -150,6 +157,14 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `review`: `unreviewed` or `kept`
 - `offset` (default 0), `limit` (default 60, max 200)
 
+`/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
+`platform`, `author`, `kind`, `review`; `sort`, `order`, `offset` and `limit`
+are ignored) and totals everything they match, not just one page: `posts` is
+always equal to the `total` that `/api/posts` returns for the same filters,
+`media` and `bytes` count the media items of those posts that are not missing.
+It is what a bulk delete of every match would move to the trash (give or take
+the files that are not counted, see [Sizes](#sizes)).
+
 Scan status:
 
 ```json
@@ -168,3 +183,56 @@ Scan status:
 ```
 
 `last` is `null` before the first scan. A scan runs on startup.
+
+## Storage
+
+`GET /api/storage`:
+
+```json
+{
+  "totals": { "posts": 43116, "media": 85985, "bytes": 87606399138 },
+  "by_author": [
+    { "platform": "instagram", "id": "123456", "handle": "somebody", "name": "Some Body",
+      "posts": 812, "media": 1630, "bytes": 2147483648, "kept_bytes": 104857600, "unreviewed_bytes": 2042626048 }
+  ],
+  "by_kind": [{ "kind": "video", "posts": 18897, "media": 20442, "bytes": 61203283968 }],
+  "by_year": [{ "year": 2023, "posts": 9120, "media": 18004, "bytes": 15032385536 }],
+  "largest": [
+    { "media_id": 18, "post": "instagram:C8xYzAbCdEf", "platform": "instagram", "post_id": "C8xYzAbCdEf",
+      "author": { "id": "123456", "handle": "somebody" }, "kind": "video", "bytes": 524288000,
+      "thumb_url": "/media/18/thumb" }
+  ],
+  "trash": { "files": 12, "bytes": 1048576 }
+}
+```
+
+- `totals.posts` counts every post in the index (the same number as
+  `/api/stats`); `media` and `bytes` leave out media items marked missing.
+  `bytes` therefore equals `/api/stats` `bytes`; `media` can be lower than its
+  `media`, which counts every indexed item.
+- `by_author`: one row per author id (posts without an author are only in the
+  totals), biggest first. Handle and name are the newest post's, as in
+  `/api/authors`. `kept_bytes` is the share in posts marked kept,
+  `unreviewed_bytes` the share in posts with no decision; today they add up to
+  `bytes`.
+- `by_kind`: by post kind (the Feed's `kind` filter), biggest first.
+- `by_year`: by the year of `posted_at` in UTC, oldest first; posts without a
+  date come last with `"year": null`.
+- `largest`: the 100 biggest media items, biggest first. `thumb_url` is `null`
+  for a video with neither a poster file nor ffmpeg to grab a frame. Trash one
+  with `POST /api/delete` and `{ "media": [media_id] }`.
+- `trash`: what is waiting in the trash folders (the totals of `GET
+  /api/trash`). It still takes disk space until the trash is emptied.
+
+### Sizes
+
+Every size is the `size` the scanner recorded for a media file (the photo or
+video itself), and media items marked missing are skipped. Poster images,
+thumbnails, metadata JSON, caption and other side files are not counted, so
+deleting a post frees a little more than its `bytes`, and the trash total is
+measured on disk instead.
+
+`/api/storage`, `/api/authors` and `/api/posts/summary` are computed in SQL
+from the index, never by walking the media folders (only the trash total is
+read from disk). Their answers are cached until anything in the index changes
+(a scan, a delete, a restore, a review decision).

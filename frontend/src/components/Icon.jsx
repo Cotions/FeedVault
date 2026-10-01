@@ -36,6 +36,7 @@ const PATHS = {
   skip:      <><path d="M5 5.5 14.5 12 5 18.5z" /><path d="M18.5 5.5v13" /></>,
   keyboard:  <><rect x="2.8" y="6" width="18.4" height="12" rx="2" /><path d="M6.5 9.5h.01M10 9.5h.01M13.5 9.5h.01M17 9.5h.01M6.5 12.5h.01M17 12.5h.01M8.5 15h7" /></>,
   arrowUp:   <><path d="M12 19.5v-15" /><path d="M5.8 10.6 12 4.4l6.2 6.2" /></>,
+  disk:      <><ellipse cx="12" cy="6" rx="7.5" ry="2.6" /><path d="M4.5 6v12c0 1.4 3.4 2.6 7.5 2.6s7.5-1.2 7.5-2.6V6" /><path d="M4.5 12c0 1.4 3.4 2.6 7.5 2.6s7.5-1.2 7.5-2.6" /></>,
   vault:     <><rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2.4" /><circle cx="10.6" cy="12" r="3.6" /><path d="M10.6 8.4v7.2" /><path d="M7 12h7.2" /><path d="M17 9.4v5.2" /></>,
 };
 
