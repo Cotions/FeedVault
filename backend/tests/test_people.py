@@ -302,3 +302,28 @@ def test_duplicate_promotion_keeps_the_person(env, client):
     assert r["posts"] == ["instagram:P1"]
     assert ids(client, f"person={pid}") == ["instagram:P1"]
     assert get(client, f"/api/people/{pid}")["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Handle history
+# ---------------------------------------------------------------------------
+
+def test_handle_history_from_renamed_posts(env, client):
+    old = owner("alice.old", 111, "Alice")
+    write_post(env["media"] / "alice.example", "A0", TS - 1000, old, "image")
+    write_post(env["media"] / "alice.example", "A1", TS - 500, old, "image")
+    write_post(env["media"] / "alice.example", "A2", TS, ALICE, "image")
+    png(env["media"] / "alice.example" / "alice.example-2024-06-01-AAAAAAAAAA3.jpg")
+    os.utime(env["media"] / "alice.example" / "alice.example-2024-06-01-AAAAAAAAAA3.jpg", (TS + 2000, TS + 2000))
+    scanner.scan(env["roots"])
+    [a] = get(client, "/api/authors")
+    assert (a["id"], a["handle"], a["name"], a["count"]) == ("111", "alice.example", "Alice Example", 4)
+    # the alias's posts count too: alice.example was last seen on the filename post
+    assert a["handles"] == [{"handle": "alice.example", "first": TS, "last": TS + 2000},
+                            {"handle": "alice.old", "first": TS - 1000, "last": TS - 500}]
+    assert a["names"] == [{"name": "Alice Example", "first": TS, "last": TS},
+                          {"name": "Alice", "first": TS - 1000, "last": TS - 500}]
+    assert a["newest"] == TS + 2000
+    # a person lists the same history
+    p = create(client, "A", a)["person"]
+    assert p["accounts"][0]["handles"] == a["handles"]

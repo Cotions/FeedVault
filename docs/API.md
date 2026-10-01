@@ -614,7 +614,10 @@ An **account** (`/api/authors` rows, a person's `accounts`):
 ```json
 { "platform": "instagram", "id": "123456", "handle": "somebody", "name": "Some Body",
   "aliases": ["somebody"], "count": 812, "bytes": 2147483648, "newest": 1727481600,
-  "url": "https://www.instagram.com/somebody/", "person": { "id": 3, "name": "Some Body" } }
+  "url": "https://www.instagram.com/somebody/", "person": { "id": 3, "name": "Some Body" },
+  "handles": [{ "handle": "somebody", "first": 1700000000, "last": 1727481600 },
+              { "handle": "some.body.old", "first": 1600000000, "last": 1690000000 }],
+  "names": [{ "name": "Some Body", "first": 1600000000, "last": 1727481600 }] }
 ```
 
 - `handle` and `name` are those of the newest post (handles change).
@@ -623,6 +626,13 @@ An **account** (`/api/authors` rows, a person's `accounts`):
 - `url`: the profile's address for `instagram`, `twitter` and `tiktok`,
   `null` otherwise.
 - `person`: the person the account is linked to, or `null`.
+- `handles` and `names`: **handle history**, every handle and display name
+  the account's posts (aliases included) carry, with the `posted_at` of the
+  first and last post under it, the most recent first. Derived from the
+  posts on every request (cached), not stored: a renamed account keeps its
+  id, so its posts stay one account, and its old handles are listed here.
+  `first` and `last` are `null` when no post under it has a date. The
+  dashboard's Creators search and Feed author picker match any of them.
 
 A **person**:
 
