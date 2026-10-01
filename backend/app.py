@@ -19,6 +19,7 @@ import config
 import db
 import duplicates
 import hashing
+import organize
 import scanner
 import thumbs
 import trash
@@ -87,6 +88,8 @@ def _post_filters():
         author=request.args.get("author") or None,
         kind=request.args.get("kind") or None,
         review=request.args.get("review") if request.args.get("review") in ("unreviewed", "kept") else None,
+        tags=[t for t in map(organize.clean_name, request.args.getlist("tag")) if t],
+        untagged=request.args.get("untagged") == "1",
     )
 
 
@@ -214,6 +217,12 @@ def _purge_filter(f):
     return out if any(v is not None for v in out.values()) else None
 
 
+def _forgotten(result):
+    """Tags of posts gone for good were dropped: write those files."""
+    for name in result.pop("forgotten", []):
+        userdata.changed(name)
+
+
 @app.post("/api/trash/purge")
 def trash_purge():
     body = request.get_json(silent=True) or {}
@@ -226,6 +235,7 @@ def trash_purge():
         return jsonify({"ok": False, "error": "keys must be a non-empty list"}), 400
     cfg = config.load()
     result = trash.purge(cfg["media_roots"], (keys or [])[:5000], cfg["data_directory"], match=match)
+    _forgotten(result)
     print(f"[trash] purged {result['entries']} entries: {result['files']} files, "
           f"{result['bytes']} bytes deleted permanently")
     return jsonify(result)
@@ -336,8 +346,72 @@ def trash_usage():
 def trash_empty():
     cfg = config.load()
     result = trash.empty(cfg["media_roots"], cfg["data_directory"])
+    _forgotten(result)
     print(f"[trash] emptied: {result['files']} files, {result['bytes']} bytes deleted permanently")
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+
+def _names(value):
+    """A list of tag names, cleaned, or None when any is not a valid name."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    names = [organize.clean_name(v) for v in value]
+    return None if None in names else names
+
+
+@app.get("/api/tags")
+def list_tags():
+    return jsonify(organize.tags(db.connect()))
+
+
+@app.post("/api/tags/apply")
+def tags_apply():
+    body = request.get_json(silent=True) or {}
+    posts, add, remove = body.get("posts"), _names(body.get("add")), _names(body.get("remove"))
+    if not _str_list(posts) or len(posts) > organize.MAX_POSTS:
+        return jsonify({"ok": False, "error": f"posts must be a list of 1 to {organize.MAX_POSTS} ids"}), 400
+    if add is None or remove is None or not (add or remove):
+        return jsonify({"ok": False, "error": "add or remove must be a list of tag names "
+                        f"(1 to {organize.MAX_NAME} characters, no quotes)"}), 400
+    r = organize.apply(db.connect(), posts, add, remove, int(time.time()))
+    if r["created"]:
+        userdata.changed("tags")
+    if r["added"] or r["removed"]:
+        userdata.changed("post_tags")
+    return jsonify({"ok": True, **r})
+
+
+@app.post("/api/tags/rename")
+def tags_rename():
+    body = request.get_json(silent=True) or {}
+    old, new = organize.clean_name(body.get("from")), organize.clean_name(body.get("to"))
+    if old is None or new is None:
+        return jsonify({"ok": False, "error": "from and to must be tag names "
+                        f"(1 to {organize.MAX_NAME} characters, no quotes)"}), 400
+    r = organize.rename(db.connect(), old, new)
+    if r is None:
+        return jsonify({"ok": False, "error": "no such tag"}), 404
+    userdata.changed("tags")
+    userdata.changed("post_tags")              # exported by tag name
+    return jsonify({"ok": True, **r})
+
+
+@app.post("/api/tags/delete")
+def tags_delete():
+    body = request.get_json(silent=True) or {}
+    name = organize.clean_name(body.get("name"))
+    n = organize.delete(db.connect(), name) if name else None
+    if n is None:
+        return jsonify({"ok": False, "error": "no such tag"}), 404
+    userdata.changed("tags")
+    userdata.changed("post_tags")
+    return jsonify({"ok": True, "posts": n})
 
 
 # ---------------------------------------------------------------------------

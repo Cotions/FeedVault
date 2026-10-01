@@ -19,6 +19,7 @@ import time
 import uuid
 
 import db
+import organize
 import scanner
 import thumbs
 from parsers import IMAGE_EXT, VIDEO_EXT, ext_of
@@ -251,7 +252,15 @@ def empty(roots, data_dir=None):
                         thumbs.forget(data_dir, line["to"])
             if os.path.isdir(r["path"]) and os.path.basename(r["path"]) == TRASH_NAME:
                 shutil.rmtree(r["path"])
-    return {"ok": True, "files": before["files"], "bytes": before["bytes"]}
+        forgotten = _forget_gone(roots)
+    return {"ok": True, "files": before["files"], "bytes": before["bytes"], "forgotten": forgotten}
+
+
+def _forget_gone(roots):
+    """Tags and the like of posts that are now gone for good: neither in the
+    index nor in any manifest. Returns the user data tables that changed."""
+    trashed = {line.get("post") for root in roots for line in _read_manifest(root)}
+    return organize.forget_gone(db.connect(), [p for p in trashed if isinstance(p, str)])
 
 
 # ---------------------------------------------------------------------------
@@ -650,4 +659,5 @@ def purge(roots, keys, data_dir, match=None):
             report["keys"].extend(sorted(done - failed))
             report["entries"] += len(done - failed)
             _write_manifest(root, keep)
+        report["forgotten"] = _forget_gone(roots) if report["entries"] else []
     return report

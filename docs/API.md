@@ -29,7 +29,9 @@ A **post summary** (list endpoints):
   "media_count": 3,
   "bytes": 5447680,
   "cover": { "kind": "image", "url": "/media/17" },
-  "missing": false
+  "missing": false,
+  "decision": null,
+  "tags": ["outfits", "summer"]
 }
 ```
 
@@ -44,6 +46,8 @@ A **post summary** (list endpoints):
   (see [Sizes](#sizes)). `media_count` counts every item, missing ones too.
   The Feed adds these up to show the size of a selection in select mode, so
   no extra request is needed for it.
+
+- `tags`: the post's tag names, sorted (see [Tags](#tags)); `[]` when none.
 
 `url` is `null` when the post has no public address (highlight items).
 `text` is an empty string when the downloader saved no caption.
@@ -72,9 +76,9 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&kind=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&kind=&tag=&untagged=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&kind=&review=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/posts/summary?q=&platform=&author=&kind=&review=&tag=&untagged=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/authors` | `[{ "platform", "id", "handle", "name", "count", "bytes" }]`, most posts first |
 | GET | `/api/storage` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
@@ -252,7 +256,12 @@ post id; after a keep, call `/api/review` with `decision: null`.
 `/api/posts` query parameters, all optional:
 
 - `q`: full-text search over post text, author handle, author name and album (SQLite
-  FTS5; plain words, prefix match on the last word)
+  FTS5; plain words, prefix match on the last word). `tag:name` and
+  `tag:"two words"` in it are tag filters, not words (see [Tags](#tags)), and
+  mix freely with text: `tag:outfits red dress`
+- `tag`: a tag name, matched without regard to (ASCII) case. Repeat it for several:
+  a post must have all of them (`tag=a&tag=b`). Combined with any `tag:` in `q`
+- `untagged=1`: only posts with no tag
 - `platform`: e.g. `instagram`
 - `author`: author id (from `/api/authors`)
 - `kind`: one of the kinds above
@@ -262,7 +271,7 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `offset` (default 0), `limit` (default 60, max 200)
 
 `/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
-`platform`, `author`, `kind`, `review`; `sort`, `order`, `offset` and `limit`
+`platform`, `author`, `kind`, `review`, `tag`, `untagged`; `sort`, `order`, `offset` and `limit`
 are ignored) and totals everything they match, not just one page: `posts` is
 always equal to the `total` that `/api/posts` returns for the same filters,
 `media` and `bytes` count the media items of those posts that are not missing.
@@ -469,6 +478,50 @@ so it survives rebuilding the index. It also covers the
 same group after a member leaves; a group that gains a member shows again.
 Unknown group: 404 `{ "ok": false, "error": "…" }`.
 
+## Tags
+
+Free-form labels, many per post. They are the user's own data: kept in the
+`tags` and `post_tags` tables, never touched by a rescan, and written to
+`<data_directory>/userdata/tags.json` and `post_tags.json` (2 s after the
+last change, `post_tags.json` naming tags by name, not id) so a rebuilt
+index gets them back.
+
+- Names are compared without regard to case for ASCII letters (`Outfits` and `outfits` are one
+  tag; the first spelling is kept). Spaces inside a name are collapsed, and
+  a name is 1 to 64 characters with no `"` and no control characters.
+- Tags are keyed by post id. A post moved to the trash keeps its tags, so
+  restoring it, or a duplicate copy taking its place (Duplicates, keep the
+  copy), brings them back. Tags of a post that is neither in the index nor in
+  any trash manifest are dropped when the trash is emptied or purged.
+- Counts only cover posts in the index (not those in the trash).
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/tags` | `[{ "name": "outfits", "color": null, "count": 12 }]`, most used first |
+| POST | `/api/tags/apply` | body `{ "posts": ["instagram:C8x…"], "add": ["outfits"], "remove": ["todo"] }` → see below |
+| POST | `/api/tags/rename` | body `{ "from": "outfit", "to": "outfits" }` → `{ "ok": true, "name": "outfits", "merged": true }` |
+| POST | `/api/tags/delete` | body `{ "name": "outfits" }` → `{ "ok": true, "posts": 12 }`: removes the tag from every post |
+
+`/api/tags/apply` adds and removes tags on up to 5000 posts at once (more is
+a 400). `add` and `remove` are lists of names, either may be omitted but not
+both; a name in `add` that does not exist yet is created. Ids that are not
+in the index are ignored. Response:
+
+```json
+{ "ok": true, "posts": ["instagram:C8x…"], "added": 3, "removed": 1, "created": ["outfits"] }
+```
+
+`posts` lists the ids that exist, `added` and `removed` count the links that
+actually changed, `created` the new tags.
+
+`/api/tags/rename` renames a tag. When `to` already names another tag, the
+two are merged: every post of `from` gets `to`, and `from` is gone
+(`merged: true`). Changing only the case of a name is a rename. An unknown
+`from` is a 404, a bad `to` a 400. `/api/tags/delete` of an unknown name is a
+404.
+
+`color` is reserved for later and always `null` for now.
+
 ## Storage
 
 `GET /api/storage`:
@@ -520,4 +573,4 @@ measured on disk instead.
 `/api/storage`, `/api/authors` and `/api/posts/summary` are computed in SQL
 from the index, never by walking the media folders (only the trash total is
 read from disk). Their answers are cached until anything in the index changes
-(a scan, a delete, a restore, a review decision).
+(a scan, a delete, a restore, a review decision, a tag change).
