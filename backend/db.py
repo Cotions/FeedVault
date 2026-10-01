@@ -149,6 +149,8 @@ def _migrate_4(conn):
             mtime_ns  INTEGER NOT NULL,
             partial   TEXT NOT NULL,                -- sha1 of the first and last MiB
             full      TEXT,                         -- sha1 of the whole file, when needed
+            width     INTEGER,                      -- images: read from the header while hashing
+            height    INTEGER,
             hashed_at INTEGER NOT NULL
         )""")
     conn.execute("""

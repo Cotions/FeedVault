@@ -177,11 +177,11 @@ def test_pass_is_resumable_and_follows_changes(env):
     os.utime(copy_base + ".jpg", (t, t))
     run_scan(env)
     hashing.run_pass(conn)
-    assert copy_base + ".jpg" not in hashes()                 # its size is unique now
+    assert hashes()[copy_base + ".jpg"]["size"] == before[copy_base + ".jpg"]["size"] + 1
     os.remove(copy_base + ".jpg")
     run_scan(env)
     hashing.run_pass(conn)
-    assert len(hashes()) == 0 or all(os.path.exists(p) for p in hashes())
+    assert copy_base + ".jpg" not in hashes()
 
 
 def test_worker_steps_aside_while_the_write_lock_is_held(env):
@@ -250,6 +250,22 @@ def test_suggestion_prefers_kept_then_more_media_then_oldest(env):
     assert duplicates.suggest(m)["id"] == "c"
     m[2]["files"] = 2
     assert duplicates.suggest(m)["id"] == "a"
+
+
+def test_suggestion_prefers_the_higher_resolution(env):
+    """A copy that differs (here: a bigger picture) is suggested over the
+    older, shorter-path post when its images have more pixels."""
+    from fakes import png
+    _, copy_base = two_folders(env, "image")
+    png(copy_base + ".jpg", size=(128, 128))
+    run_scan(env)
+    conn = db.connect()
+    hashing.run_pass(conn)
+    h = hashes()
+    assert (h[copy_base + ".jpg"]["width"], h[copy_base + ".jpg"]["height"]) == (128, 128)
+    [g] = duplicates.all_groups(conn, "copies")
+    assert g["identical"] is False and g["differs"][0]["reason"] == "size"
+    assert g["suggested"] == g["members"][1]["id"]
 
 
 def test_content_group_across_post_ids(env):

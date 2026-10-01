@@ -23,6 +23,7 @@ import threading
 import time
 
 import db
+from parsers import IMAGE_EXT, ext_of
 
 CHUNK = 1 << 20                                  # 1 MiB
 COMMIT_EVERY = 1.0                               # seconds between commits
@@ -135,6 +136,18 @@ def full_hash(path, size):
     return h.hexdigest()
 
 
+def dimensions(path):
+    """(width, height) of an image from its header, or (None, None)."""
+    if ext_of(path) not in IMAGE_EXT:
+        return None, None
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return im.size
+    except Exception:                            # not an image after all, or Pillow missing
+        return None, None
+
+
 def stat(path):
     """(size, mtime_ns), or None when the file is gone."""
     try:
@@ -149,8 +162,10 @@ def stat(path):
 # ---------------------------------------------------------------------------
 
 def candidates(conn):
-    """Paths whose recorded size another file shares, files of posts that
-    have copies first (the Duplicates page shows those right away)."""
+    """Paths whose recorded size another file shares, and every file of a
+    post that has copies (compared item by item, and measured for the
+    suggested keeper even when sizes differ). Those come first: the
+    Duplicates page shows them right away."""
     sizes = {}
     for path, size in conn.execute("SELECT path, size FROM media WHERE missing = 0 AND size > 0"):
         sizes[path] = size
@@ -165,7 +180,7 @@ def candidates(conn):
     count = {}
     for size in sizes.values():
         count[size] = count.get(size, 0) + 1
-    out = [p for p, s in sizes.items() if count[s] > 1]
+    out = [p for p, s in sizes.items() if count[s] > 1 or p in first]
     out.sort(key=lambda p: (p not in first, p))  # then by path, close together on disk
     return out
 
@@ -230,12 +245,13 @@ def _hash_all(conn, paths, known, phase, restart):
                 if phase == "partial":
                     digest = partial_hash(path, st[0])
                     full = digest if st[0] <= 2 * CHUNK else None
+                    width, height = dimensions(path)
                     conn.execute(
-                        "INSERT INTO media_hash(path, size, mtime_ns, partial, full, hashed_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, "
+                        "INSERT INTO media_hash(path, size, mtime_ns, partial, full, width, height, hashed_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, "
                         "mtime_ns = excluded.mtime_ns, partial = excluded.partial, full = excluded.full, "
-                        "hashed_at = excluded.hashed_at",
-                        (path, st[0], st[1], digest, full, int(time.time())))
+                        "width = excluded.width, height = excluded.height, hashed_at = excluded.hashed_at",
+                        (path, st[0], st[1], digest, full, width, height, int(time.time())))
                     read = min(st[0], 2 * CHUNK)
                 else:
                     full = full_hash(path, st[0])

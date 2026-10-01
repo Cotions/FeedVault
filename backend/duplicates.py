@@ -39,8 +39,9 @@ def _key(members):
 
 
 def _hashes(conn):
-    return {r[0]: (r[1], r[2], r[3], r[4]) for r in conn.execute(
-        "SELECT path, size, mtime_ns, partial, full FROM media_hash")}
+    """path -> (size, mtime_ns, partial, full, pixels or None)."""
+    return {r[0]: (r[1], r[2], r[3], r[4], r[5] * r[6] if r[5] and r[6] else None) for r in conn.execute(
+        "SELECT path, size, mtime_ns, partial, full, width, height FROM media_hash")}
 
 
 def _dismissed(conn):
@@ -82,15 +83,32 @@ def _copy_member(copy, post_row):
                    thumb_url=f"/media/copy/{copy['id']}/thumb" if thumb else None)
 
 
-def suggest(members):
-    """The member to keep: kept decision, then more media, then the oldest
-    saved, then the shortest path. (Resolution is not known yet.)"""
-    return min(members, key=lambda m: (not m["kept"], -m["files"], m["saved_at"] or 0,
-                                       len(m["meta_path"]), m["meta_path"]))
+def _pixels(member, hashes):
+    """Total pixels of a member's images, or None unless every image item's
+    size is known (videos are not measured, so they do not count)."""
+    total = 0
+    for i in member["items"]:
+        if i["kind"] != "image":
+            continue
+        h = hashes.get(i["path"])
+        if h is None or h[0] != i["size"] or h[4] is None:
+            return None
+        total += h[4]
+    return total
 
 
-def _finish(kind, members, differs, pending):
-    keep = suggest(members)
+def suggest(members, hashes=None):
+    """The member to keep: kept decision, then more media, then the highest
+    resolution (when known for every member), then the oldest saved, then
+    the shortest path."""
+    pixels = {m["id"]: _pixels(m, hashes) if hashes is not None else None for m in members}
+    known = None not in pixels.values()
+    return min(members, key=lambda m: (not m["kept"], -m["files"], -pixels[m["id"]] if known else 0,
+                                       m["saved_at"] or 0, len(m["meta_path"]), m["meta_path"]))
+
+
+def _finish(kind, members, differs, pending, hashes):
+    keep = suggest(members, hashes)
     key = _key(members)
     return {
         "id": group_id(kind, key), "kind": kind, "key": key,
@@ -172,7 +190,7 @@ def _copies_groups(conn, hashes):
             d, p = _compare_copies(ref, m, hashes)
             differs += d
             pending = pending or p
-        out.append(_finish("copies", members, differs, pending))
+        out.append(_finish("copies", members, differs, pending, hashes))
     return out
 
 
@@ -222,7 +240,7 @@ def _content_groups(conn, hashes):
                 d = i.pop("_digest")
                 if d is None or not all(d in o for o in others):
                     differs.append({"member": m["id"], "idx": i["idx"], "reason": "only here"})
-        out.append(_finish("content", members, differs, False))
+        out.append(_finish("content", members, differs, False, hashes))
     return out
 
 

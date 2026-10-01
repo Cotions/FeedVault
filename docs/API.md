@@ -306,7 +306,8 @@ Exact duplicates come in two kinds:
 
 Hashes are computed by a background worker after every scan, at the lowest
 CPU and disk priority, and cached by path, size and mtime. Only files whose
-size another file shares are read. It pauses while a scan or a delete runs.
+size another file shares, and the files of posts that have extra copies,
+are read. It pauses while a scan or a delete runs.
 
 | Method | Path | Returns |
 |---|---|---|
@@ -359,8 +360,10 @@ size another file shares are read. It pauses while a scan or a delete runs.
   `content` groups `only here` (no other member has this file). `null`
   while some files are not hashed yet (`pending: true`).
 - `suggested`: the member to keep: the one marked kept, then the one with
-  more media, then the oldest `saved_at`, then the shortest path.
-  (Resolution is not taken into account yet.)
+  more media, then the highest resolution (total pixels of its images, read
+  from their headers while hashing; only when known for every member, and
+  videos are not measured), then the oldest `saved_at`, then the shortest
+  path.
 - `frees`: the bytes of every member but the suggested one.
 - Top level: `total`, `identical`, `pending` count groups; `frees` and
   `identical_frees` add up all groups (or the identical ones), all pages.
