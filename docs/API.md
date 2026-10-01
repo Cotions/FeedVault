@@ -722,11 +722,14 @@ downloaded. Nothing is ever fetched.
 ## Sources
 
 A **source** is where a person's posts come from: a tool and its target
-(`instaloader` and a profile name), and the folder inside a media root the
-tool writes to. Clicking **Sync** runs the tool for that source as a
-[job](#jobs) and indexes the folder when it ends, so only new posts are
-downloaded and they show up in the Feed without a terminal. This slice has
-`instaloader` only; gallery-dl and yt-dlp come later.
+(`instaloader` and a profile name, `gallery-dl` or `yt-dlp` and a profile
+link), and the folder inside a media root the tool writes to. Clicking
+**Sync** runs the tool for that source as a [job](#jobs) and indexes the
+folder when it ends, so only new posts are downloaded and they show up in
+the Feed without a terminal.
+
+A source is added by pasting a profile link: the link's host picks the tool
+from the [routing table](#link-routing).
 
 Sources are user data: table `sources`, written to
 `<data_directory>/userdata/sources.json` (by tool and target, the person by
@@ -754,7 +757,12 @@ no person yet.
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 } }
 ```
 
-- `target`: the profile name, lowercase. `url`: its address on the site.
+- `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
+  the profile link, normalized (see [Link routing](#link-routing)). `url`:
+  its address on the site (the link itself for a link).
+- `platform`: what its posts are indexed under: `instagram`, or from the
+  link's host (`twitter` for x.com and twitter.com, `tiktok`, `youtube`,
+  `reddit`, `bluesky`, `pixiv`; another host, the first part of its name).
 - `folder`: absolute, inside a media root (it need not exist before the
   first sync; the sync creates it).
 - `account`: the indexed account the source belongs to (an alias is
@@ -789,20 +797,27 @@ no person yet.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
-| POST | `/api/sources` | body `{ "tool": "instaloader", "target": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
+| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null }` (`source`: the id of the source already there for it). 400 `{ "ok": false, "error" }` for a link that is not accepted |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }` |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |
 
-- `target`: a profile name, `@name`, or a profile URL
-  (`https://www.instagram.com/name/`, with or without `www.`, a query
-  string or a trailing slash). Anything else (a post or reel link, a name
-  with other characters) is a 400.
-- `folder`: optional. Absent: `<first media root>/<target>`. Present: an
-  absolute path that resolves inside a media root (symlinks followed);
-  anything else is a 400.
+- `target`: a profile link. Its host picks the tool from the routing
+  table; `tool` is optional, and when sent must be that tool (else a 400
+  naming it). With `"tool": "instaloader"`, a profile name or `@name` works
+  too. An Instagram link (`https://www.instagram.com/name/`, with or without
+  `www.`, a query string or a trailing slash) gives instaloader the profile
+  name. Anything else (a post or reel link, a name with other characters, a
+  host not in the table) is a 400.
+- `folder`: optional. Absent: `<first media root>/<target>` for
+  instaloader, `<first media root>/<platform>/<name>` for a link, the name
+  being the link's first path part that is not a page kind (`/user/`,
+  `/media`, `/en/`…), lowercase, without `@`. Present: an absolute path
+  that resolves inside a media root (symlinks followed); anything else is
+  a 400.
 - `person` (an id) and `account` are optional. With `account`, the source
   belongs to that indexed account (unknown: 400); without, to the account of
   the folder's posts when there are some.
@@ -825,6 +840,37 @@ source, one per folder right under a media root, for the user to confirm
 the handle is a valid profile name, else the folder's name (file names alone
 do not say whose profile a folder is: a stray file can be named after
 someone else).
+
+### Link routing
+
+`GET /api/config` has `"routes": { "<host>": "<tool>", … }`;
+`POST /api/config` with `{ "routes": {…} }` replaces the table (1 to 100
+entries). The defaults:
+
+| Host | Tool |
+|---|---|
+| `instagram.com` | `instaloader` |
+| `x.com`, `twitter.com`, `reddit.com`, `bsky.app`, `pixiv.net` | `gallery-dl` |
+| `youtube.com` | `yt-dlp` |
+| `tiktok.com` | `yt-dlp` (or `gallery-dl`) |
+
+- A host is a lowercase domain name (`www.` is dropped); a tool one of
+  `instaloader`, `gallery-dl`, `yt-dlp`, and `instaloader` only for
+  `instagram.com`. Anything else is `{ "ok": false, "error" }` and nothing
+  is saved. A broken table in `config.json` counts as the defaults.
+- A link matches an entry when its host is the entry or a subdomain of it
+  (`www.x.com`, `mobile.twitter.com`, `m.youtube.com`); the longest entry
+  wins. A host that only starts or ends like one (`x.com.evil.example`,
+  `evilx.com`) matches nothing.
+- Accepted links: `http` or `https` (a missing scheme is `https`), no login
+  part (`user@`), no port other than 80 or 443, a host name (not an IP
+  address), and a path of letters, digits and `. _ ~ @ % + -` between
+  slashes, not empty, no `.` or `..` part, at most 500 characters.
+- Normalized to `https://<host><path>`: lowercase host without `www.`, no
+  query string or fragment, no repeated or trailing slash. That is the
+  stored target, the same however the link was pasted; the sync checks it
+  again (still normalized, host still in the table) and gives it to the
+  tool after `--`.
 
 ### How a sync runs
 

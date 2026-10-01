@@ -11,17 +11,37 @@ account to a person later and the source follows. A source added to a person
 for a profile not downloaded yet has no account; it keeps that person until
 its first sync finds one (see adopt).
 
+A source is added by pasting a profile link: the link's host picks the tool
+from the routing table in the config (``routes``, editable in Settings), and
+the target is the link, normalized (instaloader's is the profile name).
+
 Nothing here runs a tool: sync.py builds the job from a stored source.
 """
 import json
 import os
 import re
+from urllib.parse import urlsplit
 
 import db
 import people
 
-TOOLS = ("instaloader",)                       # this slice; gallery-dl and yt-dlp come with #4 slice 2
+TOOLS = ("instaloader", "gallery-dl", "yt-dlp")
 PLATFORM = {"instaloader": "instagram"}
+# The routing table's defaults: host -> tool. A host also covers its
+# subdomains (www.x.com, m.youtube.com), never a longer name (x.com.evil.example).
+ROUTES = {
+    "instagram.com": "instaloader",
+    "x.com": "gallery-dl", "twitter.com": "gallery-dl", "reddit.com": "gallery-dl",
+    "bsky.app": "gallery-dl", "pixiv.net": "gallery-dl",
+    "youtube.com": "yt-dlp",
+    "tiktok.com": "yt-dlp",                    # or gallery-dl, in Settings
+}
+ROUTES_MAX = 100
+# The platform a host's posts are indexed under (the tools' own names for it);
+# any other host: the first part of its name ("patreon.com": "patreon").
+HOST_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com": "twitter",
+                  "reddit.com": "reddit", "bsky.app": "bluesky", "pixiv.net": "pixiv",
+                  "youtube.com": "youtube", "tiktok.com": "tiktok"}
 BROWSERS = ("firefox", "chrome", "chromium", "brave", "edge")
 SESSION_MODES = ("none", "cookies", "login")
 ERRORS = ("login_required", "private", "not_found", "rate_limited", "generic")
@@ -33,6 +53,143 @@ _URL_RE = re.compile(r"(?:https?://)?(?:www\.|m\.)?instagram\.com/([^/?#]+)/?(?:
 
 class Refused(ValueError):
     """A change that cannot be made; the message is for the user."""
+
+
+# ---------------------------------------------------------------------------
+# Profile links and the routing table
+# ---------------------------------------------------------------------------
+
+_HOST_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+# What a profile path may hold: no spaces, quotes, backslashes or controls.
+_PATH_RE = re.compile(r"(?:/[A-Za-z0-9._~@%+-]+)+")
+URL_MAX = 500
+# Path parts that say what kind of page it is, not whose: skipped when
+# naming a source's folder.
+_PAGE_WORDS = {"user", "users", "u", "profile", "channel", "c", "en", "ja", "media", "videos", "shorts",
+               "streams", "tweets", "with_replies", "likes", "submitted", "posts", "artworks", "illustrations",
+               "featured", "playlists", "member", "creator"}
+
+
+def clean_routes(value):
+    """A routing table from Settings, or (None, error): {host: tool}, each
+    host a lowercase domain name, each tool known; instaloader only for
+    instagram.com (it downloads nothing else)."""
+    if not isinstance(value, dict) or not value or len(value) > ROUTES_MAX:
+        return None, f"routes must map 1 to {ROUTES_MAX} hosts to a tool"
+    out = {}
+    for host, tool in value.items():
+        h = host.strip().lower() if isinstance(host, str) else ""
+        if h.startswith("www."):
+            h = h[4:]
+        if not _HOST_RE.fullmatch(h):
+            return None, f"not a host name: {host}"
+        if tool not in TOOLS:
+            return None, f"{h}: tool must be one of: {', '.join(TOOLS)}"
+        if tool == "instaloader" and h != "instagram.com":
+            return None, f"{h}: instaloader only downloads from instagram.com"
+        out[h] = tool
+    return out, None
+
+
+def routes(cfg):
+    """The routing table in use: the config's when it is valid, else the defaults."""
+    table, _ = clean_routes(cfg.get("routes")) if cfg.get("routes") is not None else (None, None)
+    return table or dict(ROUTES)
+
+
+def route(host, table):
+    """(table host, tool) for a link's host: the longest table entry that
+    is the host or a domain it is under; None when there is none."""
+    best = None
+    for h, tool in table.items():
+        if (host == h or host.endswith("." + h)) and (best is None or len(h) > len(best[0])):
+            best = (h, tool)
+    return best
+
+
+def parse_url(text, table):
+    """(normalized link, table host, tool) for a pasted profile link, else
+    (None, error). The link becomes ``https://<host><path>``: lowercase
+    host without ``www.``, no login part, port, query or fragment, no
+    trailing slash. Its host must be in the routing table."""
+    if not isinstance(text, str):
+        return None, "paste a profile link"
+    text = text.strip()
+    if not text or len(text) > URL_MAX or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in text):
+        return None, "paste a profile link"
+    if "://" not in text:
+        text = "https://" + text
+    try:
+        u = urlsplit(text)
+        port = u.port
+    except ValueError:
+        return None, "not a link"
+    if u.scheme.lower() not in ("http", "https"):
+        return None, "only http and https links"
+    if u.username is not None or u.password is not None or "@" in u.netloc:
+        return None, "a link with a login part is refused"
+    if port not in (None, 80, 443):
+        return None, "a link with a port is refused"
+    host = (u.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not _HOST_RE.fullmatch(host):
+        return None, "not a link to a website"
+    found = route(host, table)
+    if found is None:
+        return None, f"{host} is not in the routing table (Settings → Link routing)"
+    path = re.sub(r"/{2,}", "/", u.path).rstrip("/")
+    if not path or not _PATH_RE.fullmatch(path) or any(p in (".", "..") for p in path.split("/")):
+        return None, "paste a link to a profile, not to the site's home page"
+    return (f"https://{host}{path}", found[0], found[1]), None
+
+
+def platform_of(table_host):
+    return HOST_PLATFORMS.get(table_host) or table_host.split(".")[0]
+
+
+def folder_name(url):
+    """A folder name for a profile link: its first part that is not a page
+    kind (``/user/``, ``/media``), without ``@``, lowercase; else "profile"."""
+    for part in urlsplit(url).path.split("/"):
+        part = part.lstrip("@")
+        if part and part.lower() not in _PAGE_WORDS:
+            name = re.sub(r"[^a-z0-9._-]+", "_", part.lower()).strip("._")
+            if name:
+                return name[:80]
+    return "profile"
+
+
+def resolve(text, table, roots):
+    """What adding a source for a pasted link would make: {tool, platform,
+    target, folder}, or raises Refused. An Instagram link with instaloader
+    gives the profile name as target; any other tool, the normalized link.
+    The folder is ``<first media root>/<target>`` for instaloader,
+    ``<first media root>/<platform>/<name>`` for the others."""
+    parsed, error = parse_url(text, table)
+    if parsed is None:
+        raise Refused(error)
+    url, host, tool = parsed
+    platform = platform_of(host)
+    if tool == "instaloader":
+        target = parse_target("instaloader", url)
+        if target is None:
+            raise Refused("paste a link to an Instagram profile, not to a post")
+        folder = os.path.join(roots[0], target) if roots else None
+    else:
+        target = url
+        folder = os.path.join(roots[0], platform, folder_name(url)) if roots else None
+    return {"tool": tool, "platform": platform, "target": target, "folder": folder}
+
+
+def check_target(tool, target, table):
+    """``target`` when it is still a valid stored target for ``tool`` (a
+    profile name for instaloader; else a normalized link whose host is in
+    the routing table), else None. sync.py checks again before each run."""
+    if tool == "instaloader":
+        return target if parse_target("instaloader", target) == target else None
+    parsed, _ = parse_url(target, table)
+    return target if parsed is not None and parsed[0] == target else None
 
 
 def parse_target(tool, text):
@@ -130,7 +287,7 @@ def _public(conn, row, accounts, active):
     job = active.get(row["id"])
     return {
         "id": row["id"], "tool": row["tool"], "platform": row["platform"], "target": row["target"],
-        "url": db.profile_url(row["platform"], row["target"]),
+        "url": row["target"] if row["tool"] != "instaloader" else db.profile_url(row["platform"], row["target"]),
         "folder": row["folder"],
         "account": {"platform": key[0], "id": key[1]} if key else None,
         "person": person,
@@ -225,16 +382,26 @@ def suggestions(conn, roots):
 # Changes (the caller notes userdata)
 # ---------------------------------------------------------------------------
 
-def create(conn, roots, tool, target, folder, person_id, account, options, now):
-    """A new source. ``folder``: an existing folder inside a media root, or
-    None for ``<first media root>/<target>``. ``account``: (platform, id) of
-    an indexed account, else found from the folder's posts when it has some."""
+def create(conn, roots, tool, target, folder, person_id, account, options, now, table=None):
+    """A new source. ``target``: checked (check_target). ``folder``: an
+    existing folder inside a media root, or None for resolve()'s default.
+    ``account``: (platform, id) of an indexed account, else found from the
+    folder's posts when it has some."""
     if tool not in TOOLS:
         raise Refused(f"tool must be one of: {', '.join(TOOLS)}")
     if not roots:
         raise Refused("add a media root in Settings first")
+    table = table or dict(ROUTES)
+    if check_target(tool, target, table) is None:
+        raise Refused("the target is not a profile name or a profile link in the routing table")
+    if tool == "instaloader":
+        platform = PLATFORM[tool]
+        default = os.path.join(roots[0], target)
+    else:
+        platform = platform_of(route(urlsplit(target).hostname, table)[0])
+        default = os.path.join(roots[0], platform, folder_name(target))
     if folder is None:
-        folder = os.path.join(roots[0], target)
+        folder = default
     real = inside_root(folder, roots)
     if real is None:
         raise Refused("the folder must be inside a media root")
@@ -242,7 +409,6 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now):
         raise Refused("the folder path is a file")
     if conn.execute("SELECT 1 FROM sources WHERE tool = ? AND target = ?", (tool, target)).fetchone():
         raise Refused(f"there is already a {tool} source for {target}")
-    platform = PLATFORM[tool]
     if account is not None:
         key = people.canonical(conn, *account)
         if key not in db.accounts(conn) or key[0] != platform:

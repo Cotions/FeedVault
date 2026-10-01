@@ -695,15 +695,41 @@ def _source_or_404(sid):
     return s
 
 
+@app.get("/api/sources/resolve")
+def resolve_source():
+    """What pasting a profile link would add: the tool, platform, target and
+    default folder, shown before saving."""
+    cfg = config.load()
+    try:
+        r = sources.resolve(request.args.get("url"), sources.routes(cfg), cfg["media_roots"])
+    except sources.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    conn = db.connect()
+    taken = conn.execute("SELECT id FROM sources WHERE tool = ? AND target = ?", (r["tool"], r["target"])).fetchone()
+    return jsonify({"ok": True, **r, "source": taken[0] if taken else None})
+
+
 @app.post("/api/sources")
 def create_source():
     body = request.get_json(silent=True) or {}
     tool = body.get("tool")
-    if tool not in sources.TOOLS:
+    if tool is not None and tool not in sources.TOOLS:
         return jsonify({"ok": False, "error": f"tool must be one of: {', '.join(sources.TOOLS)}"}), 400
-    target = sources.parse_target(tool, body.get("target"))
-    if target is None:
-        return jsonify({"ok": False, "error": "target must be a profile name, @name or profile URL"}), 400
+    cfg = config.load()
+    table = sources.routes(cfg)
+    if tool == "instaloader":
+        target = sources.parse_target(tool, body.get("target"))
+        if target is None:
+            return jsonify({"ok": False, "error": "target must be a profile name, @name or profile URL"}), 400
+    else:
+        # A link: the routing table picks the tool.
+        try:
+            r = sources.resolve(body.get("target"), table, cfg["media_roots"])
+        except sources.Refused as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        if tool is not None and r["tool"] != tool:
+            return jsonify({"ok": False, "error": f"this link syncs with {r['tool']} (Settings → Link routing)"}), 400
+        tool, target = r["tool"], r["target"]
     folder, person, account = body.get("folder"), body.get("person"), body.get("account")
     if folder is not None and not isinstance(folder, str):
         return jsonify({"ok": False, "error": "folder must be an absolute path inside a media root"}), 400
@@ -719,7 +745,8 @@ def create_source():
         return jsonify({"ok": False, "error": "options must be { full_history, session }"}), 400
     conn = db.connect()
     try:
-        sid = sources.create(conn, _roots(), tool, target, folder, person, account, options, int(time.time()))
+        sid = sources.create(conn, cfg["media_roots"], tool, target, folder, person, account, options,
+                             int(time.time()), table)
     except sources.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     userdata.changed("sources")
@@ -801,7 +828,7 @@ def scan_start():
 def _public_config(cfg):
     return {"media_roots": cfg["media_roots"], "data_directory": cfg["data_directory"],
             "version": config.__version__, "tools": cfg.get("tools") or {},
-            "instaloader": sync.settings(cfg)}
+            "instaloader": sync.settings(cfg), "routes": sources.routes(cfg)}
 
 
 @app.get("/api/config")
@@ -813,7 +840,11 @@ def get_config():
 def set_config():
     body = request.get_json(silent=True) or {}
     cfg = config.load()
-    tools = roots = insta = None
+    tools = roots = insta = table = None
+    if "routes" in body:
+        table, error = sources.clean_routes(body["routes"])
+        if error:
+            return jsonify({"ok": False, "error": error})
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
         if error:
@@ -835,7 +866,9 @@ def set_config():
         cfg["media_roots"] = roots
     if insta is not None:
         cfg["instaloader"] = insta
-    if tools is not None or roots is not None or insta is not None:
+    if table is not None:
+        cfg["routes"] = table
+    if tools is not None or roots is not None or insta is not None or table is not None:
         config.save(cfg)
     if changed:
         scanner.start(roots)
