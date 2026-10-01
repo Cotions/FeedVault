@@ -7,14 +7,14 @@ already have while you browse.
 
 FeedVault does not download anything itself. It reads what
 [instaloader](https://instaloader.github.io/) and
-[gallery-dl](https://github.com/mikf/gallery-dl) write (yt-dlp is next). A post whose files disappear stays in the index, marked missing.
+[gallery-dl](https://github.com/mikf/gallery-dl) and [yt-dlp](https://github.com/yt-dlp/yt-dlp) write. A post whose files disappear stays in the index, marked missing.
 
 The **Review** page is for sorting: one post at a time, keep or trash it from
 the keyboard. Deleting moves files to `.feedvault-trash/` inside the media
 folder; only **Empty trash** in Settings removes them for good.
 
-Status: early. Instagram via instaloader and X/Twitter and TikTok via
-gallery-dl work end to end; see
+Status: early. Instagram via instaloader, X/Twitter and TikTok via
+gallery-dl, and TikTok and YouTube Shorts via yt-dlp work end to end; see
 [PLANNING.md](PLANNING.md) for what comes next.
 
 ## Start
@@ -94,7 +94,32 @@ gallery-dl --write-metadata \
 X timelines need a logged-in session (`--cookies-from-browser firefox`);
 single public tweets and TikTok usually do not.
 
-## Userscript
+## Downloading with yt-dlp
+
+yt-dlp writes an info JSON per video when asked to; FeedVault reads it and
+the files that share its name: the video, the thumbnail (its poster),
+subtitles and the description file. It suits TikTok and short videos;
+long YouTube videos are left to ChannelVault (see below).
+
+```bash
+yt-dlp --write-info-json --write-thumbnail \
+  --download-archive ~/.local/share/feedvault/yt-dlp/archive.txt \
+  -o "~/Media/yt-dlp/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s" \
+  https://www.tiktok.com/@some_account
+```
+
+- `--write-info-json` is required: `<name>.info.json` beside `<name>.mp4`.
+  Keep the two in the same folder with the same base name
+- `--write-thumbnail` saves the poster (TikTok's keeps the `.image` its URL
+  has; FeedVault serves it as the image it is)
+- `--download-archive` remembers what was downloaded; keep it in FeedVault's
+  data directory, as for gallery-dl, so a trashed post stays trashed
+- a playlist or channel run also writes the playlist's own info JSON: it is
+  recognized and ignored, not listed as unmatched
+- YouTube videos longer than `youtube_max_seconds` in the config (default
+  180) are not indexed: they show on the **Unmatched** page as "left to
+  ChannelVault". Shorts and short clips are indexed like TikTok videos
+
 
 Install [Tampermonkey](https://www.tampermonkey.net/), then open
 <http://localhost:3380/userscript/feedvault.user.js>. On Instagram, saved posts

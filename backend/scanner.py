@@ -116,6 +116,8 @@ def _scan(roots):
             for path, message in result.errors:
                 report["errors"].append({"path": path, "error": message})
                 unmatched.append((path, *_size_mtime(path), message))
+            for path, reason in result.skipped:
+                unmatched.append((path, *_size_mtime(path), reason))
             for post in result.posts:
                 _index_post(conn, post, started, report, seen_meta, unmatched, copies)
             for n in names:
@@ -213,6 +215,7 @@ def index_dirs(roots, dirs):
             indexed.extend(seen)
             conn.execute(f"DELETE FROM unmatched WHERE path IN ({', '.join('?' for _ in result.claimed) or 'NULL'})",
                          [os.path.join(d, n) for n in result.claimed])
+            unmatched.extend((path, *_size_mtime(path), reason) for path, reason in result.skipped)
         # A copy that is back keeps its "duplicate of" line; one that became
         # the post (the first copy was trashed) is no longer a copy.
         conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",

@@ -933,10 +933,28 @@ def quit_app():
 # never a path.
 # ---------------------------------------------------------------------------
 
-def _send(path):
+# Image types by their first bytes, for files whose name does not say
+# (yt-dlp keeps TikTok's thumbnails as ".image").
+_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG", "image/png"), (b"RIFF", "image/webp"), (b"GIF8", "image/gif"))
+
+
+def _sniff(path):
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+    except OSError:
+        return None
+    for magic, mimetype in _MAGIC:
+        if head.startswith(magic) and (mimetype != "image/webp" or head[8:12] == b"WEBP"):
+            return mimetype
+    return None
+
+
+def _send(path, sniff=False):
     if not path or not os.path.isfile(path):
         abort(404)
-    resp = send_file(path, conditional=True, max_age=3600)
+    mimetype = _sniff(path) if sniff and path.endswith(".image") else None
+    resp = send_file(path, mimetype=mimetype, conditional=True, max_age=3600)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
 
@@ -964,7 +982,7 @@ def serve_thumb(media_id):
 @app.get("/media/<int:media_id>/poster")
 def serve_poster(media_id):
     row = db.media_row(db.connect(), media_id)
-    return _send(row["poster_path"] if row else None)
+    return _send(row["poster_path"] if row else None, sniff=True)
 
 
 @app.get("/media/copy/<int:copy_id>/thumb")

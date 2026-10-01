@@ -1,0 +1,129 @@
+{
+ "id": "AAAAAAAAAA1",
+ "title": "A walk in the park",
+ "formats": [
+  {
+   "format_id": "233",
+   "format_note": "Default, low",
+   "url": "https://media.example/x.jpg",
+   "manifest_url": "https://media.example/x.jpg",
+   "ext": "mp4",
+   "protocol": "m3u8_native",
+   "quality": -1,
+   "has_drm": false,
+   "vcodec": "none",
+   "source_preference": 0,
+   "available_at": 1790875639,
+   "audio_ext": "mp4",
+   "video_ext": "none",
+   "vbr": 0,
+   "resolution": "audio only",
+   "format": "233 - audio only (Default, low)"
+  }
+ ],
+ "thumbnails": [
+  {
+   "url": "https://media.example/x.jpg",
+   "preference": -37,
+   "id": "0"
+  }
+ ],
+ "thumbnail": "https://media.example/x.jpg",
+ "description": "Some words about the walk\nhttps://example.com/more\n\n00:00 Intro\n00:05 The middle\n00:17 End",
+ "channel_id": "UCexampleChannelAAAAAAA1",
+ "channel_url": "https://www.youtube.com/channel/UCexampleChannelAAAAAAA1",
+ "duration": 19,
+ "view_count": 1234,
+ "age_limit": 0,
+ "webpage_url": "https://www.youtube.com/watch?v=AAAAAAAAAA1",
+ "categories": [
+  "People & Blogs"
+ ],
+ "tags": [
+  "example",
+  "tags"
+ ],
+ "playable_in_embed": true,
+ "live_status": "not_live",
+ "media_type": "video",
+ "_format_sort_fields": [
+  "quality",
+  "res",
+  "fps",
+  "hdr:12",
+  "source",
+  "vcodec",
+  "channels",
+  "acodec",
+  "lang",
+  "proto"
+ ],
+ "automatic_captions": {},
+ "subtitles": {},
+ "comment_count": 7,
+ "chapters": [
+  {
+   "start_time": 0,
+   "title": "Intro",
+   "end_time": 5
+  }
+ ],
+ "heatmap": [
+  {
+   "start_time": 0.0,
+   "end_time": 0.19,
+   "value": 1.0
+  },
+  {
+   "start_time": 0.19,
+   "end_time": 0.38,
+   "value": 0.8397510424941702
+  }
+ ],
+ "location": "Somewhere",
+ "like_count": 56,
+ "channel": "somechannel",
+ "channel_follower_count": 8,
+ "channel_is_verified": true,
+ "uploader": "somechannel",
+ "uploader_id": "@somechannel",
+ "uploader_url": "https://www.youtube.com/@somechannel",
+ "upload_date": "20050424",
+ "timestamp": 1114313512,
+ "availability": "public",
+ "webpage_url_basename": "watch",
+ "webpage_url_domain": "youtube.com",
+ "extractor": "youtube",
+ "extractor_key": "Youtube",
+ "display_id": "AAAAAAAAAA1",
+ "fulltitle": "A walk in the park",
+ "duration_string": "19",
+ "is_live": false,
+ "was_live": false,
+ "epoch": 1790875640,
+ "format": "395 - 320x240 (240p)+251 - audio only (medium)",
+ "format_id": "395+251",
+ "ext": "webm",
+ "protocol": "https+https",
+ "format_note": "240p+medium",
+ "filesize_approx": 475961,
+ "tbr": 200.62,
+ "width": 320,
+ "height": 240,
+ "resolution": "320x240",
+ "fps": 15,
+ "dynamic_range": "SDR",
+ "vcodec": "av01.0.00M.08.0.110.05.01.06.0",
+ "vbr": 94.556,
+ "aspect_ratio": 1.33,
+ "acodec": "opus",
+ "abr": 106.064,
+ "asr": 48000,
+ "audio_channels": 2,
+ "_type": "video",
+ "_version": {
+  "version": "2026.08.19",
+  "release_git_head": "594bd50c2c78ac432f81600d309fdc4e0a92d82c",
+  "repository": "yt-dlp/yt-dlp"
+ }
+}

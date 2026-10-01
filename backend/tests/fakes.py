@@ -160,3 +160,31 @@ def write_filename_post(folder, target, shortcode, ts, slides=1, video=False):
     for p in paths:
         os.utime(p, (ts, ts))
     return paths
+
+
+# --- yt-dlp -------------------------------------------------------------------
+
+YT_DLP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "yt_dlp")
+# The thumbnail's extension, as yt-dlp kept it from the URL (see the README).
+YT_DLP_THUMB = {"TikTok": "image", "Youtube": "webp", "YoutubeTab": "jpg"}
+
+
+def yt_dlp_case(case, folder, media=True, thumbs=True):
+    """Copy the yt-dlp fixture ``case`` ("tiktok/video", see
+    fixtures/yt_dlp/README.md) into ``folder`` with, beside each info JSON,
+    the video (``ext``) and thumbnail yt-dlp would have written. Returns
+    the JSON names."""
+    import shutil
+    os.makedirs(folder, exist_ok=True)
+    src = os.path.join(YT_DLP, case)
+    names = sorted(n for n in os.listdir(src) if n.endswith(".info.json"))
+    for n in names:
+        shutil.copy(os.path.join(src, n), os.path.join(folder, n))
+        with open(os.path.join(src, n), encoding="utf-8") as f:
+            data = json.load(f)
+        base = os.path.join(folder, n[:-len(".info.json")])
+        if media and data.get("_type") != "playlist":
+            fake_video(f"{base}.{data['ext']}")
+        if thumbs:
+            png(f"{base}.{YT_DLP_THUMB[data['extractor_key']]}", tuple((sum(map(ord, n)) * k) % 256 for k in (3, 7, 11)))
+    return names

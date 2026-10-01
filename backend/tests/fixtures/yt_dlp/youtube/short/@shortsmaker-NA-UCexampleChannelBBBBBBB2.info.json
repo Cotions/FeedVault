@@ -1,0 +1,40 @@
+{
+ "id": "UCexampleChannelBBBBBBB2",
+ "channel": "Shorts Maker",
+ "channel_id": "UCexampleChannelBBBBBBB2",
+ "title": "Shorts Maker - Shorts",
+ "availability": "public",
+ "channel_follower_count": 8,
+ "description": "An invented channel for tests",
+ "tags": [
+  "example",
+  "tags"
+ ],
+ "thumbnails": [
+  {
+   "url": "https://media.example/file",
+   "height": 175,
+   "width": 1060,
+   "preference": -10,
+   "id": "0",
+   "resolution": "1060x175"
+  }
+ ],
+ "uploader_id": "@shortsmaker",
+ "uploader_url": "https://www.youtube.com/@shortsmaker",
+ "channel_is_verified": true,
+ "uploader": "Shorts Maker",
+ "channel_url": "https://www.youtube.com/channel/UCexampleChannelBBBBBBB2",
+ "_type": "playlist",
+ "extractor_key": "YoutubeTab",
+ "extractor": "youtube:tab",
+ "webpage_url": "https://www.youtube.com/@shortsmaker/shorts",
+ "webpage_url_basename": "shorts",
+ "webpage_url_domain": "youtube.com",
+ "epoch": 1790875642,
+ "_version": {
+  "version": "2026.08.19",
+  "release_git_head": "594bd50c2c78ac432f81600d309fdc4e0a92d82c",
+  "repository": "yt-dlp/yt-dlp"
+ }
+}
