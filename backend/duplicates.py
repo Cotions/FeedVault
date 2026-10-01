@@ -3,9 +3,9 @@
 Two kinds of group:
 
 - ``copies``: an indexed post and the extra copies of it the scanner found in
-  other folders (db.save_copies). Items are compared by position: the same
-  size and the same partial hash (first and last MiB) is the same file; when
-  both sides also have a full sha1, that decides.
+  other folders (db.save_copies). Items are compared by position: size, then
+  the partial hash (first and last MiB), then a full sha1, which the worker
+  computes only for items that got that far.
 - ``content``: different posts (a repost saved under another id) that share
   at least one file, by size and full sha1. Posts linked through any shared
   file form one group.
@@ -26,6 +26,9 @@ import thumbs
 import trash
 
 KINDS = ("copies", "content")
+# A file shared by more posts than this (a placeholder image, a watermark
+# card) does not link them into one group: they are not reposts of each other.
+MAX_SHARED = 20
 
 
 def group_id(kind, key):
@@ -45,16 +48,34 @@ def _hashes(conn):
 
 
 def _dismissed(conn):
-    return {r[0] for r in conn.execute("SELECT key FROM dismissed_duplicates")}
+    out = []
+    for (key,) in conn.execute("SELECT key FROM dismissed_duplicates"):
+        try:
+            out.append(frozenset(json.loads(key)))
+        except (ValueError, TypeError):
+            pass
+    return out
+
+
+def is_dismissed(key, dismissed):
+    """A group stays dismissed while its members are among a dismissed
+    group's: losing a member does not bring it back, gaining one does."""
+    members = set(json.loads(key))
+    return any(members <= d for d in dismissed)
 
 
 # ---------------------------------------------------------------------------
 # Members
 # ---------------------------------------------------------------------------
 
-def _items(media):
-    return [{"idx": m["idx"], "kind": m["kind"], "size": m["size"], "path": m["path"],
-             "poster_path": m["poster_path"]} for m in media]
+def _items(media, hashes):
+    out = []
+    for m in media:
+        h = hashes.get(m["path"])
+        out.append({"idx": m["idx"], "kind": m["kind"], "size": m["size"], "path": m["path"],
+                    "poster_path": m["poster_path"],
+                    "hash": h[3] if h is not None and h[0] == m["size"] else None})
+    return out
 
 
 def _member(kind, post_id, meta_path, items, saved_at, kept, **extra):
@@ -63,21 +84,21 @@ def _member(kind, post_id, meta_path, items, saved_at, kept, **extra):
             "bytes": sum(i["size"] or 0 for i in items), "saved_at": saved_at, "kept": kept, **extra}
 
 
-def _post_member(conn, row):
+def _post_member(conn, row, hashes):
     media = conn.execute("SELECT * FROM media WHERE post_id = ? AND missing = 0 ORDER BY idx",
                          (row["id"],)).fetchall()
     summary = db.summary(conn, row)
-    return _member("post", row["id"], row["meta_path"], _items(media), row["saved_at"],
+    return _member("post", row["id"], row["meta_path"], _items(media, hashes), row["saved_at"],
                    row["decision"] == "keep", id=row["id"], post=summary,
                    thumb_url=summary["cover"]["url"] if summary["cover"] and summary["cover"].get("poster", True)
                    else None)
 
 
-def _copy_member(copy, post_row):
+def _copy_member(copy, post_row, hashes):
     media = sorted(json.loads(copy["media"]), key=lambda m: m["idx"])
     first = media[0] if media else None
     thumb = first and (first["kind"] == "image" or first.get("poster_path") or thumbs.have_ffmpeg())
-    return _member("copy", copy["post_id"], copy["meta_path"], _items(media),
+    return _member("copy", copy["post_id"], copy["meta_path"], _items(media, hashes),
                    int(copy["meta_mtime"] or copy["first_seen"]),
                    post_row["decision"] == "keep", id=f"copy:{copy['id']}", copy_id=copy["id"], post=None,
                    thumb_url=f"/media/copy/{copy['id']}/thumb" if thumb else None)
@@ -135,7 +156,7 @@ def _hash_of(item, hashes):
 
 
 def same_file(a, b, hashes):
-    """True, False, or None when not hashed yet."""
+    """True, False, or None when not hashed far enough yet."""
     if a["size"] != b["size"]:
         return False
     ha, hb = _hash_of(a, hashes), _hash_of(b, hashes)
@@ -143,9 +164,9 @@ def same_file(a, b, hashes):
         return None
     if ha[0] != hb[0]:
         return False
-    if ha[1] and hb[1]:
-        return ha[1] == hb[1]
-    return True
+    if ha[1] is None or hb[1] is None:          # the whole files are next in the worker's queue
+        return None
+    return ha[1] == hb[1]
 
 
 def _compare_copies(ref, copy, hashes):
@@ -183,8 +204,8 @@ def _copies_groups(conn, hashes):
         row = conn.execute(f"{db._SELECT} WHERE p.id = ?", (post_id,)).fetchone()
         if row is None:                         # trashed since the scan: the copy becomes the post next scan
             continue
-        ref = _post_member(conn, row)
-        members = [ref] + [_copy_member(c, row) for c in cps]
+        ref = _post_member(conn, row, hashes)
+        members = [ref] + [_copy_member(c, row, hashes) for c in cps]
         differs, pending = [], False
         for m in members[1:]:
             d, p = _compare_copies(ref, m, hashes)
@@ -210,7 +231,7 @@ def _content_groups(conn, hashes):
         return x
 
     for posts in by_digest.values():
-        if len(posts) > 1:
+        if 1 < len(posts) <= MAX_SHARED:
             first, *rest = sorted(posts)
             for p in rest:
                 parent[find(p)] = find(first)
@@ -221,37 +242,28 @@ def _content_groups(conn, hashes):
     out = []
     for ids in components.values():
         rows = [conn.execute(f"{db._SELECT} WHERE p.id = ?", (i,)).fetchone() for i in sorted(ids)]
-        members = [_post_member(conn, r) for r in rows if r is not None]
+        members = [_post_member(conn, r, hashes) for r in rows if r is not None]
         if len(members) < 2:
             continue
-        digests = []
-        for m in members:
-            ds = set()
-            for i in m["items"]:
-                h = _hash_of(i, hashes)
-                i["_digest"] = (i["size"], h[1]) if h and h[1] else None
-                if i["_digest"]:
-                    ds.add(i["_digest"])
-            digests.append(ds)
+        digests = [{(i["size"], i["hash"]) for i in m["items"] if i["hash"]} for m in members]
         differs = []
         for n, m in enumerate(members):
             others = digests[:n] + digests[n + 1:]
             for i in m["items"]:
-                d = i.pop("_digest")
-                if d is None or not all(d in o for o in others):
+                if not i["hash"] or not all((i["size"], i["hash"]) in o for o in others):
                     differs.append({"member": m["id"], "idx": i["idx"], "reason": "only here"})
         out.append(_finish("content", members, differs, False, hashes))
     return out
 
 
-def all_groups(conn, kind, include_dismissed=False):
+def all_groups(conn, kind, include_dismissed=False, hashes=None):
     """Every group of a kind, biggest saving first. Uncached: resolve() calls
     it under the write lock to see the index as it is now."""
-    hashes = _hashes(conn)
+    hashes = _hashes(conn) if hashes is None else hashes
     groups = _copies_groups(conn, hashes) if kind == "copies" else _content_groups(conn, hashes)
     if not include_dismissed:
         dismissed = _dismissed(conn)
-        groups = [g for g in groups if g["key"] not in dismissed]
+        groups = [g for g in groups if not is_dismissed(g["key"], dismissed)]
     groups.sort(key=lambda g: (-g["frees"], g["id"]))
     return groups
 
@@ -337,8 +349,10 @@ def resolve(choices, roots, data_dir):
     skipped, planned, promote = [], [], []
 
     def pick(conn):
-        current = {g["id"]: g for kind in KINDS for g in all_groups(conn, kind)}
         hashes = _hashes(conn)
+        current = {g["id"]: g for g in all_groups(conn, "copies", hashes=hashes)}
+        if any(gid not in current for gid, _ in choices):     # content groups only when asked for
+            current.update((g["id"], g) for g in all_groups(conn, "content", hashes=hashes))
         keepers = {keep for _, keep in choices}
         posts, copies = [], []
         for gid, keep in choices:

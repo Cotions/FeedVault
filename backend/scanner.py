@@ -188,4 +188,5 @@ def index_dirs(roots, dirs):
         conn.executemany("DELETE FROM copies WHERE meta_path = ?", [(p,) for p in indexed])
         db.save_copies(conn, copies, now, prune=False)
         conn.commit()
-        return report
+    hashing.kick()                             # files back from the trash may need hashing again
+    return report

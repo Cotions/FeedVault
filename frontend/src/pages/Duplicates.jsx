@@ -36,12 +36,17 @@ function differsText(g, memberId) {
   return g.differs.filter(d => d.member === memberId).map(d => (REASONS[d.reason] || (i => `item ${i} ${d.reason}`))(d.idx)).join(" · ");
 }
 
-// How many items trashing every member but `keep` would lose. In a copies
-// group differences are against the post: a trashed copy loses what it has
-// that the post lacks or holds differently, and keeping a copy loses the
-// post's version of whatever that copy lacks or holds differently.
+// How many items trashing every member but `keep` would lose. In a content
+// group, any file of a trashed member the kept one does not hold (by hash).
+// In a copies group differences are against the post: a trashed copy loses
+// what it has that the post lacks or holds differently, and keeping a copy
+// loses the post's version of whatever that copy lacks or holds differently.
 function lostItems(g, keep) {
-  if (g.kind === "content") return g.differs.filter(d => d.member !== keep).length;
+  if (g.kind === "content") {
+    const held = new Set(g.members.find(m => m.id === keep)?.items.filter(i => i.hash).map(i => `${i.size}:${i.hash}`));
+    return g.members.filter(m => m.id !== keep)
+      .reduce((n, m) => n + m.items.filter(i => !i.hash || !held.has(`${i.size}:${i.hash}`)).length, 0);
+  }
   return g.differs.filter(d => (d.member === keep ? d.reason !== "extra" : d.reason !== "missing")).length;
 }
 
@@ -89,6 +94,11 @@ function Member({ m, group, chosen, onChoose, disabled }) {
 
 function Group({ g, index, busy, selectMode, selected, onToggle, onResolve, onDismiss }) {
   const [keep, setKeep] = useState(g.suggested);
+  const [seenSuggested, setSeenSuggested] = useState(g.suggested);
+  if (g.suggested !== seenSuggested) {               // a reload changed the suggestion: follow it
+    setSeenSuggested(g.suggested);
+    setKeep(g.suggested);
+  }
   const kept = g.members.find(m => m.id === keep) || g.members[0];
   const frees = g.members.reduce((n, m) => n + (m.id === kept.id ? 0 : m.bytes), 0);
   const others = g.members.length - 1;

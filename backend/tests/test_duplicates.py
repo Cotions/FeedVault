@@ -202,6 +202,39 @@ def test_worker_steps_aside_while_the_write_lock_is_held(env):
     assert not t.is_alive() and len(hashes()) == 2
 
 
+def test_writes_are_batched_outside_file_reads(env, monkeypatch):
+    two_folders(env, slides=[False, False, True])
+    run_scan(env)
+    writes = []
+    real = hashing._write
+    monkeypatch.setattr(hashing, "_write", lambda conn, phase, pending: (
+        writes.append((phase, len(pending))), real(conn, phase, pending)))
+    assert hashing.run_pass(db.connect())
+    assert [w for w in writes if w[1]] == [("partial", len(hashes()))]
+
+
+def test_copy_of_a_big_file_is_confirmed_by_a_full_hash(env):
+    """Same size, first and last MiB: only the whole file tells a copy
+    damaged in the middle from a good one."""
+    a, copy_base = two_folders(env, "video")
+    big(copy_base + ".mp4", b"x")
+    big(a + ".mp4", b"x")
+    run_scan(env)
+    conn = db.connect()
+    hashing.run_pass(conn)
+    h = hashes()
+    assert h[a + ".mp4"]["full"] and h[a + ".mp4"]["full"] == h[copy_base + ".mp4"]["full"]
+    [g] = duplicates.all_groups(conn, "copies")
+    assert g["identical"] is True
+    big(copy_base + ".mp4", b"y")
+    t = time.time() + 5
+    os.utime(copy_base + ".mp4", (t, t))
+    run_scan(env)
+    hashing.run_pass(conn)
+    [g] = duplicates.all_groups(conn, "copies")
+    assert g["identical"] is False and g["differs"][0]["reason"] == "content"
+
+
 def test_copies_group_identical(env):
     two_folders(env, slides=[False, True])
     run_scan(env)
@@ -330,6 +363,45 @@ def test_dismissals_are_user_data(env):
     assert duplicates.all_groups(conn, "copies") == []
     # the key names members by post id and metadata path, not by row ids
     assert json.loads(g["key"]) == sorted(["instagram:P1", g["members"][1]["meta_path"]])
+
+
+def test_dismissal_covers_a_smaller_group_not_a_bigger_one(env):
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    reposts = []
+    for n, who in enumerate(("bob", "carol")):
+        r = write_post(env["media"] / who, f"R{n}", TS + 99, owner(who, 200 + n), "image")
+        shutil.copyfile(a + ".jpg", r + ".jpg")
+        reposts.append(r)
+    run_scan(env)
+    conn = db.connect()
+    hashing.run_pass(conn)
+    [g] = duplicates.all_groups(conn, "content")
+    assert len(g["members"]) == 3
+    conn.execute("INSERT INTO dismissed_duplicates(key, kind, at) VALUES (?, 'content', 1)", (g["key"],))
+    conn.commit()
+    for f in os.listdir(env["media"] / "carol"):                 # one member leaves: still dismissed
+        os.remove(env["media"] / "carol" / f)
+    run_scan(env)
+    hashing.run_pass(conn)
+    assert duplicates.all_groups(conn, "content") == []
+    d = write_post(env["media"] / "dave", "R7", TS + 999, owner("dave", 444), "image")
+    shutil.copyfile(a + ".jpg", d + ".jpg")                       # one joins: shows again
+    run_scan(env)
+    hashing.run_pass(conn)
+    [g] = duplicates.all_groups(conn, "content")
+    assert len(g["members"]) == 3
+
+
+def test_a_file_shared_by_many_posts_links_nothing(env, monkeypatch):
+    monkeypatch.setattr(duplicates, "MAX_SHARED", 2)
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    for n, who in enumerate(("bob", "carol")):
+        r = write_post(env["media"] / who, f"R{n}", TS + 99, owner(who, 200 + n), "image")
+        shutil.copyfile(a + ".jpg", r + ".jpg")
+    run_scan(env)
+    conn = db.connect()
+    hashing.run_pass(conn)
+    assert duplicates.all_groups(conn, "content") == []
 
 
 # ---------------------------------------------------------------------------

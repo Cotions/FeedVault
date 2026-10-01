@@ -4,7 +4,8 @@ Only files that could have a twin are read: those whose recorded size another
 file shares (indexed media and the files of extra copies). Each gets a sha1 of
 its first and last MiB (``partial``); a file of 2 MiB or less is read whole,
 so that is its full hash as well. A full sha1 of a bigger file is computed
-only where partial hashes collide between different posts.
+only where partial hashes collide: between different posts, or between an
+item of a post and the same item of its copy.
 
 Hashes are cached in the media_hash table and stay valid while a file's size
 and mtime do not change, so a pass after a rescan only reads new or changed
@@ -26,7 +27,10 @@ import db
 from parsers import IMAGE_EXT, ext_of
 
 CHUNK = 1 << 20                                  # 1 MiB
-COMMIT_EVERY = 1.0                               # seconds between commits
+# Seconds between writes. Results wait in memory and go in one short
+# transaction, never held open while a file is read; every commit also
+# drops the API's cached aggregates (db._memo), so not too often.
+COMMIT_EVERY = 10.0
 ERRORS_KEPT = 20
 
 _wake = threading.Event()
@@ -186,15 +190,25 @@ def candidates(conn):
 
 
 def _full_needed(conn):
-    """Paths of indexed media without a full hash whose size and partial hash
-    collide with a file of another post."""
-    return [r[0] for r in conn.execute("""
+    """Paths without a full hash whose size and partial hash match another
+    file's: of another post, or the same item of a post and its copy. A copy
+    is only called identical after a whole-file match, so one corrupt in the
+    middle is never trashed in place of a good one."""
+    out = {r[0] for r in conn.execute("""
         SELECT h.path FROM media_hash h JOIN media m ON m.path = h.path AND m.missing = 0
         WHERE h.full IS NULL AND (h.size, h.partial) IN (
             SELECT h2.size, h2.partial FROM media_hash h2
             JOIN media m2 ON m2.path = h2.path AND m2.missing = 0
-            GROUP BY h2.size, h2.partial HAVING COUNT(DISTINCT m2.post_id) > 1)
-        ORDER BY h.path""")]
+            GROUP BY h2.size, h2.partial HAVING COUNT(DISTINCT m2.post_id) > 1)""")}
+    rows = {r[0]: (r[1], r[2], r[3]) for r in conn.execute("SELECT path, size, partial, full FROM media_hash")}
+    for post_id, media in conn.execute("SELECT post_id, media FROM copies"):
+        mine = {r[0]: r[1] for r in conn.execute(
+            "SELECT idx, path FROM media WHERE post_id = ? AND missing = 0", (post_id,))}
+        for m in json.loads(media):
+            a, b = rows.get(mine.get(m["idx"])), rows.get(m["path"])
+            if a and b and a[:2] == b[:2]:
+                out.update(p for p, h in ((mine[m["idx"]], a), (m["path"], b)) if h[2] is None)
+    return sorted(out)
 
 
 def run_pass(conn, restart=None):
@@ -225,12 +239,14 @@ def run_pass(conn, restart=None):
 
 def _hash_all(conn, paths, known, phase, restart):
     _set(phase=phase, done=0, total=len(paths), bytes=0)
-    last_commit = time.monotonic()
+    pending = []                                 # rows to write, see COMMIT_EVERY
+    last_write = time.monotonic()
     for i, path in enumerate(paths):
         if restart is not None and restart.is_set():
+            _write(conn, phase, pending)
             return False
         if db.write_lock.locked():               # a scan or a delete: step aside
-            conn.commit()
+            _write(conn, phase, pending)
             _set(paused=True)
             while db.write_lock.locked():
                 if restart is not None and restart.is_set():
@@ -245,28 +261,37 @@ def _hash_all(conn, paths, known, phase, restart):
                 if phase == "partial":
                     digest = partial_hash(path, st[0])
                     full = digest if st[0] <= 2 * CHUNK else None
-                    width, height = dimensions(path)
-                    conn.execute(
-                        "INSERT INTO media_hash(path, size, mtime_ns, partial, full, width, height, hashed_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, "
-                        "mtime_ns = excluded.mtime_ns, partial = excluded.partial, full = excluded.full, "
-                        "width = excluded.width, height = excluded.height, hashed_at = excluded.hashed_at",
-                        (path, st[0], st[1], digest, full, width, height, int(time.time())))
+                    pending.append((path, st[0], st[1], digest, full, *dimensions(path), int(time.time())))
                     read = min(st[0], 2 * CHUNK)
                 else:
                     full = full_hash(path, st[0])
                     if stat(path) != st:
                         raise Changed("modified while reading")
-                    conn.execute("UPDATE media_hash SET full = ? WHERE path = ? AND size = ? AND mtime_ns = ?",
-                                 (full, path, *st))
+                    pending.append((full, path, *st))
                     read = st[0]
                 with _lock:
                     _state["bytes"] += read
             except (OSError, Changed) as e:
                 _note_error(path, str(getattr(e, "strerror", None) or e))
         _set(done=i + 1)
-        if time.monotonic() - last_commit >= COMMIT_EVERY:
-            conn.commit()
-            last_commit = time.monotonic()
-    conn.commit()
+        if time.monotonic() - last_write >= COMMIT_EVERY:
+            _write(conn, phase, pending)
+            last_write = time.monotonic()
+    _write(conn, phase, pending)
     return True
+
+
+def _write(conn, phase, pending):
+    if not pending:
+        return
+    if phase == "partial":
+        conn.executemany(
+            "INSERT INTO media_hash(path, size, mtime_ns, partial, full, width, height, hashed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, "
+            "mtime_ns = excluded.mtime_ns, partial = excluded.partial, full = excluded.full, "
+            "width = excluded.width, height = excluded.height, hashed_at = excluded.hashed_at", pending)
+    else:
+        # Only if the file is still the one that was hashed.
+        conn.executemany("UPDATE media_hash SET full = ? WHERE path = ? AND size = ? AND mtime_ns = ?", pending)
+    conn.commit()
+    pending.clear()

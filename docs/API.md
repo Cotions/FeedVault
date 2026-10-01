@@ -298,11 +298,14 @@ Exact duplicates come in two kinds:
   files, and still lists its metadata file on Unmatched as
   `duplicate of <post id> (<path of the indexed one>)`. A copy whose files
   are gone disappears on the next scan. Items are compared by position:
-  same size and same sha1 of the first and last MiB is the same file (a
-  full sha1 decides when both sides have one).
+  size, then the sha1 of the first and last MiB, then the full sha1, so a
+  copy damaged in the middle is never called identical. That last read
+  costs one more pass over the files of copies that matched so far (on the
+  reference archive, about 0.5 GiB).
 - `content`: different posts (a repost saved under another id) sharing at
   least one media file with the same size and full sha1. Posts linked
-  through any shared file form one group.
+  through any shared file form one group, except through a file more than
+  20 posts share (a placeholder or a watermark card is not a repost).
 
 Hashes are computed by a background worker after every scan, at the lowest
 CPU and disk priority, and cached by path, size and mtime. Only files whose
@@ -330,11 +333,11 @@ are read. It pauses while a scan or a delete runs.
     "members": [
       { "id": "instagram:C8x…", "type": "post", "post_id": "instagram:C8x…", "post": { "…": "post summary" },
         "folder": "/abs/cherrieskyl", "meta_path": "/abs/cherrieskyl/….json",
-        "paths": ["/abs/cherrieskyl/…_1.jpg"], "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…" }],
+        "paths": ["/abs/cherrieskyl/…_1.jpg"], "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…", "hash": "9a0c…" }],
         "files": 1, "bytes": 5242880, "saved_at": 1727500000, "kept": false, "thumb_url": "/media/17/thumb" },
       { "id": "copy:3", "type": "copy", "copy_id": 3, "post_id": "instagram:C8x…", "post": null,
         "folder": "/abs/cherrrieskyl", "meta_path": "/abs/cherrrieskyl/…_1.jpg",
-        "paths": ["/abs/cherrrieskyl/…_1.jpg"], "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…" }],
+        "paths": ["/abs/cherrrieskyl/…_1.jpg"], "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…", "hash": "9a0c…" }],
         "files": 1, "bytes": 5242880, "saved_at": 1727400000, "kept": false, "thumb_url": "/media/copy/3/thumb" }
     ]
   }]
@@ -349,7 +352,8 @@ are read. It pauses while a scan or a delete runs.
   names, of the first media file). `items`, `paths`, `files` and `bytes`
   cover media files that are on disk (posters and side files are moved with
   them but not counted). `saved_at` is the post's, or the copy's metadata
-  file mtime.
+  file mtime. An item's `hash` is its full sha1, `null` until known (only
+  files that may have a twin are fully hashed).
 - `kept`: the post has the "keep" decision. In a `copies` group every member
   shares the post's decision, and it stays with whichever member is kept.
 - `identical`: `true` when every member has the same files; `false` when
@@ -412,7 +416,8 @@ or a scan held the index for more than 30 s).
 `POST /api/duplicates/dismiss` stores the group as "not a duplicate". It is
 user data, written to `<data_directory>/userdata/dismissed_duplicates.json`
 like decisions, and keyed by the members' post ids and copy metadata paths,
-so it survives rebuilding the index. A group that gains a member shows again.
+so it survives rebuilding the index. It also covers the
+same group after a member leaves; a group that gains a member shows again.
 Unknown group: 404 `{ "ok": false, "error": "…" }`.
 
 ## Storage
