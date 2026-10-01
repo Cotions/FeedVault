@@ -224,13 +224,14 @@ def _start(params, note):
 
 # What went wrong, from the output: the first kind whose words appear.
 # Rate limiting comes first: Instagram also answers a throttled client with
-# login pages and missing profiles.
+# login pages and missing profiles. A 403 is Instagram refusing an anonymous
+# client, after which instaloader says the profile does not exist.
 FAILURES = [(error, re.compile(words, re.I)) for error, words in [
     ("rate_limited", r"\b429\b|too many requests|please wait a few minutes|rate limit"),
     ("private", r"private but not followed|privateprofilenotfollowedexception|profile is private"),
     ("login_required", r"login required|loginrequiredexception|redirected to login|use --login|"
                        r"session file does not exist|checkpoint_required|challenge_required|login_required|"
-                       r"login error|not logged in"),
+                       r"login error|not logged in|\b403 forbidden\b"),
     ("not_found", r"profile \S+ does not exist|profilenotexistsexception|\bnot found\b"),
 ]]
 MESSAGES = {

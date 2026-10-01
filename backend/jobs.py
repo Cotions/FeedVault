@@ -313,12 +313,12 @@ def _run(job):
         except OSError as e:
             _finish(job, "failed", message=f"{job.tool} could not start: {e.strerror or e}")
             return
-        _record_process(job, proc.pid)
         with _lock:
             job.proc = proc
             stop = job.cancelled or job.interrupted
         if stop:
             _terminate(job)
+        _record_process(job, proc.pid)
         reader = threading.Thread(target=_read, args=(job, proc.stdout), daemon=True, name=f"job-{job.id}-log")
         reader.start()
         code = proc.wait()
@@ -371,10 +371,13 @@ def identity(pid):
 def _record_process(job, pid):
     """Remember who the job's process is, for recover() after a crash."""
     found = identity(pid)
-    conn = db.connect()
-    conn.execute("UPDATE jobs SET pid = ?, pid_start = ?, pid_exe = ? WHERE id = ?",
-                 (pid, *(found or (None, None)), job.id))
-    conn.commit()
+    try:
+        conn = db.connect()
+        conn.execute("UPDATE jobs SET pid = ?, pid_start = ?, pid_exe = ? WHERE id = ?",
+                     (pid, *(found or (None, None)), job.id))
+        conn.commit()
+    except Exception as e:                     # the job runs on; only a crash would need it
+        print(f"[jobs] #{job.id}: could not record its process: {e}")
 
 
 def _index(job):

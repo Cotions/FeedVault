@@ -374,6 +374,11 @@ def test_classify():
     assert sync.classify(lines("x: Login required.", "[feedvault] indexing /m/x")) == ("login_required", "x: Login required.")
     assert sync.classify(lines("Redirected to login page. Use --login or --load-cookies."))[0] == "login_required"
     assert sync.classify(lines("Session file does not exist yet - Logging in."))[0] == "login_required"
+    # As a real anonymous run answered: blocked, then "does not exist".
+    assert sync.classify(lines(
+        "JSON Query to graphql/query: 403 Forbidden when accessing https://www.instagram.com/graphql/query "
+        "[retrying; skip with ^C]", "nasa: Profile nasa does not exist.", "", "Errors or warnings occurred:",
+        "nasa: Profile nasa does not exist."))[0] == "login_required"
     assert sync.classify(lines("something odd", "Traceback: boom", "[feedvault] indexing /m/x")) == \
         ("generic", "Traceback: boom")
     assert sync.classify([]) == ("generic", None)
