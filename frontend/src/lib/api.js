@@ -161,3 +161,21 @@ export function applyTags(posts, { add = [], remove = [] } = {}) {
 export function renameTag(from, to) { return post("/api/tags/rename", { from, to }); }
 // → { ok, posts }
 export function deleteTag(name) { return post("/api/tags/delete", { name }); }
+
+/* ── Collections (see docs/API.md "Collections") ─────────── */
+
+// [{ id, name, count, created_at, cover_post, cover }]
+export function getCollections() { return get("/api/collections"); }
+// → { ok, collection } or { ok: false, error } (bad or taken name)
+export function createCollection(name) { return post("/api/collections", { name }); }
+// → { collection, total, posts: [summary] }, in the collection's order
+export function getCollection(id, params = {}) { return get(`/api/collections/${id}${qs(params)}`); }
+export function renameCollection(id, name) { return post(`/api/collections/${id}/rename`, { name }); }
+export function deleteCollection(id) { return post(`/api/collections/${id}/delete`); }
+// → { ok, added: [ids] }
+export function addToCollection(id, posts) { return post(`/api/collections/${id}/add`, { posts }); }
+export function removeFromCollection(id, posts) { return post(`/api/collections/${id}/remove`, { posts }); }
+// The given posts take the places they held, in this order.
+export function orderCollection(id, posts) { return post(`/api/collections/${id}/order`, { posts }); }
+// post: an id in the collection, or null for the first post
+export function setCollectionCover(id, postId) { return post(`/api/collections/${id}/cover`, { post: postId }); }

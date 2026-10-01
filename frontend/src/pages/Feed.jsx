@@ -13,6 +13,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
 import SelectionBar from "../components/SelectionBar";
 import BulkTagDialog from "../components/BulkTagDialog";
+import CollectionDialog from "../components/CollectionDialog";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
@@ -111,11 +112,12 @@ export default function Feed() {
   const toast = useToast();
   const [confirmDel, setConfirmDel] = useState(false);
   const [tagging,    setTagging]    = useState(false);
+  const [collecting, setCollecting] = useState(false);
   const [deleting,   setDeleting]   = useState(false);
   const [dlgError,   setDlgError]   = useState(null);
   const [delErrors,  setDelErrors]  = useState(null);
   // A new filter shows different cards: drop a selection the user can no longer see.
-  const sel = useSelection(posts, { resetKey: filterKey, escapeBlocked: confirmDel || tagging });
+  const sel = useSelection(posts, { resetKey: filterKey, escapeBlocked: confirmDel || tagging || collecting });
   const selectedPosts = sel.selectedItems;
   const selectedCount = sel.count;
   const selectedBytes = selectedPosts.reduce((n, p) => n + (p.bytes || 0), 0);
@@ -442,6 +444,9 @@ export default function Feed() {
               <button type="button" className="btn-secondary" onClick={() => setTagging(true)} disabled={!selectedCount}>
                 <Icon name="tag" size={14} />Tag…
               </button>
+              <button type="button" className="btn-secondary" onClick={() => setCollecting(true)} disabled={!selectedCount}>
+                <Icon name="bookmark" size={14} />Collection…
+              </button>
               <button type="button" className="btn-keep" onClick={runKeep} disabled={!selectedCount || keeping}>
                 <Icon name="check" size={14} />{keeping ? "Keeping…" : "Keep"}
               </button>
@@ -458,6 +463,10 @@ export default function Feed() {
 
       {tagging && (
         <BulkTagDialog posts={selectedPosts} tags={allTags} onApplied={onTagged} onCancel={() => setTagging(false)} />
+      )}
+
+      {collecting && (
+        <CollectionDialog posts={selectedPosts.map(p => p.id)} onClose={() => setCollecting(false)} />
       )}
 
       <ConfirmDialog

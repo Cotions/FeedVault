@@ -1,9 +1,9 @@
 """The SQLite index.
 
 Everything here is derived from the media folders and can be rebuilt by a
-rescan, except the user's own tables (review decisions, tags, later
-people). Those are mirrored to JSON files by userdata.py so a rebuild can
-restore them.
+rescan, except the user's own tables (review decisions, tags,
+collections, later people). Those are mirrored to JSON files by
+userdata.py so a rebuild can restore them.
 """
 import glob
 import json
@@ -209,9 +209,32 @@ def _migrate_6(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS post_tags_tag ON post_tags(tag_id, post_id)")
 
 
+def _migrate_7(conn):
+    """Collections: named, ordered sets of posts. User data with the same
+    rules as tags (organize.py)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS collections (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            cover_post TEXT,                        -- a post id, or NULL: the first post
+            created_at INTEGER NOT NULL,
+            position   INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS collection_posts (
+            collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+            post_id       TEXT NOT NULL,
+            position      INTEGER NOT NULL,
+            at            INTEGER NOT NULL,
+            PRIMARY KEY (collection_id, post_id)
+        ) WITHOUT ROWID""")
+    conn.execute("CREATE INDEX IF NOT EXISTS collection_posts_order ON collection_posts(collection_id, position)")
+    conn.execute("CREATE INDEX IF NOT EXISTS collection_posts_post ON collection_posts(post_id)")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
-MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6]
+MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7]
 
 BACKUPS_KEPT = 3
 
@@ -495,6 +518,9 @@ def full(conn, row):
     out["location"] = row["location"]
     out["album"] = row["album"]
     out["hashtags"] = json.loads(row["hashtags"] or "[]")
+    out["collections"] = [{"id": r[0], "name": r[1]} for r in conn.execute(
+        "SELECT c.id, c.name FROM collection_posts cp JOIN collections c ON c.id = cp.collection_id "
+        "WHERE cp.post_id = ? ORDER BY c.name COLLATE NOCASE", (row["id"],))]
     out["source"] = {"tool": row["tool"], "version": row["tool_version"], "meta_path": row["meta_path"]}
     return out
 

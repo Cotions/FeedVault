@@ -12,6 +12,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
 import TagChips from "../components/TagChips";
 import TagInput from "../components/TagInput";
+import CollectionDialog from "../components/CollectionDialog";
 
 /* The post's tags: remove with ×, add with autocomplete. */
 function PostTags({ post, onChanged }) {
@@ -79,6 +80,7 @@ export default function PostPage() {
   const [busy,      setBusy]      = useState(false);
   const [dlgError,  setDlgError]  = useState(null);
   const [delErrors, setDelErrors] = useState(null);
+  const [collecting, setCollecting] = useState(false);
 
   // Back returns to the feed exactly as it was (filters, scroll) when we came
   // from inside the app; a direct link has no history, so go to the feed.
@@ -279,6 +281,28 @@ export default function PostPage() {
           )}
 
           <PostTags post={post} onChanged={reload} />
+
+          <div className="card post-collections">
+            <div className="card-title"><Icon name="bookmark" size={13} />Collections</div>
+            {post.collections?.length > 0 ? (
+              <ul className="tag-chips">
+                {post.collections.map(c => (
+                  <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`}>{c.name}</Link></li>
+                ))}
+              </ul>
+            ) : <p className="dim post-tags-none">In no collection.</p>}
+            <button type="button" className="btn-secondary" onClick={() => setCollecting(true)}>
+              <Icon name="plus" size={14} />Add to collection…
+            </button>
+            {collecting && (
+              <CollectionDialog
+                posts={[post.id]}
+                member={(post.collections || []).map(c => c.id)}
+                onChanged={reload}
+                onClose={() => setCollecting(false)}
+              />
+            )}
+          </div>
 
           <div className="card post-source">
             <div className="card-title">Source</div>

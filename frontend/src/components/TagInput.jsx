@@ -4,7 +4,7 @@ const MAX_SUGGESTIONS = 8;
 
 /* A tag name field with suggestions from the existing tags. Enter adds the
    highlighted suggestion, or the text as typed (a new tag); ↑/↓ move through
-   the list, Tab completes, Esc calls onClose. Enter on an empty field calls
+   the list (↓ also opens it on an empty field), Tab completes, Esc calls onClose. Enter on an empty field calls
    onEmptyEnter (default: onClose).
 
    Props: tags ([{ name, count }]), exclude (names already there), onAdd(name),
@@ -37,6 +37,7 @@ export default function TagInput({ tags = [], exclude = [], onAdd, onClose, onEm
     onAdd(clean);
     setText("");
     setActive(-1);
+    setOpen(false);
   }
 
   function onKeyDown(e) {
@@ -82,7 +83,6 @@ export default function TagInput({ tags = [], exclude = [], onAdd, onClose, onEm
         aria-activedescendant={shown && active >= 0 ? `${listId}-${active}` : undefined}
         maxLength={64}
         onChange={e => { setText(e.target.value); setActive(-1); setOpen(true); }}
-        onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onKeyDown={onKeyDown}
       />

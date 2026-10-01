@@ -63,11 +63,14 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
   "location": "Paris, France",
   "album": "Summer trip",
   "hashtags": ["travel", "paris"],
+  "collections": [{ "id": 3, "name": "Moodboard" }],
   "source": { "tool": "instaloader", "version": "4.15.1", "meta_path": "/abs/path/2024-06-01_12-00-00_UTC.json" }
 }
 ```
 
 - `album`: highlight title (or other collection name), `null` otherwise
+- `collections`: the user's collections this post is in (see
+  [Collections](#collections)), `[{ "id": 3, "name": "Moodboard" }]`, by name
 - `source.tool` is `"instaloader (filenames)"` when the post was rebuilt from
   file names alone (downloads made with `save_metadata=False`); `meta_path`
   is then the first media file
@@ -521,6 +524,49 @@ two are merged: every post of `from` gets `to`, and `from` is gone
 404.
 
 `color` is reserved for later and always `null` for now.
+
+## Collections
+
+Named, ordered sets of posts, with a cover. A post can be in several. User
+data like tags: tables `collections` and `collection_posts`, untouched by
+rescans, written to `<data_directory>/userdata/collections.json` and
+`collection_posts.json` (posts keyed by post id, collections by name), and
+the same trash rules: a post in the trash keeps its places, and loses them
+only when it is neither indexed nor in any trash manifest after the trash is
+emptied or purged. Names are unique without regard to (ASCII) case, 1 to 64
+characters, no `"` or control characters.
+
+A **collection**:
+
+```json
+{ "id": 3, "name": "Moodboard", "count": 24, "created_at": 1727500000,
+  "cover_post": "instagram:C8x…", "cover": { "kind": "image", "url": "/media/17/thumb" } }
+```
+
+- `count` covers posts in the index (not those in the trash).
+- `cover_post` is the post chosen as cover, `null` when none is chosen; then
+  `cover` is that of the first post in the collection. `cover` is a post
+  summary's `cover` (see [Post](#post)), `null` for an empty collection.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/collections` | `[collection, …]`, in the order they were created |
+| POST | `/api/collections` | body `{ "name": "Moodboard" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
+| GET | `/api/collections/<id>?offset=&limit=` | `{ "collection": {…}, "total": 24, "posts": [summary, …] }` in the collection's order; `limit` default 60, max 200; 404 if unknown |
+| POST | `/api/collections/<id>/rename` | body `{ "name": "…" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
+| POST | `/api/collections/<id>/delete` | → `{ "ok": true, "posts": 24 }`; the posts stay |
+| POST | `/api/collections/<id>/add` | body `{ "posts": ["instagram:C8x…"] }` (at most 5000) → `{ "ok": true, "added": ["instagram:C8x…"] }`, appended at the end in the order given; posts not in the index or already there are skipped |
+| POST | `/api/collections/<id>/remove` | body `{ "posts": […] }` → `{ "ok": true, "removed": 2 }` |
+| POST | `/api/collections/<id>/order` | body `{ "posts": […] }` → `{ "ok": true }`, see below |
+| POST | `/api/collections/<id>/cover` | body `{ "post": "instagram:C8x…" }`, or `null` for the first post → `{ "ok": true, "collection": {…} }`; 400 if the post is not in it |
+
+Every `/api/collections/<id>/…` call answers 404 `{ "ok": false, "error": … }`
+for an unknown id.
+
+`/order` takes posts of the collection in their new order and puts them in
+the places those same posts held before, the rest staying where they are.
+Sending one page in its new order reorders that page; sending every post
+reorders the whole collection. Ids not in the collection are ignored.
 
 ## Storage
 

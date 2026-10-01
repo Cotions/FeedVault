@@ -1,7 +1,7 @@
 """The user's own data, mirrored to JSON.
 
 The index is derived from the media folders and rebuilds from a rescan. A few
-tables are not: review decisions, tags, later people, sources. Each one is
+tables are not: review decisions, tags, collections, later people, sources. Each one is
 registered here once, and gets the same treatment:
 
 - written to ``<data_dir>/userdata/<name>.json`` shortly after it changes
@@ -63,6 +63,20 @@ register("post_tags", "post_tags", ("post_id", "tag", "at"), ("post_id", "tag"),
          insert=("INSERT OR IGNORE INTO tags(name, created_at) VALUES (:tag, COALESCE(:at, 0))",
                  "INSERT OR IGNORE INTO post_tags(post_id, tag_id, at) "
                  "SELECT :post_id, id, COALESCE(:at, 0) FROM tags WHERE name = :tag"))
+# Collections the same way: by name, before the posts in them.
+register("collections", "collections", ("name", "cover_post", "created_at", "position"), "name",
+         insert=("INSERT OR IGNORE INTO collections(name, cover_post, created_at, position) "
+                 "VALUES (:name, :cover_post, COALESCE(:created_at, 0), "
+                 "COALESCE(:position, (SELECT COALESCE(MAX(position), 0) + 1 FROM collections)))",))
+register("collection_posts", "collection_posts", ("collection", "post_id", "position", "at"),
+         ("collection", "post_id"),
+         select="SELECT c.name, cp.post_id, cp.position, cp.at FROM collection_posts cp "
+                "JOIN collections c ON c.id = cp.collection_id ORDER BY c.name, cp.position",
+         insert=("INSERT OR IGNORE INTO collections(name, created_at, position) "
+                 "VALUES (:collection, COALESCE(:at, 0), (SELECT COALESCE(MAX(position), 0) + 1 FROM collections))",
+                 "INSERT OR IGNORE INTO collection_posts(collection_id, post_id, position, at) "
+                 "SELECT id, :post_id, COALESCE(:position, 0), COALESCE(:at, 0) FROM collections "
+                 "WHERE name = :collection"))
 
 
 def path(data_dir, name):

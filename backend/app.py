@@ -365,6 +365,12 @@ def _names(value):
     return None if None in names else names
 
 
+def _post_ids(body):
+    """The body's ``posts`` if it is a list of 1 to MAX_POSTS ids, else None."""
+    posts = body.get("posts")
+    return posts if _str_list(posts) and len(posts) <= organize.MAX_POSTS else None
+
+
 @app.get("/api/tags")
 def list_tags():
     return jsonify(organize.tags(db.connect()))
@@ -373,8 +379,8 @@ def list_tags():
 @app.post("/api/tags/apply")
 def tags_apply():
     body = request.get_json(silent=True) or {}
-    posts, add, remove = body.get("posts"), _names(body.get("add")), _names(body.get("remove"))
-    if not _str_list(posts) or len(posts) > organize.MAX_POSTS:
+    posts, add, remove = _post_ids(body), _names(body.get("add")), _names(body.get("remove"))
+    if posts is None:
         return jsonify({"ok": False, "error": f"posts must be a list of 1 to {organize.MAX_POSTS} ids"}), 400
     if add is None or remove is None or not (add or remove):
         return jsonify({"ok": False, "error": "add or remove must be a list of tag names "
@@ -412,6 +418,88 @@ def tags_delete():
     userdata.changed("tags")
     userdata.changed("post_tags")
     return jsonify({"ok": True, "posts": n})
+
+
+# ---------------------------------------------------------------------------
+# Collections
+# ---------------------------------------------------------------------------
+
+_BAD_NAME = f"name must be 1 to {organize.MAX_NAME} characters, no quotes"
+
+
+@app.get("/api/collections")
+def list_collections():
+    return jsonify(organize.collections(db.connect()))
+
+
+@app.post("/api/collections")
+def create_collection():
+    name = organize.clean_name((request.get_json(silent=True) or {}).get("name"))
+    if name is None:
+        return jsonify({"ok": False, "error": _BAD_NAME}), 400
+    c = organize.create_collection(db.connect(), name, int(time.time()))
+    if c is None:
+        return jsonify({"ok": False, "error": "a collection with that name exists"}), 400
+    userdata.changed("collections")
+    return jsonify({"ok": True, "collection": c})
+
+
+@app.get("/api/collections/<int:cid>")
+def get_collection(cid):
+    conn = db.connect()
+    c = organize.collection(conn, cid)
+    if c is None:
+        return jsonify({"ok": False, "error": "no such collection"}), 404
+    total, posts = organize.collection_posts(conn, cid, offset=_int_arg("offset", 0, 0, 10**9),
+                                             limit=_int_arg("limit", 60, 1, 200))
+    return jsonify({"collection": c, "total": total, "posts": posts})
+
+
+@app.post("/api/collections/<int:cid>/<action>")
+def change_collection(cid, action):
+    conn = db.connect()
+    if action not in ("rename", "delete", "add", "remove", "order", "cover"):
+        abort(404)
+    if organize.collection(conn, cid) is None:
+        return jsonify({"ok": False, "error": "no such collection"}), 404
+    body = request.get_json(silent=True) or {}
+    if action == "rename":
+        name = organize.clean_name(body.get("name"))
+        if name is None:
+            return jsonify({"ok": False, "error": _BAD_NAME}), 400
+        if not organize.rename_collection(conn, cid, name):
+            return jsonify({"ok": False, "error": "a collection with that name exists"}), 400
+        userdata.changed("collections")
+        userdata.changed("collection_posts")       # exported by collection name
+        return jsonify({"ok": True, "collection": organize.collection(conn, cid)})
+    if action == "delete":
+        n = organize.delete_collection(conn, cid)
+        userdata.changed("collections")
+        userdata.changed("collection_posts")
+        return jsonify({"ok": True, "posts": n})
+    if action == "cover":
+        post = body.get("post")
+        if post is not None and not isinstance(post, str) or not organize.set_cover(conn, cid, post):
+            return jsonify({"ok": False, "error": "post must be the id of a post in this collection, or null"}), 400
+        userdata.changed("collections")
+        return jsonify({"ok": True, "collection": organize.collection(conn, cid)})
+    posts = _post_ids(body)
+    if posts is None:
+        return jsonify({"ok": False, "error": f"posts must be a list of 1 to {organize.MAX_POSTS} ids"}), 400
+    if action == "add":
+        added = organize.add_posts(conn, cid, posts, int(time.time()))
+        if added:
+            userdata.changed("collection_posts")
+        return jsonify({"ok": True, "added": added})
+    if action == "remove":
+        n = organize.remove_posts(conn, cid, posts)
+        if n:
+            userdata.changed("collection_posts")
+            userdata.changed("collections")         # the cover may have gone with it
+        return jsonify({"ok": True, "removed": n})
+    organize.reorder(conn, cid, posts)
+    userdata.changed("collection_posts")
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

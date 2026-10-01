@@ -186,11 +186,12 @@ def test_v2_upgraded_to_v3_copies(tmp_path, monkeypatch):
     assert db.connect().execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 1
 
 
-def test_v4_upgraded_to_v5_tags(tmp_path, monkeypatch):
+def test_v4_upgraded_to_tags_and_collections(tmp_path, monkeypatch):
     path = str(tmp_path / "feedvault.db")
     monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:4])
     db.init(path)
     monkeypatch.undo()
     db.init(path)
     assert version(path)[0] >= 5 and version(path + ".bak-v4")[0] == 4
-    assert {"tags", "post_tags"} <= tables(path) and "tags" not in tables(path + ".bak-v4")
+    assert {"tags", "post_tags", "collections", "collection_posts"} <= tables(path)
+    assert "tags" not in tables(path + ".bak-v4")

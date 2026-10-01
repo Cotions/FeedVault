@@ -8,6 +8,7 @@ import { sameTag, tagsMatch, withTags } from "../lib/tags";
 import RichText from "../components/RichText";
 import TagChips from "../components/TagChips";
 import TagInput from "../components/TagInput";
+import CollectionDialog from "../components/CollectionDialog";
 import Icon from "../components/Icon";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
@@ -107,6 +108,7 @@ const SHORTCUTS = [
   ["Space", "Play / pause video"],
   ["M", "Mute on / off (remembered)"],
   ["T", "Tag this post (Enter applies, Esc closes)"],
+  ["C", "Add this post to a collection"],
   ["Z / Ctrl+Z", "Undo the last decision"],
   ["F", "Fullscreen"],
   ["?", "This help"],
@@ -129,6 +131,7 @@ function ReviewSession({ scope, scopeControls }) {
   const [help, setHelp] = useState(false);
   const [muted, setMuted] = useState(readMuted);
   const [tagging, setTagging] = useState(false);
+  const [collecting, setCollecting] = useState(false);
   const [tagsOf, setTagsOf] = useState({});      // id -> tags changed this session
   const tagsApi = useApi(getTags, 0);
   const busyRef     = useRef(false);
@@ -320,7 +323,14 @@ function ReviewSession({ scope, scopeControls }) {
 
   // Latest handlers for the one window listener.
   const openTags = () => cur && !post?.error && setTagging(true);
-  const keys = { keep, trashPost, trashItem, undoLast, stepItem, togglePlay, toggleFullscreen, openTags };
+  const openCollections = () => cur && post && !post.error && setCollecting(true);
+  // After a collection change: the post's list of collections, without a reload flash.
+  const collectionsChanged = () => {
+    const p = cur;
+    getPost(p.platform, p.post_id).then(fp => setFull(f => ({ ...f, [p.id]: fp })), () => {});
+  };
+  const keys = { keep, trashPost, trashItem, undoLast, stepItem, togglePlay, toggleFullscreen, openTags,
+                 openCollections, blocked: collecting };
   const keysRef = useRef(keys);
   useEffect(() => { keysRef.current = keys; });
 
@@ -331,6 +341,7 @@ function ReviewSession({ scope, scopeControls }) {
       // A focused button handles its own Enter/Space.
       if (t.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
       const k = keysRef.current;
+      if (k.blocked) return;                    // a dialog has the keyboard
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       if ((e.ctrlKey || e.metaKey) && key === "z") { e.preventDefault(); k.undoLast(); return; }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -350,6 +361,7 @@ function ReviewSession({ scope, scopeControls }) {
         case "z":          k.undoLast(); break;
         case "f":          k.toggleFullscreen(); break;
         case "t":          k.openTags(); break;
+        case "c":          k.openCollections(); break;
         default:           handled = false;
       }
       if (handled) e.preventDefault();
@@ -493,6 +505,18 @@ function ReviewSession({ scope, scopeControls }) {
                 </button>
               )}
             </div>
+            <div className="review-collections">
+              {post?.collections?.length > 0 && (
+                <ul className="tag-chips">
+                  {post.collections.map(c => (
+                    <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`}>{c.name}</Link></li>
+                  ))}
+                </ul>
+              )}
+              <button type="button" className="btn-ghost review-tag-btn" onClick={e => act(e, openCollections)} disabled={!post || !!post.error}>
+                <Icon name="bookmark" size={13} />Collection<Kbd>C</Kbd>
+              </button>
+            </div>
             <Link className="text-link review-open" to={`/p/${encodeURIComponent(cur.platform)}/${encodeURIComponent(cur.post_id)}`}>
               Open post page
             </Link>
@@ -535,6 +559,15 @@ function ReviewSession({ scope, scopeControls }) {
           </div>
         </div>
       </aside>
+
+      {collecting && cur && post && (
+        <CollectionDialog
+          posts={[cur.id]}
+          member={(post.collections || []).map(c => c.id)}
+          onChanged={collectionsChanged}
+          onClose={() => setCollecting(false)}
+        />
+      )}
 
       {help && (
         <div className="review-help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onClick={() => setHelp(false)}>
