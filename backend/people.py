@@ -10,6 +10,7 @@ person. An account with no person is shown on its own, as before.
 
 The person is only in the database; files stay where each tool wrote them.
 """
+import collections
 import hashlib
 import json
 import os
@@ -71,23 +72,32 @@ def refresh_aliases(conn):
     of the id, so it is shown and linked with it. Only when exactly one
     account with metadata in that folder has that handle, so a folder of
     mixed downloads never merges two people."""
-    found = []
-    for platform, folder_id, meta_path in conn.execute(
-            "SELECT platform, author_id, MIN(meta_path) FROM posts "
-            "WHERE tool LIKE ? AND author_id IS NOT NULL GROUP BY 1, 2", (FILENAMES,)).fetchall():
+    # Two passes over posts, not three queries per account: on an archive of
+    # file-name posts those were a second per rescan.
+    tops = conn.execute("SELECT platform, author_id, MIN(meta_path) FROM posts "
+                        "WHERE tool LIKE ? AND author_id IS NOT NULL GROUP BY 1, 2", (FILENAMES,)).fetchall()
+    handles = collections.defaultdict(set)
+    for platform, folder_id, h in conn.execute(
+            "SELECT DISTINCT platform, author_id, lower(author_handle) FROM posts "
+            "WHERE tool LIKE ? AND author_id IS NOT NULL", (FILENAMES,)):
+        handles[platform, folder_id].add(h or "")
+    folders = collections.defaultdict(list)    # (platform, handle) -> [(folder + "/", folder id)]
+    for platform, folder_id, meta_path in tops:
         folder = _folder(meta_path, folder_id)
-        if folder is None:
-            continue
-        handles = {folder_id} | {(r[0] or "").lower() for r in conn.execute(
-            "SELECT DISTINCT author_handle FROM posts WHERE platform = ? AND author_id = ?", (platform, folder_id))}
-        # Paths under the folder: [folder/, folder0) in byte order ('0' follows '/').
-        ids = {r[0] for r in conn.execute(
-            "SELECT DISTINCT author_id FROM posts WHERE platform = ? AND meta_path >= ? AND meta_path < ? "
-            "AND author_id IS NOT NULL AND author_id != ? AND tool NOT LIKE ? AND lower(author_handle) IN "
-            f"({', '.join('?' for _ in handles)})",
-            (platform, folder + os.sep, folder + chr(ord(os.sep) + 1), folder_id, FILENAMES, *handles))}
-        if len(ids) == 1:
-            found.append((platform, folder_id, ids.pop()))
+        if folder is not None:
+            for h in handles[platform, folder_id] | {folder_id}:
+                folders[platform, h].append((folder + os.sep, folder_id))
+    ids = collections.defaultdict(set)
+    if folders:
+        for platform, author_id, h, meta_path in conn.execute(
+                "SELECT DISTINCT platform, author_id, lower(author_handle), meta_path FROM posts "
+                "WHERE tool NOT LIKE ? AND author_id IS NOT NULL AND meta_path IS NOT NULL "
+                "AND lower(author_handle) IN (SELECT value FROM json_each(?))",
+                (FILENAMES, json.dumps(sorted({h for _, h in folders})))):
+            for folder, folder_id in folders.get((platform, h), ()):
+                if author_id != folder_id and meta_path.startswith(folder):
+                    ids[platform, folder_id].add(author_id)
+    found = [(p, f, next(iter(i))) for (p, f), i in ids.items() if len(i) == 1]
     have = set(conn.execute("SELECT platform, alias_id, author_id FROM account_aliases").fetchall())
     if have != set(found):                     # an unchanged index stays unchanged (and cached)
         conn.execute("DELETE FROM account_aliases")
