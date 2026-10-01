@@ -977,7 +977,7 @@ gallery-dl --write-metadata --download-archive <data_directory>/gallery-dl/archi
            -o skip=abort:5 -D <folder> [--cookies-from-browser <browser>] -- <link>
 
 yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
-       --break-on-existing -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
+       [--break-on-existing] -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
        [--match-filters "duration <= <youtube_max_seconds>"] [--cookies-from-browser <browser>] -- <link>
 ```
 
@@ -990,7 +990,11 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   channel's own page (`/@name`, `/channel/<id>`, not a tab such as
   `/shorts`) never gets `--break-on-existing`: it lists the Videos tab and
   then the Shorts tab, and stopping in the first would never reach the
-  second.
+  second. Nor does a TikTok profile: it lists its pinned videos (up to 3,
+  usually old and so archived) first, and stopping at them would never
+  reach a new video. Its sync pages through the whole listing (15 videos
+  per request), the archive still skipping what it lists. Which platforms
+  may stop is a table in `sync.py` (`STOPS_AT_ARCHIVED`).
 - **First sync.** When the source has never synced, the archive is seeded
   first with what FeedVault already indexed for its account (aliases
   included): gallery-dl gets the entry of every file of the account's

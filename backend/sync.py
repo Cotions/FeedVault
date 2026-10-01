@@ -27,7 +27,9 @@ gallery-dl and yt-dlp (archives.py):
 - ``--download-archive`` in the data directory: the tool skips what it lists,
   whatever files exist; trashing a post adds it there (never again).
 - ``-o skip=abort:5`` (gallery-dl) and ``--break-on-existing`` (yt-dlp) stop
-  the run at what is already there, so a sync with nothing new is quick.
+  the run at what is already there, so a sync with nothing new is quick;
+  yt-dlp only on platforms that list a profile newest first with nothing
+  older in front (STOPS_AT_ARCHIVED).
 - the first sync of a source seeds the archive with the posts already
   indexed for its account.
 - metadata on (``--write-metadata``; ``--write-info-json --write-thumbnail``),
@@ -494,6 +496,13 @@ def _build_gallery_dl(params):
     ]}
 
 
+# Whether a yt-dlp sync may stop at the first video its archive has, per
+# platform (any other: yes). A TikTok profile lists its pinned videos (up to
+# 3, usually old, so archived) first, and yt-dlp neither skips nor reorders
+# them: it would stop there every time and never reach a new video. Without
+# it the whole listing is paged through (15 videos a request); the archive
+# still keeps every listed video from being fetched again.
+STOPS_AT_ARCHIVED = {"tiktok": False}
 YOUTUBE_TABS = {"videos", "shorts", "streams", "live", "podcasts", "releases", "playlists", "featured"}
 
 
@@ -513,10 +522,11 @@ def _build_yt_dlp(params):
     # one after the other: stopping at the first video already there would
     # never reach the next tab. The archive still skips what it lists.
     tabs = src["platform"] == "youtube" and _youtube_root(target)
+    stop = STOPS_AT_ARCHIVED.get(src["platform"], True) and not (options["full_history"] or tabs)
     return {"tool": "yt-dlp", "rescan": folder, "args": [
         "--write-info-json", "--write-thumbnail",
         "--download-archive", archives.path("yt-dlp", cfg["data_directory"]),
-        *([] if options["full_history"] or tabs else ["--break-on-existing"]),
+        *(["--break-on-existing"] if stop else []),
         # The output template is %-formatted: a % in the folder is doubled.
         "-o", os.path.join(folder.replace("%", "%%"), YT_DLP_NAME),
         # Long YouTube videos are ChannelVault's; one without a duration (live) is skipped too.

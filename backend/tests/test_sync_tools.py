@@ -170,8 +170,7 @@ def test_yt_dlp_argv(env, fake, client):
     data = str(env["tmp"] / "data")
     assert sync._build_yt_dlp({"source": str(s["id"])})["args"] == [
         "--write-info-json", "--write-thumbnail", "--download-archive", f"{data}/yt-dlp/archive.txt",
-        "--break-on-existing", "-o", os.path.join(s["folder"], "%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"),
-        "--", TT]
+        "-o", os.path.join(s["folder"], "%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"), "--", TT]
     # YouTube: the ChannelVault rule as a filter, from the setting.
     set_config(youtube_max_seconds=90)
     y = add(client, YT)
@@ -185,9 +184,8 @@ def test_youtube_channel_page_does_not_stop_at_the_first_tab(env, fake, client):
     # A channel's page lists Videos, then Shorts: no --break-on-existing there.
     root = add(client, YT)
     assert "--break-on-existing" not in sync._build_yt_dlp({"source": str(root["id"])})["args"]
-    for tab in ("https://youtube.com/@somechannel/shorts", "https://tiktok.com/@somechannel"):
-        s = add(client, tab, folder=str(env["media"] / tab.rsplit("/", 1)[-1] / "x"))
-        assert "--break-on-existing" in sync._build_yt_dlp({"source": str(s["id"])})["args"], tab
+    tab = add(client, "https://youtube.com/@somechannel/shorts", folder=str(env["media"] / "shorts"))
+    assert "--break-on-existing" in sync._build_yt_dlp({"source": str(tab["id"])})["args"]
     for page in ("https://youtube.com/channel/UCexampleChannelAAAAAAA1", "https://youtube.com/@x/featured"):
         assert sync._youtube_root(page) is (page.endswith("1"))
 
@@ -272,7 +270,7 @@ def test_gallery_dl_sync_then_nothing_new(env, fake, client):
     assert run_sync(client, s["id"])["message"] == "1 new post"
 
 
-def test_yt_dlp_sync_then_break_on_existing(env, fake, client):
+def test_yt_dlp_sync_then_nothing_new(env, fake, client):
     fake.put(TT, tt_account(1, 2))
     s = add(client, TT)
     job = run_sync(client, s["id"])
@@ -280,9 +278,33 @@ def test_yt_dlp_sync_then_break_on_existing(env, fake, client):
     p = get(client, "/api/posts/tiktok/7300000000000000002")
     assert p["source"]["tool"] == "yt-dlp" and p["text"] == "clip 2 #fun"
     assert archive_entries(env, "yt-dlp") == {"tiktok 7300000000000000001", "tiktok 7300000000000000002"}
+    # TikTok: the whole listing, each archived video skipped.
+    job = run_sync(client, s["id"])
+    assert (job["state"], job["exit_code"], job["message"]) == ("done", 0, "0 new posts")
+    assert sum("already been recorded in the archive" in ln["text"] for ln in jobs.log(job["id"])["lines"]) == 2
+
+
+def test_yt_dlp_break_on_existing(env, fake, client):
+    shorts = "https://youtube.com/@somechannel/shorts"
+    fake.put(shorts, yt_account((1, 30), (2, 30)))
+    s = add(client, shorts)
+    assert run_sync(client, s["id"])["message"] == "2 new posts"
     # yt-dlp exits 101 at the first archived video: that is a success.
     job = run_sync(client, s["id"])
     assert (job["state"], job["exit_code"], job["message"]) == ("done", 101, "0 new posts")
+
+
+def test_pinned_tiktok_video_does_not_stop_the_sync(env, fake, client):
+    # The profile lists an old pinned video first; it is already archived.
+    fake.put(TT, {**tt_account(1, 2), "pinned": ["7300000000000000001"]})
+    s = add(client, TT)
+    assert run_sync(client, s["id"])["message"] == "2 new posts"
+    fake.put(TT, {**tt_account(1, 2, 3, 4), "pinned": ["7300000000000000001"]})
+    job = run_sync(client, s["id"])
+    assert (job["state"], job["message"]) == ("done", "2 new posts")
+    assert {"tiktok 7300000000000000003", "tiktok 7300000000000000004"} <= archive_entries(env, "yt-dlp")
+    # With --break-on-existing, as before, the pinned video would have stopped it.
+    assert "--break-on-existing" not in fake.runs("yt-dlp")[-1]["argv"]
 
 
 def test_youtube_long_videos_are_not_downloaded(env, fake, client):
