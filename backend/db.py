@@ -241,9 +241,35 @@ def _migrate_8(conn):
     conn.execute("ALTER TABLE copies ADD COLUMN side_files TEXT NOT NULL DEFAULT '[]'")
 
 
+def _migrate_9(conn):
+    """Jobs (jobs.py): the queue and the last HISTORY_KEPT jobs, each with
+    the last lines of its output once it has ended. Operational data, not
+    the user's: not mirrored by userdata.py, and losing it loses nothing."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind       TEXT NOT NULL,
+            params     TEXT NOT NULL,              -- JSON object, as checked by the kind
+            argv       TEXT NOT NULL,              -- JSON list, for display: the tool's name, not its path
+            cwd        TEXT NOT NULL,
+            lock_group TEXT NOT NULL,
+            state      TEXT NOT NULL,              -- queued running done failed cancelled interrupted
+            created_at INTEGER NOT NULL,
+            started_at INTEGER,
+            ended_at   INTEGER,
+            exit_code  INTEGER,
+            rescan     TEXT,                       -- folder indexed when it exits 0, or NULL
+            full_scan  INTEGER NOT NULL DEFAULT 0,
+            result     TEXT,                       -- JSON object, or NULL
+            message    TEXT,
+            tail       TEXT NOT NULL DEFAULT '[]'  -- JSON [[n, text]], once ended
+        )""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
-MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8]
+MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
+              _migrate_9]
 
 BACKUPS_KEPT = 3
 

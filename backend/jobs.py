@@ -12,8 +12,13 @@ sessions at once), different groups in parallel, at most MAX_RUNNING in all.
 Each job runs in a session of its own, so cancelling (SIGTERM, then SIGKILL)
 reaches everything it started. When a job that downloads into a media root
 exits cleanly, that folder is indexed and the job reports its new posts.
+
+Jobs are kept in the ``jobs`` table: the queue, and the last HISTORY_KEPT
+ended jobs with the tail of their output. Jobs a stopped FeedVault left
+queued or running are marked interrupted on the next start (recover).
 """
 import collections
+import json
 import os
 import shutil
 import signal
@@ -22,6 +27,7 @@ import threading
 import time
 
 import config
+import db
 import scanner
 
 TOOLS = ("instaloader", "gallery-dl", "yt-dlp", "ffmpeg")
@@ -147,8 +153,6 @@ class Job:
 _lock = threading.Lock()
 _active = collections.OrderedDict()            # id -> Job, queued and running, oldest first
 _closing = False
-_next_id = 0
-_history = collections.OrderedDict()           # id -> (public dict, tail), ended jobs
 
 
 def _under_root(path, roots):
@@ -177,14 +181,13 @@ def submit(kind_name, params):
             raise BadRequest("the job's folder is not inside a media root")
     cwd = spec.get("cwd") or cfg["data_directory"]
     os.makedirs(cwd, exist_ok=True)
-    global _next_id
-    with _lock:
+    now = int(time.time())
+    with _lock:                                # ids and queue order agree
         if _closing:
             raise BadRequest("FeedVault is stopping")
-        _next_id += 1
-        job = Job(_next_id, kind.name, params, spec, group, cwd, rescan, int(time.time()))
+        job = Job(_insert(kind.name, params, spec, group, cwd, rescan, now),
+                  kind.name, params, spec, group, cwd, rescan, now)
         _active[job.id] = job
-    _save(job)
     _pump()
     return job.public()
 
@@ -345,12 +348,13 @@ def cancel(job_id):
         else:
             job.cancelled = True
             queued = False
+        public = job.public()                  # as it was: the job may end right after SIGTERM
     if queued:
         _save(job, [])
         _prune()
     elif job.proc is not None:                 # else _run sees the flag once it has started it
         _terminate(job)
-    return job.public()
+    return public
 
 
 def shutdown():
@@ -387,29 +391,71 @@ def shutdown():
 # Reading
 # ---------------------------------------------------------------------------
 
+def _insert(kind, params, spec, group, cwd, rescan, now):
+    conn = db.connect()
+    cur = conn.execute(
+        "INSERT INTO jobs(kind, params, argv, cwd, lock_group, state, created_at, rescan, full_scan) "
+        "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+        (kind, json.dumps(params), json.dumps([spec["tool"], *map(str, spec.get("args", []))]), cwd, group,
+         now, rescan, int(bool(spec.get("full_scan")))))
+    conn.commit()
+    return cur.lastrowid
+
+
 def _save(job, tail=None):
-    with _lock:
-        if job.state in ("queued", "running"):
-            return
-        _history[job.id] = (job.public(), tail or [])
-        _history.move_to_end(job.id)
+    """Write a job's state; ``tail`` (its last lines) once it has ended."""
+    conn = db.connect()
+    conn.execute(
+        "UPDATE jobs SET state = ?, started_at = ?, ended_at = ?, exit_code = ?, result = ?, message = ?, "
+        "tail = COALESCE(?, tail) WHERE id = ?",
+        (job.state, job.started_at, job.ended_at, job.exit_code,
+         None if job.result is None else json.dumps(job.result), job.message,
+         None if tail is None else json.dumps(tail), job.id))
+    conn.commit()
 
 
 def _prune():
-    with _lock:
-        while len(_history) > HISTORY_KEPT:
-            _history.popitem(last=False)
+    conn = db.connect()
+    conn.execute("DELETE FROM jobs WHERE state NOT IN ('queued', 'running') "
+                 "AND id NOT IN (SELECT id FROM jobs ORDER BY id DESC LIMIT ?)", (HISTORY_KEPT,))
+    conn.commit()
+
+
+def recover():
+    """At startup: jobs a stopped FeedVault left queued or running."""
+    conn = db.connect()
+    n = conn.execute("UPDATE jobs SET state = 'interrupted', message = ?, ended_at = COALESCE(started_at, created_at) "
+                     "WHERE state IN ('queued', 'running')", (INTERRUPTED,)).rowcount
+    conn.commit()
+    if n:
+        print(f"[jobs] {n} job{'' if n == 1 else 's'} interrupted when FeedVault last stopped")
+
+
+_COLUMNS = "id, kind, params, argv, cwd, lock_group, state, created_at, started_at, ended_at, " \
+           "exit_code, rescan, result, message"
+
+
+def _public(row):
+    kind = _kinds.get(row["kind"])
+    return {"id": row["id"], "kind": row["kind"], "label": kind.label if kind else row["kind"],
+            "params": json.loads(row["params"]), "argv": json.loads(row["argv"]), "cwd": row["cwd"],
+            "group": row["lock_group"], "state": row["state"], "created_at": row["created_at"],
+            "started_at": row["started_at"], "ended_at": row["ended_at"], "exit_code": row["exit_code"],
+            "rescan": row["rescan"], "result": json.loads(row["result"]) if row["result"] else None,
+            "message": row["message"]}
 
 
 def listing():
     """Active jobs and recent history, newest first."""
     with _lock:
-        active = [j.public() for j in _active.values()]
-        ended = [h[0] for h in _history.values() if h[0]["id"] not in _active]
-    jobs = sorted(active + ended, key=lambda j: j["id"], reverse=True)
-    return {"running": sum(j["state"] == "running" for j in active),
-            "queued": sum(j["state"] == "queued" for j in active),
-            "jobs": jobs[:HISTORY_KEPT + len(active)]}
+        active = {j.id: j.public() for j in _active.values()}
+    rows = db.connect().execute(f"SELECT {_COLUMNS} FROM jobs ORDER BY id DESC LIMIT ?",
+                                (HISTORY_KEPT + len(active),)).fetchall()
+    # The live state wins: a row is written a moment after the change.
+    jobs = [active.get(r["id"]) or _public(r) for r in rows]
+    return {"running": sum(j["state"] == "running" for j in active.values()),
+            "queued": sum(j["state"] == "queued" for j in active.values()),
+            "jobs": jobs}
 
 
 def get(job_id):
@@ -417,8 +463,8 @@ def get(job_id):
         job = _active.get(job_id)
         if job is not None:
             return job.public()
-        h = _history.get(job_id)
-        return h[0] if h else None
+    row = db.connect().execute(f"SELECT {_COLUMNS} FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return _public(row) if row else None
 
 
 def log(job_id, after=0):
@@ -430,12 +476,12 @@ def log(job_id, after=0):
         if job is not None:
             lines, state = list(job.lines), job.state
             first = lines[0][0] if lines else job.n + 1
-        else:
-            h = _history.get(job_id)
-            if h is None:
-                return None
-            lines, state = h[1], h[0]["state"]
-            first = lines[0][0] if lines else 1
+    if job is None:
+        row = db.connect().execute("SELECT state, tail FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        lines, state = [tuple(x) for x in json.loads(row["tail"])], row["state"]
+        first = lines[0][0] if lines else 1
     new = [ln for ln in lines if ln[0] > after]
     page = new[:LOG_PAGE]
     return {"state": state, "first": first, "next": page[-1][0] if page else after,

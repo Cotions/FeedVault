@@ -2,6 +2,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 
 import pytest
@@ -31,7 +32,7 @@ def state(job_id):
 
 
 def ended(job_id, timeout=10):
-    wait_for(lambda: state(job_id) not in ("queued", "running"), timeout)
+    wait_for(lambda: job_id not in jobs._active and state(job_id) not in ("queued", "running"), timeout)
     return jobs.get(job_id)
 
 
@@ -49,7 +50,6 @@ def runner(env, monkeypatch):
     """The job runner with test kinds that run Python scripts. Every job is
     stopped afterwards."""
     monkeypatch.setattr(jobs, "_active", jobs.collections.OrderedDict())
-    monkeypatch.setattr(jobs, "_history", jobs.collections.OrderedDict())
     monkeypatch.setattr(jobs, "_closing", False)
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     added = []
@@ -65,6 +65,10 @@ def runner(env, monkeypatch):
 
     yield {"kind": kind, "gate_kind": gate_kind, "tmp": env["tmp"], "media": env["media"]}
     jobs.shutdown()
+    # A runner thread still finishing would land in the next test's queue.
+    for t in threading.enumerate():
+        if t.name.startswith("job-") and not t.name.endswith("-log"):
+            t.join(10)
     for name in added:
         jobs._kinds.pop(name, None)
 
@@ -332,3 +336,53 @@ def test_shutdown_stops_running_jobs(runner):
     assert state(job) == "interrupted" and state(queued) == "interrupted"
     with pytest.raises(jobs.BadRequest):
         jobs.submit("long", {})
+
+
+def test_history_is_kept_in_sqlite(runner, monkeypatch):
+    runner["kind"]("hello", "print('hi'); import sys; sys.exit(2)")
+    job = ended(jobs.submit("hello", {})["id"])
+    # A new process: nothing in memory, the row and its tail remain.
+    monkeypatch.setattr(jobs, "_active", jobs.collections.OrderedDict())
+    again = jobs.get(job["id"])
+    assert again == job and again["params"] == {} and again["argv"][0] == sys.executable
+    assert (again["state"], again["exit_code"], again["message"]) == ("failed", 2, "hi")
+    assert jobs.log(job["id"])["lines"] == [{"n": 1, "text": "hi"}]
+    assert jobs.get(job["id"] + 1) is None and jobs.log(job["id"] + 1) is None
+
+
+def test_interrupted_on_restart(runner):
+    import db
+    runner["gate_kind"]("gated", "g")
+    gate = str(runner["tmp"] / "never")
+    running = jobs.submit("gated", {"gate": gate})["id"]
+    queued = jobs.submit("gated", {"gate": gate})["id"]
+    wait_for(lambda: state(running) == "running")
+    # The backend dies without shutdown(): the rows still say running and queued.
+    states = dict(db.connect().execute("SELECT id, state FROM jobs").fetchall())
+    assert states == {running: "running", queued: "queued"}
+    jobs.recover()                                     # the next start
+    with jobs._lock:
+        orphans = dict(jobs._active)
+        jobs._active.clear()
+    for job_id in (running, queued):
+        job = jobs.get(job_id)
+        assert job["state"] == "interrupted" and job["message"] == jobs.INTERRUPTED
+        assert job["ended_at"] is not None
+    with jobs._lock:
+        jobs._active.update(orphans)                   # so teardown stops the "old" process
+
+
+
+def test_history_keeps_the_last_100(runner, monkeypatch):
+    monkeypatch.setattr(jobs, "HISTORY_KEPT", 5)
+    runner["kind"]("quick", "pass")
+    ids = [ended(jobs.submit("quick", {})["id"])["id"] for _ in range(7)]
+    listed = jobs.listing()
+    assert [j["id"] for j in listed["jobs"]] == ids[::-1][:5]
+    assert (listed["running"], listed["queued"]) == (0, 0)
+    assert jobs.get(ids[0]) is None
+
+
+def test_jobs_are_not_user_data():
+    import userdata
+    assert "jobs" not in userdata.REGISTRY

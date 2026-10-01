@@ -19,6 +19,7 @@ import config
 import db
 import duplicates
 import hashing
+import jobs
 import organize
 import scanner
 import thumbs
@@ -565,6 +566,7 @@ def browse():
 @app.post("/api/quit")
 def quit_app():
     def stop():
+        jobs.shutdown()                        # os._exit skips atexit
         userdata.flush()
         os._exit(0)
 
@@ -690,8 +692,11 @@ def main():
         print(f"[db] {e}")
         sys.exit(1)
     userdata.restore_all(db.connect(), cfg["data_directory"])
-    # Ctrl+C and SIGTERM still write the last few seconds of user data.
+    jobs.recover()
+    # Ctrl+C and SIGTERM still write the last few seconds of user data, after
+    # stopping running jobs (atexit runs the last registered first).
     atexit.register(userdata.flush)
+    atexit.register(jobs.shutdown)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     scanner.start(cfg["media_roots"])
     if "--no-browser" not in sys.argv and os.environ.get("FEEDVAULT_NO_BROWSER") != "1":
