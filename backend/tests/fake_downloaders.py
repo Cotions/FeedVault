@@ -13,8 +13,10 @@ this script), keyed by the profile link FeedVault passes:
         "https://tiktok.com/@someone": {
             "extractor_key": "TikTok", "uploader_id": "6800000000000000009", "uploader": "someone",
             "channel": "Some One", "videos": [{"id": "7300000000000000001", "ts": 1717243200,
-                                               "title": "…", "description": "…", "duration": 12}]}},
-     "fail": null | "429" | "login" | "private" | "notfound"}
+                                               "title": "…", "description": "…", "duration": 12}],
+            "pinned": ["7300000000000000001"]}},
+     "fail": null | "429" | "login" | "private" | "notfound",
+     "config_cookies": false}
 
 and behave like gallery-dl 1.32 and yt-dlp 2026.08 for one profile link with
 the flags FeedVault passes, newest post first:
@@ -27,7 +29,12 @@ the flags FeedVault passes, newest post first:
   (``<extractor> <id>`` lines), ``--break-on-existing`` (exit 101 at the first
   archived video), ``-o`` (``%(uploader_id)s``, ``%(upload_date)s``,
   ``%(id)s``, ``%(ext)s``, ``%%``), ``--match-filters "duration <= N"``. A
-  YouTube channel also gets its playlist info JSON.
+  YouTube channel also gets its playlist info JSON. ``pinned`` videos are
+  listed first, as TikTok lists a profile's pinned videos. With
+  ``--cookies-from-browser`` (or ``config_cookies``: cookies from the
+  user's own yt-dlp config) the info JSON holds the cookies, as yt-dlp's
+  does (``cookies`` in each format and at the top, a ``Cookie`` in their
+  ``http_headers``).
 
 Every run appends {"tool", "argv", "at"} as one JSON line to
 FAKE_DOWNLOADS_LOG, when set.
@@ -192,6 +199,27 @@ YT_DLP_FAIL = {
     "notfound": "ERROR: [{ie}] {id}: Unable to find user",
 }
 THUMB = {"TikTok": "image", "Youtube": "webp"}
+FAKE_COOKIE = "sessionid=FAKE-SECRET"
+
+
+def _formats(video_id, cookies):
+    """Two formats as yt-dlp lists them; with the cookies it used when it had some."""
+    out = []
+    for fid in ("h264_540p", "h264_720p"):
+        f = {"format_id": fid, "url": f"https://v16.example.invalid/{video_id}/{fid}.mp4", "ext": "mp4",
+             "http_headers": {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}}
+        if cookies:
+            f["cookies"] = f"{FAKE_COOKIE}; Domain=.tiktok.com; Path=/; Secure"
+            f["http_headers"]["Cookie"] = FAKE_COOKIE
+        out.append(f)
+    return out
+
+
+def _chosen(video_id, cookies):
+    """The formats, and the chosen one's fields copied to the top, as yt-dlp does."""
+    formats = _formats(video_id, cookies)
+    return {"formats": formats, **{k: v for k, v in formats[-1].items() if k in ("format_id", "url", "http_headers",
+                                                                               "cookies")}}
 
 
 def _fill(template, fields):
@@ -243,7 +271,8 @@ def yt_dlp_main(argv):
                 json.dump({"_type": "playlist", "id": account["channel_id"], "extractor": "youtube:tab",
                            "extractor_key": "YoutubeTab", "webpage_url": url, "title": f"{account['uploader']} - Videos",
                            **base_fields}, f, indent=1)
-        for v in sorted(account["videos"], key=lambda v: -v["ts"]):
+        pinned = account.get("pinned") or []
+        for v in sorted(account["videos"], key=lambda v: (v["id"] not in pinned, -v["ts"])):
             line = f"{ie.lower()} {v['id']}"
             if line in have:
                 print(f"[download] {v['id']}: has already been recorded in the archive")
@@ -272,6 +301,7 @@ def yt_dlp_main(argv):
                                "timestamp": v["ts"], "upload_date": day, "duration": v.get("duration"),
                                "uploader_url": account.get("uploader_url"), "like_count": 5, "view_count": 50,
                                "comment_count": 2, "ext": "mp4", "_version": {"version": "2026.08.19"},
+                               **_chosen(v["id"], args.cookies_from_browser or data.get("config_cookies")),
                                **base_fields}, f, indent=1)
             if args.download_archive:
                 with open(args.download_archive, "a", encoding="utf-8") as f:

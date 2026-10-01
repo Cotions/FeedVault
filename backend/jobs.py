@@ -51,18 +51,18 @@ class BadRequest(ValueError):
 
 class Kind:
     def __init__(self, name, label, params, build, group, summarize=None, start=None, outcome=None,
-                 ended=None, pause=None, describe=None):
+                 ended=None, pause=None, describe=None, after=None):
         self.name, self.label, self.params = name, label, params
         self.build, self.group, self.summarize = build, group, summarize
         self.start, self.outcome, self.ended = start, outcome, ended
-        self.pause, self.describe = pause, describe
+        self.pause, self.describe, self.after = pause, describe, after
 
 
 _kinds = {}
 
 
 def register(name, *, label, params, build, group, summarize=None, start=None, outcome=None, ended=None,
-             pause=None, describe=None):
+             pause=None, describe=None, after=None):
     """Add a job kind.
 
     params:    {name: {"type": "choice", "choices": [...]}
@@ -77,6 +77,10 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
                the process starts (no other job of its group is running);
                an exception fails the job with its message; note(text) adds a
                [feedvault] line to its log
+    after:     optional, (public job dict, note) -> None, run in the job's
+               thread once its process has exited, cancelled or not, before
+               the rescan; an exception is noted in its log and changes
+               nothing else
     outcome:   optional, (params, exit code, output lines, index result or
                None) -> (state, result, message) for a job whose process
                exited and was not cancelled. With it, the rescan folder is
@@ -88,7 +92,7 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
                the next one of this kind in its group waits that long
     describe:  optional, (params, argv) -> label shown instead of ``label``
     """
-    _kinds[name] = Kind(name, label, params, build, group, summarize, start, outcome, ended, pause, describe)
+    _kinds[name] = Kind(name, label, params, build, group, summarize, start, outcome, ended, pause, describe, after)
 
 
 def kinds():
@@ -334,6 +338,11 @@ def _run(job):
         if not reader.is_alive():
             proc.stdout.close()
         job.exit_code = code
+        if kind.after:
+            try:
+                kind.after(job.public(live=True), lambda text: _note(job, f"[feedvault] {text}"))
+            except Exception as e:             # the run's files are there: it still ends as it went
+                _note(job, f"[feedvault] after-run step failed: {e}")
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")
         elif job.interrupted:                  # FeedVault is stopping: no indexing on the way out

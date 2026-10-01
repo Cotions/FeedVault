@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds, saveInstaloaderSettings, saveSettings } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED } from "../lib/jobs";
-import { fmtAgo, fmtBytes, fmtFullDate } from "../lib/fmt";
+import { fmtAgo, fmtBytes, fmtFullDate, plural } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 
@@ -444,25 +444,37 @@ const COOKIE_TOOLS = {
   "gallery-dl": { title: "X, Reddit, Bluesky, pixiv sync (gallery-dl)", sites: "X, Reddit, Bluesky or pixiv" },
   "yt-dlp": { title: "YouTube and TikTok sync (yt-dlp)", sites: "YouTube or TikTok" },
 };
+const TOOL_PAUSE = 30;
+const PAUSE_TEXT = {
+  "gallery-dl": "seconds, so X and the others do not see profiles fetched back to back",
+  "yt-dlp": "seconds, so TikTok and YouTube do not see profiles fetched back to back",
+};
 
 /* How gallery-dl or yt-dlp reaches the sites when FeedVault syncs a source:
-   anonymously, or with a browser's cookies, which the tool reads itself.
-   yt-dlp's card also has the YouTube length limit. */
+   anonymously, or with a browser's cookies, which the tool reads itself; and
+   the pause between two of its syncs. yt-dlp's card also has the YouTube
+   length limit. */
 function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
   const { title, sites } = COOKIE_TOOLS[tool];
   const [mode,    setMode]    = useState(saved.session?.mode || "none");
   const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
   const [longest, setLongest] = useState(String(maxSeconds ?? 180));
+  const [pause,   setPause]   = useState(String(saved.pause ?? TOOL_PAUSE));
   const [saving,  setSaving]  = useState(false);
 
   const session = mode === "cookies" ? { mode, browser } : { mode };
   const youtube = tool === "yt-dlp";
   const dirty = JSON.stringify(session) !== JSON.stringify(saved.session || { mode: "none" })
+    || pause.trim() !== String(saved.pause ?? TOOL_PAUSE)
     || (youtube && longest.trim() !== String(maxSeconds ?? 180));
 
   async function save(e) {
     e.preventDefault();
-    const changes = { [tool]: { session } };
+    if (!/^\d+$/.test(pause.trim()) || Number(pause) > 3600) {
+      setMsg({ ok: false, text: "The pause is whole seconds, from 0 to 3600." });
+      return;
+    }
+    const changes = { [tool]: { session, pause: Number(pause) } };
     if (youtube) {
       const seconds = Number(longest);
       if (!/^\d+$/.test(longest.trim()) || seconds < 1 || seconds > 86400) {
@@ -508,7 +520,8 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
               <span className="creator-sub">
                 {tool} reads the cookies of the browser where you are logged in to {sites} (<code>--cookies-from-browser</code>).
                 Close that browser first if it fails.
-                {youtube && <> yt-dlp copies the cookies it used into each video&rsquo;s <code>.info.json</code>, in your media folder.</>}
+                {youtube && <> yt-dlp copies the cookies it used into each video&rsquo;s <code>.info.json</code>; FeedVault
+                  removes them from the files right after each sync.</>}
               </span>
             </span>
           </label>
@@ -518,6 +531,12 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
             </select>
           )}
         </fieldset>
+        <label className="insta-pause">
+          <span>Pause between two syncs</span>
+          <input type="text" inputMode="numeric" className="insta-input" aria-label={`${tool} pause in seconds`} value={pause}
+                 onChange={e => { setPause(e.target.value); setMsg(null); }} />
+          <span className="dim">{PAUSE_TEXT[tool]}</span>
+        </label>
         {youtube && (
           <label className="insta-pause">
             <span>Longest YouTube video</span>
@@ -533,6 +552,77 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
         </div>
         {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="alert">{msg.text}</div>}
       </form>
+      {youtube && <InfoJsonCookies />}
+    </div>
+  );
+}
+
+/* Info JSONs written before FeedVault removed the cookies after each sync:
+   counted first (a dry run), then cleaned once confirmed. */
+function InfoJsonCookies() {
+  const [found,   setFound]   = useState(null);   // the dry run's answer, while the dialog is open
+  const [busy,    setBusy]    = useState(false);
+  const [dlgErr,  setDlgErr]  = useState(null);
+  const [msg,     setMsg]     = useState(null);
+
+  async function check() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await cleanInfoJsonCookies(false);
+      if (!r?.ok) setMsg({ ok: false, text: r?.error || "Could not check the info JSONs." });
+      else if (!r.files) setMsg({ ok: true, text: `No yt-dlp info JSON holds cookies (${plural(r.checked, "info JSON")} checked).` });
+      else { setDlgErr(null); setFound(r); }
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function run() {
+    setBusy(true);
+    setDlgErr(null);
+    try {
+      const r = await cleanInfoJsonCookies(true);
+      if (!r?.ok) { setDlgErr(r?.error || "Could not clean the info JSONs."); return; }
+      setFound(null);
+      const failed = r.failures ? ` ${plural(r.failures, "file")} could not be changed: ${r.failed.map(f => `${f.path} (${f.error})`).join(", ")}${r.failures > r.failed.length ? ", …" : ""}` : "";
+      setMsg({ ok: !r.failures, text: `Removed the cookies from ${plural(r.files, "info JSON")}.${failed}` });
+    } catch (err) {
+      setDlgErr(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="info-cookies">
+      <p className="page-lede">
+        Videos synced with cookies before FeedVault did this still have them in their <code>.info.json</code>.
+        This looks through every yt-dlp info JSON under your media roots and counts those first.
+      </p>
+      <div className="settings-actions">
+        <button type="button" className="btn-secondary" onClick={check} disabled={busy}>
+          <Icon name="search" size={14} />{busy && !found ? "Checking…" : "Remove cookies from existing yt-dlp info JSONs…"}
+        </button>
+      </div>
+      {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="status">{msg.text}</div>}
+      <ConfirmDialog
+        open={!!found}
+        busy={busy}
+        error={dlgErr}
+        title={`Remove the cookies from ${plural(found?.files ?? 0, "info JSON")}?`}
+        confirmLabel="Remove cookies"
+        onConfirm={run}
+        onCancel={() => setFound(null)}
+      >
+        <p>
+          {plural(found?.files ?? 0, "yt-dlp info JSON")} of the {plural(found?.checked ?? 0, "info JSON")} under your
+          media roots hold cookies. Each is rewritten without its <code>cookies</code> and <code>Cookie</code> headers;
+          everything else in it, and its date, stay the same.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

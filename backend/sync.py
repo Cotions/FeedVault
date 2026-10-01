@@ -13,7 +13,9 @@ instaloader:
   ``--fast-update`` also stops at the first file that exists.
 - the first sync of a source seeds that file with the newest post FeedVault
   already has for the account, so it never walks the whole profile again
-  (unless the source asks for its full history).
+  (unless the source asks for its full history). Only dates that can be
+  trusted count (see trusted_newest): a seed after a post never downloaded
+  would skip it for good.
 - metadata on (``--no-compress-json``), so new posts get captions and the
   account's numeric id; people.refresh_aliases links them to the folder's
   older filename-only posts.
@@ -25,16 +27,21 @@ gallery-dl and yt-dlp (archives.py):
 - ``--download-archive`` in the data directory: the tool skips what it lists,
   whatever files exist; trashing a post adds it there (never again).
 - ``-o skip=abort:5`` (gallery-dl) and ``--break-on-existing`` (yt-dlp) stop
-  the run at what is already there, so a sync with nothing new is quick.
+  the run at what is already there, so a sync with nothing new is quick;
+  yt-dlp only on platforms that list a profile newest first with nothing
+  older in front (STOPS_AT_ARCHIVED).
 - the first sync of a source seeds the archive with the posts already
   indexed for its account.
 - metadata on (``--write-metadata``; ``--write-info-json --write-thumbnail``),
   into the source's folder; YouTube videos longer than ``youtube_max_seconds``
   are not downloaded (ChannelVault's).
+- after a yt-dlp sync, the info JSONs it wrote are rewritten without the
+  cookies yt-dlp copies into them (info_cookies.py), before the folder is
+  indexed.
 
 How it went is read from the output (login required, private, not found,
-rate limited) and stored on the source. instaloader syncs pause between two
-(config ``instaloader.pause``).
+rate limited) and stored on the source. Two syncs of one tool pause between
+them (config ``<tool>.pause``).
 """
 import configparser
 import json
@@ -48,12 +55,13 @@ from urllib.parse import urlsplit
 import archives
 import config
 import db
+import info_cookies
 import jobs
 import people
 import sources
 import userdata
 from parsers import is_media, yt_dlp
-from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SPACED_RE
+from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SPACED_RE, _day_start
 
 KIND = "instaloader-sync"
 GROUP = "instaloader"
@@ -61,6 +69,7 @@ KINDS = {"instaloader": KIND, "gallery-dl": "gallery-dl-sync", "yt-dlp": "yt-dlp
 YT_DLP_NAME = "%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"
 BREAK_ON_EXISTING = 101                        # yt-dlp's exit code when --break-on-existing stopped it
 PAUSE_DEFAULT = 60
+TOOL_PAUSE_DEFAULT = 30                        # gallery-dl and yt-dlp
 PAUSE_MAX = 3600
 
 DATED = "{target}-{date_utc:%Y-%m-%d}-{shortcode}"
@@ -78,14 +87,16 @@ STAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"         # instaloader's LatestStamps.ISO
 # Settings
 # ---------------------------------------------------------------------------
 
+def _pause(value, default):
+    ok = isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= PAUSE_MAX
+    return value if ok else default
+
+
 def settings(cfg=None):
     """The global instaloader settings, cleaned: {"session": {...}, "pause": seconds}."""
     raw = (cfg or config.load()).get("instaloader") or {}
     session = sources.clean_session(raw.get("session")) or {"mode": "none"}
-    pause = raw.get("pause")
-    if not isinstance(pause, int) or isinstance(pause, bool) or not 0 <= pause <= PAUSE_MAX:
-        pause = PAUSE_DEFAULT
-    return {"session": session, "pause": pause}
+    return {"session": session, "pause": _pause(raw.get("pause"), PAUSE_DEFAULT)}
 
 
 def clean_settings(value, current):
@@ -99,10 +110,9 @@ def clean_settings(value, current):
             return None, ('session must be { "mode": "none" }, { "mode": "cookies", "browser": '
                           f'{" | ".join(sources.BROWSERS)} }} or {{ "mode": "login", "user": "<name>" }}')
     if "pause" in value:
-        p = value["pause"]
-        if not isinstance(p, int) or isinstance(p, bool) or not 0 <= p <= PAUSE_MAX:
+        if _pause(value["pause"], None) is None:
             return None, f"pause must be whole seconds from 0 to {PAUSE_MAX}"
-        out["pause"] = p
+        out["pause"] = value["pause"]
     return out, None
 
 
@@ -115,24 +125,28 @@ def session_flags(session):
 
 
 def tool_settings(tool, cfg=None):
-    """gallery-dl's or yt-dlp's settings, cleaned: {"session": {...}}, the
-    session "none" or a browser's cookies (they have no login of their own
-    FeedVault could name)."""
+    """gallery-dl's or yt-dlp's settings, cleaned: {"session": {...}, "pause":
+    seconds}, the session "none" or a browser's cookies (they have no login
+    of their own FeedVault could name)."""
     raw = (cfg or config.load()).get(tool) or {}
     session = sources.clean_session(raw.get("session"), sources.COOKIE_MODES) or {"mode": "none"}
-    return {"session": session}
+    return {"session": session, "pause": _pause(raw.get("pause"), TOOL_PAUSE_DEFAULT)}
 
 
 def clean_tool_settings(tool, value, current):
     """Settings from POST /api/config merged over ``current``. Returns (settings, error)."""
-    if not isinstance(value, dict) or set(value) - {"session"}:
-        return None, f"{tool} must be {{ session }}"
+    if not isinstance(value, dict) or set(value) - {"session", "pause"}:
+        return None, f"{tool} must be {{ session, pause }}"
     out = dict(current)
     if "session" in value:
         out["session"] = sources.clean_session(value["session"], sources.COOKIE_MODES)
         if out["session"] is None:
             return None, ('session must be { "mode": "none" } or { "mode": "cookies", "browser": '
                           f'{" | ".join(sources.BROWSERS)} }}')
+    if "pause" in value:
+        if _pause(value["pause"], None) is None:
+            return None, f"pause must be whole seconds from 0 to {PAUSE_MAX}"
+        out["pause"] = value["pause"]
     return out, None
 
 
@@ -244,6 +258,31 @@ def _write_stamps(stamps, path):
     os.replace(tmp, path)
 
 
+FILENAMES = "instaloader (filenames)"           # parsers.instaloader's tool for posts rebuilt from names
+DAY = 86400
+
+
+def trusted_newest(conn, platform, author_id):
+    """The newest post time of an account (aliases included) that can seed
+    instaloader's stamp, or None. A post with metadata has its real time; a
+    post rebuilt from a dated file name counts until the end of that day
+    (its mtime only within it); one from a name without a date (``{target} -
+    {shortcode}``) has only its mtime, which a copy that did not keep it
+    makes the copy's date, later than posts never downloaded: not counted."""
+    clause, args = db.post_filter(platform=platform, author=author_id)
+    newest = None
+    for tool, path, posted in conn.execute(
+            f"SELECT p.tool, p.meta_path, p.posted_at {db._FROM} {clause} AND p.posted_at IS NOT NULL", args):
+        if tool == FILENAMES:
+            m = _NAME_RE.fullmatch(os.path.basename(path))
+            day = _day_start(m["date"]) if m else None
+            if day is None:
+                continue
+            posted = min(posted, day + DAY - 1)
+        newest = posted if newest is None else max(newest, posted)
+    return newest
+
+
 def _start(params, note):
     """Right before instaloader starts (no other instaloader runs): seed the
     stamps file on a source's first sync."""
@@ -268,7 +307,11 @@ def _start(params, note):
     if src["author_id"] is not None:
         key = people.canonical(conn, src["platform"], src["author_id"])
         a = db.accounts(conn).get(key)
-        newest = a and a["newest"]
+        if a and a["newest"] is not None:
+            newest = trusted_newest(conn, *key)
+            if newest is None:
+                note("first sync: no reliable date, fetching full history")
+                return
     if newest is None:
         note(f"first sync of {target}: no post indexed yet, downloading everything")
         return
@@ -463,6 +506,13 @@ def _build_gallery_dl(params):
     ]}
 
 
+# Whether a yt-dlp sync may stop at the first video its archive has, per
+# platform (any other: yes). A TikTok profile lists its pinned videos (up to
+# 3, usually old, so archived) first, and yt-dlp neither skips nor reorders
+# them: it would stop there every time and never reach a new video. Without
+# it the whole listing is paged through (15 videos a request); the archive
+# still keeps every listed video from being fetched again.
+STOPS_AT_ARCHIVED = {"tiktok": False}
 YOUTUBE_TABS = {"videos", "shorts", "streams", "live", "podcasts", "releases", "playlists", "featured"}
 
 
@@ -482,10 +532,11 @@ def _build_yt_dlp(params):
     # one after the other: stopping at the first video already there would
     # never reach the next tab. The archive still skips what it lists.
     tabs = src["platform"] == "youtube" and _youtube_root(target)
+    stop = STOPS_AT_ARCHIVED.get(src["platform"], True) and not (options["full_history"] or tabs)
     return {"tool": "yt-dlp", "rescan": folder, "args": [
         "--write-info-json", "--write-thumbnail",
         "--download-archive", archives.path("yt-dlp", cfg["data_directory"]),
-        *([] if options["full_history"] or tabs else ["--break-on-existing"]),
+        *(["--break-on-existing"] if stop else []),
         # The output template is %-formatted: a % in the folder is doubled.
         "-o", os.path.join(folder.replace("%", "%%"), YT_DLP_NAME),
         # Long YouTube videos are ChannelVault's; one without a duration (live) is skipped too.
@@ -518,6 +569,31 @@ def _start_archive(tool):
     return start
 
 
+_seed_yt_dlp = _start_archive("yt-dlp")
+_info_before = {}                              # source id -> its folder's info JSONs right before yt-dlp starts
+
+
+def _start_yt_dlp(params, note):
+    src = sources.row(db.connect(), _source_id(params))
+    if src is not None:
+        _info_before[src["id"]] = info_cookies.listing(src["folder"])
+    _seed_yt_dlp(params, note)
+
+
+def _strip_cookies(job, note):
+    """After a yt-dlp run: take the cookies out of the info JSONs it wrote,
+    whether they came from FeedVault's setting (--cookies-from-browser) or
+    the user's own yt-dlp config. A failure is logged; the sync goes on."""
+    before = _info_before.pop(int(job["params"]["source"]), None)
+    if before is None or not job["rescan"]:
+        return                                 # it never got to start
+    cleaned, failed = info_cookies.after_sync(job["rescan"], before)
+    if cleaned:
+        note(f"cookies removed from {cleaned} info JSON{'' if cleaned == 1 else 's'}")
+    for path, error in failed:
+        note(f"could not remove the cookies from {path}: {error}")
+
+
 def _describe(label):
     def describe(params, argv):
         if not argv:
@@ -529,11 +605,13 @@ def _describe(label):
 jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source": {"type": "text", "max": 15}},
               build=_build_gallery_dl, group="gallery-dl", start=_start_archive("gallery-dl"),
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "gallery-dl"),
-              ended=_ended, describe=_describe("Sync with gallery-dl"))
+              ended=_ended, pause=lambda: tool_settings("gallery-dl")["pause"],
+              describe=_describe("Sync with gallery-dl"))
 jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
-              build=_build_yt_dlp, group="yt-dlp", start=_start_archive("yt-dlp"),
+              build=_build_yt_dlp, group="yt-dlp", start=_start_yt_dlp, after=_strip_cookies,
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "yt-dlp"),
-              ended=_ended, describe=_describe("Sync with yt-dlp"))
+              ended=_ended, pause=lambda: tool_settings("yt-dlp")["pause"],
+              describe=_describe("Sync with yt-dlp"))
 
 
 # ---------------------------------------------------------------------------

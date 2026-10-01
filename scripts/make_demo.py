@@ -8,7 +8,8 @@ Writes <dir>/media (fake posts), <dir>/data (database goes here) and
 <dir>/bin (set as the tools in the config; they never touch the network), so
 adding https://x.com/demo_skies, https://tiktok.com/@demo.clips or
 https://youtube.com/@demoshorts as a source and syncing it downloads invented
-posts (<dir>/fake_downloads.json). Start the backend against it with:
+posts (<dir>/fake_downloads.json). One TikTok profile, old.sync, is as a yt-dlp
+sync with cookies left it before FeedVault removed them. Start the backend against it with:
 
     FEEDVAULT_CONFIG=<dir>/config.json backend/venv/bin/python backend/app.py
 
@@ -332,6 +333,29 @@ def add_fake_tools(root, ts):
     return tools
 
 
+def add_old_yt_dlp_sync(media, root, ts):
+    """A TikTok profile yt-dlp downloaded with a browser's cookies before
+    FeedVault removed them: its info JSONs still hold the (made-up) cookies,
+    for Settings → "Remove cookies from existing yt-dlp info JSONs"."""
+    import fake_downloaders
+    data = os.path.join(root, "old_sync.json")
+    with open(data, "w") as f:
+        json.dump({"accounts": {"https://tiktok.com/@old.sync": {
+            "extractor_key": "TikTok", "uploader_id": "6900000000000000888", "uploader": "old.sync",
+            "channel": "Old Sync", "uploader_url": "https://www.tiktok.com/@old.sync",
+            "videos": [{"id": str(7400000000000000100 + i), "ts": ts - (30 + i) * 86_400, "title": f"older clip {i}",
+                        "description": f"older clip {i} #demo", "duration": 15} for i in range(1, 4)]}}}, f)
+    os.environ["FAKE_DOWNLOADS"] = data
+    try:
+        fake_downloaders.yt_dlp_main([
+            "--write-info-json", "--write-thumbnail", "--cookies-from-browser", "firefox",
+            "-o", os.path.join(media, "tiktok", "old.sync", "%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"),
+            "https://tiktok.com/@old.sync"])
+    finally:
+        del os.environ["FAKE_DOWNLOADS"]
+        os.remove(data)
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -372,6 +396,7 @@ def main():
     add_duplicates(media, ts)
     add_gallery_dl(media, ts)
     add_person(media, ts)
+    add_old_yt_dlp_sync(media, root, ts)
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     seed_tags(os.path.join(root, "data"), tagged)

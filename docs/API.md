@@ -94,8 +94,9 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" } }, "yt-dlp": { "session": { "mode": "none" } }, "youtube_max_seconds": 180, "routes": {…} }` |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30 }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30 }, "youtube_max_seconds": 180, "routes": {…} }` |
 | POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
 | POST | `/api/quit` | stops the backend |
@@ -915,10 +916,16 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
   not downloaded again). `--fast-update` also stops at the first file that
   exists.
 - **First sync.** When `stamps.ini` has no entry for the target yet, it is
-  seeded with the newest `posted_at` FeedVault has for the source's account
-  (and the account's numeric id, when it has one), so the first sync only
-  fetches what is newer instead of walking the whole profile again. Not
-  with `options.full_history`, nor for a source with no account.
+  seeded with the newest trustworthy `posted_at` FeedVault has for the
+  source's account (and the account's numeric id, when it has one), so the
+  first sync only fetches what is newer instead of walking the whole
+  profile again. Not with `options.full_history`, nor for a source with no
+  account. Trustworthy: a post with metadata, or a filename-only post whose
+  name carries a date, counted no later than the end of that day (UTC). A
+  name without a date (`{target} - {shortcode}`) only has the file's mtime,
+  which a copy may have made later than posts never downloaded: such posts
+  are left out, and an account with nothing else gets no seed (the job log
+  says `first sync: no reliable date, fetching full history`).
 - **Metadata on.** `--no-compress-json` writes each post's JSON beside its
   media, so new posts get captions, stats and the account's numeric id.
   The folder's name becomes an alias of that id (see [People](#people)),
@@ -971,7 +978,7 @@ gallery-dl --write-metadata --download-archive <data_directory>/gallery-dl/archi
            -o skip=abort:5 -D <folder> [--cookies-from-browser <browser>] -- <link>
 
 yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
-       --break-on-existing -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
+       [--break-on-existing] -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
        [--match-filters "duration <= <youtube_max_seconds>"] [--cookies-from-browser <browser>] -- <link>
 ```
 
@@ -984,7 +991,11 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   channel's own page (`/@name`, `/channel/<id>`, not a tab such as
   `/shorts`) never gets `--break-on-existing`: it lists the Videos tab and
   then the Shorts tab, and stopping in the first would never reach the
-  second.
+  second. Nor does a TikTok profile: it lists its pinned videos (up to 3,
+  usually old and so archived) first, and stopping at them would never
+  reach a new video. Its sync pages through the whole listing (15 videos
+  per request), the archive still skipping what it lists. Which platforms
+  may stop is a table in `sync.py` (`STOPS_AT_ARCHIVED`).
 - **First sync.** When the source has never synced, the archive is seeded
   first with what FeedVault already indexed for its account (aliases
   included): gallery-dl gets the entry of every file of the account's
@@ -1003,17 +1014,20 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   back; restoring it takes out what trashing added (see [Deleting](#deleting)).
 - **Result**: as for instaloader: the folder is indexed when the job ends,
   `result` `{ "added", "updated", "error", "line" }`, stored on the source.
-  There is no pause between gallery-dl or yt-dlp jobs. A non-zero exit
-  whose error lines are all about single items (yt-dlp's `ERROR: [youtube]
-  <id>: Private video`, against `[youtube:tab]` or `[tiktok:user]` for the
-  profile; gallery-dl's `[download][error] Failed to download …`), and are
-  not a rate limit or a login wall, is `done`: `message` says how many
-  items could not be downloaded, `line` the last of them.
+  A non-zero exit whose error lines are all about single items (yt-dlp's
+  `ERROR: [youtube] <id>: Private video`, against `[youtube:tab]` or
+  `[tiktok:user]` for the profile; gallery-dl's `[download][error] Failed
+  to download …`), and are not a rate limit or a login wall, is `done`:
+  `message` says how many items could not be downloaded, `line` the last
+  of them.
+- **Pause.** The next sync of the same tool waits the tool's `pause`
+  (default 30 s); see [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings).
 
 ### gallery-dl and yt-dlp settings
 
-`GET /api/config` has `"gallery-dl": { "session": {…} }` and
-`"yt-dlp": { "session": {…} }`; `POST /api/config` with either changes it.
+`GET /api/config` has `"gallery-dl": { "session": {…}, "pause": 30 }` and
+`"yt-dlp": { "session": {…}, "pause": 30 }`; `POST /api/config` with
+either (`session` and/or `pause`) changes it.
 
 | `session` | Flags | What it means |
 |---|---|---|
@@ -1021,10 +1035,52 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
 | `{ "mode": "cookies", "browser": "firefox" }` | `--cookies-from-browser firefox` | The tool reads that browser's cookies itself. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
 
 FeedVault only passes the browser's name on. It never stores, reads or
-sends cookies. Note that yt-dlp copies the cookies it sent for a video into
-that video's info JSON (`cookies` key), in the media folder.
+sends cookies.
+
+`pause`: whole seconds from 0 to 3600 (default 30). As for instaloader,
+after a `gallery-dl-sync` job ends the next one waits that long before it
+starts (`waits_until`), and the same for `yt-dlp-sync`; one tool's pause
+never holds the other's syncs.
 
 `youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
+
+#### Cookies in info JSONs
+
+yt-dlp copies the cookies it sent for a video into that video's info JSON
+(`cookies` in each format and at the top, a `Cookie` line in their
+`http_headers`), in the media folder. So after every `yt-dlp-sync` job (the
+cookies can come from `--cookies-from-browser` or from the user's own
+yt-dlp config), once yt-dlp has exited (cancelled or not) and before the
+folder is indexed, FeedVault rewrites the info JSONs right in the source's
+folder that are new or changed since just before yt-dlp started (compared
+with a listing of their names and mtimes taken then, not with the clock):
+every `cookies` key at any depth and every `Cookie` header inside an
+`http_headers` are dropped, everything else stays as it was once parsed.
+The rewrite is atomic (a temporary file in the same folder renamed over the
+JSON) and keeps the file's mode, mtime and, when FeedVault may set it, its
+owner. Only regular files (never a symlink) that parse as yt-dlp's
+(`extractor_key`, `id`, `webpage_url`) are touched. The job log says
+`cookies removed from N info JSONs`; a file that cannot be rewritten gets a
+log line and does not change how the sync ended.
+
+gallery-dl's metadata JSONs hold no cookies: it keeps request headers and
+cookies in private `_http_*` keys, which `--write-metadata` leaves out.
+
+`POST /api/yt-dlp/info-json-cookies` does the same for every `*.info.json`
+under the media roots (symlinked folders not followed), for folders
+synced before this:
+
+```json
+{ "ok": true, "applied": false, "checked": 120, "files": 37, "failures": 0, "failed": [] }
+```
+
+`checked`: info JSONs looked at; `files`: yt-dlp ones holding cookies
+(with `apply`, cleaned); `failed`: the first 20 `{ path, error }` (a file
+or folder that could not be read, a file that could not be rewritten),
+`failures` how many in all. `400` for an
+`apply` that is not a boolean, `409` while a yt-dlp sync runs or another
+check is under way. Settings counts first (`apply` false), then asks to
+confirm.
 
 ## Storage
 

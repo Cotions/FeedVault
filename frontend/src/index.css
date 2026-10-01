@@ -1434,6 +1434,8 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 }
 .folder-row .btn-secondary { white-space: nowrap; }
 .settings-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.info-cookies { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.info-cookies .page-lede { margin-bottom: 0; }
 .scan-running { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
 .scan-counts {
   display: grid;

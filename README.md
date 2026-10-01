@@ -160,6 +160,9 @@ or stores cookies, passwords or session files.
 
 gallery-dl and yt-dlp can use a browser's cookies the same way
 (`--cookies-from-browser`, **Settings → gallery-dl / yt-dlp sync**).
+yt-dlp copies the cookies it used into each video's `.info.json`; FeedVault
+rewrites the files of each sync without them, and **Settings → YouTube
+and TikTok sync** can do the same for info JSONs written before.
 
 ## Where things live
 

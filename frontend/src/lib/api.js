@@ -258,3 +258,6 @@ export function syncAllSources() { return post("/api/sources/sync-all"); }
 export function saveInstaloaderSettings(settings) { return post("/api/config", { instaloader: settings }); }
 // Any of { "gallery-dl": { session }, "yt-dlp": { session }, youtube_max_seconds, routes } → { ok, config }
 export function saveSettings(changes) { return post("/api/config", changes); }
+// Cookies out of every yt-dlp info JSON under the media roots; apply false only counts.
+// → { ok, applied, checked, files, failures, failed: [{ path, error }] } or { ok: false, error }
+export function cleanInfoJsonCookies(apply) { return post("/api/yt-dlp/info-json-cookies", { apply }); }

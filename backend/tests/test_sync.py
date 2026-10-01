@@ -280,6 +280,63 @@ def test_seed_leaves_other_profiles_alone(env, client, fake):
     assert not st.has_option("carol.cooks", "profile-id")                      # the folder name is no id
 
 
+def spaced_post(folder, target, shortcode, mtime):
+    """A post in the older layout without a date, ``{target} - {shortcode}.jpg``,
+    whose mtime is ``mtime`` (a copy that did not keep the post's)."""
+    path = folder / f"{target} - {shortcode}.jpg"
+    write_filename_post(folder, target, shortcode, mtime)
+    os.rename(next(folder.glob(f"*-{shortcode}.jpg")), path)
+    os.utime(path, (mtime, mtime))
+
+
+def seed_of(client, target):
+    s = add_source(client, target)
+    notes = []
+    sync._start({"source": str(s["id"])}, notes.append)
+    st = stamps(None)
+    return (st.get(target, "post-timestamp") if st.has_option(target, "post-timestamp") else None), notes
+
+
+def test_seed_from_dated_names_ends_with_their_day(env, client, fake):
+    # The newest file's mtime was lost (copied later): the name's day bounds it.
+    folder = env["media"] / "dee.dates"
+    write_filename_post(folder, "dee.dates", "DDDDDDDDDD0", TS)
+    write_filename_post(folder, "dee.dates", "DDDDDDDDDD1", TS + DAY)
+    copied = folder / "dee.dates-2024-06-02-DDDDDDDDDD1.jpg"
+    os.utime(copied, (TS + 400 * DAY, TS + 400 * DAY))
+    scanner.scan(env["roots"])
+    stamp, notes = seed_of(client, "dee.dates")
+    assert stamp == "2024-06-02T00:00:00.000000+0000"          # the name's day: mtime too far off, midnight
+    assert any("starting after its newest indexed post, 2024-06-02 00:00 UTC" in n for n in notes)
+
+
+def test_undated_names_with_late_mtimes_seed_nothing(env, client, fake):
+    # motherbeef-style "{target} - {shortcode}" names, copied a year later.
+    folder = env["media"] / "mo.beef"
+    for i in range(3):
+        spaced_post(folder, "mo.beef", f"MMMMMMMMMM{i}", TS + 365 * DAY)
+    scanner.scan(env["roots"])
+    assert get(client, "/api/posts?author=mo.beef")["total"] == 3
+    stamp, notes = seed_of(client, "mo.beef")
+    assert stamp is None
+    assert notes == ["first sync: no reliable date, fetching full history"]
+    # So instaloader walks the profile and gets the posts never downloaded.
+    fake.set({"mo.beef": {"id": 55, "posts": [{"shortcode": "MISSED00001", "ts": TS + 100 * DAY}]}})
+    s = get(client, "/api/sources")["sources"][0]
+    job = sync_now(client, s["id"])
+    assert job["message"] == "1 new post"
+    assert any("no reliable date" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+
+
+def test_mixed_names_seed_from_the_dated_ones(env, client, fake):
+    folder = env["media"] / "mix.ed"
+    write_filename_post(folder, "mix.ed", "XXXXXXXXXX0", TS)                  # 2024-06-01 12:00, mtime kept
+    spaced_post(folder, "mix.ed", "XXXXXXXXXX1", TS + 300 * DAY)            # undated, copied later
+    scanner.scan(env["roots"])
+    stamp, _ = seed_of(client, "mix.ed")
+    assert stamp == "2024-06-01T12:00:00.000000+0000"
+
+
 def test_new_profile_downloads_everything_and_joins_its_person(env, client, fake):
     fake.set({"newbie": {"id": 999, "name": "New Bie", "posts": [
         {"shortcode": f"NNNNNNNNNN{i}", "ts": TS + i * DAY, "caption": f"n{i}"} for i in range(3)]}})

@@ -5,6 +5,7 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 
 import pytest
 
@@ -14,6 +15,7 @@ from fakes import gallery_dl_case, yt_dlp_case
 import archives
 import config
 import db
+import info_cookies
 import jobs
 import scanner
 import sources
@@ -30,7 +32,6 @@ USER = {"id": 900, "name": "someone", "nick": "Some One"}
 
 
 def wait_for(pred, timeout=10):
-    import time
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         v = pred()
@@ -71,9 +72,9 @@ class Fake:
         self.accounts = {}
         self.data.write_text(json.dumps({"accounts": {}, "fail": None}))
 
-    def put(self, url, account, fail=None):
+    def put(self, url, account, fail=None, config_cookies=False):
         self.accounts[url] = account
-        self.data.write_text(json.dumps({"accounts": self.accounts, "fail": fail}))
+        self.data.write_text(json.dumps({"accounts": self.accounts, "fail": fail, "config_cookies": config_cookies}))
 
     def runs(self, tool=None):
         runs = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -95,6 +96,7 @@ def fake(env, monkeypatch):
         exe.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     f = Fake(env["tmp"])
+    set_config(**{"gallery-dl": {"pause": 0}, "yt-dlp": {"pause": 0}})
     monkeypatch.setenv("FAKE_DOWNLOADS", str(f.data))
     monkeypatch.setenv("FAKE_DOWNLOADS_LOG", str(f.log))
     yield f
@@ -170,8 +172,7 @@ def test_yt_dlp_argv(env, fake, client):
     data = str(env["tmp"] / "data")
     assert sync._build_yt_dlp({"source": str(s["id"])})["args"] == [
         "--write-info-json", "--write-thumbnail", "--download-archive", f"{data}/yt-dlp/archive.txt",
-        "--break-on-existing", "-o", os.path.join(s["folder"], "%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"),
-        "--", TT]
+        "-o", os.path.join(s["folder"], "%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"), "--", TT]
     # YouTube: the ChannelVault rule as a filter, from the setting.
     set_config(youtube_max_seconds=90)
     y = add(client, YT)
@@ -185,9 +186,8 @@ def test_youtube_channel_page_does_not_stop_at_the_first_tab(env, fake, client):
     # A channel's page lists Videos, then Shorts: no --break-on-existing there.
     root = add(client, YT)
     assert "--break-on-existing" not in sync._build_yt_dlp({"source": str(root["id"])})["args"]
-    for tab in ("https://youtube.com/@somechannel/shorts", "https://tiktok.com/@somechannel"):
-        s = add(client, tab, folder=str(env["media"] / tab.rsplit("/", 1)[-1] / "x"))
-        assert "--break-on-existing" in sync._build_yt_dlp({"source": str(s["id"])})["args"], tab
+    tab = add(client, "https://youtube.com/@somechannel/shorts", folder=str(env["media"] / "shorts"))
+    assert "--break-on-existing" in sync._build_yt_dlp({"source": str(tab["id"])})["args"]
     for page in ("https://youtube.com/channel/UCexampleChannelAAAAAAA1", "https://youtube.com/@x/featured"):
         assert sync._youtube_root(page) is (page.endswith("1"))
 
@@ -272,7 +272,7 @@ def test_gallery_dl_sync_then_nothing_new(env, fake, client):
     assert run_sync(client, s["id"])["message"] == "1 new post"
 
 
-def test_yt_dlp_sync_then_break_on_existing(env, fake, client):
+def test_yt_dlp_sync_then_nothing_new(env, fake, client):
     fake.put(TT, tt_account(1, 2))
     s = add(client, TT)
     job = run_sync(client, s["id"])
@@ -280,9 +280,33 @@ def test_yt_dlp_sync_then_break_on_existing(env, fake, client):
     p = get(client, "/api/posts/tiktok/7300000000000000002")
     assert p["source"]["tool"] == "yt-dlp" and p["text"] == "clip 2 #fun"
     assert archive_entries(env, "yt-dlp") == {"tiktok 7300000000000000001", "tiktok 7300000000000000002"}
+    # TikTok: the whole listing, each archived video skipped.
+    job = run_sync(client, s["id"])
+    assert (job["state"], job["exit_code"], job["message"]) == ("done", 0, "0 new posts")
+    assert sum("already been recorded in the archive" in ln["text"] for ln in jobs.log(job["id"])["lines"]) == 2
+
+
+def test_yt_dlp_break_on_existing(env, fake, client):
+    shorts = "https://youtube.com/@somechannel/shorts"
+    fake.put(shorts, yt_account((1, 30), (2, 30)))
+    s = add(client, shorts)
+    assert run_sync(client, s["id"])["message"] == "2 new posts"
     # yt-dlp exits 101 at the first archived video: that is a success.
     job = run_sync(client, s["id"])
     assert (job["state"], job["exit_code"], job["message"]) == ("done", 101, "0 new posts")
+
+
+def test_pinned_tiktok_video_does_not_stop_the_sync(env, fake, client):
+    # The profile lists an old pinned video first; it is already archived.
+    fake.put(TT, {**tt_account(1, 2), "pinned": ["7300000000000000001"]})
+    s = add(client, TT)
+    assert run_sync(client, s["id"])["message"] == "2 new posts"
+    fake.put(TT, {**tt_account(1, 2, 3, 4), "pinned": ["7300000000000000001"]})
+    job = run_sync(client, s["id"])
+    assert (job["state"], job["message"]) == ("done", "2 new posts")
+    assert {"tiktok 7300000000000000003", "tiktok 7300000000000000004"} <= archive_entries(env, "yt-dlp")
+    # With --break-on-existing, as before, the pinned video would have stopped it.
+    assert "--break-on-existing" not in fake.runs("yt-dlp")[-1]["argv"]
 
 
 def test_youtube_long_videos_are_not_downloaded(env, fake, client):
@@ -569,7 +593,8 @@ def test_archive_file_kept_intact_by_concurrent_appends(env):
 
 def test_tool_settings_in_config(env, client):
     cfg = get(client, "/api/config")
-    assert cfg["gallery-dl"] == {"session": {"mode": "none"}} and cfg["yt-dlp"] == {"session": {"mode": "none"}}
+    for tool in ("gallery-dl", "yt-dlp"):
+        assert cfg[tool] == {"session": {"mode": "none"}, "pause": 30}
     assert cfg["youtube_max_seconds"] == 180
     r = post(client, "/api/config", {"gallery-dl": {"session": {"mode": "cookies", "browser": "firefox"}},
                                       "youtube_max_seconds": 600})
@@ -581,6 +606,36 @@ def test_tool_settings_in_config(env, client):
                 {"youtube_max_seconds": 0}, {"youtube_max_seconds": "60"}, {"youtube_max_seconds": True}]:
         assert post(client, "/api/config", bad)["ok"] is False, bad
     assert config.load()["youtube_max_seconds"] == 600
+    # The pause, each tool its own, as instaloader's.
+    r = post(client, "/api/config", {"yt-dlp": {"pause": 0}, "gallery-dl": {"pause": 3600}})
+    assert r["config"]["yt-dlp"] == {"session": {"mode": "none"}, "pause": 0}
+    assert r["config"]["gallery-dl"] == {"session": {"mode": "cookies", "browser": "firefox"}, "pause": 3600}
+    for bad in [-1, 3601, "5", True, None, 1.5]:
+        assert post(client, "/api/config", {"yt-dlp": {"pause": bad}})["ok"] is False, bad
+    assert config.load()["yt-dlp"]["pause"] == 0
+    set_config(**{"gallery-dl": {"pause": "x"}})                    # edited by hand: the default
+    assert get(client, "/api/config")["gallery-dl"]["pause"] == 30
+
+
+def test_pause_between_two_syncs_of_one_tool(env, fake, client):
+    fake.put(TT, tt_account(1))
+    fake.put(X, x_account((1, 1)))
+    tt, x = add(client, TT), add(client, X)
+    set_config(**{"yt-dlp": {"pause": 30}, "gallery-dl": {"pause": 0}})
+    run_sync(client, tt["id"])
+    queued = post(client, f"/api/sources/{tt['id']}/sync", {})["job"]
+    assert queued["state"] == "queued" and queued["waits_until"] > time.time() + 20
+    assert get(client, "/api/sources")["sources"][0]["job"]["waits_until"] == queued["waits_until"]
+    # Another tool's group is not held.
+    assert run_sync(client, x["id"])["state"] == "done"
+    post(client, f"/api/jobs/{queued['id']}/cancel", {})
+    assert ended(queued["id"])["state"] == "cancelled"
+    # gallery-dl pauses too, from its own setting.
+    set_config(**{"yt-dlp": {"pause": 0}, "gallery-dl": {"pause": 1}})
+    jobs._cool.clear()
+    first = run_sync(client, x["id"])
+    second = post(client, f"/api/sources/{x['id']}/sync", {})["job"]
+    assert second["waits_until"] and ended(second["id"])["started_at"] >= first["ended_at"] + 1
 
 
 def test_source_session_is_cookies_or_none(env, client):
@@ -588,3 +643,195 @@ def test_source_session_is_cookies_or_none(env, client):
         assert post(client, "/api/sources", {"target": X, "options": {"session": session}}, 400)["ok"] is False
     s = add(client, X, options={"session": {"mode": "cookies", "browser": "brave"}})
     assert s["options"]["session"] == {"mode": "cookies", "browser": "brave"}
+
+
+# ---------------------------------------------------------------------------
+# Cookies out of yt-dlp's info JSONs
+# ---------------------------------------------------------------------------
+
+TT_INFO = os.path.join(TESTS, "fixtures", "yt_dlp", "tiktok", "video",
+                       "6800000000000000002-20190727-7100000000000000001.info.json")
+
+
+def with_cookies(d):
+    """A real info JSON as a sync with cookies writes it: cookies at the top,
+    in a format and in the http_headers of both."""
+    d = json.loads(json.dumps(d))
+    d["cookies"] = "sessionid=SECRET; Domain=.tiktok.com; Path=/"
+    d["http_headers"]["Cookie"] = "sessionid=SECRET"
+    d["formats"][0]["cookies"] = "sessionid=SECRET"
+    d["formats"][0]["http_headers"] = {"User-Agent": "Mozilla/5.0", "cookie": "sessionid=SECRET"}
+    return d
+
+
+def secret_in(path):
+    return "SECRET" in open(path, encoding="utf-8").read()
+
+
+def test_strip_takes_out_cookies_and_nothing_else():
+    original = json.load(open(TT_INFO, encoding="utf-8"))
+    cleaned, changed = info_cookies.strip(with_cookies(original))
+    expected = {k: v for k, v in original.items() if k != "cookies"}
+    expected["formats"] = [dict(original["formats"][0], http_headers={"User-Agent": "Mozilla/5.0"}),
+                           *original["formats"][1:]]
+    assert changed and cleaned == expected
+    assert info_cookies.strip(expected) == (expected, False)
+    # A "cookies" key at any depth, a Cookie header only inside http_headers.
+    assert info_cookies.strip({"a": [{"b": {"cookies": 1, "Cookie": 2}}]}) == ({"a": [{"b": {"Cookie": 2}}]}, True)
+
+
+def test_clean_is_atomic_and_keeps_mode_and_mtime(tmp_path):
+    path = tmp_path / "x.info.json"
+    path.write_text(json.dumps(with_cookies(json.load(open(TT_INFO, encoding="utf-8")))))
+    os.chmod(path, 0o640)
+    os.utime(path, (1_600_000_000, 1_600_000_000))
+    inode = os.stat(path).st_ino
+    assert info_cookies.clean(str(path), apply=False) is True and secret_in(path)    # a count only
+    assert info_cookies.clean(str(path)) is True
+    st = os.stat(path)
+    assert not secret_in(path) and st.st_mtime == 1_600_000_000 and st.st_mode & 0o777 == 0o640
+    assert st.st_ino != inode                                   # renamed over, not written in place
+    assert os.listdir(tmp_path) == ["x.info.json"]              # no temporary file left
+    assert info_cookies.clean(str(path)) is False               # nothing left to take out
+
+
+def test_clean_leaves_what_is_not_yt_dlp_alone(tmp_path):
+    other = tmp_path / "a.info.json"
+    other.write_text(json.dumps({"category": "twitter", "cookies": "SECRET"}))        # not yt-dlp's
+    broken = tmp_path / "b.info.json"
+    broken.write_text('{"cookies": "SECRET", ')
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps(with_cookies(json.load(open(TT_INFO, encoding="utf-8")))))
+    link = tmp_path / "c.info.json"
+    link.symlink_to(outside)
+    for p in (other, broken, link):
+        assert info_cookies.clean(str(p)) is False
+    assert secret_in(other) and secret_in(broken) and secret_in(outside) and link.is_symlink()
+
+
+def test_sync_with_cookies_cleans_the_info_jsons_it_wrote(env, fake, client):
+    fake.put(TT, tt_account(1))
+    s = add(client, TT, options={"session": {"mode": "cookies", "browser": "firefox"}})
+    folder = s["folder"]
+    os.makedirs(folder)
+    # An info JSON from before the job, and one outside the source's folder written meanwhile.
+    before = os.path.join(folder, "old-20200101-1.info.json")
+    with open(before, "w") as f:
+        json.dump(with_cookies(json.load(open(TT_INFO, encoding="utf-8"))), f)
+    os.utime(before, (1_600_000_000, 1_600_000_000))
+    # One whose mtime is ahead of the clock (a file system whose clock is off): known, so left alone too.
+    ahead = os.path.join(folder, "old-20200101-2.info.json")
+    with open(ahead, "w") as f:
+        json.dump(with_cookies(json.load(open(TT_INFO, encoding="utf-8"))), f)
+    os.utime(ahead, (time.time() + 3600, time.time() + 3600))
+    elsewhere = env["media"] / "elsewhere" / "x.info.json"
+    elsewhere.parent.mkdir()
+    elsewhere.write_text(open(before).read())
+    job = run_sync(client, s["id"])
+    assert job["state"] == "done"
+    [new] = [os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".info.json") and not n.startswith("old-")]
+    d = json.load(open(new))
+    assert "cookies" not in json.dumps(d) and all("Cookie" not in f["http_headers"] for f in d["formats"])
+    assert d["http_headers"] == {"User-Agent": "Mozilla/5.0", "Accept": "*/*"} and len(d["formats"]) == 2
+    assert d["formats"][1]["url"].endswith("h264_720p.mp4") and d["title"] == "clip 1"
+    log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert "[feedvault] cookies removed from 1 info JSON" in log
+    # Cleaned before the rescan: the post is indexed from the cleaned file.
+    assert log.index("[feedvault] cookies removed from 1 info JSON") < next(
+        i for i, t in enumerate(log) if t.startswith("[feedvault] indexing"))
+    assert secret_in(before) and os.stat(before).st_mtime == 1_600_000_000 and secret_in(elsewhere)
+    assert secret_in(ahead)
+
+
+def test_sync_without_cookies_rewrites_nothing(env, fake, client):
+    fake.put(TT, tt_account(1))
+    s = add(client, TT)
+    job = run_sync(client, s["id"])
+    assert not any("[feedvault] cookies" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+
+
+def test_cookies_from_the_users_own_yt_dlp_config_are_removed_too(env, fake, client):
+    # No cookies setting in FeedVault, but yt-dlp's own config passes some.
+    fake.put(TT, tt_account(1), config_cookies=True)
+    s = add(client, TT)
+    job = run_sync(client, s["id"])
+    assert "--cookies-from-browser" not in job["argv"]
+    assert "[feedvault] cookies removed from 1 info JSON" in [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert not any(secret_in(os.path.join(s["folder"], n)) for n in os.listdir(s["folder"]) if n.endswith(".json"))
+
+
+def test_cookie_cleaning_failure_does_not_fail_the_sync(env, fake, client, monkeypatch):
+    def refuse(path, apply=True):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(info_cookies, "clean", refuse)
+    fake.put(TT, tt_account(1))
+    s = add(client, TT, options={"session": {"mode": "cookies", "browser": "firefox"}})
+    job = run_sync(client, s["id"])
+    assert (job["state"], job["message"]) == ("done", "1 new post")
+    assert any(ln["text"].startswith("[feedvault] could not remove the cookies from ")
+               and ln["text"].endswith(": Permission denied") for ln in jobs.log(job["id"])["lines"])
+
+
+def test_settings_action_counts_then_cleans_inside_the_roots(env, fake, client, tmp_path):
+    dirty = with_cookies(json.load(open(TT_INFO, encoding="utf-8")))
+    paths = [env["media"] / "tiktok" / "a" / "1.info.json", env["media"] / ".feedvault-trash" / "2.info.json"]
+    for p in paths:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(dirty))
+    clean = env["media"] / "clean.info.json"
+    clean.write_text(json.dumps(info_cookies.strip(json.load(open(TT_INFO, encoding="utf-8")))[0]))
+    gallery = env["media"] / "g.info.json"
+    gallery.write_text(json.dumps({"category": "twitter", "cookies": "SECRET"}))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "3.info.json").write_text(json.dumps(dirty))
+    (env["media"] / "linked").symlink_to(outside)                 # a symlinked folder is not followed
+    (env["media"] / "4.info.json").symlink_to(outside / "3.info.json")
+    r = post(client, "/api/yt-dlp/info-json-cookies", {})
+    assert (r["applied"], r["checked"], r["files"], r["failures"]) == (False, 5, 2, 0)
+    assert all(secret_in(p) for p in paths)
+    r = post(client, "/api/yt-dlp/info-json-cookies", {"apply": True})
+    assert (r["applied"], r["files"]) == (True, 2)
+    assert not any(secret_in(p) for p in paths)
+    assert secret_in(outside / "3.info.json") and secret_in(gallery)
+    assert post(client, "/api/yt-dlp/info-json-cookies", {})["files"] == 0
+    assert post(client, "/api/yt-dlp/info-json-cookies", {"apply": "yes"}, 400)["ok"] is False
+    assert client.post("/api/yt-dlp/info-json-cookies", json={"apply": True}).status_code == 403
+
+
+def test_settings_action_reports_failures(env, fake, client, monkeypatch):
+    p = env["media"] / "1.info.json"
+    p.write_text(json.dumps(with_cookies(json.load(open(TT_INFO, encoding="utf-8")))))
+    real = info_cookies.clean
+
+    def failing(path, apply=True):
+        if apply:
+            raise PermissionError(13, "Permission denied")
+        return real(path, apply)
+    monkeypatch.setattr(info_cookies, "clean", failing)
+    r = post(client, "/api/yt-dlp/info-json-cookies", {"apply": True})
+    assert (r["files"], r["failures"], r["failed"]) == (0, 1, [{"path": str(p), "error": "Permission denied"}])
+
+
+def test_settings_action_goes_on_past_a_bad_file_or_folder(env, client):
+    d = with_cookies(json.load(open(TT_INFO, encoding="utf-8")))
+    bad = env["media"] / "a.info.json"                             # a lone surrogate: not writable as UTF-8
+    bad.write_text(json.dumps({**d, "title": "\ud83d"}))                 # escaped: "\\ud83d"
+    good = env["media"] / "b.info.json"
+    good.write_text(json.dumps(d))
+    locked = env["media"] / "locked"
+    locked.mkdir()
+    (locked / "c.info.json").write_text(json.dumps(d))
+    locked.chmod(0)
+    try:
+        r = post(client, "/api/yt-dlp/info-json-cookies", {"apply": True})
+    finally:
+        locked.chmod(0o755)
+    assert (r["files"], r["failures"]) == (1, 2) and not secret_in(good) and secret_in(bad)
+    assert sorted(f["path"] for f in r["failed"]) == [str(bad), str(locked)]
+    assert not [n for n in os.listdir(env["media"]) if n.endswith(".tmp")]      # no temporary file left
+
+
+def test_settings_action_waits_for_a_running_yt_dlp_sync(env, client, monkeypatch):
+    monkeypatch.setattr(jobs, "active", lambda: [{"kind": "yt-dlp-sync", "state": "running"}])
+    assert post(client, "/api/yt-dlp/info-json-cookies", {}, 409)["ok"] is False
