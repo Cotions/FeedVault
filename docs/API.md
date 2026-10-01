@@ -94,7 +94,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" } }, "yt-dlp": { "session": { "mode": "none" } }, "youtube_max_seconds": 180, "routes": {…} }` |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30 }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30 }, "youtube_max_seconds": 180, "routes": {…} }` |
 | POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
@@ -1014,17 +1014,20 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   back; restoring it takes out what trashing added (see [Deleting](#deleting)).
 - **Result**: as for instaloader: the folder is indexed when the job ends,
   `result` `{ "added", "updated", "error", "line" }`, stored on the source.
-  There is no pause between gallery-dl or yt-dlp jobs. A non-zero exit
-  whose error lines are all about single items (yt-dlp's `ERROR: [youtube]
-  <id>: Private video`, against `[youtube:tab]` or `[tiktok:user]` for the
-  profile; gallery-dl's `[download][error] Failed to download …`), and are
-  not a rate limit or a login wall, is `done`: `message` says how many
-  items could not be downloaded, `line` the last of them.
+  A non-zero exit whose error lines are all about single items (yt-dlp's
+  `ERROR: [youtube] <id>: Private video`, against `[youtube:tab]` or
+  `[tiktok:user]` for the profile; gallery-dl's `[download][error] Failed
+  to download …`), and are not a rate limit or a login wall, is `done`:
+  `message` says how many items could not be downloaded, `line` the last
+  of them.
+- **Pause.** The next sync of the same tool waits the tool's `pause`
+  (default 30 s); see [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings).
 
 ### gallery-dl and yt-dlp settings
 
-`GET /api/config` has `"gallery-dl": { "session": {…} }` and
-`"yt-dlp": { "session": {…} }`; `POST /api/config` with either changes it.
+`GET /api/config` has `"gallery-dl": { "session": {…}, "pause": 30 }` and
+`"yt-dlp": { "session": {…}, "pause": 30 }`; `POST /api/config` with
+either (`session` and/or `pause`) changes it.
 
 | `session` | Flags | What it means |
 |---|---|---|
@@ -1033,6 +1036,11 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
 
 FeedVault only passes the browser's name on. It never stores, reads or
 sends cookies.
+
+`pause`: whole seconds from 0 to 3600 (default 30). As for instaloader,
+after a `gallery-dl-sync` job ends the next one waits that long before it
+starts (`waits_until`), and the same for `yt-dlp-sync`; one tool's pause
+never holds the other's syncs.
 
 `youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
 

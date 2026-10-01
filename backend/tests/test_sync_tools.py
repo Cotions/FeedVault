@@ -5,6 +5,7 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 
 import pytest
 
@@ -31,7 +32,6 @@ USER = {"id": 900, "name": "someone", "nick": "Some One"}
 
 
 def wait_for(pred, timeout=10):
-    import time
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         v = pred()
@@ -96,6 +96,7 @@ def fake(env, monkeypatch):
         exe.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     f = Fake(env["tmp"])
+    set_config(**{"gallery-dl": {"pause": 0}, "yt-dlp": {"pause": 0}})
     monkeypatch.setenv("FAKE_DOWNLOADS", str(f.data))
     monkeypatch.setenv("FAKE_DOWNLOADS_LOG", str(f.log))
     yield f
@@ -592,7 +593,8 @@ def test_archive_file_kept_intact_by_concurrent_appends(env):
 
 def test_tool_settings_in_config(env, client):
     cfg = get(client, "/api/config")
-    assert cfg["gallery-dl"] == {"session": {"mode": "none"}} and cfg["yt-dlp"] == {"session": {"mode": "none"}}
+    for tool in ("gallery-dl", "yt-dlp"):
+        assert cfg[tool] == {"session": {"mode": "none"}, "pause": 30}
     assert cfg["youtube_max_seconds"] == 180
     r = post(client, "/api/config", {"gallery-dl": {"session": {"mode": "cookies", "browser": "firefox"}},
                                       "youtube_max_seconds": 600})
@@ -604,6 +606,36 @@ def test_tool_settings_in_config(env, client):
                 {"youtube_max_seconds": 0}, {"youtube_max_seconds": "60"}, {"youtube_max_seconds": True}]:
         assert post(client, "/api/config", bad)["ok"] is False, bad
     assert config.load()["youtube_max_seconds"] == 600
+    # The pause, each tool its own, as instaloader's.
+    r = post(client, "/api/config", {"yt-dlp": {"pause": 0}, "gallery-dl": {"pause": 3600}})
+    assert r["config"]["yt-dlp"] == {"session": {"mode": "none"}, "pause": 0}
+    assert r["config"]["gallery-dl"] == {"session": {"mode": "cookies", "browser": "firefox"}, "pause": 3600}
+    for bad in [-1, 3601, "5", True, None, 1.5]:
+        assert post(client, "/api/config", {"yt-dlp": {"pause": bad}})["ok"] is False, bad
+    assert config.load()["yt-dlp"]["pause"] == 0
+    set_config(**{"gallery-dl": {"pause": "x"}})                    # edited by hand: the default
+    assert get(client, "/api/config")["gallery-dl"]["pause"] == 30
+
+
+def test_pause_between_two_syncs_of_one_tool(env, fake, client):
+    fake.put(TT, tt_account(1))
+    fake.put(X, x_account((1, 1)))
+    tt, x = add(client, TT), add(client, X)
+    set_config(**{"yt-dlp": {"pause": 30}, "gallery-dl": {"pause": 0}})
+    run_sync(client, tt["id"])
+    queued = post(client, f"/api/sources/{tt['id']}/sync", {})["job"]
+    assert queued["state"] == "queued" and queued["waits_until"] > time.time() + 20
+    assert get(client, "/api/sources")["sources"][0]["job"]["waits_until"] == queued["waits_until"]
+    # Another tool's group is not held.
+    assert run_sync(client, x["id"])["state"] == "done"
+    post(client, f"/api/jobs/{queued['id']}/cancel", {})
+    assert ended(queued["id"])["state"] == "cancelled"
+    # gallery-dl pauses too, from its own setting.
+    set_config(**{"yt-dlp": {"pause": 0}, "gallery-dl": {"pause": 1}})
+    jobs._cool.clear()
+    first = run_sync(client, x["id"])
+    second = post(client, f"/api/sources/{x['id']}/sync", {})["job"]
+    assert second["waits_until"] and ended(second["id"])["started_at"] >= first["ended_at"] + 1
 
 
 def test_source_session_is_cookies_or_none(env, client):

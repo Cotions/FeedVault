@@ -444,25 +444,37 @@ const COOKIE_TOOLS = {
   "gallery-dl": { title: "X, Reddit, Bluesky, pixiv sync (gallery-dl)", sites: "X, Reddit, Bluesky or pixiv" },
   "yt-dlp": { title: "YouTube and TikTok sync (yt-dlp)", sites: "YouTube or TikTok" },
 };
+const TOOL_PAUSE = 30;
+const PAUSE_TEXT = {
+  "gallery-dl": "seconds, so X and the others do not see profiles fetched back to back",
+  "yt-dlp": "seconds, so TikTok and YouTube do not see profiles fetched back to back",
+};
 
 /* How gallery-dl or yt-dlp reaches the sites when FeedVault syncs a source:
-   anonymously, or with a browser's cookies, which the tool reads itself.
-   yt-dlp's card also has the YouTube length limit. */
+   anonymously, or with a browser's cookies, which the tool reads itself; and
+   the pause between two of its syncs. yt-dlp's card also has the YouTube
+   length limit. */
 function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
   const { title, sites } = COOKIE_TOOLS[tool];
   const [mode,    setMode]    = useState(saved.session?.mode || "none");
   const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
   const [longest, setLongest] = useState(String(maxSeconds ?? 180));
+  const [pause,   setPause]   = useState(String(saved.pause ?? TOOL_PAUSE));
   const [saving,  setSaving]  = useState(false);
 
   const session = mode === "cookies" ? { mode, browser } : { mode };
   const youtube = tool === "yt-dlp";
   const dirty = JSON.stringify(session) !== JSON.stringify(saved.session || { mode: "none" })
+    || pause.trim() !== String(saved.pause ?? TOOL_PAUSE)
     || (youtube && longest.trim() !== String(maxSeconds ?? 180));
 
   async function save(e) {
     e.preventDefault();
-    const changes = { [tool]: { session } };
+    if (!/^\d+$/.test(pause.trim()) || Number(pause) > 3600) {
+      setMsg({ ok: false, text: "The pause is whole seconds, from 0 to 3600." });
+      return;
+    }
+    const changes = { [tool]: { session, pause: Number(pause) } };
     if (youtube) {
       const seconds = Number(longest);
       if (!/^\d+$/.test(longest.trim()) || seconds < 1 || seconds > 86400) {
@@ -519,6 +531,12 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
             </select>
           )}
         </fieldset>
+        <label className="insta-pause">
+          <span>Pause between two syncs</span>
+          <input type="text" inputMode="numeric" className="insta-input" aria-label={`${tool} pause in seconds`} value={pause}
+                 onChange={e => { setPause(e.target.value); setMsg(null); }} />
+          <span className="dim">{PAUSE_TEXT[tool]}</span>
+        </label>
         {youtube && (
           <label className="insta-pause">
             <span>Longest YouTube video</span>

@@ -39,8 +39,8 @@ gallery-dl and yt-dlp (archives.py):
   rewritten without them (info_cookies.py), before the folder is indexed.
 
 How it went is read from the output (login required, private, not found,
-rate limited) and stored on the source. instaloader syncs pause between two
-(config ``instaloader.pause``).
+rate limited) and stored on the source. Two syncs of one tool pause between
+them (config ``<tool>.pause``).
 """
 import configparser
 import json
@@ -68,6 +68,7 @@ KINDS = {"instaloader": KIND, "gallery-dl": "gallery-dl-sync", "yt-dlp": "yt-dlp
 YT_DLP_NAME = "%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"
 BREAK_ON_EXISTING = 101                        # yt-dlp's exit code when --break-on-existing stopped it
 PAUSE_DEFAULT = 60
+TOOL_PAUSE_DEFAULT = 30                        # gallery-dl and yt-dlp
 PAUSE_MAX = 3600
 
 DATED = "{target}-{date_utc:%Y-%m-%d}-{shortcode}"
@@ -85,14 +86,16 @@ STAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"         # instaloader's LatestStamps.ISO
 # Settings
 # ---------------------------------------------------------------------------
 
+def _pause(value, default):
+    ok = isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= PAUSE_MAX
+    return value if ok else default
+
+
 def settings(cfg=None):
     """The global instaloader settings, cleaned: {"session": {...}, "pause": seconds}."""
     raw = (cfg or config.load()).get("instaloader") or {}
     session = sources.clean_session(raw.get("session")) or {"mode": "none"}
-    pause = raw.get("pause")
-    if not isinstance(pause, int) or isinstance(pause, bool) or not 0 <= pause <= PAUSE_MAX:
-        pause = PAUSE_DEFAULT
-    return {"session": session, "pause": pause}
+    return {"session": session, "pause": _pause(raw.get("pause"), PAUSE_DEFAULT)}
 
 
 def clean_settings(value, current):
@@ -106,10 +109,9 @@ def clean_settings(value, current):
             return None, ('session must be { "mode": "none" }, { "mode": "cookies", "browser": '
                           f'{" | ".join(sources.BROWSERS)} }} or {{ "mode": "login", "user": "<name>" }}')
     if "pause" in value:
-        p = value["pause"]
-        if not isinstance(p, int) or isinstance(p, bool) or not 0 <= p <= PAUSE_MAX:
+        if _pause(value["pause"], None) is None:
             return None, f"pause must be whole seconds from 0 to {PAUSE_MAX}"
-        out["pause"] = p
+        out["pause"] = value["pause"]
     return out, None
 
 
@@ -122,24 +124,28 @@ def session_flags(session):
 
 
 def tool_settings(tool, cfg=None):
-    """gallery-dl's or yt-dlp's settings, cleaned: {"session": {...}}, the
-    session "none" or a browser's cookies (they have no login of their own
-    FeedVault could name)."""
+    """gallery-dl's or yt-dlp's settings, cleaned: {"session": {...}, "pause":
+    seconds}, the session "none" or a browser's cookies (they have no login
+    of their own FeedVault could name)."""
     raw = (cfg or config.load()).get(tool) or {}
     session = sources.clean_session(raw.get("session"), sources.COOKIE_MODES) or {"mode": "none"}
-    return {"session": session}
+    return {"session": session, "pause": _pause(raw.get("pause"), TOOL_PAUSE_DEFAULT)}
 
 
 def clean_tool_settings(tool, value, current):
     """Settings from POST /api/config merged over ``current``. Returns (settings, error)."""
-    if not isinstance(value, dict) or set(value) - {"session"}:
-        return None, f"{tool} must be {{ session }}"
+    if not isinstance(value, dict) or set(value) - {"session", "pause"}:
+        return None, f"{tool} must be {{ session, pause }}"
     out = dict(current)
     if "session" in value:
         out["session"] = sources.clean_session(value["session"], sources.COOKIE_MODES)
         if out["session"] is None:
             return None, ('session must be { "mode": "none" } or { "mode": "cookies", "browser": '
                           f'{" | ".join(sources.BROWSERS)} }}')
+    if "pause" in value:
+        if _pause(value["pause"], None) is None:
+            return None, f"pause must be whole seconds from 0 to {PAUSE_MAX}"
+        out["pause"] = value["pause"]
     return out, None
 
 
@@ -586,11 +592,13 @@ def _describe(label):
 jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source": {"type": "text", "max": 15}},
               build=_build_gallery_dl, group="gallery-dl", start=_start_archive("gallery-dl"),
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "gallery-dl"),
-              ended=_ended, describe=_describe("Sync with gallery-dl"))
+              ended=_ended, pause=lambda: tool_settings("gallery-dl")["pause"],
+              describe=_describe("Sync with gallery-dl"))
 jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
               build=_build_yt_dlp, group="yt-dlp", start=_start_archive("yt-dlp"), after=_strip_cookies,
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "yt-dlp"),
-              ended=_ended, describe=_describe("Sync with yt-dlp"))
+              ended=_ended, pause=lambda: tool_settings("yt-dlp")["pause"],
+              describe=_describe("Sync with yt-dlp"))
 
 
 # ---------------------------------------------------------------------------
