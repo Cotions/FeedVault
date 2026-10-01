@@ -148,9 +148,10 @@ def _finish(kind, members, differs, pending, hashes):
 # ---------------------------------------------------------------------------
 
 def _hash_of(item, hashes):
-    """(partial, full) of an item, or None until it is hashed at its recorded size."""
+    """(partial, full) of an item, or None until it is hashed at its recorded
+    size (a row may hold only a perceptual hash)."""
     h = hashes.get(item["path"])
-    if h is None or item["size"] is None or h[0] != item["size"]:
+    if h is None or item["size"] is None or h[0] != item["size"] or h[2] is None:
         return None
     return h[2], h[3]
 

@@ -312,6 +312,12 @@ CPU and disk priority, and cached by path, size and mtime. Only files whose
 size another file shares, and the files of posts that have extra copies,
 are read. It pauses while a scan or a delete runs.
 
+After the content hashes, the same worker takes a perceptual hash (a 64-bit
+dHash) of every image and video in the index, for the `similar` kind: from
+the cached grid thumbnail when there is one, else from the image or the
+video's poster, else from a frame ffmpeg extracts (kept as the thumbnail).
+A picture that cannot be decoded is tried again only when its file changes.
+
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/duplicates?kind=&offset=&limit=` | groups of one kind, see below |
@@ -377,12 +383,14 @@ are read. It pauses while a scan or a delete runs.
 
 ```json
 { "running": true, "paused": false, "phase": "partial", "done": 1200, "total": 7496,
-  "bytes": 2516582400, "hashed": 6900, "started_at": 1727500000, "finished_at": null,
-  "errors": [{ "path": "/abs/x.mp4", "error": "Permission denied" }] }
+  "bytes": 2516582400, "hashed": 6900, "fingerprinted": 85120, "started_at": 1727500000,
+  "finished_at": null, "errors": [{ "path": "/abs/x.mp4", "error": "Permission denied" }] }
 ```
 
-`phase` is `partial` or `full` (`null` when idle), `done` and `total` count
-files in that phase, `bytes` what was read, `hashed` the rows in the cache,
+`phase` is `partial` or `full` (content hashes), `dhash` (perceptual
+hashes) or `probe` (video sizes from ffprobe), `null` when idle. `done` and
+`total` count files in that phase, `bytes` what was read, `hashed` the
+files with a content hash, `fingerprinted` those with a perceptual hash,
 `finished_at` when the last complete pass ended, `errors` the last 20
 files that could not be read.
 
