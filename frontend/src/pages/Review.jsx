@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPosts, getPost, getAuthors, getTags, applyTags, deleteItems, setDecision, restorePosts } from "../lib/api";
+import { getPosts, getPost, getAuthors, getPeople, getTags, applyTags, deleteItems, setDecision, restorePosts } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
-import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, authorFeedPath } from "../lib/fmt";
+import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, platformShort, authorFeedPath } from "../lib/fmt";
 import { sameTag, tagsMatch, withTags } from "../lib/tags";
 import RichText from "../components/RichText";
 import TagChips from "../components/TagChips";
 import TagInput from "../components/TagInput";
 import CollectionDialog from "../components/CollectionDialog";
 import Icon from "../components/Icon";
+import CreatorPicker from "../components/CreatorPicker";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
 
@@ -485,6 +486,7 @@ function ReviewSession({ scope, scopeControls }) {
           <div className="review-info">
             <div className="review-byline">
               <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
+              <span className="chip" title={platformLabel(cur.platform)}>{platformShort(cur.platform)}</span>
               {media.length > 1 && <span className="chip">{safeItem + 1}/{media.length}</span>}
               <span className="chip">{cur.kind}</span>
             </div>
@@ -599,15 +601,17 @@ export default function Review() {
   const [params, setParams] = useSearchParams();
   const platform = params.get("platform") || "";
   const author   = params.get("author") || "";
+  const person   = params.get("person") || "";
   const kind     = params.get("kind") || "";
   const order    = params.get("order") === "asc" ? "asc" : "desc";
   const tag      = params.get("tag") || "";
   const untagged = !tag && params.get("untagged") === "1";
-  const scope    = useMemo(() => ({ platform, author, kind, order, tag: tag ? [tag] : [], untagged }),
-    [platform, author, kind, order, tag, untagged]);
+  const scope    = useMemo(() => ({ platform, author, person, kind, order, tag: tag ? [tag] : [], untagged }),
+    [platform, author, person, kind, order, tag, untagged]);
   const scopeKey = JSON.stringify(scope);
 
   const { data: authorsData } = useApi(getAuthors, 0);
+  const { data: peopleData } = useApi(getPeople, 0);
   const { data: tagsData } = useApi(getTags, 0);
   const authors = useMemo(() => authorsData || [], [authorsData]);
   const platforms = useMemo(() => {
@@ -621,7 +625,6 @@ export default function Review() {
     for (const [k, v] of Object.entries(changes)) { if (v) next.set(k, v); else next.delete(k); }
     setParams(next, { replace: true });
   }
-  const authorValue = author ? `${platform}:${author}` : "";
 
   const controls = (
     <div className="review-scope" role="group" aria-label="Review scope">
@@ -633,22 +636,19 @@ export default function Review() {
         <option value="">All kinds</option>
         {KINDS.map(k => <option key={k} value={k}>{k}</option>)}
       </select>
-      <select
-        className="sort-select review-scope-author"
-        aria-label="Creator"
-        value={authors.some(a => `${a.platform}:${a.id}` === authorValue) ? authorValue : ""}
-        onChange={e => {
-          const v = e.target.value;
-          if (!v) return setParam({ author: "" });
-          const i = v.indexOf(":");
-          setParam({ platform: v.slice(0, i), author: v.slice(i + 1) });
+      <CreatorPicker
+        className="review-scope-author"
+        people={peopleData || []}
+        accounts={authors}
+        platform={person ? "" : platform}
+        allLabel="All creators"
+        value={person ? { person } : author ? { platform, id: author } : null}
+        onChange={c => {
+          if (!c) setParam({ author: "", person: "" });
+          else if (c.person) setParam({ person: String(c.person.id), author: "", platform: "" });
+          else setParam({ platform: c.account.platform, author: c.account.id, person: "" });
         }}
-      >
-        <option value="">All creators</option>
-        {authors.filter(a => a.id != null && (!platform || a.platform === platform)).map(a => (
-          <option key={`${a.platform}:${a.id}`} value={`${a.platform}:${a.id}`}>@{a.handle || a.id} ({a.count})</option>
-        ))}
-      </select>
+      />
       <select
         className="sort-select review-scope-tag"
         aria-label="Tag"

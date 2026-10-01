@@ -11,6 +11,7 @@ import time
 import db
 import hashing
 import parsers
+import people
 
 # Folders that never hold posts but may hold images (icons in packages).
 # (Dot-folders, including FeedVault's own .feedvault-trash, are skipped too.)
@@ -96,6 +97,7 @@ def _scan(roots):
     seen_meta = set()
     unmatched = []                             # (path, size, mtime, reason)
     copies = []                                # (parsed post, meta mtime), see db.save_copies
+    profiles = []                              # parsers.Profile, see db.save_profiles
 
     for root in roots:
         if not os.path.isdir(root):
@@ -110,6 +112,7 @@ def _scan(roots):
             if not names:
                 continue
             result = parsers.parse_dir(root, dirpath, names)
+            profiles.extend(result.profiles)
             for path, message in result.errors:
                 report["errors"].append({"path": path, "error": message})
                 unmatched.append((path, *_size_mtime(path), message))
@@ -123,6 +126,8 @@ def _scan(roots):
 
     report["missing"] = _mark_missing(conn, seen_meta)
     db.save_copies(conn, copies, started, prune=True)
+    db.save_profiles(conn, profiles, prune=True)
+    people.refresh_aliases(conn)
     conn.execute("DELETE FROM unmatched")
     conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
                      unmatched)
@@ -191,7 +196,7 @@ def index_dirs(roots, dirs):
         conn = db.connect()
         now = int(time.time())
         report = {"added": 0, "updated": 0}
-        unmatched, copies, indexed = [], [], []
+        unmatched, copies, indexed, profiles = [], [], [], []
         for d in sorted(set(dirs)):
             real = os.path.realpath(d)
             root = next((r for r in roots
@@ -201,6 +206,7 @@ def index_dirs(roots, dirs):
                 continue
             names = [n for n in os.listdir(d) if not n.startswith(".") and os.path.isfile(os.path.join(d, n))]
             result = parsers.parse_dir(root, d, names)
+            profiles.extend(result.profiles)
             seen = set()
             for post in result.posts:
                 _index_post(conn, post, now, report, seen, unmatched, copies)
@@ -213,6 +219,8 @@ def index_dirs(roots, dirs):
                          unmatched)
         conn.executemany("DELETE FROM copies WHERE meta_path = ?", [(p,) for p in indexed])
         db.save_copies(conn, copies, now, prune=False)
+        db.save_profiles(conn, profiles, prune=False)
+        people.refresh_aliases(conn)
         conn.commit()
     hashing.kick()                             # files back from the trash may need hashing again
     return report

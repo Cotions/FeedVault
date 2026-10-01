@@ -1,7 +1,7 @@
 """The user's own data, mirrored to JSON.
 
 The index is derived from the media folders and rebuilds from a rescan. A few
-tables are not: review decisions, tags, collections, later people, sources. Each one is
+tables are not: review decisions, tags, collections, people, later sources. Each one is
 registered here once, and gets the same treatment:
 
 - written to ``<data_dir>/userdata/<name>.json`` shortly after it changes
@@ -77,6 +77,19 @@ register("collection_posts", "collection_posts", ("collection", "post_id", "posi
                  "INSERT OR IGNORE INTO collection_posts(collection_id, post_id, position, at) "
                  "SELECT id, :post_id, COALESCE(:position, 0), COALESCE(:at, 0) FROM collections "
                  "WHERE name = :collection"))
+# People by name, before the accounts linked to them, which are keyed by
+# platform and author id (a person missing from people.json is created again).
+register("people", "people", ("name", "notes", "created_at"), "name",
+         insert=("INSERT OR IGNORE INTO people(name, notes, created_at) "
+                 "VALUES (:name, COALESCE(:notes, ''), COALESCE(:created_at, 0))",))
+register("person_accounts", "person_accounts", ("platform", "author_id", "person", "at"), ("platform", "author_id"),
+         select="SELECT pa.platform, pa.author_id, p.name, pa.at FROM person_accounts pa "
+                "JOIN people p ON p.id = pa.person_id ORDER BY pa.platform, pa.author_id",
+         insert=("INSERT OR IGNORE INTO people(name, created_at) VALUES (:person, COALESCE(:at, 0))",
+                 "INSERT OR IGNORE INTO person_accounts(person_id, platform, author_id, at) "
+                 "SELECT id, :platform, :author_id, COALESCE(:at, 0) FROM people WHERE name = :person"))
+# "Not the same person": keyed by the group's accounts, like duplicates.
+register("dismissed_suggestions", "dismissed_suggestions", ("key", "at"), "key")
 
 
 def path(data_dir, name):

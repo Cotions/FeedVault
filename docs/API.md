@@ -85,11 +85,11 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&kind=&tag=&untagged=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&person=&kind=&tag=&untagged=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&kind=&review=&tag=&untagged=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
-| GET | `/api/authors` | `[{ "platform", "id", "handle", "name", "count", "bytes" }]`, most posts first |
-| GET | `/api/storage` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
+| GET | `/api/posts/summary?q=&platform=&author=&person=&kind=&review=&tag=&untagged=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
+| GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
@@ -116,8 +116,8 @@ Only **Empty trash** and **purge** (below) remove files for good.
 | POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
 | GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }` |
 | POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }` |
-| GET | `/api/trash/items?offset=&limit=&platform=&author=&since=&before=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
-| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "since": …, "before": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
+| GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
+| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "person": …, "since": …, "before": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
 | GET | `/trash/<key>/thumb` | small JPEG of a trashed entry (no header needed, like `/media`) |
 
 `/api/delete` removes each listed post with all its files (media, posters,
@@ -186,7 +186,9 @@ deletion first:
 
 - Query parameters, all optional: `platform`, `author` (an author id, or a
   handle for authors without one; ids are only unique within a platform, so
-  send `platform` with it), `since` (Unix seconds: deleted at or after),
+  send `platform` with it), `person` (a person id: entries of any of their
+  accounts, see [People](#people); one that is not an id matches nothing),
+  `since` (Unix seconds: deleted at or after),
   `before` (deleted strictly before), `offset` (default 0), `limit`
   (default 60, max 500).
 - `total`, `files` and `bytes` add up every entry the filters match, not just
@@ -229,7 +231,7 @@ target. Lines of files already gone are dropped. Response:
 ```
 
 Instead of `keys`, `{ "filter": { … } }` purges every entry the same filters
-as `/api/trash/items` match (`platform`, `author`, `since`, `before`; each optional, but
+as `/api/trash/items` match (`platform`, `author`, `person` (a number), `since`, `before`; each optional, but
 the filter must name at least one, use `/api/trash/empty` for everything).
 The match is made under the same lock as the purge itself. The page sends the
 time it loaded the list as `before`, so nothing trashed after the user saw
@@ -274,7 +276,10 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `untagged=1`: only posts with no tag
 - `platform`: `instagram`, `twitter` (X, x.com included), `tiktok`, or another
   gallery-dl category name for sites without their own mapping (`reddit`, `bluesky`, …)
-- `author`: author id (from `/api/authors`)
+- `author`: author id (from `/api/authors`) or one of its folder-name aliases;
+  either way the whole account's posts (see [People](#people))
+- `person`: a person id: posts of every account linked to that person, across
+  platforms (see [People](#people)); a value that is not an id matches nothing
 - `kind`: one of the kinds above
 - `sort`: `posted` (default) or `saved`
 - `order`: `desc` (default, newest first) or `asc`
@@ -282,7 +287,7 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `offset` (default 0), `limit` (default 60, max 200)
 
 `/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
-`platform`, `author`, `kind`, `review`, `tag`, `untagged`; `sort`, `order`, `offset` and `limit`
+`platform`, `author`, `person`, `kind`, `review`, `tag`, `untagged`; `sort`, `order`, `offset` and `limit`
 are ignored) and totals everything they match, not just one page: `posts` is
 always equal to the `total` that `/api/posts` returns for the same filters,
 `media` and `bytes` count the media items of those posts that are not missing.
@@ -581,6 +586,139 @@ the places those same posts held before, the rest staying where they are.
 Sending one page in its new order reorders that page; sending every post
 reorders the whole collection. Ids not in the collection are ignored.
 
+## People
+
+One person often posts on several platforms, under different handles. An
+**account** is a platform and an author id, as indexed (instaloader's
+`owner.id`, gallery-dl's `author.id`); a **person** links accounts into one.
+An account with no person is shown on its own, as before.
+
+People and their links are user data: tables `people` and `person_accounts`,
+never touched by a rescan, and written to
+`<data_directory>/userdata/people.json` and `person_accounts.json` (accounts
+by platform and author id, people by name) 2 s after the last change, so a
+rebuilt index gets them back. Links are by account, not by post: a post
+trashed and restored, or replaced by a duplicate copy, keeps its person.
+Nothing moves on disk.
+
+Posts rebuilt from file names have no id: their author id is the profile
+folder's name. When the same folder also holds posts with metadata whose
+handle is that name (exactly one account), the folder name is an **alias** of
+that account's id. Aliases are derived on every scan, not stored as user
+data. An account and its aliases read as one: one row in `/api/authors` and
+Storage, one link (linking or unlinking an alias acts on the account), and
+the `author` and `person` filters take the aliases' posts in. No alias is
+made between two ids linked to different people (merging them is the
+user's call), and once every post of the id is gone the folder name is an
+account of its own again.
+
+An **account** (`/api/authors` rows, a person's `accounts`):
+
+```json
+{ "platform": "instagram", "id": "123456", "handle": "somebody", "name": "Some Body",
+  "aliases": ["somebody"], "count": 812, "bytes": 2147483648, "newest": 1727481600,
+  "url": "https://www.instagram.com/somebody/", "person": { "id": 3, "name": "Some Body" },
+  "handles": [{ "handle": "somebody", "first": 1700000000, "last": 1727481600 },
+              { "handle": "some.body.old", "first": 1600000000, "last": 1690000000 }],
+  "names": [{ "name": "Some Body", "first": 1600000000, "last": 1727481600 }] }
+```
+
+- `handle` and `name` are those of the newest post (handles change).
+- `count` and `bytes` cover the posts in the index, aliases included;
+  `newest` is the newest `posted_at`.
+- `url`: the profile's address for `instagram`, `twitter` and `tiktok`,
+  `null` otherwise.
+- `person`: the person the account is linked to, or `null`.
+- `handles` and `names`: **handle history**, every handle and display name
+  the account's posts (aliases included) carry, with the `posted_at` of the
+  first and last post under it, the most recent first. Derived from the
+  posts on every request (cached), not stored: a renamed account keeps its
+  id, so its posts stay one account, and its old handles are listed here.
+  `first` and `last` are `null` when no post under it has a date. The
+  dashboard's Creators search and Feed author picker match any of them.
+
+A **person**:
+
+```json
+{ "id": 3, "name": "Some Body", "notes": "", "created_at": 1727500000,
+  "accounts": [account, …], "platforms": ["instagram", "twitter"],
+  "count": 900, "bytes": 2347483648, "newest": 1727481600 }
+```
+
+- `name`: 1 to 64 characters, no `"` or control characters, unique without
+  regard to (ASCII) case. `notes`: free text, at most 5000 characters.
+- `accounts`: most posts first. An account linked but not in the index
+  (before the first scan of a rebuilt index, or every post trashed) is listed
+  with `count` 0 and `handle` `null`.
+- `count`, `bytes`, `newest`: over every account.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/people` | `[person, …]`, by name |
+| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }] }` (`accounts` may be omitted) → `{ "ok": true, "person": {…} }` |
+| GET | `/api/people/<id>` | person, or 404 |
+| POST | `/api/people/<id>` | body `{ "name": "…" }` and/or `{ "notes": "…" }` → `{ "ok": true, "person": {…} }` |
+| DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post |
+| POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
+| POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }] }` → `{ "ok": true, "person": {…} }`, see below |
+
+- An account belongs to one person at most: adding it to a person (create,
+  add, merge) takes it from any other. An account that is not in the index
+  (no post, no alias) is a 400.
+- `added` and `removed` count the links that changed.
+- Merge keeps the first id: its name (or `name`, when given), and the
+  others' notes appended to its own. Every account of the others, and
+  `accounts`, move to it; the others are gone. `ids` must all exist (404
+  otherwise); with one id, `accounts` must not be empty.
+- A bad name, a name taken by another person, bad notes or a malformed
+  account list is a 400 `{ "ok": false, "error": "…" }`; an unknown id a 404.
+
+### Link suggestions
+
+Accounts likely to be one person, found in the index and in metadata already
+downloaded. Nothing is ever fetched.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/people/suggestions` | `{ "suggestions": [suggestion, …], "dismissed": 2 }`, most likely first |
+| POST | `/api/people/suggestions/dismiss` | body `{ "id": "…" }` → `{ "ok": true }`: "not the same person", for good; 404 when the id is not listed (reload) |
+
+```json
+{ "id": "4c1d9e0b7a2f3e5d6c8b", "score": 0.92, "reason": "same_handle",
+  "reasons": [{ "reason": "same_handle", "detail": "@somebody" },
+              { "reason": "same_name", "detail": "Some Body" }],
+  "accounts": [account, …], "person": null }
+```
+
+- `reason` (the strongest of `reasons`) and its `score`:
+  - `bio_link` (0.95): an account's bio or website, as its metadata has it,
+    links to another indexed account (`instagram.com/<handle>`,
+    `x.com/<handle>` or `twitter.com/<handle>`, `tiktok.com/@<handle>`,
+    any of its handles, old ones too). Read on every scan from instaloader's
+    Profile file (`<handle>_<id>.json[.xz]`: `biography`, `external_url`,
+    `bio_links`) and from gallery-dl's author dict of the newest post
+    (`description`/`signature`, `url`).
+  - `same_handle` (0.9): one handle (any in the account's history, or an
+    alias) on several platforms.
+  - `similar_handle` (0.7): handles equal once case, `.` `_` `-`, a leading
+    `the`, `real`, `its` or `official`, a trailing `official` and trailing
+    digits are set aside (`foo`, `foo_`, `thefoo`, `foo2`), but not two
+    different numbers (`foo1`, `foo2`).
+  - `same_name` (0.6): one display name, compared without case, accents,
+    emoji and punctuation, at least 4 letters.
+  A group found for several reasons scores 0.02 more per extra reason.
+- `detail`: what matched, for people.
+- `accounts`: the accounts of the group, most posts first. `person`: the
+  person one of them is linked to, or `null`. Only groups where linking
+  changes something are listed: at least one account has no person, and at
+  most one person is involved (two people are a merge, left to the user).
+  Linking is `POST /api/people` (`person` `null`) or
+  `/api/people/<id>/accounts` with the rest.
+- A dismissal is user data, written to
+  `<data_directory>/userdata/dismissed_suggestions.json` and keyed by the
+  group's accounts, so it survives rebuilding the index; a group that gains
+  an account shows again.
+
 ## Storage
 
 `GET /api/storage`:
@@ -590,6 +728,7 @@ reorders the whole collection. Ids not in the collection are ignored.
   "totals": { "posts": 43116, "media": 85985, "bytes": 87606399138 },
   "by_author": [
     { "platform": "instagram", "id": "123456", "handle": "somebody", "name": "Some Body",
+      "aliases": [], "person": { "id": 3, "name": "Some Body" },
       "posts": 812, "media": 1630, "bytes": 2147483648, "kept_bytes": 104857600, "unreviewed_bytes": 2042626048 }
   ],
   "by_kind": [{ "kind": "video", "posts": 18897, "media": 20442, "bytes": 61203283968 }],
@@ -607,9 +746,10 @@ reorders the whole collection. Ids not in the collection are ignored.
   `/api/stats`); `media` and `bytes` leave out media items marked missing.
   `bytes` therefore equals `/api/stats` `bytes`; `media` can be lower than its
   `media`, which counts every indexed item.
-- `by_author`: one row per author id (posts without an author are only in the
-  totals), biggest first. Handle and name are the newest post's, as in
-  `/api/authors`. `kept_bytes` is the share in posts marked kept,
+- `by_author`: one row per account (posts without an author are only in the
+  totals), biggest first, folder-name aliases counted with the account they
+  stand for. Handle and name are the newest post's, as in `/api/authors`;
+  `aliases` and `person` are the account's (see [People](#people)). `kept_bytes` is the share in posts marked kept,
   `unreviewed_bytes` the share in posts with no decision; today they add up to
   `bytes`.
 - `by_kind`: by post kind (the Feed's `kind` filter), biggest first.
@@ -620,6 +760,9 @@ reorders the whole collection. Ids not in the collection are ignored.
   with `POST /api/delete` and `{ "media": [media_id] }`.
 - `trash`: what is waiting in the trash folders (the totals of `GET
   /api/trash`). It still takes disk space until the trash is emptied.
+- `?person=<id>`: everything above but `trash` covers that person's posts
+  only, filtered as `/api/posts?person=` does, so `totals` equals
+  `/api/posts/summary?person=`.
 
 ### Sizes
 

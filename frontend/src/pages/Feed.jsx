@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPosts, getPostsSummary, getAuthors, getTags, deleteItems, setDecision } from "../lib/api";
+import { getPosts, getPostsSummary, getAuthors, getPeople, getTags, deleteItems, setDecision } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { KINDS, platformLabel, fmtBytes, fmtInt } from "../lib/fmt";
 import { sameTag, searchTags, tagsMatch, withTags } from "../lib/tags";
+import { personPath } from "../lib/people";
 import PostCard from "../components/PostCard";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -14,10 +15,11 @@ import DeleteErrors from "../components/DeleteErrors";
 import SelectionBar from "../components/SelectionBar";
 import BulkTagDialog from "../components/BulkTagDialog";
 import CollectionDialog from "../components/CollectionDialog";
+import CreatorPicker from "../components/CreatorPicker";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
-const FILTERS = ["platform", "kind", "author", "review", "tag", "untagged", "sort"];
+const FILTERS = ["platform", "kind", "author", "person", "review", "tag", "untagged", "sort"];
 const SUMMARY_DELAY = 250;
 
 export default function Feed() {
@@ -29,14 +31,15 @@ export default function Feed() {
   const platform = params.get("platform") || "";
   const kind     = params.get("kind") || "";
   const author   = params.get("author") || "";
+  const person   = params.get("person") || "";
   const sort     = params.get("sort") === "saved" ? "saved" : "posted";
   const reviewP  = params.get("review");
   const review   = reviewP === "unreviewed" || reviewP === "kept" ? reviewP : "";
   const tagKey   = JSON.stringify(params.getAll("tag").filter(t => t.trim()));
   const untagged = params.get("untagged") === "1";
 
-  const filters = useMemo(() => ({ q, platform, kind, author, review, tag: JSON.parse(tagKey), untagged, sort }),
-    [q, platform, kind, author, review, tagKey, untagged, sort]);
+  const filters = useMemo(() => ({ q, platform, kind, author, person, review, tag: JSON.parse(tagKey), untagged, sort }),
+    [q, platform, kind, author, person, review, tagKey, untagged, sort]);
   const tagFilter = filters.tag;
   const filterKey = JSON.stringify(filters);
 
@@ -66,8 +69,8 @@ export default function Feed() {
   // Only with a filter: unfiltered, it is the whole archive (see Storage).
   // Built from the cleaned values, so ?review=bogus or a blank q is no filter.
   const anyFilter  = !!(rawQ || FILTERS.some(f => f !== "sort" && params.get(f)));
-  const summaryKey = q || platform || kind || author || review || tagFilter.length || untagged
-    ? JSON.stringify({ q, platform, kind, author, review, tag: tagFilter, untagged }) : null;
+  const summaryKey = q || platform || kind || author || person || review || tagFilter.length || untagged
+    ? JSON.stringify({ q, platform, kind, author, person, review, tag: tagFilter, untagged }) : null;
   const [summary, setSummary] = useState({ key: null, data: null });
   const [summaryTick, setSummaryTick] = useState(0);    // bumped after a delete or keep
   useEffect(() => {
@@ -211,6 +214,7 @@ export default function Feed() {
   }, [hasMore, loadMore]);
 
   const authorsApi = useApi(getAuthors, refreshKey);
+  const peopleApi  = useApi(getPeople, refreshKey);
   const tagsApi    = useApi(getTags, refreshKey);
   const allTags    = tagsApi.data || [];
   const authors    = useMemo(() => authorsApi.data || [], [authorsApi.data]);
@@ -235,17 +239,15 @@ export default function Feed() {
     else if (value) setParam({ tag: [...tagFilter, value], untagged: "" });
   }
 
-  // Author ids are only unique within a platform, so the select carries both.
-  const authorValue = author
-    ? `${platform || (authors.find(a => String(a.id) === author)?.platform ?? "")}:${author}`
-    : "";
-  function onAuthor(value) {
-    if (!value) return setParam({ author: "" });
-    const i = value.indexOf(":");
-    setParam({ platform: value.slice(0, i), author: value.slice(i + 1) });
+  // Author ids are only unique within a platform, so an account carries both.
+  function onCreator(c) {
+    if (!c) setParam({ author: "", person: "" });
+    else if (c.person) setParam({ person: String(c.person.id), author: "", platform: "" });
+    else setParam({ platform: c.account.platform, author: c.account.id, person: "" });
   }
-  const authorKnown = !author || authors.some(a => `${a.platform}:${a.id}` === authorValue);
-  const selectedAuthor = authors.find(a => `${a.platform}:${a.id}` === authorValue);
+  const selectedAuthor = author
+    ? authors.find(a => (a.id === author || a.aliases?.includes(author)) && (!platform || a.platform === platform)) : null;
+  const selectedPerson = person ? (peopleApi.data || []).find(p => String(p.id) === person) : null;
 
   function clearFilters() {
     const next = new URLSearchParams();
@@ -261,7 +263,7 @@ export default function Feed() {
     <div className="card feed">
       <div className="page-head">
         <h2 className="page-title">
-          {q ? "Results" : selectedAuthor ? `@${selectedAuthor.handle}`
+          {q ? "Results" : selectedPerson ? selectedPerson.name : selectedAuthor ? `@${selectedAuthor.handle}`
             : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span> : "Feed"}
         </h2>
         <span className="page-count">
@@ -292,18 +294,16 @@ export default function Feed() {
             {KINDS.map(k => <option key={k} value={k}>{k}</option>)}
           </select>
         </label>
-        <label className="filter filter-author">
-          <span>Author</span>
-          <select className="sort-select" value={authorKnown ? authorValue : "__unknown"} onChange={e => onAuthor(e.target.value)}>
-            <option value="">All</option>
-            {!authorKnown && <option value="__unknown" disabled>id {author}</option>}
-            {authors.filter(a => a.id != null && (!platform || a.platform === platform)).map(a => (
-              <option key={`${a.platform}:${a.id}`} value={`${a.platform}:${a.id}`}>
-                @{a.handle || a.name || a.id}{platform ? "" : ` · ${platformLabel(a.platform)}`} ({a.count})
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="filter filter-author">
+          <span>Creator</span>
+          <CreatorPicker
+            people={peopleApi.data || []}
+            accounts={authors}
+            platform={person ? "" : platform}
+            value={person ? { person } : author ? { platform, id: author } : null}
+            onChange={onCreator}
+          />
+        </div>
         <label className="filter filter-tags">
           <span>Tags</span>
           <select className="sort-select" value="" onChange={e => onTagFilter(e.target.value)}>
@@ -353,13 +353,18 @@ export default function Feed() {
           </button>
         )}
         <div className="page-head-spacer" />
-        {author && (
+        {person && (
+          <Link className="btn-secondary review-link" to={personPath(person)} title="Accounts, handles and notes of this person">
+            <Icon name="users" size={14} />Person
+          </Link>
+        )}
+        {(author || person) && (
           <Link
             className="btn-secondary review-link"
-            to={`/review?${new URLSearchParams({ ...(platform ? { platform } : {}), author })}`}
-            title="Keep or trash this creator's unreviewed posts, one by one"
+            to={`/review?${new URLSearchParams(person ? { person } : { ...(platform ? { platform } : {}), author })}`}
+            title={`Keep or trash this ${person ? "person" : "creator"}'s unreviewed posts, one by one`}
           >
-            <Icon name="review" size={14} />Review this creator
+            <Icon name="review" size={14} />Review this {person ? "person" : "creator"}
           </Link>
         )}
         {posts.length > 0 && (

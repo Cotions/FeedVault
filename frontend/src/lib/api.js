@@ -84,7 +84,7 @@ function qs(params) {
 
 /* ── Endpoints (docs/API.md) ─────────────────────────────── */
 
-// { total, posts: [summary] }. params: q, platform, author, kind, review,
+// { total, posts: [summary] }. params: q, platform, author, person, kind, review,
 // tag (a list: every one must match), untagged, sort, order, offset, limit
 export function getPosts(params = {}) { return get(`/api/posts${qs(params)}`); }
 // Full post. Throws ApiError with status 404 when it is not in the index.
@@ -92,12 +92,14 @@ export function getPost(platform, postId) {
   return get(`/api/posts/${encodeURIComponent(platform)}/${encodeURIComponent(postId)}`);
 }
 // { posts, media, bytes } over every post the filters match. params: q,
-// platform, author, kind, review, tag, untagged (the /api/posts filters; paging is ignored).
+// platform, author, person, kind, review, tag, untagged (the /api/posts filters; paging is ignored).
 export function getPostsSummary(params = {}, opts) { return get(`/api/posts/summary${qs(params)}`, opts); }
+// [account], most posts first; see docs/API.md "People".
 export function getAuthors()   { return get("/api/authors"); }
 export function getStats()     { return get("/api/stats"); }
 // { totals, by_author, by_kind, by_year, largest, trash }, see docs/API.md "Storage".
-export function getStorage()   { return get("/api/storage"); }
+// person: an id, to cover that person's posts only.
+export function getStorage(person) { return get(`/api/storage${qs({ person })}`); }
 export function getUnmatched() { return get("/api/unmatched"); }
 export function getScan()      { return get("/api/scan"); }
 export function startScan()    { return post("/api/scan"); }
@@ -121,9 +123,9 @@ export function deleteItems({ posts, media } = {}) {
 export function getTrash()   { return get("/api/trash"); }
 export function emptyTrash() { return post("/api/trash/empty"); }
 // Trashed entries, newest deletion first → { total, files, bytes, trash, authors,
-// entries }. params: author, since, before, offset, limit. See docs/API.md "Trash contents".
+// entries }. params: platform, author, person, since, before, offset, limit. See docs/API.md "Trash contents".
 export function getTrashItems(params = {}) { return get(`/api/trash/items${qs(params)}`); }
-// Permanently deletes entries' files: { keys } or { filter: { author, since, before } }
+// Permanently deletes entries' files: { keys } or { filter: { platform, author, person, since, before } }
 // → { ok, entries, keys, files, bytes, dropped, errors }
 export function purgeTrash(body) { return post("/api/trash/purge", body); }
 // Puts exactly those entries back (partial deletes too) → { ok, posts, files, errors }
@@ -179,6 +181,37 @@ export function removeFromCollection(id, posts) { return post(`/api/collections/
 export function orderCollection(id, posts) { return post(`/api/collections/${id}/order`, { posts }); }
 // post: an id in the collection, or null for the first post
 export function setCollectionCover(id, postId) { return post(`/api/collections/${id}/cover`, { post: postId }); }
+
+/* ── People (see docs/API.md "People") ───────────────────── */
+
+// [{ id, name, notes, created_at, accounts: [account], platforms, count, bytes, newest }], by name
+export function getPeople() { return get("/api/people"); }
+// Throws ApiError with status 404 for an unknown id.
+export function getPerson(id) { return get(`/api/people/${id}`); }
+// accounts: [{ platform, id }] → { ok, person } or { ok: false, error }
+export function createPerson(name, accounts = []) { return post("/api/people", { name, accounts }); }
+// changes: { name } and/or { notes } → { ok, person }
+export function updatePerson(id, changes) { return post(`/api/people/${id}`, changes); }
+// Unlinks every account; posts are never touched → { ok, unlinked }
+export async function deletePerson(id) {
+  try {
+    return await request("DELETE", `/api/people/${id}`);
+  } catch (e) {
+    if (e.body && typeof e.body === "object") return e.body;
+    throw e;
+  }
+}
+// { add: [{ platform, id }], remove: [...] } → { ok, added, removed, person }
+export function linkAccounts(id, { add = [], remove = [] } = {}) {
+  return post(`/api/people/${id}/accounts`, { add, remove });
+}
+// Folds ids[1..] (and accounts) into ids[0] → { ok, person }
+export function mergePeople(ids, { name, accounts = [] } = {}) {
+  return post("/api/people/merge", { ids, accounts, ...(name ? { name } : {}) });
+}
+// { suggestions: [{ id, score, reason, reasons: [{ reason, detail }], accounts, person }], dismissed }
+export function getSuggestions() { return get("/api/people/suggestions"); }
+export function dismissSuggestion(id) { return post("/api/people/suggestions/dismiss", { id }); }
 
 /* ── Jobs (see docs/API.md "Jobs") ───────────────────────── */
 

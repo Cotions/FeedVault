@@ -452,12 +452,15 @@ def _measure(g):
     return size, files, missing
 
 
-def _matches(g, author=None, since=None, before=None, platform=None):
+def _matches(g, author=None, since=None, before=None, platform=None, accounts=None):
+    """``accounts``: a person's {(platform, author id)} (people.account_set)."""
     p = g["public"]
     # Author ids and handles are only unique within a platform.
     if platform is not None and p["platform"] != platform:
         return False
     if author is not None and _author_key(p["author"]) != author:
+        return False
+    if accounts is not None and (p["platform"], _author_key(p["author"])) not in accounts:
         return False
     if since is not None and p["at"] < since:
         return False
@@ -466,7 +469,7 @@ def _matches(g, author=None, since=None, before=None, platform=None):
     return True
 
 
-def items(roots, author=None, since=None, before=None, platform=None, offset=0, limit=60):
+def items(roots, author=None, since=None, before=None, platform=None, offset=0, limit=60, accounts=None):
     entries = _all_entries(roots)
     ffmpeg = thumbs.have_ffmpeg()
     out = {"total": 0, "files": 0, "bytes": 0,
@@ -484,7 +487,7 @@ def items(roots, author=None, since=None, before=None, platform=None, offset=0, 
                 "entries": 0, "bytes": 0})
             a["entries"] += 1
             a["bytes"] += size
-        if not _matches(g, author, since, before, platform):
+        if not _matches(g, author, since, before, platform, accounts):
             continue
         out["total"] += 1
         out["files"] += files
@@ -626,7 +629,7 @@ def _prune_dirs(path, root):
 
 def purge(roots, keys, data_dir, match=None):
     """Permanently delete the files of the given entries and drop their lines.
-    ``match`` (author, since, before) picks the entries instead of ``keys``."""
+    ``match`` (_matches arguments) picks the entries instead of ``keys``."""
     report = {"ok": True, "entries": 0, "keys": [], "files": 0, "bytes": 0, "dropped": 0, "errors": []}
     with db.write_lock:
         if match is not None:

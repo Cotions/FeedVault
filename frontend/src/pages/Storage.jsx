@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { getStorage, getConfig, deleteItems } from "../lib/api";
+import { useCallback, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { getStorage, getConfig, getPeople, deleteItems } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
@@ -10,6 +10,8 @@ import StatsHero from "../components/StatsHero";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
+import CreatorPicker from "../components/CreatorPicker";
+import { personPath } from "../lib/people";
 
 // Sortable creator columns. Share is the size as a fraction of the whole, so
 // it sorts like size.
@@ -79,6 +81,11 @@ function CreatorTable({ rows, total }) {
                     {a.name && a.name !== a.handle ? `${a.name} · ` : ""}{platformLabel(a.platform)}
                   </span>
                 </Link>
+                {a.person && (
+                  <Link to={personPath(a.person.id)} className="chip person-chip" title={`Person: ${a.person.name}`}>
+                    <Icon name="users" size={11} />{a.person.name}
+                  </Link>
+                )}
               </td>
               <td className="num">{fmtInt(a.posts)}</td>
               <td className="num">{fmtInt(a.media)}</td>
@@ -157,8 +164,13 @@ function BigFile({ item, index, onTrash }) {
 export default function Storage() {
   const { refreshKey, running, start } = useScan();
   const toast = useToast();
-  const { data: s, error, reload } = useApi(getStorage, refreshKey);
+  const [params, setParams] = useSearchParams();
+  const person = params.get("person") || "";
+  const load = useCallback(() => getStorage(person || undefined), [person]);
+  const { data: s, error, reload } = useApi(load, refreshKey);
   const config = useApi(getConfig, refreshKey);
+  const people = useApi(getPeople, refreshKey);
+  const who = person ? (people.data || []).find(p => String(p.id) === person) : null;
 
   const [pending,   setPending]   = useState(null);    // the largest-file item awaiting confirmation
   const [busy,      setBusy]      = useState(false);
@@ -191,7 +203,22 @@ export default function Storage() {
   }
 
   const head = (
-    <div className="page-head page-head-bare"><h2 className="page-title">Storage</h2></div>
+    <div className="page-head page-head-bare">
+      <h2 className="page-title">Storage</h2>
+      {person && <span className="page-count">{who ? who.name : `person ${person}`}</span>}
+      <div className="page-head-spacer" />
+      {(people.data?.length > 0 || person) && (
+        <CreatorPicker
+          className="storage-person"
+          label="Person"
+          allLabel="Everyone"
+          placeholder="Search people…"
+          people={people.data || []}
+          value={person ? { person } : null}
+          onChange={c => setParams(c ? { person: String(c.person.id) } : {}, { replace: true })}
+        />
+      )}
+    </div>
   );
 
   if (!s) {
@@ -227,7 +254,11 @@ export default function Storage() {
         {head}
         <div className="card">
           <div className="empty">
-            {noRoots ? (
+            {person ? (
+              <>This person has no posts in the index.{" "}
+                <Link to={personPath(person)} className="text-link">Open the person</Link>
+              </>
+            ) : noRoots ? (
               <>No media folder yet. Add one in <Link to="/settings" className="text-link">Settings</Link>, and
                 its disk use shows up here.</>
             ) : (
@@ -272,7 +303,7 @@ export default function Storage() {
           entries={s.by_kind.map(k => [k.kind, k.bytes])}
           label={k => k}
           format={fmtBytes}
-          linkFor={k => `/?kind=${encodeURIComponent(k)}`}
+          linkFor={k => `/?${new URLSearchParams({ kind: k, ...(person ? { person } : {}) })}`}
           delay={400}
         />
         <Bars

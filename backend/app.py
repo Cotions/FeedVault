@@ -21,6 +21,7 @@ import duplicates
 import hashing
 import jobs
 import organize
+import people
 import scanner
 import thumbs
 import trash
@@ -81,6 +82,15 @@ def _int_arg(name, default, lo, hi):
     return max(lo, min(hi, v))
 
 
+def _person_arg():
+    """The ``person`` parameter: an id, or None when absent. A value that
+    cannot be an id names nobody, so it matches nothing (-1)."""
+    v = request.args.get("person")
+    if not v:
+        return None
+    return int(v) if v.isascii() and v.isdigit() and len(v) < 16 else -1
+
+
 def _post_filters():
     """The /api/posts filter parameters, shared with /api/posts/summary."""
     return dict(
@@ -92,6 +102,7 @@ def _post_filters():
         # spaces collapsed only: a name that cannot be a tag matches nothing
         tags=[" ".join(t.split()) for t in request.args.getlist("tag") if t.strip()],
         untagged=request.args.get("untagged") == "1",
+        person=_person_arg(),
     )
 
 
@@ -136,7 +147,7 @@ def get_stats():
 def get_storage():
     t = trash.usage(_roots())
     # The cached result is shared: extend a copy.
-    return jsonify({**db.storage(db.connect()), "trash": {"files": t["files"], "bytes": t["bytes"]}})
+    return jsonify({**db.storage(db.connect(), _person_arg()), "trash": {"files": t["files"], "bytes": t["bytes"]}})
 
 
 @app.get("/api/unmatched")
@@ -193,6 +204,11 @@ def trash_restore():
                                  keys=(keys or [])[:5000]))
 
 
+def _accounts_of(pid):
+    """A person's accounts for the trash filters, or None for no person."""
+    return None if pid is None else people.account_set(db.connect(), pid)
+
+
 @app.get("/api/trash/items")
 def trash_items():
     return jsonify(trash.items(
@@ -203,20 +219,27 @@ def trash_items():
         before=_int_arg("before", 0, 0, 2**53) if request.args.get("before") else None,
         offset=_int_arg("offset", 0, 0, 10**9),
         limit=_int_arg("limit", 60, 1, 500),
+        accounts=_accounts_of(_person_arg()),
     ))
 
 
 def _purge_filter(f):
-    """A purge filter, checked: {platform, author, since, before} with at least one set."""
-    if not isinstance(f, dict) or set(f) - {"platform", "author", "since", "before"}:
+    """A purge filter, checked: {platform, author, person, since, before} with
+    at least one set; ``person`` becomes that person's ``accounts``."""
+    keys = ("platform", "author", "person", "since", "before")
+    if not isinstance(f, dict) or set(f) - set(keys):
         return None
-    out = {k: f.get(k) for k in ("platform", "author", "since", "before")}
+    out = {k: f.get(k) for k in keys}
     if any(out[k] is not None and not (isinstance(out[k], str) and out[k]) for k in ("platform", "author")):
         return None
-    for k in ("since", "before"):
-        if out[k] is not None and (not isinstance(out[k], int) or isinstance(out[k], bool) or out[k] < 0):
+    for k in ("person", "since", "before"):
+        if out[k] is not None and (not isinstance(out[k], int) or isinstance(out[k], bool)
+                                   or not 0 <= out[k] < 2**53):
             return None
-    return out if any(v is not None for v in out.values()) else None
+    if all(v is None for v in out.values()):
+        return None
+    out["accounts"] = _accounts_of(out.pop("person"))
+    return out
 
 
 def _forgotten(result):
@@ -232,7 +255,7 @@ def trash_purge():
     if match is not None:
         match = _purge_filter(match)
         if match is None or keys is not None:
-            return jsonify({"ok": False, "error": "filter needs platform, author, since or before (and no keys)"}), 400
+            return jsonify({"ok": False, "error": "filter needs platform, author, person, since or before (and no keys)"}), 400
     elif not _str_list(keys):
         return jsonify({"ok": False, "error": "keys must be a non-empty list"}), 400
     cfg = config.load()
@@ -504,6 +527,147 @@ def change_collection(cid, action):
     organize.reorder(conn, cid, posts)
     userdata.changed("collection_posts")
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# People
+# ---------------------------------------------------------------------------
+
+_BAD_PERSON_NAME = f"name must be 1 to {organize.MAX_NAME} characters, no quotes"
+_BAD_ACCOUNTS = f"accounts must be a list of at most {people.MAX_ACCOUNTS} {{ platform, id }}"
+
+
+def _people_changed(names=False):
+    """Links changed (and, with ``names``, the people themselves: links are
+    exported by person name)."""
+    if names:
+        userdata.changed("people")
+    userdata.changed("person_accounts")
+
+
+@app.get("/api/people")
+def list_people():
+    return jsonify(people.people(db.connect()))
+
+
+@app.post("/api/people")
+def create_person():
+    body = request.get_json(silent=True) or {}
+    name, accounts = people.clean_name(body.get("name")), people.clean_accounts(body.get("accounts"))
+    if name is None:
+        return jsonify({"ok": False, "error": _BAD_PERSON_NAME}), 400
+    if accounts is None:
+        return jsonify({"ok": False, "error": _BAD_ACCOUNTS}), 400
+    try:
+        p = people.create(db.connect(), name, accounts, int(time.time()))
+    except people.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    _people_changed(names=True)
+    return jsonify({"ok": True, "person": p})
+
+
+@app.post("/api/people/merge")
+def merge_people():
+    body = request.get_json(silent=True) or {}
+    ids, accounts = body.get("ids"), people.clean_accounts(body.get("accounts"))
+    name = None if body.get("name") is None else people.clean_name(body.get("name"))
+    if not isinstance(ids, list) or not ids or len(ids) > people.MAX_ACCOUNTS \
+            or not all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i < 2**53 for i in ids):
+        return jsonify({"ok": False, "error": "ids must be a list of person ids"}), 400
+    ids = list(dict.fromkeys(ids))
+    if body.get("name") is not None and name is None:
+        return jsonify({"ok": False, "error": _BAD_PERSON_NAME}), 400
+    if accounts is None:
+        return jsonify({"ok": False, "error": _BAD_ACCOUNTS}), 400
+    if len(ids) + len(accounts) < 2:
+        return jsonify({"ok": False, "error": "nothing to merge: send two people, or a person and accounts"}), 400
+    conn = db.connect()
+    found = {r[0] for r in conn.execute(f"SELECT id FROM people WHERE id IN ({', '.join('?' for _ in ids)})", ids)}
+    if found != set(ids):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    try:
+        p = people.merge(conn, ids, name, accounts, int(time.time()))
+    except people.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    _people_changed(names=True)
+    return jsonify({"ok": True, "person": p})
+
+
+@app.get("/api/people/suggestions")
+def people_suggestions():
+    return jsonify(people.suggestions(db.connect()))
+
+
+@app.post("/api/people/suggestions/dismiss")
+def dismiss_suggestion():
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("id"), str):
+        return jsonify({"ok": False, "error": "id must be a suggestion id"}), 400
+    if not people.dismiss(db.connect(), body["id"], int(time.time())):
+        return jsonify({"ok": False, "error": "no such suggestion; reload"}), 404
+    userdata.changed("dismissed_suggestions")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/people/<int:pid>")
+def get_person(pid):
+    conn = db.connect()
+    p = people.person(conn, pid) if people.exists(conn, pid) else None
+    if p is None:
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    return jsonify(p)
+
+
+@app.post("/api/people/<int:pid>")
+def update_person(pid):
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    body = request.get_json(silent=True) or {}
+    name = None if body.get("name") is None else people.clean_name(body["name"])
+    notes = body.get("notes")
+    if body.get("name") is not None and name is None:
+        return jsonify({"ok": False, "error": _BAD_PERSON_NAME}), 400
+    if notes is not None and (not isinstance(notes, str) or len(notes) > people.MAX_NOTES):
+        return jsonify({"ok": False, "error": f"notes must be text of at most {people.MAX_NOTES} characters"}), 400
+    if name is None and notes is None:
+        return jsonify({"ok": False, "error": "send name or notes"}), 400
+    try:
+        p = people.update(conn, pid, name, notes)
+    except people.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    _people_changed(names=name is not None)
+    if notes is not None:
+        userdata.changed("people")
+    return jsonify({"ok": True, "person": p})
+
+
+@app.delete("/api/people/<int:pid>")
+def delete_person(pid):
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    n = people.delete(conn, pid)
+    _people_changed(names=True)
+    return jsonify({"ok": True, "unlinked": n})
+
+
+@app.post("/api/people/<int:pid>/accounts")
+def person_accounts(pid):
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    body = request.get_json(silent=True) or {}
+    add, remove = people.clean_accounts(body.get("add")), people.clean_accounts(body.get("remove"))
+    if add is None or remove is None or not (add or remove):
+        return jsonify({"ok": False, "error": "add or remove must be a list of { platform, id }"}), 400
+    try:
+        r = people.link(conn, pid, add, remove, int(time.time()))
+    except people.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    if r["added"] or r["removed"]:
+        _people_changed()
+    return jsonify({"ok": True, **r})
 
 
 # ---------------------------------------------------------------------------

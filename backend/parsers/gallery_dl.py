@@ -29,7 +29,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-from . import DirResult, Media, ParsedPost, ext_of, IMAGE_EXT, VIDEO_EXT
+from . import DirResult, Media, ParsedPost, Profile, ext_of, IMAGE_EXT, VIDEO_EXT
 
 TOOL = "gallery-dl"
 
@@ -140,6 +140,8 @@ def _tiktok_hashtags(d):
 #                subtitles): claimed, never shown, trashed with the post
 #   kinds        subcategory -> post kind, e.g. stories
 #   fixup        function (post, json) for what a table cannot say
+#   profile      where the author's own dict is (bio and links, for link
+#                suggestions): the one whose id is the post's author id
 SITES = {
     "twitter": {
         "post_id": "tweet_id",
@@ -150,6 +152,7 @@ SITES = {
         "url": _twitter_url,
         "posters": {"preview"},
         "fixup": _twitter_fixup,
+        "profile": "author",
     },
     "tiktok": {
         "post_id": "id",
@@ -163,6 +166,7 @@ SITES = {
         "url": _tiktok_url,
         "posters": {"cover"},
         "sides": {"audio", "subtitle"},
+        "profile": "author",
     },
 }
 
@@ -178,7 +182,12 @@ GENERIC = {
     "date": ["date", "created_at", "timestamp"],
     "hashtags": "hashtags",
     "kinds": {"stories": "story", "story": "story", "highlights": "story"},
+    "profile": ["author", "user", "owner"],
 }
+
+# Bio text and links in an author dict, by the keys extractors use.
+_BIO_KEYS = ("description", "signature", "biography", "bio")
+_URL_KEYS = ("url", "website", "external_url", ("bioLink", "link"))
 
 
 def _paths(spec):
@@ -321,6 +330,23 @@ def _post_from(category, entries, dirpath):
     return post
 
 
+def _profile(site, post, d):
+    """The post author's bio and links, when the JSON has any."""
+    if not post.author_id:
+        return None
+    for key in _paths(site.get("profile")):
+        a = _dig(d, key)
+        if not isinstance(a, dict) or _str(a.get("id")) != post.author_id:
+            continue
+        bio = next((a[k] for k in _BIO_KEYS if isinstance(a.get(k), str) and a[k]), "")
+        urls = [_dig(a, k) for k in _URL_KEYS]
+        urls = list(dict.fromkeys(u for u in urls if isinstance(u, str) and u))
+        if not bio and not urls:
+            return None
+        return Profile(post.platform, post.author_id, post.author_handle, bio, urls, post.posted_at, post.meta_path)
+    return None
+
+
 def parse_dir(root, dirpath, names):
     result = DirResult()
     names_set = set(names)
@@ -353,8 +379,16 @@ def parse_dir(root, dirpath, names):
             continue
         groups.setdefault((category, pid), []).append((n, d, fname))
 
+    profiles = {}
     for (category, _), entries in sorted(groups.items()):
         post = _post_from(category, entries, dirpath)
         result.posts.append(post)
+        # The newest post's view of its author, one per account.
+        profile = _profile(_site(category), post, entries[0][1])
+        if profile:
+            key = (profile.platform, profile.author_id)
+            if key not in profiles or (profile.at or 0) > (profiles[key].at or 0):
+                profiles[key] = profile
         result.claimed |= {e[0] for e in entries} | {e[2] for e in entries if e[2]}
+    result.profiles = list(profiles.values())
     return result
