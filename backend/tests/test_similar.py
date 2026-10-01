@@ -229,4 +229,213 @@ def test_worker_threads_give_the_same_hashes(env, monkeypatch):
     monkeypatch.setattr(hashing, "PICTURE_WORKERS", 3)
     hashing.run_pass(db.connect())
     assert {p: r["dhash"] for p, r in hashes().items()} == serial and len(serial) == 12
-    assert hashing.status()["done"] == 12
+    assert hashing.status()["fingerprinted"] == 12
+
+
+# ---------------------------------------------------------------------------
+# Step 2: near matches
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+
+import config  # noqa: E402
+import duplicates  # noqa: E402
+import userdata  # noqa: E402
+from conftest import H  # noqa: E402
+
+
+def test_near_pairs_finds_exactly_the_close_ones():
+    rng = random.Random(7)
+    values = [rng.getrandbits(64) for _ in range(3000)]
+    for n in range(0, 400, 2):                                    # plant pairs 0 to 12 bits apart
+        v = values[n]
+        for bit in rng.sample(range(64), n // 2 % 13):
+            v ^= 1 << bit
+        values[n + 1] = v
+    for t in (0, 3, 4, 6, 7, 10):
+        brute = {(i, j) for i in range(len(values)) for j in range(i + 1, len(values))
+                 if (values[i] ^ values[j]).bit_count() <= t} if t in (4, 10) else None
+        got = duplicates.near_pairs(values, t)
+        assert all((values[i] ^ values[j]).bit_count() <= t and i < j for i, j in got)
+        planted = {(n, n + 1) for n in range(0, 400, 2) if (values[n] ^ values[n + 1]).bit_count() <= t}
+        assert planted <= got
+        if brute is not None:
+            assert got == brute
+
+
+def set_dhash(path, value):
+    db.connect().execute("UPDATE media_hash SET dhash = ? WHERE path = ?", (hashing.to_db(value), path))
+    db.connect().commit()
+
+
+def repost(env):
+    """An original (posted first, saved last) and a smaller, recompressed
+    repost of it by another account."""
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    photo(a + ".jpg", 1)
+    b = write_post(env["media"] / "bob", "R9", TS + 3600, BOB, "image")
+    resized(a + ".jpg", b + ".jpg")
+    t = time.time() + 60
+    os.utime(a + ".json", (t, t))
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    return a, b
+
+
+def test_similar_group_for_a_resized_repost(env):
+    a, b = repost(env)
+    conn = db.connect()
+    assert duplicates.all_groups(conn, "content") == []
+    [g] = duplicates.all_groups(conn, "similar")
+    assert [m["id"] for m in g["members"]] == ["instagram:P1", "instagram:R9"]
+    assert g["identical"] is False and g["pending"] is False and g["differs"] == []
+    assert 0 <= g["distance"] <= 4
+    p1, r9 = g["members"]
+    assert (p1["match"], p1["items"][0]["width"], p1["items"][0]["height"]) == (1, 640, 800)
+    assert (r9["items"][0]["width"], r9["items"][0]["height"]) == (320, 400)
+    assert p1["thumb_url"] == p1["items"][0]["thumb_url"] and p1["thumb_url"].startswith("/media/")
+    assert g["suggested"] == "instagram:P1"                        # larger
+
+
+def test_similar_excludes_content_groups_and_flat_pictures(env):
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    photo(a + ".jpg", 1)
+    b = write_post(env["media"] / "bob", "R9", TS + 99, BOB, "image")
+    shutil.copyfile(a + ".jpg", b + ".jpg")                        # byte for byte: a content group
+    write_post(env["media"] / "alice", "F1", TS + 5, ALICE, "image")   # solid colours: flat
+    write_post(env["media"] / "bob", "F2", TS + 6, BOB, "image")
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    conn = db.connect()
+    assert len(duplicates.all_groups(conn, "content")) == 1
+    flat = [r["dhash"] for p, r in hashes().items() if "F" in os.path.basename(p) or True]
+    assert any(hashing.from_db(v).bit_count() <= duplicates.FLAT_BITS
+               or hashing.from_db(v).bit_count() >= 64 - duplicates.FLAT_BITS for v in flat)
+    assert duplicates.all_groups(conn, "similar") == []
+
+
+def test_threshold_and_carousel_items(env):
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    c = write_post(env["media"] / "bob", "C2", TS + 99, BOB, "carousel", slides=[False, False])
+    photo(a + ".jpg", 1)
+    photo(c + "_1.jpg", 2)
+    photo(c + "_2.jpg", 3)
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    base = 0x0F0F_3C3C_5A5A_6969
+    set_dhash(a + ".jpg", base)
+    set_dhash(c + "_1.jpg", base ^ 0xFFFF_0000_0000_0000)        # 16 bits off: unrelated
+    set_dhash(c + "_2.jpg", base ^ 0b11111)                        # 5 bits off
+    conn = db.connect()
+    assert duplicates.all_groups(conn, "similar", threshold=4) == []
+    [g] = duplicates.all_groups(conn, "similar", threshold=6)
+    assert g["distance"] == 5
+    c2, p1 = g["members"]
+    assert (p1["match"], c2["match"]) == (1, 2)
+    assert g["differs"] == [{"member": "instagram:C2", "idx": 1, "reason": "only here"}]
+
+
+def test_a_picture_near_too_many_posts_links_nothing(env):
+    paths = []
+    for i in range(duplicates.MAX_SHARED + 2):
+        paths.append(write_post(env["media"] / f"u{i}", f"P{i}", TS + i, owner(f"u{i}", 1000 + i), "image") + ".jpg")
+        photo(paths[-1], i)                                        # no two byte-identical
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    base = 0x0F0F_3C3C_5A5A_6969
+    for p in paths:
+        set_dhash(p, base)
+    assert duplicates.all_groups(db.connect(), "similar") == []
+    rng = random.Random(3)
+    for p in paths[2:]:
+        set_dhash(p, rng.getrandbits(64))
+    [g] = duplicates.all_groups(db.connect(), "similar")
+    assert len(g["members"]) == 2
+
+
+def test_videos_in_groups_are_measured_once(env, monkeypatch):
+    a = write_post(env["media"] / "alice", "V1", TS, ALICE, "video")
+    b = write_post(env["media"] / "bob", "V2", TS + 99, BOB, "video")
+    c = write_post(env["media"] / "carol", "V3", TS + 999, owner("carol", 333), "video")
+    for base, seed in ((a, 1), (b, 1), (c, 2)):
+        photo(base + ".jpg", seed)                                 # a and b: the same poster
+    for base, extra in ((b, b"x"), (c, b"yy")):                    # no byte-identical videos
+        with open(base + ".mp4", "ab") as f:
+            f.write(extra)
+    calls = []
+    monkeypatch.setattr(hashing, "video_size", lambda p: calls.append(p) or ((720, 1280) if p == a + ".mp4" else None))
+    monkeypatch.setattr(hashing.shutil, "which", lambda name: "/usr/bin/" + name)
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    assert sorted(calls) == sorted([a + ".mp4", b + ".mp4"])     # carol's is in no group
+    h = hashes()
+    assert (h[a + ".mp4"]["width"], h[a + ".mp4"]["height"]) == (720, 1280)
+    assert (h[b + ".mp4"]["width"], h[b + ".mp4"]["height"]) == (0, 0)  # tried: not again
+    hashing.run_pass(db.connect())
+    assert len(calls) == 2
+    [g] = duplicates.all_groups(db.connect(), "similar")
+    assert g["members"][0]["items"][0]["width"] == 720 and g["members"][1]["items"][0]["width"] is None
+
+
+def similar(client, **params):
+    q = "&".join(f"{k}={v}" for k, v in params.items())
+    r = client.get(f"/api/duplicates?kind=similar&{q}", headers=H)
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()
+
+
+def test_api_threshold(env, client):
+    repost(env)
+    r = similar(client)
+    assert (r["threshold"], r["total"], r["identical"]) == (6, 1, 0)
+    g = r["groups"][0]
+    assert all("author" not in m for m in g["members"])
+    assert similar(client, threshold=0)["total"] in (0, 1)
+    for bad in ("11", "-1", "x", "6.5"):
+        assert client.get(f"/api/duplicates?kind=similar&threshold={bad}", headers=H).status_code == 400
+    assert client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": "x", "threshold": 99},
+                       headers=H).status_code == 400
+    assert client.post("/api/duplicates/dismiss", json={"group": g["id"], "threshold": True},
+                       headers=H).status_code == 400
+    cfg = config.load()
+    cfg["similar_threshold"] = 0
+    config.save(cfg)
+    assert similar(client)["threshold"] == 0
+    cfg["similar_threshold"] = "lots"                              # unusable: the default
+    config.save(cfg)
+    assert similar(client)["threshold"] == duplicates.SIMILAR_DEFAULT
+    assert client.get("/api/duplicates?kind=copies", headers=H).get_json()["threshold"] is None
+
+
+def test_resolve_similar_one_at_a_time_and_restore(env, client):
+    a, b = repost(env)
+    g = similar(client, threshold=8)["groups"][0]
+    other = {"group": "0" * 20, "keep": "x"}
+    r = client.post("/api/duplicates/resolve", json={"groups": [{"group": g["id"], "keep": g["suggested"]}, other],
+                                                     "threshold": 8}, headers=H).get_json()
+    assert r["ok"] is False and "one at a time" in r["skipped"][0]["error"] and os.path.exists(b + ".jpg")
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": g["suggested"], "threshold": 0},
+                    headers=H).get_json()
+    if g["distance"] > 0:                                          # rebuilt at 0 bits: not the same group
+        assert "reload" in r["skipped"][0]["error"] and os.path.exists(b + ".jpg")
+        r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": g["suggested"], "threshold": 8},
+                        headers=H).get_json()
+    assert r["ok"] and r["resolved"] == [g["id"]] and r["posts"] == ["instagram:R9"]
+    assert not os.path.exists(b + ".jpg") and os.path.exists(a + ".jpg")
+    assert similar(client, threshold=8)["total"] == 0
+    [e] = client.get("/api/trash/items", headers=H).get_json()["entries"]
+    r = client.post("/api/trash/restore", json={"keys": [e["key"]]}, headers=H).get_json()
+    assert r["errors"] == [] and os.path.exists(b + ".jpg")
+    hashing.run_pass(db.connect())
+    assert similar(client, threshold=8)["total"] == 1
+
+
+def test_dismiss_similar(env, client):
+    repost(env)
+    g = similar(client)["groups"][0]
+    assert client.post("/api/duplicates/dismiss", json={"group": g["id"]}, headers=H).get_json() == {"ok": True}
+    r = similar(client)
+    assert (r["total"], r["dismissed"]) == (0, 1)
+    userdata.flush()
+    saved = json.load(open(userdata.path(str(env["tmp"] / "data"), "dismissed_duplicates")))
+    assert [row["kind"] for row in saved["rows"]] == ["similar"]

@@ -307,6 +307,11 @@ def run_pass(conn, restart=None, data_dir=None):
         if not _hash_all(conn, list(pics), "dhash", restart, _fresh(known, 4),
                          lambda path, st: _dhash_row(path, st, *pics[path], data_dir), PICTURE_WORKERS):
             return False
+        if shutil.which("ffprobe"):
+            import duplicates                     # it imports this module
+            if not _hash_all(conn, duplicates.videos_to_measure(conn), "probe", restart,
+                             lambda path, st: False, _probe_row, PICTURE_WORKERS):
+                return False
         _set(finished_at=int(time.time()))
         return True
     finally:
