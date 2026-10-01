@@ -1210,6 +1210,7 @@ Built-in kinds:
 | `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
 | `instaloader-sync` | `source`: a source id | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line" }` | `instaloader` |
 | `gallery-dl-sync` | `source`: a source id | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
+| `tool-test` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | the tool once on a fixed public item, see [Downloaders](#downloaders); `result` `{ "ok", "error", "line" }` | the tool's name |
 | `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 
 More download kinds come with the userscript (#10).
@@ -1285,7 +1286,8 @@ A tool:
   "version": "2026.08.06",
   "version_error": null,
   "latest": { "version": "2026.09.20", "error": null, "checked_at": 1727500000 },
-  "outdated": true
+  "outdated": true,
+  "login": { "mode": "cookies", "browser": "firefox" }
 }
 ```
 
@@ -1314,6 +1316,17 @@ A tool:
 The tools are found once and kept in memory; they are found again when the
 tools set in Settings (or `PATH`) change, and on `POST /api/downloaders/check`.
 
+- `login`: the session a sync of the tool uses, from its settings (see
+  [instaloader settings](#instaloader-settings) and [gallery-dl and yt-dlp
+  settings](#gallery-dl-and-yt-dlp-settings)): `{ "mode": "none" }`,
+  `{ "mode": "cookies", "browser": "firefox" }`, or for instaloader
+  `{ "mode": "login", "user": "name", "session_file": true }`, where
+  `session_file` says whether instaloader's session file for that user
+  exists (`$XDG_CONFIG_HOME/instaloader/session-<user>`, else
+  `~/.config/…`, or its legacy place in the temp folder; the user name
+  lowercased, as instaloader does). FeedVault only checks that the file is
+  there; it never opens it, nor any cookie. `null` for ffmpeg.
+
 **Latest versions.** Off by default: `POST /api/config` with
 `{ "check_updates": true }` turns it on. This is the only request the
 server itself makes to the network. For instaloader, gallery-dl and yt-dlp
@@ -1325,3 +1338,23 @@ asked at most once a day, a failed ask included; the answers are kept in
 `<data_directory>/downloaders/pypi.json`, so a restart does not ask again.
 They are asked when `GET /api/downloaders` finds them due; Check again
 does not ask sooner.
+
+**Test.** Job kind `tool-test`, params `{ "tool": "instaloader" |
+"gallery-dl" | "yt-dlp" }` and nothing else, group: the tool's name (the
+same as its syncs, so it never runs beside one). It runs the tool once on a
+fixed public item with the session flags its syncs use, in
+`<data_directory>/downloaders/test`:
+
+```
+instaloader --no-posts --no-profile-pic --no-metadata-json --dirname-pattern <data_directory>/downloaders/test
+            [--load-cookies <browser> | --login <user>] -- instagram
+gallery-dl --simulate [--cookies-from-browser <browser>] -- https://x.com/jack/status/20
+yt-dlp --simulate --no-playlist [--cookies-from-browser <browser>] -- https://www.youtube.com/watch?v=jNQXAC9IVRw
+```
+
+instaloader fetches the profile's metadata and nothing else; gallery-dl
+and yt-dlp download nothing (`--simulate`). `state` `done`, `result`
+`{ "ok": true, "error": null, "line": null }`, `message` `"Works"`; or
+`failed`, `result` `{ "ok": false, "error", "line" }` with `error` read from
+the output as for a sync (`login_required`, `rate_limited`, `private`,
+`not_found`, `generic`) and `message` saying what it means.

@@ -20,10 +20,19 @@ only time the server itself reaches the network. One fixed URL per package,
 no redirects, a timeout and a size cap; at most once a day per package, the
 answers kept in ``<data_dir>/downloaders/pypi.json`` across restarts.
 ffmpeg is not on PyPI: no check.
+
+Login status is what the settings say (sync.py), never read from a cookie
+or a session file: for instaloader's saved login, only whether its session
+file exists (os.path.exists on the path instaloader uses). The ``tool-test``
+job runs a tool once against a fixed public item with the session flags a
+sync would use, and says how it went in sync.py's terms (login required,
+rate limited, not found, …).
 """
+import getpass
 import json
 import os
 import re
+import tempfile
 import signal
 import subprocess
 import threading
@@ -33,6 +42,7 @@ import urllib.request
 
 import config
 import jobs
+import sync
 
 VERSION_TIMEOUT = 10                           # seconds for a tool's --version
 VERSION_MAX = 200                              # characters kept of its first line
@@ -278,6 +288,93 @@ def newer(latest_version, installed):
 
 
 # ---------------------------------------------------------------------------
+# Login status, and the test job
+# ---------------------------------------------------------------------------
+
+def session_files(user):
+    """Where instaloader keeps the session ``instaloader --login <user>``
+    saved (instaloader.get_default_session_filename, then its legacy
+    place); it lowercases the name it is given."""
+    user = user.lower()
+    config_dir = os.path.join(os.getenv("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "instaloader")
+    legacy = (tempfile.gettempdir() + "/.instaloader-" + getpass.getuser() + "/session-" + user).lower()
+    return [os.path.join(config_dir, "session-" + user), legacy]
+
+
+def login(tool, cfg=None):
+    """The session a sync of ``tool`` uses, from the settings: {"mode":
+    "none" | "cookies" (+ "browser") | "login" (+ "user", "session_file":
+    whether instaloader's session file for it exists)}. None for ffmpeg.
+    No file is opened: the session file is only looked for."""
+    cfg = cfg or config.load()
+    if tool == "instaloader":
+        session = dict(sync.settings(cfg)["session"])
+        if session["mode"] == "login":
+            session["session_file"] = any(os.path.exists(p) for p in session_files(session["user"]))
+        return session
+    if tool in sync.KINDS:
+        return dict(sync.tool_settings(tool, cfg)["session"])
+    return None
+
+
+# One public item per tool, cheap to fetch, unlikely to go away.
+TEST_TARGETS = {
+    "instaloader": "instagram",                                  # the profile's metadata only
+    "gallery-dl": "https://x.com/jack/status/20",
+    "yt-dlp": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+}
+TEST_FAILURES = {"instaloader": sync.FAILURES, "gallery-dl": sync.GALLERY_DL_FAILURES,
+                 "yt-dlp": sync.YT_DLP_FAILURES}
+TEST_MESSAGES = {
+    "login_required": "Login required: the site refused it without a session; set one in its sync settings",
+    "rate_limited": "Rate limited: the site is limiting requests, try again later",
+    "private": "The test item needs a login the session in use does not have",
+    "not_found": "The test item was not found: the site may have changed, an update may fix it",
+    "generic": "The test failed",
+}
+
+
+def _scratch(cfg):
+    """Where a test runs, so whatever a tool writes stays out of the media."""
+    return os.path.join(cfg["data_directory"], "downloaders", "test")
+
+
+def _build_test(params):
+    """The argument list: the tool's fixed test item and the session flags
+    of its settings, nothing else from the request than which tool."""
+    tool = params["tool"]
+    cfg = config.load()
+    folder = _scratch(cfg)
+    os.makedirs(folder, exist_ok=True)
+    if tool == "instaloader":
+        args = ["--no-posts", "--no-profile-pic", "--no-metadata-json", "--dirname-pattern", sync._escape(folder),
+                *sync.session_flags(sync.settings(cfg)["session"])]
+    else:
+        args = ["--simulate", *(["--no-playlist"] if tool == "yt-dlp" else []),
+                *sync.cookie_flags(sync.tool_settings(tool, cfg)["session"])]
+    return {"tool": tool, "cwd": folder, "args": [*args, "--", TEST_TARGETS[tool]]}
+
+
+def _test_outcome(params, code, lines, index):
+    if code == 0:
+        return "done", {"ok": True, "error": None, "line": None}, "Works"
+    error, line = sync.classify(lines, TEST_FAILURES[params["tool"]])
+    message = TEST_MESSAGES[error]
+    if error == "generic" and line:
+        message = f"{message}: {line[:200]}"
+    return "failed", {"ok": False, "error": error, "line": line}, message
+
+
+TESTED = list(TEST_TARGETS)
+
+# Its tool's lock group: never beside a sync of the same tool (one
+# instaloader session at a time).
+jobs.register("tool-test", label="Test a downloader", params={"tool": {"type": "choice", "choices": TESTED}},
+              build=_build_test, group=lambda p: p["tool"], outcome=_test_outcome,
+              describe=lambda params, argv: f"Test {params.get('tool', 'a downloader')}")
+
+
+# ---------------------------------------------------------------------------
 # Status (GET /api/downloaders)
 # ---------------------------------------------------------------------------
 
@@ -291,6 +388,7 @@ def status(refresh=False):
         known = pypi.get(PACKAGES.get(t))
         info["latest"] = known
         info["outdated"] = newer(known["version"], info["version"]) if known and known["version"] else None
+        info["login"] = login(t, cfg)
         out.append(info)
     return {"checked_at": checked_at, "check_updates": cfg.get("check_updates") is True, "tools": out}
 

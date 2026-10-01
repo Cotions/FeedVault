@@ -1,20 +1,36 @@
 """Downloaders (downloaders.py): detection, latest versions, login status,
 the test and update jobs. Every tool here is a fake on a temporary PATH, in
 fake virtualenv and pipx layouts: nothing real is run, updated or read."""
+import json
 import os
 import sys
+import threading
 
 import pytest
 
 from conftest import H
+from test_jobs import ended, wait_for
 
+import jobs
+
+# Prints <name>.version for --version. Any other run appends its arguments
+# to <name>.argv, waits while <name>.hold exists, then prints <name>.fail
+# and exits 1 if that exists, else prints "ok".
 VERSION_SCRIPT = """#!{python}
-import os, sys
+import json, os, sys, time
 here = os.path.dirname(os.path.realpath(__file__))
+base = os.path.join(here, {name!r})
 if sys.argv[1:] in (["--version"], ["-version"]):
-    print(open(os.path.join(here, {name!r} + ".version")).read().strip())
+    print(open(base + ".version").read().strip())
     sys.exit(0)
-print("args:", sys.argv[1:])
+with open(base + ".argv", "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\\n")
+while os.path.exists(base + ".hold"):
+    time.sleep(0.02)
+if os.path.exists(base + ".fail"):
+    print(open(base + ".fail").read())
+    sys.exit(1)
+print("ok")
 """
 
 
@@ -58,8 +74,24 @@ def layout(env, monkeypatch):
     os.symlink(fake_tool(os.path.join(venv, "bin"), "yt-dlp", "2026.01.01"), bin_dir / "yt-dlp")
     fake_tool(str(bin_dir), "ffmpeg", "ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers")
     downloaders.forget()
+    monkeypatch.setattr(jobs, "_active", jobs.collections.OrderedDict())
+    monkeypatch.setattr(jobs, "_closing", False)
+    monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     yield {"bin": bin_dir, "venv": venv, "pipx_venv": pipx_venv, "tmp": tmp}
+    jobs.shutdown()
+    for t in threading.enumerate():
+        if t.name.startswith("job-") and not t.name.endswith("-log"):
+            t.join(10)
     downloaders.forget()
+
+
+def runs(path):
+    """The argument lists a fake tool was run with (--version aside)."""
+    try:
+        with open(os.path.realpath(path) + ".argv") as f:
+            return [json.loads(line) for line in f]
+    except FileNotFoundError:
+        return []
 
 
 def by_tool(status):
@@ -280,3 +312,98 @@ def test_unreachable_pypi_is_shown_and_not_retried_today(pypi, client, monkeypat
 def test_newer(latest, installed, result):
     import downloaders
     assert downloaders.newer(latest, installed) is result
+
+
+# ---------------------------------------------------------------------------
+# Login status and the test job
+# ---------------------------------------------------------------------------
+
+def test_login_status_from_the_settings(layout, client, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(layout["tmp"] / "xdg"))
+
+    def logins():
+        return {t["tool"]: t["login"] for t in client.get("/api/downloaders", headers=H).get_json()["tools"]}
+    assert logins() == {"instaloader": {"mode": "none"}, "gallery-dl": {"mode": "none"},
+                        "yt-dlp": {"mode": "none"}, "ffmpeg": None}
+    for body in ({"instaloader": {"session": {"mode": "cookies", "browser": "firefox"}}},
+                 {"yt-dlp": {"session": {"mode": "cookies", "browser": "brave"}}}):
+        assert client.post("/api/config", json=body, headers=H).get_json()["ok"]
+    got = logins()
+    assert got["instaloader"] == {"mode": "cookies", "browser": "firefox"}
+    assert got["yt-dlp"] == {"mode": "cookies", "browser": "brave"} and got["gallery-dl"] == {"mode": "none"}
+    assert client.post("/api/config", json={"instaloader": {"session": {"mode": "login", "user": "Some.One"}}},
+                       headers=H).get_json()["ok"]
+    assert logins()["instaloader"] == {"mode": "login", "user": "Some.One", "session_file": False}
+    # instaloader's own place for it, the name lowercased as instaloader does.
+    # Unreadable: only its existence is looked at.
+    session = layout["tmp"] / "xdg" / "instaloader" / "session-some.one"
+    session.parent.mkdir(parents=True)
+    session.write_text("secret")
+    session.chmod(0)
+    real_open = open
+
+    def no_reading(path, *args, **kwargs):
+        assert "session-" not in str(path), f"{path} was opened"
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr("builtins.open", no_reading)
+    assert logins()["instaloader"]["session_file"] is True
+
+
+def test_test_job_argv(layout, client, monkeypatch):
+    import downloaders
+    import sync
+    fake_tool(str(layout["bin"]), "instaloader", "4.15")
+    data = str(layout["tmp"] / "data")
+    for body in ({"instaloader": {"session": {"mode": "login", "user": "me"}}},
+                 {"gallery-dl": {"session": {"mode": "cookies", "browser": "firefox"}}}):
+        assert client.post("/api/config", json=body, headers=H).get_json()["ok"]
+    got = {}
+    for tool in ("instaloader", "gallery-dl", "yt-dlp"):
+        r = client.post("/api/jobs", json={"kind": "tool-test", "params": {"tool": tool}}, headers=H).get_json()
+        job = ended(r["job"]["id"])
+        assert (job["state"], job["result"], job["message"], job["group"]) == \
+            ("done", {"ok": True, "error": None, "line": None}, "Works", tool)
+        assert job["label"] == f"Test {tool}" and job["cwd"] == os.path.join(data, "downloaders", "test")
+        got[tool] = runs(layout["bin"] / tool)[-1]
+    assert got["instaloader"] == ["--no-posts", "--no-profile-pic", "--no-metadata-json", "--dirname-pattern",
+                                  os.path.join(data, "downloaders", "test"), "--login", "me", "--", "instagram"]
+    assert got["gallery-dl"] == ["--simulate", "--cookies-from-browser", "firefox", "--", "https://x.com/jack/status/20"]
+    assert got["yt-dlp"] == ["--simulate", "--no-playlist", "--", "https://www.youtube.com/watch?v=jNQXAC9IVRw"]
+    # Each in its tool's lock group: the same as that tool's syncs.
+    assert all(jobs._kinds[sync.KINDS[t]].group == t for t in downloaders.TESTED)
+
+
+@pytest.mark.parametrize("params", [
+    {"tool": "ffmpeg"}, {"tool": "yt-dlp; rm -rf ~"}, {"tool": "$(id)"}, {},
+    {"tool": "yt-dlp", "url": "https://evil.example"}, {"tool": "yt-dlp", "args": ["--exec", "id"]},
+])
+def test_nothing_from_the_request_reaches_the_test_argv(layout, client, params):
+    r = client.post("/api/jobs", json={"kind": "tool-test", "params": params}, headers=H)
+    assert r.status_code == 400 and runs(layout["bin"] / "yt-dlp") == []
+
+
+@pytest.mark.parametrize("tool, output, error", [
+    ("yt-dlp", "ERROR: [youtube] jNQXAC9IVRw: Sign in to confirm you're not a bot. Use --cookies-from-browser",
+     "login_required"),
+    ("yt-dlp", "ERROR: [youtube] jNQXAC9IVRw: HTTP Error 429: Too Many Requests", "rate_limited"),
+    ("yt-dlp", "ERROR: [youtube] jNQXAC9IVRw: Video unavailable", "not_found"),
+    ("gallery-dl", "[twitter][error] AuthRequired: 'authenticated cookies' needed", "login_required"),
+    ("instaloader", "Login error: \"fail\" status, message \"checkpoint_required\".", "login_required"),
+    ("instaloader", "JSON Query to graphql/query: 403 Forbidden", "login_required"),
+    ("instaloader", "Profile instagram does not exist.", "not_found"),
+    ("gallery-dl", "something odd happened", "generic"),
+])
+def test_test_job_classification(layout, client, tool, output, error):
+    import downloaders
+    fake_tool(str(layout["bin"]), "instaloader")
+    with open(os.path.realpath(layout["bin"] / tool) + ".fail", "w") as f:
+        f.write(output)
+    job = ended(jobs.submit("tool-test", {"tool": tool})["id"])
+    assert job["state"] == "failed" and job["result"] == {"ok": False, "error": error, "line": output}
+    expected = downloaders.TEST_MESSAGES[error] + (f": {output}" if error == "generic" else "")
+    assert job["message"] == expected
+
+
+def test_test_job_of_a_missing_tool(layout):
+    job = ended(jobs.submit("tool-test", {"tool": "instaloader"})["id"])
+    assert job["state"] == "failed" and job["message"] == "instaloader not found; set its path in Settings"
