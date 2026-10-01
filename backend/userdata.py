@@ -88,6 +88,8 @@ register("person_accounts", "person_accounts", ("platform", "author_id", "person
          insert=("INSERT OR IGNORE INTO people(name, created_at) VALUES (:person, COALESCE(:at, 0))",
                  "INSERT OR IGNORE INTO person_accounts(person_id, platform, author_id, at) "
                  "SELECT id, :platform, :author_id, COALESCE(:at, 0) FROM people WHERE name = :person"))
+# "Not the same person": keyed by the group's accounts, like duplicates.
+register("dismissed_suggestions", "dismissed_suggestions", ("key", "at"), "key")
 
 
 def path(data_dir, name):

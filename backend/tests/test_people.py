@@ -1,7 +1,8 @@
+import json
 import os
 
 from conftest import H
-from fakes import gallery_dl_case, owner, png, write_post
+from fakes import gallery_dl_case, owner, png, write_meta, write_post
 
 import config
 import db
@@ -327,3 +328,148 @@ def test_handle_history_from_renamed_posts(env, client):
     # a person lists the same history
     p = create(client, "A", a)["person"]
     assert p["accounts"][0]["handles"] == a["handles"]
+
+
+# ---------------------------------------------------------------------------
+# Suggestions
+# ---------------------------------------------------------------------------
+
+def edit_json(path, change):
+    with open(path) as f:
+        d = json.load(f)
+    change(d)
+    with open(path, "w") as f:
+        json.dump(d, f)
+
+
+def suggestion_archive(env):
+    """X @example_user1 and TikTok @example_user6 (fixtures), and on Instagram:
+    @example_user1 (same handle as X), @the_example_user6 (similar to the
+    TikTok), @zed.one and @zed.two (same display name), and @bob.example,
+    whose Profile file links to the X account; the TikTok's bio links to
+    @zed.one."""
+    write_post(env["media"] / "example_user1", "E1", TS, owner("example_user1", 501, "Eee"), "image")
+    write_post(env["media"] / "the_example_user6", "E6", TS, owner("the_example_user6", 506, "Six"), "image")
+    write_post(env["media"] / "zed.one", "Z1", TS, owner("zed.one", 601, "Zed Example ✨"), "image")
+    write_post(env["media"] / "zed.two", "Z2", TS, owner("zed.two", 602, "zed  example"), "image")
+    write_post(env["media"] / "bob.example", "B1", TS, BOB, "image")
+    write_meta(str(env["media"] / "bob.example" / "bob.example_222"),
+               {"id": "222", "username": "bob.example", "biography": "hi",
+                "external_url": "https://x.com/Example_User1", "bio_links": []}, node_type="Profile")
+    gallery_dl_case("twitter/photo", env["media"] / "twitter" / "example_user1")
+    tiktok = env["media"] / "tiktok" / "example_user6"
+    for n in gallery_dl_case("tiktok/video", tiktok):
+        edit_json(tiktok / n, lambda d: d["author"].update(signature="me on ig: instagram.com/zed.one ✌"))
+    scanner.scan(env["roots"])
+
+
+def suggestions(client):
+    return get(client, "/api/people/suggestions")
+
+
+def by_accounts(client):
+    return {tuple(sorted(f"{a['platform']}:{a['handle']}" for a in s["accounts"])): s
+            for s in suggestions(client)["suggestions"]}
+
+
+def test_suggestions_for_each_reason(env, client):
+    suggestion_archive(env)
+    got = by_accounts(client)
+    reasons = {k: [(r["reason"], r["detail"]) for r in s["reasons"]] for k, s in got.items()}
+    assert reasons == {
+        ("instagram:bob.example", "twitter:example_user1"):
+            [("bio_link", "Instagram @bob.example links to X @example_user1")],
+        ("instagram:zed.one", "tiktok:example_user6"):
+            [("bio_link", "TikTok @example_user6 links to Instagram @zed.one")],
+        ("instagram:example_user1", "twitter:example_user1"): [("same_handle", "@example_user1")],
+        ("instagram:the_example_user6", "tiktok:example_user6"):
+            [("similar_handle", "@example_user6 ~ @the_example_user6")],
+        ("instagram:zed.one", "instagram:zed.two"): [("same_name", "Zed Example ✨")],
+    }
+    s = got[("instagram:bob.example", "twitter:example_user1")]
+    assert (s["reason"], s["score"], s["person"]) == ("bio_link", 0.95, None)
+    assert [x["score"] for x in suggestions(client)["suggestions"]] == [0.95, 0.95, 0.9, 0.7, 0.6]
+    assert suggestions(client)["dismissed"] == 0
+
+
+def test_several_reasons_score_higher(env, client):
+    write_post(env["media"] / "example_user1", "E1", TS, owner("example_user1", 501, "Example User 1"), "image")
+    gallery_dl_case("twitter/photo", env["media"] / "twitter" / "example_user1")
+    scanner.scan(env["roots"])
+    [s] = suggestions(client)["suggestions"]
+    assert [r["reason"] for r in s["reasons"]] == ["same_handle", "same_name"]
+    assert (s["reason"], s["score"]) == ("same_handle", 0.92)
+
+
+def test_an_old_handle_and_an_alias_suggest_too(env, client):
+    # Instagram renamed from example_user1; the X account still has that handle
+    write_post(env["media"] / "newname", "E1", TS, owner("example_user1", 501, "A"), "image")
+    write_post(env["media"] / "newname", "E2", TS + 10, owner("newname", 501, "B"), "image")
+    gallery_dl_case("twitter/photo", env["media"] / "twitter" / "example_user1")
+    scanner.scan(env["roots"])
+    assert list(by_accounts(client)) == [("instagram:newname", "twitter:example_user1")]
+
+
+def test_linking_and_people_change_suggestions(env, client):
+    suggestion_archive(env)
+    zed1, zed2 = account(client, "instagram", "zed.one"), account(client, "instagram", "zed.two")
+    tt = account(client, "tiktok", "example_user6")
+    # one side linked: the suggestion extends that person
+    pid = create(client, "Zed", zed1)["person"]["id"]
+    s = by_accounts(client)[("instagram:zed.one", "instagram:zed.two")]
+    assert s["person"] == {"id": pid, "name": "Zed"}
+    post(client, f"/api/people/{pid}/accounts", {"add": [ref(zed2)]})
+    assert ("instagram:zed.one", "instagram:zed.two") not in by_accounts(client)
+    # two people: a merge, not a suggestion
+    create(client, "Six", tt)
+    assert ("instagram:zed.one", "tiktok:example_user6") not in by_accounts(client)
+
+
+def test_dismissals_persist(env, client):
+    suggestion_archive(env)
+    s = by_accounts(client)[("instagram:zed.one", "instagram:zed.two")]
+    assert post(client, "/api/people/suggestions/dismiss", {"id": s["id"]}) == {"ok": True}
+    assert ("instagram:zed.one", "instagram:zed.two") not in by_accounts(client)
+    assert suggestions(client)["dismissed"] == 1
+    post(client, "/api/people/suggestions/dismiss", {"id": s["id"]}, 404)        # not listed any more
+    post(client, "/api/people/suggestions/dismiss", {"id": 5}, 400)
+    assert client.get("/api/people/suggestions").status_code == 403
+    # survives a rebuild
+    userdata.flush()
+    db.init(str(env["tmp"] / "rebuilt.db"))
+    userdata.restore_all(db.connect(), config.load()["data_directory"])
+    scanner.scan(env["roots"])
+    assert ("instagram:zed.one", "instagram:zed.two") not in by_accounts(client)
+    assert len(by_accounts(client)) == 4
+    # a group that gains an account shows again
+    write_post(env["media"] / "zed.three", "Z3", TS, owner("zed.three", 603, "Zed Example"), "image")
+    scanner.scan(env["roots"])
+    assert ("instagram:zed.one", "instagram:zed.three", "instagram:zed.two") in by_accounts(client)
+
+
+def test_profiles_are_read_without_claiming_or_posts(env):
+    suggestion_archive(env)
+    conn = db.connect()
+    rows = {(r[0], r[1]): (r[2], json.loads(r[3])) for r in conn.execute(
+        "SELECT platform, author_id, bio, urls FROM profiles")}
+    assert rows[("instagram", "222")] == ("hi", ["https://x.com/Example_User1"])
+    assert rows[("tiktok", "8419594197139637801")][0].startswith("me on ig:")
+    assert rows[("twitter", "641286")] == ("Example text", ["https://example.invalid/cf73a03c581b9cda"])
+    assert db.unmatched(conn) == []
+    assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 7
+    # a profile file gone: dropped on the next scan
+    os.remove(env["media"] / "bob.example" / "bob.example_222.json")
+    scanner.scan(env["roots"])
+    assert ("instagram", "222") not in {(r[0], r[1]) for r in conn.execute("SELECT platform, author_id FROM profiles")}
+
+
+def test_handle_and_link_normalizing():
+    import people
+    assert {h: people.handle_parts(h) for h in ("foo", "foo_", "TheFoo", "real.foo2", "foo_official", "theo")} == {
+        "foo": ("foo", ""), "foo_": ("foo", ""), "TheFoo": ("foo", ""), "real.foo2": ("foo", "2"),
+        "foo_official": ("foo", ""), "theo": ("theo", "")}
+    assert people.handle_parts("ab1") == (None, "1")
+    assert people.norm_name("Zoé  Smith!") == "zoe smith" and people.norm_name("Al ✨") is None
+    assert people.profile_links("x.com/Foo_bar. https://www.instagram.com/p/abc/ tiktok.com/@baz "
+                                "tiktok.com/nope instagram.com/holly.x twitch.tv/z") == [
+        ("twitter", "foo_bar"), ("tiktok", "baz"), ("instagram", "holly.x")]

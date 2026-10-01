@@ -298,10 +298,33 @@ def _migrate_10(conn):
         ) WITHOUT ROWID""")
 
 
+def _migrate_11(conn):
+    """Link suggestions (people.suggestions). profiles is derived on every
+    scan: an account's bio and links as its metadata has them (instaloader's
+    Profile file, gallery-dl's author dict). dismissed_suggestions is user
+    data, mirrored to JSON by userdata.py."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS profiles (
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            handle    TEXT,
+            bio       TEXT NOT NULL DEFAULT '',
+            urls      TEXT NOT NULL DEFAULT '[]',   -- JSON list
+            at        INTEGER,                      -- how recent (newest wins)
+            source    TEXT NOT NULL,                -- the metadata file
+            PRIMARY KEY (platform, author_id)
+        ) WITHOUT ROWID""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dismissed_suggestions (
+            key TEXT PRIMARY KEY,                   -- JSON list, sorted: the accounts, "platform:id"
+            at  INTEGER NOT NULL
+        )""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
-              _migrate_9, _migrate_10]
+              _migrate_9, _migrate_10, _migrate_11]
 
 BACKUPS_KEPT = 3
 
@@ -513,6 +536,31 @@ def save_copies(conn, found, now, prune):
         keep = set(paths)
         gone = [(r[0],) for r in conn.execute("SELECT meta_path FROM copies") if r[0] not in keep]
         conn.executemany("DELETE FROM copies WHERE meta_path = ?", gone)
+
+
+def save_profiles(conn, found, prune):
+    """Record what metadata says about accounts (parsers.Profile), the most
+    recent per account. ``prune`` (a full scan): ``found`` is all there is."""
+    best = {}
+    for p in found:
+        key = (p.platform, p.author_id)
+        if key not in best or (p.at or 0) >= (best[key].at or 0):
+            best[key] = p
+    rows = {k: (p.platform, p.author_id, p.handle, p.bio or "", json.dumps(p.urls), p.at, p.source)
+            for k, p in best.items()}
+    if prune:
+        have = {(r[0], r[1]): tuple(r) for r in conn.execute(
+            "SELECT platform, author_id, handle, bio, urls, at, source FROM profiles")}
+        if have == rows:
+            return                             # unchanged: keep the caches
+        conn.execute("DELETE FROM profiles")
+    else:
+        # A rescanned folder: keep a more recent profile seen elsewhere.
+        rows = {k: r for k, r in rows.items() if not conn.execute(
+            "SELECT 1 FROM profiles WHERE platform = ? AND author_id = ? AND COALESCE(at, 0) > ?",
+            (r[0], r[1], r[5] or 0)).fetchone()}
+    conn.executemany("INSERT OR REPLACE INTO profiles(platform, author_id, handle, bio, urls, at, source) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?)", list(rows.values()))
 
 
 def copy_row(conn, copy_id):

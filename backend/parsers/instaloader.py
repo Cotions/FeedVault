@@ -19,7 +19,7 @@ import lzma
 import os
 import re
 
-from . import DirResult, Media, ParsedPost, ext_of, is_media, IMAGE_EXT, VIDEO_EXT
+from . import DirResult, Media, ParsedPost, Profile, ext_of, is_media, IMAGE_EXT, VIDEO_EXT
 
 TOOL = "instaloader"
 
@@ -161,6 +161,22 @@ def _post_from(node, node_type, version, meta_path, media):
         hashtags=list(dict.fromkeys(h.lower() for h in _HASHTAG_RE.findall(text))),
         media=media,
     )
+
+
+def _profile(node, path):
+    """What a Profile file (``<handle>_<id>.json.xz``, written with the
+    profile's posts) says for link suggestions: its bio and links."""
+    if not isinstance(node, dict) or node.get("id") is None:
+        return None
+    urls = [node.get("external_url")]
+    urls += [b.get("url") for b in node.get("bio_links") or () if isinstance(b, dict)]
+    try:
+        at = int(os.path.getmtime(path))
+    except OSError:
+        at = None
+    bio = node.get("biography")
+    return Profile("instagram", str(node["id"]), node.get("username"), bio if isinstance(bio, str) else "",
+                   list(dict.fromkeys(u for u in urls if isinstance(u, str) and u)), at, path)
 
 
 # --- filename-only posts ----------------------------------------------------
@@ -324,6 +340,10 @@ def parse_dir(root, dirpath, names):
         seen_instaloader = True
         result.claimed.add(n)
         node_type = info.get("node_type")
+        if node_type == "Profile":
+            profile = _profile(data["node"], path)
+            if profile:
+                result.profiles.append(profile)
         if node_type not in _POST_TYPES:
             continue                           # Profile, Hashtag, iterator state
         node = data["node"] if isinstance(data["node"], dict) else {}

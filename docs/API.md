@@ -670,6 +670,52 @@ A **person**:
 - A bad name, a name taken by another person, bad notes or a malformed
   account list is a 400 `{ "ok": false, "error": "…" }`; an unknown id a 404.
 
+### Link suggestions
+
+Accounts likely to be one person, found in the index and in metadata already
+downloaded. Nothing is ever fetched.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/people/suggestions` | `{ "suggestions": [suggestion, …], "dismissed": 2 }`, most likely first |
+| POST | `/api/people/suggestions/dismiss` | body `{ "id": "…" }` → `{ "ok": true }`: "not the same person", for good; 404 when the id is not listed (reload) |
+
+```json
+{ "id": "4c1d9e0b7a2f3e5d6c8b", "score": 0.92, "reason": "same_handle",
+  "reasons": [{ "reason": "same_handle", "detail": "@somebody" },
+              { "reason": "same_name", "detail": "Some Body" }],
+  "accounts": [account, …], "person": null }
+```
+
+- `reason` (the strongest of `reasons`) and its `score`:
+  - `bio_link` (0.95): an account's bio or website, as its metadata has it,
+    links to another indexed account (`instagram.com/<handle>`,
+    `x.com/<handle>` or `twitter.com/<handle>`, `tiktok.com/@<handle>`,
+    any of its handles, old ones too). Read on every scan from instaloader's
+    Profile file (`<handle>_<id>.json[.xz]`: `biography`, `external_url`,
+    `bio_links`) and from gallery-dl's author dict of the newest post
+    (`description`/`signature`, `url`).
+  - `same_handle` (0.9): one handle (any in the account's history, or an
+    alias) on several platforms.
+  - `similar_handle` (0.7): handles equal once case, `.` `_` `-`, a leading
+    `the`, `real`, `its` or `official`, a trailing `official` and trailing
+    digits are set aside (`foo`, `foo_`, `thefoo`, `foo2`), but not two
+    different numbers (`foo1`, `foo2`).
+  - `same_name` (0.6): one display name, compared without case, accents,
+    emoji and punctuation, at least 4 letters.
+  A group found for several reasons scores 0.02 more per extra reason.
+- `detail`: what matched, for people.
+- `accounts`: the accounts of the group, most posts first. `person`: the
+  person one of them is linked to, or `null`. Only groups where linking
+  changes something are listed: at least one account has no person, and at
+  most one person is involved (two people are a merge, left to the user).
+  Linking is `POST /api/people` (`person` `null`) or
+  `/api/people/<id>/accounts` with the rest.
+- A dismissal is user data, written to
+  `<data_directory>/userdata/dismissed_suggestions.json` and keyed by the
+  group's accounts, so it survives rebuilding the index; a group that gains
+  an account shows again.
+
 ## Storage
 
 `GET /api/storage`:

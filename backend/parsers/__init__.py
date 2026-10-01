@@ -69,6 +69,20 @@ class DirResult:
     claimed: set = field(default_factory=set)
     # (path, message) for files that look like ours but could not be read.
     errors: list = field(default_factory=list)
+    # What the metadata says about accounts beyond their posts, for link
+    # suggestions (Profile below), at most one per account and directory.
+    profiles: list = field(default_factory=list)
+
+
+@dataclass
+class Profile:
+    platform: str
+    author_id: str
+    handle: Optional[str]
+    bio: str                        # the profile's description, may be empty
+    urls: list                      # links the profile shows (website, bio links)
+    at: Optional[int]               # how recent: the post's time, or the file's mtime
+    source: str                     # the metadata file it was read from
 
 
 from . import instaloader, gallery_dl  # noqa: E402
@@ -91,5 +105,6 @@ def parse_dir(root, dirpath, names):
         result.posts.extend(r.posts)
         result.claimed |= r.claimed
         result.errors.extend(r.errors)
+        result.profiles.extend(r.profiles)
         remaining = [n for n in remaining if n not in r.claimed]
     return result

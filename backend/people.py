@@ -10,7 +10,11 @@ person. An account with no person is shown on its own, as before.
 
 The person is only in the database; files stay where each tool wrote them.
 """
+import hashlib
+import json
 import os
+import re
+import unicodedata
 
 import db
 import organize
@@ -272,3 +276,160 @@ def merge(conn, ids, name, accounts, now):
         if name is not None:
             conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, keep))
     return person(conn, keep)
+
+
+# ---------------------------------------------------------------------------
+# Suggestions: accounts that are likely one person
+#
+# Read from the index and what downloaded metadata says; nothing is fetched.
+# ---------------------------------------------------------------------------
+
+# Most sure first; a group found for several reasons scores a little higher.
+SCORES = {"bio_link": 0.95, "same_handle": 0.9, "similar_handle": 0.7, "same_name": 0.6}
+_PREFIXES = ("the", "real", "its", "official")
+_SUFFIXES = ("official",)
+_LINK_RE = re.compile(r"(?:https?://)?(?:www\.|m\.|mobile\.)?(instagram\.com|x\.com|twitter\.com|tiktok\.com)"
+                      r"/(@?[A-Za-z0-9._]{1,30})", re.IGNORECASE)
+_LINK_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com": "twitter", "tiktok.com": "tiktok"}
+# First path parts that are pages, not profiles.
+_NOT_HANDLES = {"p", "reel", "reels", "tv", "stories", "explore", "accounts", "i", "intent", "share", "home",
+                "hashtag", "search", "status", "video", "tag", "discover", "music", "login", "settings"}
+
+
+def handle_parts(handle):
+    """(base, digits): a handle with what people add to a taken one taken
+    off (case, dots, underscores and dashes, a leading "the", "real", "its" or
+    "official", a trailing "official"), and its trailing digits apart. The
+    base is None when too little is left."""
+    h = re.sub(r"[._-]", "", (handle or "").lower())
+    for p in _PREFIXES:
+        if h.startswith(p) and len(h) - len(p) >= 3:
+            h = h[len(p):]
+            break
+    for x in _SUFFIXES:
+        if h.endswith(x) and len(h) - len(x) >= 3:
+            h = h[:-len(x)]
+    base = h.rstrip("0123456789")
+    return (base if len(base) >= 3 else None), h[len(base):]
+
+
+def norm_name(name):
+    """A display name compared without case, accents, emoji or punctuation;
+    None when under 4 letters."""
+    folded = unicodedata.normalize("NFKD", (name or "").casefold())
+    words = "".join(c if c.isalnum() else " " for c in folded if not unicodedata.combining(c)).split()
+    out = " ".join(words)
+    return out if sum(len(w) for w in words) >= 4 else None
+
+
+def profile_links(text):
+    """[(platform, handle)] of the profile links in a bio or URL, in order."""
+    out = []
+    for site, path in _LINK_RE.findall(text or ""):
+        platform = _LINK_PLATFORMS[site.lower()]
+        if platform == "tiktok" and not path.startswith("@"):
+            continue                           # tiktok.com/@handle only
+        handle = path.lstrip("@").rstrip(".").lower()
+        if handle and handle not in _NOT_HANDLES:
+            out.append((platform, handle))
+    return list(dict.fromkeys(out))
+
+
+def _key(accounts):
+    return json.dumps(sorted(f"{p}:{i}" for p, i in accounts))
+
+
+def suggestion_id(key):
+    return hashlib.sha1(key.encode()).hexdigest()[:20]
+
+
+def _label(a):
+    from_platform = {"instagram": "Instagram", "twitter": "X", "tiktok": "TikTok"}
+    return f"{from_platform.get(a['platform'], a['platform'])} @{a['handle'] or a['id']}"
+
+
+def _candidates(conn, accounts):
+    """[(reason, detail, {account keys})], before any filtering."""
+    out = []
+    by_handle, by_base, by_name = {}, {}, {}
+    for key, a in accounts.items():
+        for h in {x["handle"].lower() for x in a["handles"]} | {i.lower() for i in a["aliases"]}:
+            by_handle.setdefault(h, set()).add(key)
+            base, digits = handle_parts(h)
+            if base:
+                by_base.setdefault(base, {}).setdefault(digits, {}).setdefault(key, h)
+        for x in a["names"]:
+            n = norm_name(x["name"])
+            if n:
+                by_name.setdefault(n, {}).setdefault(key, x["name"])
+    for h, keys in by_handle.items():
+        if len({k[0] for k in keys}) > 1:      # across platforms (one platform: one account)
+            out.append(("same_handle", f"@{h}", keys))
+    for by_digits in by_base.values():
+        # foo, foo_, thefoo and foo2 are alike; foo1 and foo2 are not.
+        plain = by_digits.get("", {})
+        for digits, seen in (by_digits.items() if len(by_digits) > 1 else [("", plain)]):
+            if digits == "" and len(by_digits) > 1:
+                continue
+            seen = {**plain, **seen}
+            if len(seen) > 1 and len(set(seen.values())) > 1:
+                out.append(("similar_handle", " ~ ".join(f"@{h}" for h in sorted(set(seen.values()))), set(seen)))
+    for n, seen in by_name.items():
+        if len(seen) > 1:
+            out.append(("same_name", sorted(seen.values())[0], set(seen)))
+    # Bio and website links to another indexed account, by any of its handles.
+    for platform, aid, handle, bio, urls in conn.execute(
+            "SELECT platform, author_id, handle, bio, urls FROM profiles").fetchall():
+        src = canonical(conn, platform, aid)
+        if src not in accounts:
+            continue
+        for p, h in profile_links(" ".join([bio or "", *json.loads(urls or "[]")])):
+            for dst in by_handle.get(h, ()):
+                if dst[0] == p and dst != src:
+                    out.append(("bio_link", f"{_label(accounts[src])} links to {_label(accounts[dst])}", {src, dst}))
+    return out
+
+
+def suggestions(conn):
+    """Groups of accounts likely to be one person, most likely first, with
+    why. Only groups linking would change: not all in one person already, and
+    not two people (that is a merge, the user's call). Dismissed groups are
+    left out; a group that gains an account shows again."""
+    def compute(conn):
+        accounts = db._accounts(conn, sizes=True)
+        dismissed = {r[0] for r in conn.execute("SELECT key FROM dismissed_suggestions")}
+        groups = {}
+        for reason, detail, keys in _candidates(conn, accounts):
+            people = {accounts[k]["person"]["id"] for k in keys if accounts[k]["person"]}
+            unlinked = [k for k in keys if not accounts[k]["person"]]
+            if len(people) > 1 or not unlinked:
+                continue
+            key = _key(keys)
+            g = groups.setdefault(key, {"keys": keys, "reasons": []})
+            if not any(r["reason"] == reason and r["detail"] == detail for r in g["reasons"]):
+                g["reasons"].append({"reason": reason, "detail": detail})
+        out = []
+        for key, g in groups.items():
+            if key in dismissed:
+                continue
+            g["reasons"].sort(key=lambda r: -SCORES[r["reason"]])
+            score = SCORES[g["reasons"][0]["reason"]] + 0.02 * (len({r["reason"] for r in g["reasons"]}) - 1)
+            members = sorted((accounts[k] for k in g["keys"]), key=lambda a: (-a["count"], a["platform"], a["id"]))
+            person = next((a["person"] for a in members if a["person"]), None)
+            out.append({"id": suggestion_id(key), "score": round(min(score, 1.0), 2),
+                        "reason": g["reasons"][0]["reason"], "reasons": g["reasons"],
+                        "accounts": members, "person": person})
+        out.sort(key=lambda s: (-s["score"], -sum(a["count"] for a in s["accounts"]), s["id"]))
+        return {"suggestions": out, "dismissed": len(dismissed)}
+    return db._memo(conn, ("suggestions",), compute)
+
+
+def dismiss(conn, sid, now):
+    """Store a suggestion as "not the same person". False when it is not listed."""
+    s = next((s for s in suggestions(conn)["suggestions"] if s["id"] == sid), None)
+    if s is None:
+        return False
+    with conn:
+        conn.execute("INSERT OR IGNORE INTO dismissed_suggestions(key, at) VALUES (?, ?)",
+                     (_key((a["platform"], a["id"]) for a in s["accounts"]), now))
+    return True

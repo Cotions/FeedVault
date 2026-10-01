@@ -592,6 +592,22 @@ def merge_people():
     return jsonify({"ok": True, "person": p})
 
 
+@app.get("/api/people/suggestions")
+def people_suggestions():
+    return jsonify(people.suggestions(db.connect()))
+
+
+@app.post("/api/people/suggestions/dismiss")
+def dismiss_suggestion():
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("id"), str):
+        return jsonify({"ok": False, "error": "id must be a suggestion id"}), 400
+    if not people.dismiss(db.connect(), body["id"], int(time.time())):
+        return jsonify({"ok": False, "error": "no such suggestion; reload"}), 404
+    userdata.changed("dismissed_suggestions")
+    return jsonify({"ok": True})
+
+
 @app.get("/api/people/<int:pid>")
 def get_person(pid):
     p = people.person(db.connect(), pid)
