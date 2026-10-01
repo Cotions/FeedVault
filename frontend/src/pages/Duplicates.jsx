@@ -211,6 +211,7 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
    still goes through the group's button and its confirmation. */
 function Compare({ g, at, keep, onMove, onKeep, onClose }) {
   const boxRef = useRef(null);
+  const [broken, setBroken] = useState(null);   // the url that failed to load (file gone, unreadable)
   const m = g.members[at];
   const item = matchOf(m);
   const who = m.post?.author?.handle ? `@${m.post.author.handle}` : m.folder;
@@ -222,7 +223,19 @@ function Compare({ g, at, keep, onMove, onKeep, onClose }) {
   }, []);
 
   function onKeyDown(e) {
-    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    if (e.key === "Tab") {
+      // Keep focus inside the dialog, like the other modals.
+      const els = [...boxRef.current.querySelectorAll("button, a[href], video")];
+      if (!els.length) return;
+      const first = els[0], last = els[els.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === boxRef.current)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
       onMove(e.key === "ArrowLeft" ? -1 : 1);
     } else if (e.key === "Escape") {
@@ -251,12 +264,13 @@ function Compare({ g, at, keep, onMove, onKeep, onClose }) {
           <button type="button" className="dup-compare-nav" onClick={() => onMove(-1)} aria-label="Previous member">
             <Icon name="chevLeft" size={22} />
           </button>
-          {!item?.url ? (
+          {!item?.url || broken === item.url ? (
             <span className="big-file-ph"><Icon name="image" size={40} /></span>
           ) : item.kind === "video" ? (
-            <video key={item.url} src={item.url} controls muted loop autoPlay playsInline />
+            <video key={item.url} src={item.url} controls muted loop autoPlay playsInline
+              onError={() => setBroken(item.url)} />
           ) : (
-            <img key={item.url} src={item.url} alt="" />
+            <img key={item.url} src={item.url} alt="" onError={() => setBroken(item.url)} />
           )}
           <button type="button" className="dup-compare-nav" onClick={() => onMove(1)} aria-label="Next member">
             <Icon name="chevRight" size={22} />
@@ -338,10 +352,16 @@ export default function Duplicates() {
     return () => { alive = false; clearInterval(t); };
   }, [reload]);
 
+  // A page that comes back after the tab or threshold changed is dropped.
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
+
   async function loadMore() {
+    const asked = view;
     setLoadingMore(true);
     try {
       const r = await getDuplicates({ kind, threshold: tParam ?? undefined, offset: result.groups.length, limit: PAGE });
+      if (viewRef.current !== asked) return;
       setResult(prev => ({ ...r, groups: [...prev.groups, ...r.groups.filter(g => !prev.groups.some(p => p.id === g.id))] }));
     } catch (e) {
       toast(e.message, "err");

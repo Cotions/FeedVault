@@ -240,7 +240,7 @@ def _threshold(value):
     default, if the config's is not usable); None when the request's is not
     a whole number of bits in range."""
     def bits(v):
-        if isinstance(v, str) and v.isdigit():
+        if isinstance(v, str) and v.isascii() and v.isdigit():
             v = int(v)
         ok = isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= duplicates.SIMILAR_MAX
         return v if ok else None

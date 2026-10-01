@@ -90,7 +90,7 @@ def test_pass_fingerprints_every_picture(env, monkeypatch):
     assert hashing.from_db(h[a + ".jpg"]["dhash"]) == hashing.dhash(a + ".jpg")
     assert (h[a + ".jpg"]["width"], h[a + ".jpg"]["height"]) == (640, 800)
     assert h[v + ".mp4"]["dhash"] is not None                                  # from the poster
-    assert h[n + ".mp4"]["dhash"] is None and h[n + ".mp4"]["dhash_at"]       # tried, nothing to read
+    assert n + ".mp4" not in h or h[n + ".mp4"]["dhash_at"] is None          # waits for ffmpeg
     assert h[a + ".jpg"]["partial"] is None                                    # no twin: no content hash
     st = hashing.status()
     assert (st["fingerprinted"], st["errors"]) == (2, [])
@@ -167,6 +167,45 @@ def test_unreadable_picture_is_tried_once(env):
     hashing._state["errors"] = []
     hashing.run_pass(conn)
     assert hashes()[a + ".jpg"]["dhash_at"] == at and hashing.status()["errors"] == []
+
+
+def test_any_decoder_error_is_noted_not_fatal(env, monkeypatch):
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    b = write_post(env["media"] / "alice", "P2", TS + 1, ALICE, "image")
+    photo(a + ".jpg", 1)
+    photo(b + ".jpg", 2)
+    scanner.scan(env["roots"])
+    real = hashing.dhash
+
+    def flaky(p):
+        if str(p) == a + ".jpg":
+            raise ZeroDivisionError("bad EXIF")                 # not an OSError: Pillow plugins raise anything
+        return real(p)
+    monkeypatch.setattr(hashing, "dhash", flaky)
+    assert hashing.run_pass(db.connect())
+    h = hashes()
+    assert h[a + ".jpg"]["dhash"] is None and h[a + ".jpg"]["dhash_at"]
+    assert h[b + ".jpg"]["dhash"] is not None
+    assert "ZeroDivisionError" in hashing.status()["errors"][0]["error"]
+
+
+def test_video_waits_for_ffmpeg(env, monkeypatch):
+    n = write_post(env["media"] / "alice", "V2", TS, ALICE, "video")
+    os.remove(n + ".jpg")
+    scanner.scan(env["roots"])
+    data_dir = str(env["tmp"] / "data")
+    monkeypatch.setattr(thumbs, "have_ffmpeg", lambda: False)
+    hashing.run_pass(db.connect(), data_dir=data_dir)
+    assert hashes().get(n + ".mp4", {}).get("dhash") is None
+
+    def frame(src, out):
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        photo(out, 5)
+        return True
+    monkeypatch.setattr(thumbs, "have_ffmpeg", lambda: True)    # installed later: picked up next pass
+    monkeypatch.setattr(thumbs, "_video_frame", frame)
+    hashing.run_pass(db.connect(), data_dir=data_dir)
+    assert hashes()[n + ".mp4"]["dhash"] is not None
 
 
 def test_worker_steps_aside_during_the_dhash_phase(env, monkeypatch):
@@ -391,7 +430,7 @@ def test_api_threshold(env, client):
     g = r["groups"][0]
     assert all("author" not in m for m in g["members"])
     assert similar(client, threshold=0)["total"] in (0, 1)
-    for bad in ("11", "-1", "x", "6.5"):
+    for bad in ("11", "-1", "x", "6.5", "%C2%B2", "%EF%BC%96"):     # not ASCII digits
         assert client.get(f"/api/duplicates?kind=similar&threshold={bad}", headers=H).status_code == 400
     assert client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": "x", "threshold": 99},
                        headers=H).status_code == 400
@@ -439,6 +478,15 @@ def test_dismiss_similar(env, client):
     userdata.flush()
     saved = json.load(open(userdata.path(str(env["tmp"] / "data"), "dismissed_duplicates")))
     assert [row["kind"] for row in saved["rows"]] == ["similar"]
+
+
+def test_dismissals_of_another_kind_do_not_hide_a_similar_group(env, client):
+    repost(env)
+    conn = db.connect()
+    [g] = duplicates.all_groups(conn, "similar")
+    conn.execute("INSERT INTO dismissed_duplicates(key, kind, at) VALUES (?, 'content', 0)", (g["key"],))
+    conn.commit()
+    assert similar(client)["total"] == 1
 
 
 # ---------------------------------------------------------------------------

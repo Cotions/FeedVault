@@ -343,23 +343,25 @@ def _full_row(path, st):
 
 def _dhash_row(path, st, kind, poster, data_dir):
     """A row with the file's dHash, or a NULL one (tried, not retried until
-    the file changes) when its picture cannot be decoded."""
+    the file changes) when its picture cannot be decoded. None, to try again
+    next pass, for a video without a poster while ffmpeg is not installed."""
     row = {"path": path, "kind": kind, "poster_path": poster}
     src = thumbs.cached(data_dir, row)
     if src is None and (kind == "image" or poster):
         src = poster or path
     elif src is None:
+        if not thumbs.have_ffmpeg():
+            return None, 0
         src = thumbs.thumb_for(data_dir, row)    # a frame from ffmpeg, kept as the grid's thumbnail
     value, read = None, 0
     if src is not None:
-        from PIL import Image
         try:
             read = os.path.getsize(src)
             value = dhash(src)
         except FileNotFoundError:
             raise
-        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as e:
-            _note_error(path, f"not a readable picture: {e}")
+        except Exception as e:                   # any decoder or EXIF error: one bad file must not stop the pass
+            _note_error(path, f"not a readable picture: {type(e).__name__}: {e}")
     if stat(path) != st:
         raise Changed("modified while reading")
     width, height = dimensions(path) if kind == "image" else (None, None)
@@ -373,10 +375,10 @@ def _probe_row(path, st):
 
 
 def _hash_all(conn, paths, phase, restart, fresh, work, workers=1):
-    """Run ``work(path, (size, mtime_ns))`` -> (row, bytes read) on every path
-    that is not ``fresh``, writing the rows in batches. With ``workers``,
-    that many threads (at the same low priority) work on a few files each
-    between checks for a restart or a lock."""
+    """Run ``work(path, (size, mtime_ns))`` -> (row or None, bytes read) on
+    every path that is not ``fresh``, writing the rows in batches. With
+    ``workers``, that many threads (at the same low priority) take one file
+    each between checks for a restart or a lock."""
     _set(phase=phase, done=0, total=len(paths), bytes=0)
     pending = []                                 # rows to write, see COMMIT_EVERY
     last_write = time.monotonic()
@@ -392,7 +394,7 @@ def _hash_all(conn, paths, phase, restart, fresh, work, workers=1):
             return None, 0
 
     pool = ThreadPoolExecutor(workers, initializer=_lower_priority) if workers > 1 else None
-    step = workers * 4 if pool else 1
+    step = workers if pool else 1                # one file per thread between checks
     try:
         for start in range(0, len(paths), step):
             if restart is not None and restart.is_set():

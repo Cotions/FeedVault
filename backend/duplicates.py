@@ -63,9 +63,11 @@ def _hashes(conn):
         "SELECT path, size, mtime_ns, partial, full, width, height, dhash FROM media_hash")}
 
 
-def _dismissed(conn):
+def _dismissed(conn, kind):
+    """Dismissals of one kind: "these only look alike" says nothing about
+    the same posts sharing a file."""
     out = []
-    for (key,) in conn.execute("SELECT key FROM dismissed_duplicates"):
+    for (key,) in conn.execute("SELECT key FROM dismissed_duplicates WHERE kind = ?", (kind,)):
         try:
             out.append(frozenset(json.loads(key)))
         except (ValueError, TypeError):
@@ -110,7 +112,7 @@ def _post_member(conn, row, hashes):
     summary = db.summary(conn, row)
     return _member("post", row["id"], row["meta_path"], _items(media, hashes), row["saved_at"],
                    row["decision"] == "keep", id=row["id"], post=summary, posted_at=row["posted_at"],
-                   author=row["author_id"] or row["author_handle"],
+                   author=row["author_id"] or row["author_handle"] or os.path.dirname(row["meta_path"]),
                    thumb_url=summary["cover"]["url"] if summary["cover"] and summary["cover"].get("poster", True)
                    else None)
 
@@ -364,7 +366,7 @@ def _pictures(conn, hashes):
         h = hashes.get(path)
         if h is None or h[0] != size or h[7] is None:
             continue
-        if FLAT_BITS <= h[7].bit_count() <= 64 - FLAT_BITS:
+        if FLAT_BITS < h[7].bit_count() < 64 - FLAT_BITS:
             out.append((post_id, idx, h[7]))
     return out
 
@@ -414,6 +416,9 @@ def videos_to_measure(conn):
     """Videos of posts in a content group or near another post at the
     loosest threshold, whose size is not known yet: hashing.py measures them
     with ffprobe, for the keeper rule."""
+    if not conn.execute("SELECT 1 FROM media m JOIN media_hash h ON h.path = m.path AND h.size = m.size "
+                        "WHERE m.missing = 0 AND m.kind = 'video' AND h.width IS NULL LIMIT 1").fetchone():
+        return []                                 # the usual case after the first pass: skip the grouping
     hashes = _hashes(conn)
     posts = {p for ids in _content_components(conn, hashes) for p in ids}
     posts |= {p[0] for link in _near_links(conn, hashes, SIMILAR_MAX) for p in link[:2]}
@@ -433,7 +438,7 @@ def all_groups(conn, kind, include_dismissed=False, hashes=None, threshold=SIMIL
     else:
         groups = _similar_groups(conn, hashes, threshold)
     if not include_dismissed:
-        dismissed = _dismissed(conn)
+        dismissed = _dismissed(conn, kind)
         groups = [g for g in groups if not is_dismissed(g["key"], dismissed)]
     groups.sort(key=lambda g: (-g["frees"], g["id"]))
     return groups
