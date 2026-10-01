@@ -610,13 +610,14 @@ def test_ended_is_listed_only_once_its_effects_are_in(env, client, fake, monkeyp
 
 def test_quitting_mid_sync_records_it_once_and_does_not_index(env, client, fake, monkeypatch):
     carol_archive(env)
-    fake.set(carol_profile(new=3), delay=0.3)
+    fake.set(carol_profile(new=3), delay=1)
     s = add_source(client)
     calls = []
     real = sources.record
     monkeypatch.setattr(sources, "record", lambda *a: calls.append(a[-1]["state"]) or real(*a))
     job = post(client, f"/api/sources/{s['id']}/sync")["job"]
-    wait_for(lambda: any(n.startswith("carol.cooks-2024-06-04") for n in os.listdir(env["media"] / "carol.cooks")))
+    # The newest comes first: two more to go when it is there.
+    wait_for(lambda: any(n.startswith("carol.cooks-2024-06-06") for n in os.listdir(env["media"] / "carol.cooks")))
     jobs.shutdown()
     for t in threading.enumerate():
         if t.name == f"job-{job['id']}":
