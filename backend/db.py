@@ -233,9 +233,17 @@ def _migrate_7(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS collection_posts_post ON collection_posts(post_id)")
 
 
+def _migrate_8(conn):
+    """Side files: files a post owns besides its media, posters and metadata
+    path (gallery-dl's other per-file JSONs, music, subtitles), as a JSON list
+    of paths, so the trash can move them with the post."""
+    conn.execute("ALTER TABLE posts ADD COLUMN side_files TEXT NOT NULL DEFAULT '[]'")
+    conn.execute("ALTER TABLE copies ADD COLUMN side_files TEXT NOT NULL DEFAULT '[]'")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
-MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7]
+MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8]
 
 BACKUPS_KEPT = 3
 
@@ -381,6 +389,7 @@ def upsert_post(conn, p, meta_mtime, meta_size, now):
         posted_at=p.posted_at, saved_at=saved_at, text=p.text or "",
         likes=p.likes, comments=p.comments, views=p.views, location=p.location, album=p.album,
         hashtags=json.dumps(p.hashtags), tool=p.tool, tool_version=p.tool_version,
+        side_files=json.dumps(p.side_files),
         meta_path=p.meta_path, meta_mtime=meta_mtime, meta_size=meta_size,
         missing=0, indexed_at=now,
     )
@@ -436,10 +445,11 @@ def save_copies(conn, found, now, prune):
             media.append({"idx": m.idx, "kind": m.kind, "path": m.path,
                           "poster_path": m.poster_path, "size": size})
         conn.execute(
-            "INSERT INTO copies(post_id, meta_path, meta_mtime, media, first_seen) VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO copies(post_id, meta_path, meta_mtime, media, side_files, first_seen) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(meta_path) DO UPDATE SET post_id = excluded.post_id, "
-            "meta_mtime = excluded.meta_mtime, media = excluded.media",
-            (p.id, p.meta_path, mtime, json.dumps(media), now))
+            "meta_mtime = excluded.meta_mtime, media = excluded.media, side_files = excluded.side_files",
+            (p.id, p.meta_path, mtime, json.dumps(media), json.dumps(p.side_files), now))
         paths.append(p.meta_path)
     if prune:
         keep = set(paths)
@@ -450,7 +460,8 @@ def save_copies(conn, found, now, prune):
 def copy_row(conn, copy_id):
     """A copy with its media list decoded, or None."""
     row = conn.execute("SELECT * FROM copies WHERE id = ?", (copy_id,)).fetchone()
-    return {**dict(row), "media": json.loads(row["media"])} if row else None
+    return {**dict(row), "media": json.loads(row["media"]),
+            "side_files": json.loads(row["side_files"])} if row else None
 
 
 # ---------------------------------------------------------------------------

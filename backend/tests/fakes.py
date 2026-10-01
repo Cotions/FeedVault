@@ -1,4 +1,4 @@
-"""Fake instaloader output for tests and the demo vault.
+"""Fake instaloader and gallery-dl output for tests and the demo vault.
 
 Shapes follow what instaloader 4.15 writes (see backend/parsers/instaloader.py).
 Handles, names and captions are invented; no real account or media is used.
@@ -105,3 +105,36 @@ def write_post(folder, shortcode, ts, owner, kind="image", caption="", slides=No
 
 def owner(handle, uid, name=None):
     return {"id": str(uid), "username": handle, "full_name": name or handle.title()}
+
+
+# --- gallery-dl ---------------------------------------------------------------
+
+GALLERY_DL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "gallery_dl")
+
+
+def gallery_dl_case(case, folder, media=True):
+    """Copy the gallery-dl fixture ``case`` ("twitter/photo", see
+    fixtures/gallery_dl/README.md) into ``folder`` and create the file each
+    JSON describes, as gallery-dl would have downloaded it. Returns the JSON
+    names."""
+    import shutil
+    os.makedirs(folder, exist_ok=True)
+    src = os.path.join(GALLERY_DL, case)
+    names = sorted(n for n in os.listdir(src) if n.endswith(".json"))
+    for n in names:
+        shutil.copy(os.path.join(src, n), os.path.join(folder, n))
+        with open(os.path.join(src, n), encoding="utf-8") as f:
+            data = json.load(f)
+        if not media or "extension" not in data:
+            continue                           # a post-level JSON has no file
+        stem = n[:-5]
+        name = stem if stem.endswith("." + data["extension"]) else f"{stem}.{data['extension']}"
+        path = os.path.join(folder, name)
+        if data["extension"] in ("mp4", "webm", "mov"):
+            fake_video(path)
+        elif data["extension"] in ("jpg", "jpeg", "png", "webp"):
+            png(path, tuple((sum(map(ord, name)) * k) % 256 for k in (3, 7, 11)))
+        else:
+            with open(path, "wb") as f:        # music, subtitles
+                f.write(b"ID3" + b"\x00" * 32)
+    return names

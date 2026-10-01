@@ -95,14 +95,17 @@ def _post_files(conn, post):
     """Every file that belongs to a post: media, posters, metadata, side files,
     as (path, manifest fields)."""
     return _files(conn.execute("SELECT * FROM media WHERE post_id = ? ORDER BY idx", (post["id"],)),
-                  post["meta_path"])
+                  post["meta_path"], json.loads(post["side_files"]))
 
 
-def _files(media, meta):
+def _files(media, meta, sides=()):
     files = []
     for m in media:
         files.extend(_media_files(m))
     files.append((meta, {"role": "meta"}))
+    # The parser's side files (gallery-dl's other per-file JSONs, music):
+    # left behind, they would bring the post back on the next scan.
+    files.extend((p, {"role": "side"}) for p in sides)
     for ext in (".json.xz", ".json"):
         if meta.endswith(ext):
             base = meta[: -len(ext)]
@@ -210,7 +213,7 @@ def _delete_copy(conn, copy, roots, data_dir, report):
     info = _post_info(post, len(copy["media"]), False) if post else \
         {"platform": platform, "author": None, "kind": None, "posted_at": None,
          "items": len(copy["media"]), "partial": False}
-    files = _files(copy["media"], copy["meta_path"])
+    files = _files(copy["media"], copy["meta_path"], copy["side_files"])
     if not _move_all(files, roots, copy["post_id"], {**info, "copy": copy["meta_path"]}, report, data_dir):
         conn.commit()
         return

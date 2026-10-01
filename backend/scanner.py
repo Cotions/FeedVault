@@ -3,6 +3,7 @@
 A rescan never deletes a post. A post whose metadata file is gone is marked
 missing and kept, because keeping what disappears is the point of the app.
 """
+import json
 import os
 import threading
 import time
@@ -114,7 +115,7 @@ def _size_mtime(path):
 
 def _index_post(conn, post, now, report, seen_meta, unmatched, copies):
     mtime, size = _stat(post.meta_path)
-    existing = conn.execute("SELECT meta_path, meta_mtime, meta_size, missing FROM posts WHERE id = ?",
+    existing = conn.execute("SELECT meta_path, meta_mtime, meta_size, missing, side_files FROM posts WHERE id = ?",
                             (post.id,)).fetchone()
 
     # The same post downloaded twice into different folders: first one wins
@@ -134,7 +135,8 @@ def _index_post(conn, post, now, report, seen_meta, unmatched, copies):
 
     seen_meta.add(post.meta_path)
     if existing and existing["meta_path"] == post.meta_path and not existing["missing"] \
-            and existing["meta_mtime"] == mtime and existing["meta_size"] == size:
+            and existing["meta_mtime"] == mtime and existing["meta_size"] == size \
+            and existing["side_files"] == json.dumps(post.side_files):
         have = {r[0] for r in conn.execute("SELECT path FROM media WHERE post_id = ? AND missing = 0",
                                            (post.id,))}
         if have == {m.path for m in post.media}:

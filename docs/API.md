@@ -35,6 +35,8 @@ A **post summary** (list endpoints):
 }
 ```
 
+- `platform`: `instagram`, `twitter` (X; `url` points at x.com), `tiktok`; posts
+  from other gallery-dl sites carry the gallery-dl category (`reddit`, …)
 - `kind`: `image` | `video` | `carousel` | `story` | `text`
 - `cover`: a thumbnail of the first media item (`/media/<id>/thumb`, a JPEG
   at most 480 px wide), or `null` for text-only posts. For a video,
@@ -68,9 +70,13 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 }
 ```
 
-- `album`: highlight title (or other collection name), `null` otherwise
+- `album`: highlight title (or other collection name); for gallery-dl posts a
+  note such as `"Retweeted by @someone"` or `"Quoted by @someone"`; `null` otherwise
 - `collections`: the user's collections this post is in (see
   [Collections](#collections)), `[{ "id": 3, "name": "Moodboard" }]`, by name
+- `source.tool`: `"instaloader"` or `"gallery-dl"` (`version` is `null` for
+  gallery-dl, which does not record it); `meta_path` of a gallery-dl post is the
+  JSON of its first media file, or the post-level JSON of a text-only tweet
 - `source.tool` is `"instaloader (filenames)"` when the post was rebuilt from
   file names alone (downloads made with `save_metadata=False`); `meta_path`
   is then the first media file
@@ -266,7 +272,8 @@ post id; after a keep, call `/api/review` with `decision: null`.
   a post must have all of them (`tag=a&tag=b`). Combined with any `tag:` in `q`;
   a value that cannot be a tag name matches nothing
 - `untagged=1`: only posts with no tag
-- `platform`: e.g. `instagram`
+- `platform`: `instagram`, `twitter` (X, x.com included), `tiktok`, or another
+  gallery-dl category name for sites without their own mapping (`reddit`, `bluesky`, …)
 - `author`: author id (from `/api/authors`)
 - `kind`: one of the kinds above
 - `sort`: `posted` (default) or `saved`

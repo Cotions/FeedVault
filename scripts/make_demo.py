@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a demo vault of invented instaloader output, for trying the dashboard.
+"""Build a demo vault of invented instaloader and gallery-dl output, for trying the dashboard.
 
     python3 scripts/make_demo.py /tmp/feedvault-demo
 
@@ -145,6 +145,99 @@ def add_duplicates(media, ts):
     img.resize((540, 675)).save(base + ".jpg", "JPEG", quality=60)
 
 
+def _gdl_template(case, n=0):
+    folder = os.path.join(fakes.GALLERY_DL, case)
+    with open(os.path.join(folder, sorted(x for x in os.listdir(folder) if x.endswith(".json"))[n])) as f:
+        return json.load(f)
+
+
+def _gdl_write(folder, name, data, ext=None):
+    """One gallery-dl file: the media (made up) and its .json beside it."""
+    os.makedirs(folder, exist_ok=True)
+    if ext in ("jpg", "png"):
+        fakes.png(os.path.join(folder, name), tuple(random.Random(name).randrange(40, 220) for _ in range(3)))
+    elif ext == "mp4":
+        fakes.fake_video(os.path.join(folder, name))
+    elif ext == "mp3":
+        with open(os.path.join(folder, name), "wb") as f:
+            f.write(b"ID3" + b"\x00" * 32)
+    with open(os.path.join(folder, name + ".json" if ext else name), "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+
+def _stamp(ts):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+X_USERS = {
+    "tram_spotter": {"id": 4100001, "name": "tram_spotter", "nick": "Tram Spotter"},
+    "kiln_notes": {"id": 4100002, "name": "kiln_notes", "nick": "Kiln Notes"},
+}
+
+
+def add_gallery_dl(media, ts):
+    """A few X and TikTok posts laid out as gallery-dl writes them, from the
+    shapes in backend/tests/fixtures/gallery_dl (text and people invented)."""
+    base = os.path.join(media, "gallery-dl")
+
+    def tweet(folder_user, tid, author, text, when, files, **extra):
+        tpl = _gdl_template("twitter/photo")
+        common = {k: v for k, v in tpl.items()
+                  if k not in ("filename", "extension", "type", "width", "height", "description", "num")}
+        user = X_USERS[folder_user]
+        common.update(tweet_id=tid, conversation_id=tid, date=_stamp(when), content=text,
+                      author={**tpl["author"], **X_USERS[author]}, user={**tpl["user"], **user},
+                      favorite_count=random.Random(tid).randint(3, 900), reply_count=random.Random(tid).randint(0, 40),
+                      count=len(files), hashtags=[t[1:] for t in text.split() if t.startswith("#")], **extra)
+        folder = os.path.join(base, "twitter", user["name"])
+        if not files:                                       # text-only: the "event": "post" JSON
+            _gdl_write(folder, f"{tid}.json", common)
+        for num, (ext, ftype) in enumerate(files, 1):
+            d = {"filename": f"demo{tid}{num}", "extension": ext, "type": ftype, "width": 1080, "height": 1350,
+                 "description": None, **common, "num": num}
+            _gdl_write(folder, f"{tid}_{num}.{ext}", d, ext)
+
+    t = ts + 3 * 86_400
+    tweet("tram_spotter", 1790000000000000101, "tram_spotter",
+          "Night line 12, last run. Rain on the windows. #trams #nightphotography", t, [("jpg", "photo")])
+    tweet("tram_spotter", 1790000000000000102, "tram_spotter",
+          "Depot open day: four of the old ones lined up 🚋 #trams", t + 7_200,
+          [("jpg", "photo")] * 4)
+    tweet("tram_spotter", 1790000000000000103, "tram_spotter",
+          "Short clip: the 1950s car pulling out of the depot", t + 20_000,
+          [("mp4", "video"), ("jpg", "preview")], view_count=12_400)
+    tweet("tram_spotter", 1790000000000000104, "tram_spotter",
+          "Does anyone know why line 4 skips the bridge stop on Sundays?", t + 40_000, [])
+    tweet("tram_spotter", 1790000000000000105, "kiln_notes",
+          "RT @kiln_notes: Shino glaze, second firing. Happy with this one. #ceramics", t + 60_000,
+          [("jpg", "photo"), ("jpg", "photo")], retweet_id=1790000000000000099, date_original=_stamp(t - 86_400))
+
+    def tiktok(pid, text, when, files, post_type):
+        tpl = _gdl_template("tiktok/video", 1)
+        author = {**tpl["author"], "id": "6900000000000000001", "uniqueId": "lo.fi.garden", "nickname": "lo-fi garden"}
+        common = {**tpl, "id": pid, "desc": text, "createTime": str(when), "date": _stamp(when), "author": author,
+                  "user": "lo.fi.garden", "post_type": post_type, "textExtra": [], "challenges": [],
+                  "stats": {"diggCount": random.Random(pid).randint(100, 90_000), "shareCount": 12,
+                            "commentCount": random.Random(pid).randint(0, 300),
+                            "playCount": random.Random(pid).randint(1_000, 900_000), "collectCount": "40"}}
+        common["video"] = {**tpl["video"], "id": pid}
+        folder = os.path.join(base, "tiktok", "lo.fi.garden")
+        for num, (ext, ftype, file_id) in enumerate(files, 1):
+            n = num if ftype == "image" else 0
+            d = {**common, "filename": f"demo{pid}{num}", "extension": ext, "type": ftype, "num": n,
+                 "file_id": file_id, "title": text or f"TikTok {'photo' if ftype == 'image' else ftype} #{pid}"}
+            title = d["title"][:40]
+            stem = f"{pid}{'_%02d' % n if n else ''} {title}{f' [{file_id}]' if file_id else ''}"
+            _gdl_write(folder, f"{stem}.{ext}", d, ext)
+
+    tiktok("7300000000000000201", "Tomato harvest timelapse 🍅 #garden #timelapse", t + 80_000,
+           [("mp4", "video", ""), ("jpg", "cover", "cover")], "video")
+    tiktok("7300000000000000202", "", t + 90_000,
+           [("jpg", "image", "a1b2c3"), ("jpg", "image", "d4e5f6"), ("jpg", "image", "a7b8c9"),
+            ("mp3", "audio", "7300000000000000999")], "image")
+
+
 def seed_tags(data, tagged):
     """User data files the app imports on its first start (an existing demo's
     own tags are left alone)."""
@@ -197,6 +290,7 @@ def main():
     # A stray file so the Unmatched page has something to show.
     fakes.png(os.path.join(media, "pixel_bakery", "screenshot_from_phone.png"), (200, 60, 60))
     add_duplicates(media, ts)
+    add_gallery_dl(media, ts)
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     seed_tags(os.path.join(root, "data"), tagged)

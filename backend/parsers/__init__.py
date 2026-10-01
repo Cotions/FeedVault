@@ -51,6 +51,9 @@ class ParsedPost:
     album: Optional[str] = None     # highlight title, collection name
     hashtags: list = field(default_factory=list)
     media: list = field(default_factory=list)
+    # Other files that belong to the post and go to the trash with it: the
+    # per-file metadata JSONs besides meta_path, music, subtitles.
+    side_files: list = field(default_factory=list)
 
     @property
     def id(self):
@@ -68,9 +71,11 @@ class DirResult:
     errors: list = field(default_factory=list)
 
 
-from . import instaloader  # noqa: E402
+from . import instaloader, gallery_dl  # noqa: E402
 
-PARSERS = [instaloader]
+# Parsers that read metadata first; guessing posts from file names comes last,
+# on whatever is left.
+PARSERS = [instaloader.parse_dir, gallery_dl.parse_dir, instaloader.parse_filenames]
 
 
 def parse_dir(root, dirpath, names):
@@ -81,8 +86,8 @@ def parse_dir(root, dirpath, names):
     """
     result = DirResult()
     remaining = list(names)
-    for parser in PARSERS:
-        r = parser.parse_dir(root, dirpath, remaining)
+    for parse in PARSERS:
+        r = parse(root, dirpath, remaining)
         result.posts.extend(r.posts)
         result.claimed |= r.claimed
         result.errors.extend(r.errors)

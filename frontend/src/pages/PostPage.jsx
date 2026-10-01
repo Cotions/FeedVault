@@ -4,7 +4,7 @@ import { getPost, deleteItems, getTags, applyTags } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
-import { excerpt, fmt, fmtBytes, fmtFullDate, fmtIso, platformLabel, safeUrl, authorFeedPath } from "../lib/fmt";
+import { albumLabel, excerpt, fmt, fmtBytes, fmtFullDate, fmtIso, platformLabel, safeUrl, authorFeedPath } from "../lib/fmt";
 import MediaCarousel from "../components/MediaCarousel";
 import RichText from "../components/RichText";
 import Icon from "../components/Icon";
@@ -250,7 +250,7 @@ export default function PostPage() {
               </div>
               {post.album && (
                 <div>
-                  <dt>Highlight</dt>
+                  <dt>{albumLabel(post.platform)}</dt>
                   <dd><Link to={`/?q=${encodeURIComponent(post.album)}`}>{post.album}</Link></dd>
                 </div>
               )}

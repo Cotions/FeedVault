@@ -340,8 +340,13 @@ def parse_dir(root, dirpath, names):
         # Profile folders also hold an "id" file.
         result.claimed |= {n for n in names if n == "id"}
     result.claimed |= {n for n in names if _SIDE_RE.fullmatch(n)}
+    return result
 
-    posts, claimed = _filename_posts(root, dirpath, [n for n in names if n not in result.claimed])
-    result.posts.extend(posts)
-    result.claimed |= claimed
+
+def parse_filenames(root, dirpath, names):
+    """Posts rebuilt from file names, for the files no parser with metadata
+    claimed: it runs last (see parsers.PARSERS), so a gallery-dl file whose
+    name happens to fit the pattern stays gallery-dl's."""
+    result = DirResult()
+    result.posts, result.claimed = _filename_posts(root, dirpath, names)
     return result

@@ -80,6 +80,12 @@ export function platformShort(p) {
   return SHORT[p] || (p || "").slice(0, 2).toUpperCase();
 }
 
+/* What a post's album is: an Instagram highlight title, or a note such as
+   "Retweeted by @someone" for posts from gallery-dl. */
+export function albumLabel(p) {
+  return p === "instagram" ? "Highlight" : "Note";
+}
+
 export const KINDS = ["image", "video", "carousel", "story", "text"];
 
 /* First words of a post, for alt text and titles. */
