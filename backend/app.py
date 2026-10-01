@@ -233,7 +233,8 @@ def _purge_filter(f):
     if any(out[k] is not None and not (isinstance(out[k], str) and out[k]) for k in ("platform", "author")):
         return None
     for k in ("person", "since", "before"):
-        if out[k] is not None and (not isinstance(out[k], int) or isinstance(out[k], bool) or out[k] < 0):
+        if out[k] is not None and (not isinstance(out[k], int) or isinstance(out[k], bool)
+                                   or not 0 <= out[k] < 2**53):
             return None
     if all(v is None for v in out.values()):
         return None
@@ -571,7 +572,7 @@ def merge_people():
     ids, accounts = body.get("ids"), people.clean_accounts(body.get("accounts"))
     name = None if body.get("name") is None else people.clean_name(body.get("name"))
     if not isinstance(ids, list) or not ids or len(ids) > people.MAX_ACCOUNTS \
-            or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            or not all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i < 2**53 for i in ids):
         return jsonify({"ok": False, "error": "ids must be a list of person ids"}), 400
     ids = list(dict.fromkeys(ids))
     if body.get("name") is not None and name is None:
@@ -610,7 +611,8 @@ def dismiss_suggestion():
 
 @app.get("/api/people/<int:pid>")
 def get_person(pid):
-    p = people.person(db.connect(), pid)
+    conn = db.connect()
+    p = people.person(conn, pid) if people.exists(conn, pid) else None
     if p is None:
         return jsonify({"ok": False, "error": "no such person"}), 404
     return jsonify(p)
@@ -619,7 +621,7 @@ def get_person(pid):
 @app.post("/api/people/<int:pid>")
 def update_person(pid):
     conn = db.connect()
-    if people.person(conn, pid) is None:
+    if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
     body = request.get_json(silent=True) or {}
     name = None if body.get("name") is None else people.clean_name(body["name"])
@@ -643,7 +645,7 @@ def update_person(pid):
 @app.delete("/api/people/<int:pid>")
 def delete_person(pid):
     conn = db.connect()
-    if people.person(conn, pid) is None:
+    if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
     n = people.delete(conn, pid)
     _people_changed(names=True)
@@ -653,7 +655,7 @@ def delete_person(pid):
 @app.post("/api/people/<int:pid>/accounts")
 def person_accounts(pid):
     conn = db.connect()
-    if people.person(conn, pid) is None:
+    if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
     body = request.get_json(silent=True) or {}
     add, remove = people.clean_accounts(body.get("add")), people.clean_accounts(body.get("remove"))

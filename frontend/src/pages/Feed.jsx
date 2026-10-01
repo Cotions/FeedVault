@@ -242,11 +242,11 @@ export default function Feed() {
   // Author ids are only unique within a platform, so an account carries both.
   function onCreator(c) {
     if (!c) setParam({ author: "", person: "" });
-    else if (c.person) setParam({ person: String(c.person.id), author: "" });
+    else if (c.person) setParam({ person: String(c.person.id), author: "", platform: "" });
     else setParam({ platform: c.account.platform, author: c.account.id, person: "" });
   }
   const selectedAuthor = author
-    ? authors.find(a => a.id === author && (!platform || a.platform === platform)) : null;
+    ? authors.find(a => (a.id === author || a.aliases?.includes(author)) && (!platform || a.platform === platform)) : null;
   const selectedPerson = person ? (peopleApi.data || []).find(p => String(p.id) === person) : null;
 
   function clearFilters() {

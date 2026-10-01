@@ -276,8 +276,8 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `untagged=1`: only posts with no tag
 - `platform`: `instagram`, `twitter` (X, x.com included), `tiktok`, or another
   gallery-dl category name for sites without their own mapping (`reddit`, `bluesky`, …)
-- `author`: author id (from `/api/authors`); takes in the account's folder-name
-  aliases (see [People](#people))
+- `author`: author id (from `/api/authors`) or one of its folder-name aliases;
+  either way the whole account's posts (see [People](#people))
 - `person`: a person id: posts of every account linked to that person, across
   platforms (see [People](#people)); a value that is not an id matches nothing
 - `kind`: one of the kinds above
@@ -607,7 +607,10 @@ handle is that name (exactly one account), the folder name is an **alias** of
 that account's id. Aliases are derived on every scan, not stored as user
 data. An account and its aliases read as one: one row in `/api/authors` and
 Storage, one link (linking or unlinking an alias acts on the account), and
-the `author` and `person` filters take the aliases' posts in.
+the `author` and `person` filters take the aliases' posts in. No alias is
+made between two ids linked to different people (merging them is the
+user's call), and once every post of the id is gone the folder name is an
+account of its own again.
 
 An **account** (`/api/authors` rows, a person's `accounts`):
 

@@ -36,7 +36,8 @@ export default function CreatorPicker({
 
   const current = value?.person != null
     ? (people || []).find(p => p.id === Number(value.person))
-    : value?.id != null ? accounts.find(a => a.id === value.id && (!value.platform || a.platform === value.platform)) : null;
+    : value?.id != null ? accounts.find(a => (a.id === value.id || a.aliases?.includes(value.id))
+                                          && (!value.platform || a.platform === value.platform)) : null;
   const shown = value?.person != null
     ? current ? current.name : `person ${value.person}`
     : value?.id != null ? current ? `@${current.handle || current.id}` : `id ${value.id}` : "";

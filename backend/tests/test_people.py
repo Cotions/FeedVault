@@ -78,6 +78,8 @@ def test_folder_name_is_an_alias_of_the_numeric_id(env, client):
     assert a["url"] == "https://www.instagram.com/alice.example/" and a["person"] is None
     # the author filter takes the alias in
     assert ids(client, "platform=instagram&author=111") == ["instagram:A1", "instagram:A2", "instagram:AAAAAAAAAA3"]
+    # and the alias the whole account (links from a filename-only post use it)
+    assert ids(client, "platform=instagram&author=alice.example") == ids(client, "platform=instagram&author=111")
     # bytes add up both
     total = get(client, "/api/posts/summary?author=111")["bytes"]
     assert a["bytes"] == total > 0
@@ -103,6 +105,29 @@ def test_no_alias_for_another_handle_or_two_candidates(env):
     png(env["media"] / "dave" / "dave-2024-06-03-DDDDDDDDDD1.jpg")
     scanner.scan(env["roots"])
     assert db.aliases(db.connect()) == {("instagram", "dave"): "555"}
+
+
+def test_alias_ends_with_its_id_and_never_joins_two_people(env, client):
+    archive(env)
+    # every post with the id trashed: the folder name is an account again
+    post(client, "/api/delete", {"posts": ["instagram:A1", "instagram:A2"]})
+    folder = account(client, "instagram", "alice.example")
+    assert (folder["id"], folder["count"]) == ("alice.example", 1)
+    p = create(client, "A", folder)["person"]
+    assert [(a["id"], a["count"]) for a in p["accounts"]] == [("alice.example", 1)]
+    # the folder and the id linked to different people before they met
+    (env["media"] / "erin").mkdir()
+    png(env["media"] / "erin" / "erin-2024-06-03-EEEEEEEEEE1.jpg")
+    write_post(env["media"] / "elsewhere", "E1", TS, owner("erin", 777), "image")
+    scanner.scan(env["roots"])
+    by_id = {a["id"]: a for a in get(client, "/api/authors")}
+    create(client, "Folder", by_id["erin"])
+    create(client, "Id", by_id["777"])
+    write_post(env["media"] / "erin", "E2", TS + 5, owner("erin", 777), "image")
+    scanner.scan(env["roots"])
+    assert ("instagram", "erin") not in db.aliases(db.connect())
+    shown = {p["name"]: [a["id"] for a in p["accounts"]] for p in get(client, "/api/people")}
+    assert (shown["Folder"], shown["Id"]) == (["erin"], ["777"])
 
 
 # ---------------------------------------------------------------------------
@@ -473,3 +498,14 @@ def test_handle_and_link_normalizing():
     assert people.profile_links("x.com/Foo_bar. https://www.instagram.com/p/abc/ tiktok.com/@baz "
                                 "tiktok.com/nope instagram.com/holly.x twitch.tv/z") == [
         ("twitter", "foo_bar"), ("tiktok", "baz"), ("instagram", "holly.x")]
+    # other domains that end like one
+    assert people.profile_links("https://www.dropbox.com/s/abc netflix.com/title mytiktok.com/@z") == []
+
+
+def test_similar_handles_with_the_same_digits(env, client):
+    write_post(env["media"] / "foo_5", "F1", TS, owner("foo_5", 801), "image")
+    write_post(env["media"] / "foo.5", "F2", TS, owner("foo.5", 802), "image")
+    write_post(env["media"] / "foo6", "F3", TS, owner("foo6", 803), "image")
+    scanner.scan(env["roots"])
+    got = [(s["reason"], sorted(a["id"] for a in s["accounts"])) for s in suggestions(client)["suggestions"]]
+    assert got == [("similar_handle", ["801", "802"])]

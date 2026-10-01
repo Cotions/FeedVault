@@ -737,7 +737,8 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
     post_summary and storage so a count and its size can never disagree.
 
     ``tags``: the post must have every one; ``tag:`` terms in ``q`` add to them.
-    ``author`` takes in its folder-name aliases; ``person`` (an id) every
+    ``author`` is the whole account: an id takes in its folder-name aliases,
+    an alias its id (and the id's other aliases). ``person`` (an id) every
     account linked to that person."""
     where, args = [], []
     tags = list(tags or ())
@@ -764,9 +765,12 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
         where.append("p.platform = ?")
         args.append(platform)
     if author:
-        where.append("(p.author_id = ? OR (p.platform, p.author_id) IN "
-                     "(SELECT platform, alias_id FROM account_aliases WHERE author_id = ?))")
-        args += [author, author]
+        where.append("(p.author_id = ? OR (p.platform, p.author_id) IN ("
+                     "SELECT platform, alias_id FROM account_aliases WHERE author_id = ? "
+                     "UNION SELECT platform, author_id FROM account_aliases WHERE alias_id = ? "
+                     "UNION SELECT s.platform, s.alias_id FROM account_aliases s JOIN account_aliases t "
+                     "ON t.platform = s.platform AND t.author_id = s.author_id WHERE t.alias_id = ?))")
+        args += [author] * 4
     if person is not None:
         where.append(f"(p.platform, p.author_id) IN ({PERSON_ACCOUNTS})")
         args += [person] * 3
@@ -855,8 +859,12 @@ def profile_url(platform, handle):
 
 
 def _alias_map(conn):
-    """{(platform, alias id): author id}."""
-    return {(r[0], r[1]): r[2] for r in conn.execute("SELECT platform, alias_id, author_id FROM account_aliases")}
+    """{(platform, alias id): author id}, for ids still in the index: once
+    every post of the id is gone (trashed), the folder name is its own
+    account again."""
+    return {(r[0], r[1]): r[2] for r in conn.execute("""
+        SELECT platform, alias_id, author_id FROM account_aliases a
+        WHERE EXISTS (SELECT 1 FROM posts p WHERE p.platform = a.platform AND p.author_id = a.author_id)""")}
 
 
 def aliases(conn):
@@ -902,7 +910,7 @@ def _spans(table, key):
 def _accounts(conn, sizes=True):
     """{(platform, id): account row}, aliases merged into the account they
     stand for. ``sizes``: add up the bytes of every account's media too."""
-    hist, alias = _history(conn), _alias_map(conn)
+    hist, alias = _history(conn), aliases(conn)
     people = {(r[0], r[1]): {"id": r[2], "name": r[3]} for r in conn.execute(
         "SELECT pa.platform, pa.author_id, p.id, p.name FROM person_accounts pa JOIN people p ON p.id = pa.person_id")}
     size = {}
@@ -987,7 +995,7 @@ def _storage(conn, person=None):
     totals = {"posts": 0, "media": 0, "bytes": 0}
     by_author, by_kind, by_year = {}, {}, {}
     # Without byte sums: they would add half again to a cold load.
-    names, alias = _accounts(conn, sizes=False), _alias_map(conn)
+    names, alias = _accounts(conn, sizes=False), aliases(conn)
     for r in rows:
         targets = [totals, bucket(by_kind, r["kind"], kind=r["kind"]),
                    bucket(by_year, r["year"], year=r["year"])]

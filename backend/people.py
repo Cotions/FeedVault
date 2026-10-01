@@ -97,7 +97,16 @@ def refresh_aliases(conn):
             for folder, folder_id in folders.get((platform, h), ()):
                 if author_id != folder_id and meta_path.startswith(folder):
                     ids[platform, folder_id].add(author_id)
-    found = [(p, f, next(iter(i))) for (p, f), i in ids.items() if len(i) == 1]
+    # Nor when the two are linked to different people: that is the user's
+    # merge to make, and a merged account must show under one person.
+    links = {(r[0], r[1]): r[2] for r in conn.execute("SELECT platform, author_id, person_id FROM person_accounts")}
+    found = []
+    for (p, f), i in ids.items():
+        if len(i) == 1:
+            target = next(iter(i))
+            mine, theirs = links.get((p, f)), links.get((p, target))
+            if mine is None or theirs is None or mine == theirs:
+                found.append((p, f, target))
     have = set(conn.execute("SELECT platform, alias_id, author_id FROM account_aliases").fetchall())
     if have != set(found):                     # an unchanged index stays unchanged (and cached)
         conn.execute("DELETE FROM account_aliases")
@@ -107,10 +116,9 @@ def refresh_aliases(conn):
 
 
 def canonical(conn, platform, author_id):
-    """The account an id stands for: itself, or the id it is an alias of."""
-    row = conn.execute("SELECT author_id FROM account_aliases WHERE platform = ? AND alias_id = ?",
-                       (platform, author_id)).fetchone()
-    return (platform, row[0]) if row else (platform, author_id)
+    """The account an id stands for: itself, or the indexed id it is an alias of."""
+    target = db.aliases(conn).get((platform, author_id))
+    return (platform, target) if target is not None else (platform, author_id)
 
 
 def account_set(conn, person_id):
@@ -141,7 +149,7 @@ def _linked(conn, rows):
     as empty rows."""
     known = db.accounts(conn)
     out = {r["id"]: [] for r in rows}
-    seen = set()
+    seen = set()                               # (person, account): a link and its alias show once
     ids = list(out)
     if not ids:
         return out
@@ -149,9 +157,9 @@ def _linked(conn, rows):
             "SELECT person_id, platform, author_id FROM person_accounts "
             f"WHERE person_id IN ({', '.join('?' for _ in ids)}) ORDER BY platform, author_id", ids):
         key = canonical(conn, platform, aid)
-        if key in seen:
+        if (pid, key) in seen:
             continue
-        seen.add(key)
+        seen.add((pid, key))
         a = known.get(key)
         if a is None:
             a = {"platform": platform, "id": aid, "handle": None, "name": None, "count": 0, "bytes": 0,
@@ -169,6 +177,11 @@ def people(conn):
         linked = _linked(conn, rows)
         return [_person(r, linked[r["id"]]) for r in rows]
     return db._memo(conn, ("people",), compute)
+
+
+def exists(conn, pid):
+    """Whether a person has that id (an id SQLite cannot hold has nobody)."""
+    return 0 <= pid < 2**53 and conn.execute("SELECT 1 FROM people WHERE id = ?", (pid,)).fetchone() is not None
 
 
 def person(conn, pid):
@@ -298,7 +311,7 @@ def merge(conn, ids, name, accounts, now):
 SCORES = {"bio_link": 0.95, "same_handle": 0.9, "similar_handle": 0.7, "same_name": 0.6}
 _PREFIXES = ("the", "real", "its", "official")
 _SUFFIXES = ("official",)
-_LINK_RE = re.compile(r"(?:https?://)?(?:www\.|m\.|mobile\.)?(instagram\.com|x\.com|twitter\.com|tiktok\.com)"
+_LINK_RE = re.compile(r"(?<![\w.-])(?:https?://)?(?:www\.|m\.|mobile\.)?(instagram\.com|x\.com|twitter\.com|tiktok\.com)"
                       r"/(@?[A-Za-z0-9._]{1,30})", re.IGNORECASE)
 _LINK_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com": "twitter", "tiktok.com": "tiktok"}
 # First path parts that are pages, not profiles.
@@ -378,10 +391,8 @@ def _candidates(conn, accounts):
     for by_digits in by_base.values():
         # foo, foo_, thefoo and foo2 are alike; foo1 and foo2 are not.
         plain = by_digits.get("", {})
-        for digits, seen in (by_digits.items() if len(by_digits) > 1 else [("", plain)]):
-            if digits == "" and len(by_digits) > 1:
-                continue
-            seen = {**plain, **seen}
+        for digits in [d for d in by_digits if d] or [""]:
+            seen = {**plain, **by_digits[digits]}
             if len(seen) > 1 and len(set(seen.values())) > 1:
                 out.append(("similar_handle", " ~ ".join(f"@{h}" for h in sorted(set(seen.values()))), set(seen)))
     for n, seen in by_name.items():
@@ -406,7 +417,7 @@ def suggestions(conn):
     not two people (that is a merge, the user's call). Dismissed groups are
     left out; a group that gains an account shows again."""
     def compute(conn):
-        accounts = db._accounts(conn, sizes=True)
+        accounts = db.accounts(conn)
         dismissed = {r[0] for r in conn.execute("SELECT key FROM dismissed_suggestions")}
         groups = {}
         for reason, detail, keys in _candidates(conn, accounts):

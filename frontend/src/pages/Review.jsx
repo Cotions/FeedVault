@@ -645,7 +645,7 @@ export default function Review() {
         value={person ? { person } : author ? { platform, id: author } : null}
         onChange={c => {
           if (!c) setParam({ author: "", person: "" });
-          else if (c.person) setParam({ person: String(c.person.id), author: "" });
+          else if (c.person) setParam({ person: String(c.person.id), author: "", platform: "" });
           else setParam({ platform: c.account.platform, author: c.account.id, person: "" });
         }}
       />
