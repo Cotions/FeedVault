@@ -5,7 +5,13 @@ import { useScan } from "./scan";
 import { useJobs, ENDED } from "./jobs";
 import { useToast } from "./toast";
 
-export const SYNC_KIND = "instaloader-sync";
+// One sync kind per tool (docs/API.md "Jobs").
+export const SYNC_KINDS = new Set(["instaloader-sync", "gallery-dl-sync", "yt-dlp-sync"]);
+
+// How a source is named: @name for Instagram, else its link without https://.
+export function sourceName(s) {
+  return s.tool === "instaloader" ? `@${s.target}` : s.target.replace(/^https:\/\//, "");
+}
 
 // last_result.error → a short badge
 export const ERRORS = {
@@ -27,7 +33,7 @@ export function useSources() {
   const { refreshKey } = useScan();
   const { list, started } = useJobs();
   const toast = useToast();
-  const syncs = useMemo(() => (list?.jobs || []).filter(j => j.kind === SYNC_KIND), [list]);
+  const syncs = useMemo(() => (list?.jobs || []).filter(j => SYNC_KINDS.has(j.kind)), [list]);
   const live = syncs.filter(j => !ENDED.has(j.state)).map(j => `${j.id}:${j.state}`).join(",");
   const api = useApi(getSources, `${refreshKey}|${live}`);
   const { reload } = api;

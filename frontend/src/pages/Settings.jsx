@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds, saveInstaloaderSettings } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds, saveInstaloaderSettings, saveSettings } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED } from "../lib/jobs";
@@ -440,12 +440,186 @@ function InstaloaderCard({ saved, onSaved }) {
   );
 }
 
+const COOKIE_TOOLS = {
+  "gallery-dl": { title: "X, Reddit, Bluesky, pixiv sync (gallery-dl)", sites: "X, Reddit, Bluesky or pixiv" },
+  "yt-dlp": { title: "YouTube and TikTok sync (yt-dlp)", sites: "YouTube or TikTok" },
+};
+
+/* How gallery-dl or yt-dlp reaches the sites when FeedVault syncs a source:
+   anonymously, or with a browser's cookies, which the tool reads itself.
+   yt-dlp's card also has the YouTube length limit. */
+function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
+  const { title, sites } = COOKIE_TOOLS[tool];
+  const [mode,    setMode]    = useState(saved.session?.mode || "none");
+  const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
+  const [longest, setLongest] = useState(String(maxSeconds ?? 180));
+  const [saving,  setSaving]  = useState(false);
+
+  const session = mode === "cookies" ? { mode, browser } : { mode };
+  const youtube = tool === "yt-dlp";
+  const dirty = JSON.stringify(session) !== JSON.stringify(saved.session || { mode: "none" })
+    || (youtube && longest.trim() !== String(maxSeconds ?? 180));
+
+  async function save(e) {
+    e.preventDefault();
+    const changes = { [tool]: { session } };
+    if (youtube) {
+      const seconds = Number(longest);
+      if (!/^\d+$/.test(longest.trim()) || seconds < 1 || seconds > 86400) {
+        setMsg({ ok: false, text: "The length is whole seconds, from 1 to 86400." });
+        return;
+      }
+      changes.youtube_max_seconds = seconds;
+    }
+    setSaving(true);
+    setMsg(null);
+    try {
+      const r = await saveSettings(changes);
+      if (r?.ok) { onSaved(); setMsg({ ok: true, text: "Saved. The next sync uses it." }); }
+      else setMsg({ ok: false, text: r?.error || "Save failed." });
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">{title}</div>
+      <p className="page-lede">
+        How {tool} signs in when you click Sync on a source. FeedVault only passes on the browser&rsquo;s
+        name: it never sees, reads or stores your cookies or credentials.
+      </p>
+      <form className="insta-form" onSubmit={save}>
+        <fieldset className="insta-modes">
+          <legend className="insta-legend">Session</legend>
+          <label className="insta-mode">
+            <input type="radio" name={`${tool}-mode`} value="none" checked={mode === "none"} onChange={() => setMode("none")} />
+            <span>
+              <span><b>No login</b> (default)</span>
+              <span className="creator-sub">Public profiles only. Some sites show less, or limit requests sooner, without a login.</span>
+            </span>
+          </label>
+          <label className="insta-mode">
+            <input type="radio" name={`${tool}-mode`} value="cookies" checked={mode === "cookies"} onChange={() => setMode("cookies")} />
+            <span>
+              <b>Use my browser&rsquo;s login</b>
+              <span className="creator-sub">
+                {tool} reads the cookies of the browser where you are logged in to {sites} (<code>--cookies-from-browser</code>).
+                Close that browser first if it fails.
+                {youtube && <> yt-dlp copies the cookies it used into each video&rsquo;s <code>.info.json</code>, in your media folder.</>}
+              </span>
+            </span>
+          </label>
+          {mode === "cookies" && (
+            <select className="insta-input" aria-label="Browser" value={browser} onChange={e => setBrowser(e.target.value)}>
+              {BROWSERS.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          )}
+        </fieldset>
+        {youtube && (
+          <label className="insta-pause">
+            <span>Longest YouTube video</span>
+            <input type="text" inputMode="numeric" className="insta-input" aria-label="Longest YouTube video in seconds"
+                   value={longest} onChange={e => { setLongest(e.target.value); setMsg(null); }} />
+            <span className="dim">seconds; longer ones are not downloaded nor indexed (left to ChannelVault)</span>
+          </label>
+        )}
+        <div>
+          <button type="submit" className="btn-primary" disabled={saving || !dirty}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+        {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="alert">{msg.text}</div>}
+      </form>
+    </div>
+  );
+}
+
+const ROUTE_TOOLS = ["gallery-dl", "yt-dlp", "instaloader"];
+
+/* Which tool syncs a pasted link, by its host: a host matches itself and its
+   subdomains, the longest entry wins. instaloader is for instagram.com only. */
+function RoutesCard({ saved, onSaved, msg, setMsg }) {
+  const [rows,   setRows]   = useState(() => Object.entries(saved).map(([host, tool]) => ({ host, tool })));
+  const [saving, setSaving] = useState(false);
+
+  const table = Object.fromEntries(rows.filter(r => r.host.trim()).map(r => [r.host.trim().toLowerCase(), r.tool]));
+  const dirty = JSON.stringify(table) !== JSON.stringify(saved);
+
+  function edit(i, change) {
+    setRows(list => list.map((r, j) => (j === i ? { ...r, ...change } : r)));
+    setMsg(null);
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    setSaving(true);
+    setMsg(null);
+    try {
+      const r = await saveSettings({ routes: table });
+      if (r?.ok) { onSaved(); setMsg({ ok: true, text: "Saved. New links use it; existing sources keep their tool." }); }
+      else setMsg({ ok: false, text: r?.error || "Save failed." });
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">Link routing</div>
+      <p className="page-lede">
+        Which downloader a pasted profile link goes to, by its site. A site covers its subdomains too
+        (<code>m.youtube.com</code>); a link to a site not listed is refused.
+      </p>
+      <form className="insta-form" onSubmit={save}>
+        <ul className="route-list">
+          {rows.map((r, i) => (
+            <li key={i} className="route-row">
+              <input type="text" className="insta-input route-host" aria-label="Site" placeholder="example.com"
+                     maxLength={253} value={r.host} onChange={e => edit(i, { host: e.target.value })} />
+              <select className="insta-input route-tool" aria-label={`Tool for ${r.host || "this site"}`} value={r.tool}
+                      onChange={e => edit(i, { tool: e.target.value })}>
+                {ROUTE_TOOLS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <button type="button" className="del-btn del-btn-danger" aria-label={`Remove ${r.host}`} title="Remove"
+                      onClick={() => { setRows(list => list.filter((_, j) => j !== i)); setMsg(null); }}>
+                <Icon name="trash" size={15} />
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="settings-actions">
+          <button type="button" className="btn-secondary" onClick={() => setRows(list => [...list, { host: "", tool: "gallery-dl" }])}>
+            <Icon name="plus" size={14} />Add a site
+          </button>
+          <button type="submit" className="btn-primary" disabled={saving || !dirty}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+          {dirty && (
+            <button type="button" className="btn-ghost"
+                    onClick={() => { setRows(Object.entries(saved).map(([host, tool]) => ({ host, tool }))); setMsg(null); }}>
+              Discard changes
+            </button>
+          )}
+        </div>
+        {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="alert">{msg.text}</div>}
+      </form>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { refreshKey } = useScan();
   const { data: config, error, reload } = useApi(getConfig, refreshKey);
   // Lives here, not in the editor: a save remounts the editor (see key below)
   // and the confirmation must survive that.
   const [msg, setMsg] = useState(null);   // { ok, text }
+  const [notes, setNotes] = useState({});  // the same, per settings card below
+  const note = name => ({ msg: notes[name] || null, setMsg: m => setNotes(n => ({ ...n, [name]: m })) });
 
   return (
     <div className="settings-page">
@@ -464,6 +638,11 @@ export default function Settings() {
           />
           <ToolsCard saved={config.tools || {}} onSaved={reload} />
           <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} />
+          {Object.keys(COOKIE_TOOLS).map(t => (
+            <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${config.youtube_max_seconds}`} tool={t}
+                         saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} />
+          ))}
+          <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} />
           <TrashCard />
           <LastScan />
           <div className="card">

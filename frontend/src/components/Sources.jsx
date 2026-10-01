@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { createSource, cancelJob } from "../lib/api";
+import { createSource, cancelJob, resolveSource } from "../lib/api";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
-import { ERRORS } from "../lib/sources";
+import { ERRORS, sourceName } from "../lib/sources";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
@@ -49,8 +49,8 @@ export function SyncButton({ source: s, job, onSync, small = false }) {
       className={small ? "icon-btn source-sync" : "btn-secondary source-sync"}
       disabled={!!job}
       onClick={e => { e.preventDefault(); onSync(s); }}
-      title={job ? "Its sync is queued or running; see Jobs" : `Download @${s.target}'s new posts`}
-      aria-label={`Sync @${s.target}`}
+      title={job ? "Its sync is queued or running; see Jobs" : `Download ${sourceName(s)}'s new posts with ${s.tool}`}
+      aria-label={`Sync ${sourceName(s)}`}
     >
       <Icon name="refresh" size={small ? 15 : 13} className={job?.state === "running" ? "spin" : undefined} />
       {!small && label}
@@ -58,7 +58,12 @@ export function SyncButton({ source: s, job, onSync, small = false }) {
   );
 }
 
-/* One source: its profile, folder, last sync, Sync and Remove. */
+/* The tool that syncs a source. */
+export function ToolBadge({ tool }) {
+  return <span className={`chip tool-chip tool-chip-${tool}`} title={`Synced with ${tool}`}>{tool}</span>;
+}
+
+/* One source: its profile, tool, folder, last sync, Sync and Remove. */
 export function SourceRow({ source: s, job, onSync, onRemove }) {
   const url = safeUrl(s.url);
   return (
@@ -66,15 +71,17 @@ export function SourceRow({ source: s, job, onSync, onRemove }) {
       <span className="chip platform-chip" title={platformLabel(s.platform)}>{platformShort(s.platform)}</span>
       <span className="source-id">
         <span className="creator-name">
-          @{s.target}
+          {sourceName(s)}
           {s.person && !s.account && <span className="creator-sub"> · first sync not done yet</span>}
         </span>
         <code className="source-folder" title={s.folder}>{s.folder}</code>
       </span>
+      <ToolBadge tool={s.tool} />
       <SourceStatus source={s} job={job} />
       {url && (
         <a href={url} className="icon-btn" target="_blank" rel="noreferrer noopener"
-           title="Profile on Instagram (opens the site)" aria-label={`@${s.target} on Instagram`}>
+           title={`Profile on ${platformLabel(s.platform)} (opens the site)`}
+           aria-label={`${sourceName(s)} on ${platformLabel(s.platform)}`}>
           <Icon name="external" size={15} />
         </a>
       )}
@@ -100,7 +107,7 @@ export function RemoveSourceDialog({ source, onRemove, onClose }) {
     try {
       const r = await onRemove(source);
       if (!r?.ok) { setError(r?.error || "Could not remove."); return; }
-      toast(`@${source.target} is no longer a source.`);
+      toast(`${sourceName(source)} is no longer a source.`);
       onClose();
     } catch (err) {
       setError(err.message);
@@ -112,7 +119,7 @@ export function RemoveSourceDialog({ source, onRemove, onClose }) {
   return (
     <ConfirmDialog
       open={!!source}
-      title={source ? `Remove @${source.target}?` : ""}
+      title={source ? `Remove ${sourceName(source)}?` : ""}
       confirmLabel="Remove source"
       danger
       busy={busy}
@@ -125,24 +132,52 @@ export function RemoveSourceDialog({ source, onRemove, onClose }) {
   );
 }
 
-/* Paste a profile URL or a handle (Instagram, through instaloader). */
+// A bare name or @name is an Instagram profile; anything else is a link.
+const HANDLE = /^@?[A-Za-z0-9._]{1,30}$/;
+function isHandle(text) {
+  return HANDLE.test(text) && (text.startsWith("@") || !text.includes("."));
+}
+
+/* What a pasted link would add, asked as the user types: the tool the
+   routing table picks, the platform and the folder, or why it is refused. */
+function useResolved(text) {
+  // Kept with the text it answers, so a stale answer is never shown.
+  const [resolved, setResolved] = useState({ text: null, r: null });
+  useEffect(() => {
+    if (!text || isHandle(text)) return undefined;
+    const ctl = new AbortController();
+    const t = setTimeout(() => {
+      resolveSource(text, { signal: ctl.signal })
+        .then(r => setResolved({ text, r }))
+        .catch(err => { if (err.name !== "AbortError") setResolved({ text, r: { ok: false, error: err.message } }); });
+    }, 250);
+    return () => { clearTimeout(t); ctl.abort(); };
+  }, [text]);
+  return resolved.text === text ? resolved.r : null;
+}
+
+/* Paste a profile link (the tool comes from Settings → Link routing), or an
+   Instagram name. Before saving it shows the tool, platform and folder. */
 export function AddSource({ person = null, onAdded }) {
   const toast = useToast();
   const [target, setTarget] = useState("");
   const [full,   setFull]   = useState(false);
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState(null);
+  const text = target.trim();
+  const resolved = useResolved(text);
 
   async function add(e) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const body = { tool: "instaloader", target: target.trim(), options: { full_history: full } };
+      const body = { target: text, options: { full_history: full } };
+      if (isHandle(text)) body.tool = "instaloader";
       if (person != null) body.person = person;
       const r = await createSource(body);
       if (!r?.ok) { setError(r?.error || "Could not add the source."); return; }
-      toast(`@${r.source.target} added. Sync it to download its posts.`);
+      toast(`${sourceName(r.source)} added. Sync it to download its posts.`);
       setTarget("");
       setFull(false);
       onAdded?.(r.source);
@@ -158,9 +193,9 @@ export function AddSource({ person = null, onAdded }) {
       <input
         type="text"
         className="page-filter"
-        placeholder="instagram.com/name or @name"
-        aria-label="Instagram profile URL or handle"
-        maxLength={200}
+        placeholder="Profile link: x.com/name, tiktok.com/@name, @instagram_name…"
+        aria-label="Profile link, or an Instagram name"
+        maxLength={500}
         value={target}
         onChange={e => { setTarget(e.target.value); setError(null); }}
       />
@@ -168,10 +203,27 @@ export function AddSource({ person = null, onAdded }) {
         <input type="checkbox" checked={full} onChange={e => setFull(e.target.checked)} />
         Full history
       </label>
-      <button type="submit" className="btn-secondary" disabled={busy || !target.trim()}>
+      <button type="submit" className="btn-secondary" disabled={busy || !text || resolved?.ok === false || resolved?.source != null}>
         <Icon name="plus" size={13} />Add source
       </button>
-      {error && <div className="msg err source-msg" role="alert">{error}</div>}
+      {text && isHandle(text) && (
+        <div className="source-resolved" role="status">
+          <ToolBadge tool="instaloader" /><span>Instagram profile <b>@{text.replace(/^@/, "")}</b></span>
+        </div>
+      )}
+      {resolved?.ok && (
+        <div className="source-resolved" role="status">
+          <ToolBadge tool={resolved.tool} />
+          <span className="chip platform-chip" title={platformLabel(resolved.platform)}>{platformShort(resolved.platform)}</span>
+          <span className="source-resolved-target">{resolved.target.replace(/^https:\/\//, "")}</span>
+          <span className="dim">into</span>
+          <code className="source-folder" title={resolved.folder}>{resolved.folder}</code>
+          {resolved.source != null && <span className="is-err">already a source</span>}
+        </div>
+      )}
+      {(error || resolved?.ok === false) && (
+        <div className="msg err source-msg" role="alert">{error || resolved.error}</div>
+      )}
     </form>
   );
 }
