@@ -1359,7 +1359,9 @@ does not ask sooner.
 
 **Test.** Job kind `tool-test`, params `{ "tool": "instaloader" |
 "gallery-dl" | "yt-dlp" }` and nothing else, group: the tool's name (the
-same as its syncs, so it never runs beside one). It runs the tool once on a
+same as its syncs, so it never runs beside one), with the same pause as its
+syncs: a test right after a sync waits it out (`waits_until`), and so does
+a sync right after a test. It runs the tool once on a
 fixed public item with the session flags its syncs use, in
 `<data_directory>/downloaders/test`:
 
@@ -1389,8 +1391,11 @@ command picked from how it is installed:
 | `pipx` | `pipx upgrade <name>` (pipx found on `PATH`) |
 | `system`, `missing` | nothing: 400, the error says the command to run instead |
 
-`<name>` is the tool's PyPI name, fixed in code. A virtualenv without its
-`bin/python`, or a pipx install with no `pipx` on `PATH`, is refused the
-same way. ffmpeg is not a choice: it comes from the system's packages. Once
+`<name>` is the tool's PyPI name, fixed in code. Refused the same way: a
+virtualenv without its `bin/python`, or without pip in its
+`lib/python*/site-packages` (one made by uv; no command is offered then),
+a pipx virtualenv named otherwise than the package (`pipx install
+--suffix`: the command shown upgrades it by its own name), or a pipx
+install with no `pipx` on `PATH`. ffmpeg is not a choice: it comes from the system's packages. Once
 the job has ended, the tool is found again, so `GET /api/downloaders` shows
 its new version.

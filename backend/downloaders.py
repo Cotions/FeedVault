@@ -39,6 +39,7 @@ to run instead. It shares its tool's lock group, so it never runs during a
 sync of that tool; the tool is found again once it ends.
 """
 import getpass
+import glob
 import json
 import os
 import re
@@ -98,8 +99,9 @@ def install_of(path):
 
 def run_version(path, tool):
     """(version, error): the first line ``<path> --version`` prints
-    (``-version`` for ffmpeg, its copyright notice cut), in a session of its
-    own, killed with whatever it started after VERSION_TIMEOUT."""
+    (``-version`` for ffmpeg), in a session of its own, killed with
+    whatever it started after VERSION_TIMEOUT. A process that left the
+    group and still holds the output is not waited for."""
     try:
         proc = subprocess.Popen([path, "-version" if tool == "ffmpeg" else "--version"],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -110,12 +112,12 @@ def run_version(path, tool):
         out, _ = proc.communicate(timeout=VERSION_TIMEOUT)
     except subprocess.TimeoutExpired:
         jobs._killpg(proc, signal.SIGKILL)
-        proc.communicate()
+        proc.stdout.close()
+        proc.wait()
         return None, f"no answer to --version within {VERSION_TIMEOUT} s"
     finally:
         jobs._killpg(proc, signal.SIGKILL)     # anything it left behind in its group
-    line = next((t.strip() for t in out.decode("utf-8", "replace").splitlines() if t.strip()), "")
-    line = line.split(" Copyright")[0][:VERSION_MAX]
+    line = jobs.version_line(out.decode("utf-8", "replace").splitlines())[:VERSION_MAX]
     if proc.returncode != 0:
         return None, f"--version failed (exit code {proc.returncode}){': ' + line if line else ''}"
     return (line, None) if line else (None, "no version printed")
@@ -192,24 +194,25 @@ def fetch_latest(name):
     request = urllib.request.Request(PYPI_URL.format(name), headers={
         "Accept": "application/json", "User-Agent": f"FeedVault/{config.__version__}"})
     deadline = time.monotonic() + PYPI_TIMEOUT
-    body = b""
+    chunks, size = [], 0
     try:
         with urllib.request.build_opener(_NoRedirect).open(request, timeout=PYPI_TIMEOUT) as r:
-            while len(body) <= PYPI_MAX:
+            while size <= PYPI_MAX:
                 if time.monotonic() > deadline:
                     return None, f"PyPI did not answer within {PYPI_TIMEOUT} s"
                 chunk = r.read(65536)
                 if not chunk:
                     break
-                body += chunk
+                chunks.append(chunk)
+                size += len(chunk)
     except urllib.error.HTTPError as e:
         return None, f"PyPI answered {e.code}"
     except (urllib.error.URLError, OSError, ValueError) as e:
         return None, f"could not reach PyPI: {getattr(e, 'reason', None) or e}"
-    if len(body) > PYPI_MAX:
+    if size > PYPI_MAX:
         return None, "PyPI's answer is too large"
     try:
-        version = json.loads(body)["info"]["version"]
+        version = json.loads(b"".join(chunks))["info"]["version"]
     except (ValueError, KeyError, TypeError, RecursionError):
         version = None
     if not isinstance(version, str) or not _PYPI_VERSION_RE.fullmatch(version):
@@ -379,10 +382,16 @@ def _test_outcome(params, code, lines, index):
 
 TESTED = list(TEST_TARGETS)
 
-# Its tool's lock group: never beside a sync of the same tool (one
-# instaloader session at a time).
+def _test_pause(params):
+    tool = params["tool"]
+    return sync.settings()["pause"] if tool == "instaloader" else sync.tool_settings(tool)["pause"]
+
+
+# Its tool's lock group and pause: never beside a sync of the same tool (one
+# instaloader session at a time), nor right before or after one: the site
+# sees it as one more run.
 jobs.register("tool-test", label="Test a downloader", params={"tool": {"type": "choice", "choices": TESTED}},
-              build=_build_test, group=lambda p: p["tool"], outcome=_test_outcome,
+              build=_build_test, group=lambda p: p["tool"], outcome=_test_outcome, pause=_test_pause,
               describe=lambda params, argv: f"Test {params.get('tool', 'a downloader')}")
 
 
@@ -412,9 +421,17 @@ def update_plan(info):
         command = f"{shlex.quote(python)} -m pip install -U {name}"
         if not config.is_executable(python):
             return {"argv": None, "command": command, "reason": f"no Python at {python}"}
+        # A virtualenv made without pip (uv's) cannot run it.
+        if not glob.glob(os.path.join(glob.escape(info["venv"]), "lib", "python*", "site-packages", "pip")):
+            return {"argv": None, "command": None,
+                    "reason": f"its virtualenv has no pip ({info['venv']}): update it with the tool that made it"}
         return {"argv": [python, "-m", "pip", "install", "--no-input", "--disable-pip-version-check", "-U", name],
                 "command": command, "reason": None}
     if kind == "pipx":
+        installed = os.path.basename(info["venv"])
+        if installed != name:                  # pipx install --suffix: pipx names it otherwise
+            return {"argv": None, "command": f"pipx upgrade {shlex.quote(installed)}",
+                    "reason": f"pipx knows it as {installed}, not {name}"}
         if shutil.which("pipx") is None:
             return {"argv": None, "command": f"pipx upgrade {name}", "reason": "pipx is not on the PATH"}
         return {"argv": ["pipx", "upgrade", name], "command": f"pipx upgrade {name}", "reason": None}
@@ -444,20 +461,25 @@ def detect_install(tool):
 
 
 def _updated(job):
-    """Once an update has ended, the tool is found again: the card shows its new version."""
+    """Once an update has run, its tool is found again (in the background:
+    the queue does not wait for it), so the card shows its new version."""
     tool = job["params"].get("tool")
-    if tool in jobs.TOOLS and job["started_at"] is not None:
-        refresh_tool(tool)
+    if tool in jobs.TOOLS and job["started_at"] is not None and job["state"] != "interrupted":
+        threading.Thread(target=refresh_tool, args=(tool,), daemon=True, name=f"refresh-{tool}").start()
 
 
 def refresh_tool(tool):
-    """Find one tool again, the others kept as they are."""
+    """Find one tool again, the others kept as they are. Nothing to do
+    while nothing is cached: the next status() finds every tool."""
     cfg = config.load()
-    info = detect(tool, cfg)
-    with _lock:
-        if _cache["tools"] is not None and _cache["key"] == _key(cfg):
-            _cache["tools"] = {**_cache["tools"], tool: info}
-            _cache["checked_at"] = int(time.time())
+    with _finding:                             # a detection running now would overwrite it
+        with _lock:
+            if _cache["tools"] is None or _cache["key"] != _key(cfg):
+                return
+        info = detect(tool, cfg)
+        with _lock:
+            if _cache["tools"] is not None and _cache["key"] == _key(cfg):
+                _cache["tools"] = {**_cache["tools"], tool: info}
 
 
 jobs.register("tool-update", label="Update a downloader",
@@ -472,8 +494,14 @@ jobs.register("tool-update", label="Update a downloader",
 
 def status(refresh=False):
     cfg = config.load()
+    pypi = {}
+
+    def ask():
+        pypi.update(latest(cfg))
+    asking = threading.Thread(target=ask, daemon=True)     # while the tools are found
+    asking.start()
     tools, checked_at = found(refresh, cfg)
-    pypi = latest(cfg)
+    asking.join()
     out = []
     for t in jobs.TOOLS:
         info = dict(tools[t])

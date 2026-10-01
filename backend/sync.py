@@ -472,7 +472,7 @@ def _ended(job):
 
 jobs.register(KIND, label="Sync from Instagram", params={"source": {"type": "text", "max": 15}},
               build=_build, group=GROUP, start=_start, outcome=_outcome, ended=_ended,
-              pause=lambda: settings()["pause"],
+              pause=lambda params: settings()["pause"],
               describe=lambda params, argv: f"Sync @{argv[-1]}" if argv else "Sync from Instagram")
 
 
@@ -621,12 +621,12 @@ def _describe(label):
 jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source": {"type": "text", "max": 15}},
               build=_build_gallery_dl, group="gallery-dl", start=_start_archive("gallery-dl"),
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "gallery-dl"),
-              ended=_ended, pause=lambda: tool_settings("gallery-dl")["pause"],
+              ended=_ended, pause=lambda params: tool_settings("gallery-dl")["pause"],
               describe=_describe("Sync with gallery-dl"))
 jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
               build=_build_yt_dlp, group="yt-dlp", start=_start_yt_dlp, after=_strip_cookies,
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "yt-dlp"),
-              ended=_ended, pause=lambda: tool_settings("yt-dlp")["pause"],
+              ended=_ended, pause=lambda params: tool_settings("yt-dlp")["pause"],
               describe=_describe("Sync with yt-dlp"))
 
 

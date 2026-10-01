@@ -47,9 +47,11 @@ def fake_tool(folder, name, version="1.0.0"):
     return path
 
 
-def fake_venv(folder):
-    """A virtualenv layout: pyvenv.cfg and bin/."""
+def fake_venv(folder, pip=True):
+    """A virtualenv layout: pyvenv.cfg, bin/, and pip in its site-packages."""
     os.makedirs(os.path.join(folder, "bin"), exist_ok=True)
+    if pip:
+        os.makedirs(os.path.join(folder, "lib", "python3.12", "site-packages", "pip"))
     with open(os.path.join(folder, "pyvenv.cfg"), "w") as f:
         f.write("home = /usr/bin\n")
     return folder
@@ -76,6 +78,7 @@ def layout(env, monkeypatch):
     downloaders.forget()
     monkeypatch.setattr(jobs, "_active", jobs.collections.OrderedDict())
     monkeypatch.setattr(jobs, "_closing", False)
+    monkeypatch.setattr(jobs, "_cool", {})     # no pause left over from another test
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     yield {"bin": bin_dir, "venv": venv, "pipx_venv": pipx_venv, "tmp": tmp}
     jobs.shutdown()
@@ -167,6 +170,21 @@ def test_version_errors(layout, monkeypatch):
     bad.chmod(0o755)
     monkeypatch.setattr(downloaders, "VERSION_TIMEOUT", 0.5)
     assert downloaders.run_version(str(hang), "instaloader") == (None, "no answer to --version within 0.5 s")
+    # A child that leaves the group and keeps the output open is not waited for.
+    pid_file = layout["tmp"] / "escaped.pid"
+    escape = broken / "gallery-dl"
+    escape.write_text(f"#!{sys.executable}\nimport subprocess, time\n"
+                      f"p = subprocess.Popen([{sys.executable!r}, '-c', 'import time; time.sleep(30)'],"
+                      f" start_new_session=True)\n"
+                      f"open({str(pid_file)!r}, 'w').write(str(p.pid))\ntime.sleep(30)\n")
+    escape.chmod(0o755)
+    started = __import__("time").monotonic()
+    try:
+        assert downloaders.run_version(str(escape), "gallery-dl") == (None, "no answer to --version within 0.5 s")
+        assert __import__("time").monotonic() - started < 5
+    finally:
+        if pid_file.exists():
+            os.kill(int(pid_file.read_text()), 9)
     assert downloaders.run_version(str(bad), "yt-dlp") == (None, "--version failed (exit code 3): boom")
 
 
@@ -520,6 +538,40 @@ def test_nothing_from_the_request_reaches_the_update_argv(layout, client, params
     python = fake_updater(os.path.join(layout["venv"], "bin", "python"), "2026.09.09")
     r = client.post("/api/jobs", json={"kind": "tool-update", "params": params}, headers=H)
     assert r.status_code == 400 and updater_runs(python) == []
+
+
+def test_update_refused_without_pip_or_under_another_pipx_name(layout, client, monkeypatch):
+    # A virtualenv without pip (uv makes them): no Update button.
+    uv = fake_venv(str(layout["tmp"] / "uv" / "tools" / "yt-dlp"), pip=False)
+    fake_updater(os.path.join(uv, "bin", "python"), "2026.09.09")
+    tool = fake_tool(os.path.join(uv, "bin"), "yt-dlp")
+    assert client.post("/api/config", json={"tools": {"yt-dlp": tool}}, headers=H).get_json()["ok"]
+    t = by_tool(client.get("/api/downloaders", headers=H).get_json())["yt-dlp"]
+    assert (t["install"], t["update"]["possible"]) == ("venv", False) and "no pip" in t["update"]["reason"]
+    r = client.post("/api/jobs", json={"kind": "tool-update", "params": {"tool": "yt-dlp"}}, headers=H)
+    assert r.status_code == 400 and updater_runs(os.path.join(uv, "bin", "python")) == []
+    # pipx install --suffix: pipx knows it by another name; upgrading "gallery-dl" would miss it.
+    fake_updater(str(layout["bin"] / "pipx"), "1.31.0", pipx=True)
+    other = fake_venv(str(layout["tmp"] / "pipx" / "venvs" / "gallery-dl@nightly"))
+    tool = fake_tool(os.path.join(other, "bin"), "gallery-dl")
+    assert client.post("/api/config", json={"tools": {"gallery-dl": tool}}, headers=H).get_json()["ok"]
+    t = by_tool(client.get("/api/downloaders", headers=H).get_json())["gallery-dl"]
+    assert (t["install"], t["update"]) == ("pipx", {"possible": False, "command": "pipx upgrade gallery-dl@nightly",
+                                                    "reason": "pipx knows it as gallery-dl@nightly, not gallery-dl"})
+    assert client.post("/api/jobs", json={"kind": "tool-update", "params": {"tool": "gallery-dl"}},
+                       headers=H).status_code == 400
+    assert updater_runs(str(layout["bin"] / "pipx")) == []
+
+
+def test_test_jobs_keep_their_tools_pause(layout, client):
+    assert client.post("/api/config", json={"yt-dlp": {"pause": 600}}, headers=H).get_json()["ok"]
+    first = ended(jobs.submit("tool-test", {"tool": "yt-dlp"})["id"])
+    assert first["state"] == "done"
+    # The next run of yt-dlp, a test or a sync, waits out the pause; gallery-dl does not.
+    nxt = jobs.submit("tool-test", {"tool": "yt-dlp"})
+    assert nxt["state"] == "queued" and nxt["waits_until"] >= first["ended_at"] + 599
+    assert ended(jobs.submit("tool-test", {"tool": "gallery-dl"})["id"])["state"] == "done"
+    assert jobs.get(nxt["id"])["state"] == "queued"
 
 
 def test_update_and_sync_never_run_at_once(layout, client):
