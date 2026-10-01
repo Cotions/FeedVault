@@ -136,3 +136,147 @@ def test_version_errors(layout, monkeypatch):
     monkeypatch.setattr(downloaders, "VERSION_TIMEOUT", 0.5)
     assert downloaders.run_version(str(hang), "instaloader") == (None, "no answer to --version within 0.5 s")
     assert downloaders.run_version(str(bad), "yt-dlp") == (None, "--version failed (exit code 3): boom")
+
+
+# ---------------------------------------------------------------------------
+# Latest versions: a local server stands in for PyPI
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def pypi(layout, monkeypatch):
+    """A fake PyPI on 127.0.0.1. ``answers[name]`` is (status, body bytes)
+    or a callable(handler); ``asked`` lists the names requested."""
+    import http.server
+    import json as _json
+    import threading
+    import downloaders
+    state = {"asked": [], "answers": {}}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            name = self.path.split("/")[2]
+            state["asked"].append(name)
+            answer = state["answers"].get(name) or (200, _json.dumps({"info": {"version": "2099.1.1"}}).encode())
+            if callable(answer):
+                return answer(self)
+            code, body = answer
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(downloaders, "PYPI_URL", f"http://127.0.0.1:{server.server_port}/pypi/{{}}/json")
+    yield state
+    server.shutdown()
+    server.server_close()
+
+
+def check_updates(client, on=True):
+    assert client.post("/api/config", json={"check_updates": on}, headers=H).get_json()["ok"]
+
+
+def test_latest_is_off_by_default(pypi, client):
+    r = client.get("/api/downloaders", headers=H).get_json()
+    assert r["check_updates"] is False
+    assert all(t["latest"] is None and t["outdated"] is None for t in r["tools"])
+    assert client.get("/api/config", headers=H).get_json()["check_updates"] is False
+    assert pypi["asked"] == []
+    assert not client.post("/api/config", json={"check_updates": "yes"}, headers=H).get_json()["ok"]
+
+
+def test_latest_once_a_day(pypi, client, env, monkeypatch):
+    import downloaders
+    import json as _json
+    pypi["answers"]["gallery-dl"] = (200, _json.dumps({"info": {"version": "1.30.0"}}).encode())
+    check_updates(client)
+    tools = by_tool(client.get("/api/downloaders", headers=H).get_json())
+    assert sorted(pypi["asked"]) == ["gallery-dl", "instaloader", "yt-dlp"]     # never ffmpeg
+    assert tools["ffmpeg"]["latest"] is None
+    assert tools["yt-dlp"]["latest"]["version"] == "2099.1.1" and tools["yt-dlp"]["outdated"] is True
+    assert tools["gallery-dl"]["outdated"] is False                            # 1.30.0 installed
+    assert tools["instaloader"]["latest"]["version"] == "2099.1.1" and tools["instaloader"]["outdated"] is None
+    # Asked again neither on the next load, nor on Check again, nor after a restart.
+    client.get("/api/downloaders", headers=H)
+    client.post("/api/downloaders/check", headers=H)
+    assert len(pypi["asked"]) == 3
+    saved = _json.load(open(env["tmp"] / "data" / "downloaders" / "pypi.json"))
+    assert saved["yt-dlp"]["version"] == "2099.1.1"
+    # A day later: asked again.
+    later = int(downloaders.time.time()) + downloaders.PYPI_EVERY + 1
+    monkeypatch.setattr(downloaders.time, "time", lambda: later)
+    client.get("/api/downloaders", headers=H)
+    assert len(pypi["asked"]) == 6
+    # Turned off: nothing shown, nothing asked.
+    check_updates(client, False)
+    monkeypatch.setattr(downloaders.time, "time", lambda: later + 10 * downloaders.PYPI_EVERY)
+    assert all(t["latest"] is None for t in client.get("/api/downloaders", headers=H).get_json()["tools"])
+    assert len(pypi["asked"]) == 6
+
+
+@pytest.mark.parametrize("answer, error", [
+    ((200, b"not json"), "PyPI's answer is not what was expected"),
+    ((200, b'{"info": []}'), "PyPI's answer is not what was expected"),
+    ((200, b'{"info": {"version": 5}}'), "PyPI's answer is not what was expected"),
+    ((200, b'{"info": {"version": "1.0; rm -rf ~"}}'), "PyPI's answer is not what was expected"),
+    ((200, b'{"info": {"version": "' + b"1" * 100 + b'"}}'), "PyPI's answer is not what was expected"),
+    ((200, b"[" * 2000 + b"]" * 2000), "PyPI's answer is not what was expected"),
+    ((404, b"{}"), "PyPI answered 404"),
+    ((200, b'{"info": {"version": "1.0"}, "pad": "' + b"x" * 5000 + b'"}'), "PyPI's answer is too large"),
+])
+def test_bad_pypi_answers(pypi, monkeypatch, answer, error):
+    import downloaders
+    monkeypatch.setattr(downloaders, "PYPI_MAX", 4096)
+    pypi["answers"]["yt-dlp"] = answer
+    assert downloaders.fetch_latest("yt-dlp") == (None, error)
+
+
+def test_pypi_redirect_and_slow_answer(pypi, monkeypatch):
+    import time
+    import downloaders
+
+    def redirect(h):
+        h.send_response(302)
+        h.send_header("Location", "http://127.0.0.1:1/elsewhere")
+        h.send_header("Content-Length", "0")
+        h.end_headers()
+
+    def drip(h):
+        h.send_response(200)
+        h.send_header("Content-Length", "100000")
+        h.end_headers()
+        try:
+            for _ in range(25):
+                h.wfile.write(b" " * 10)
+                h.wfile.flush()
+                time.sleep(0.05)
+        except OSError:
+            pass
+    pypi["answers"]["yt-dlp"] = redirect
+    assert downloaders.fetch_latest("yt-dlp") == (None, "PyPI answered 302")
+    monkeypatch.setattr(downloaders, "PYPI_TIMEOUT", 0.5)
+    pypi["answers"]["gallery-dl"] = drip
+    assert downloaders.fetch_latest("gallery-dl") == (None, "PyPI did not answer within 0.5 s")
+
+
+def test_unreachable_pypi_is_shown_and_not_retried_today(pypi, client, monkeypatch):
+    import downloaders
+    monkeypatch.setattr(downloaders, "PYPI_URL", "http://127.0.0.1:1/pypi/{}/json")
+    check_updates(client)
+    t = by_tool(client.get("/api/downloaders", headers=H).get_json())["yt-dlp"]
+    assert t["latest"]["version"] is None and t["latest"]["error"].startswith("could not reach PyPI")
+    assert t["outdated"] is None
+
+
+@pytest.mark.parametrize("latest, installed, result", [
+    ("2026.08.06", "2026.01.01", True), ("2026.08.06", "2026.08.06", False),
+    ("2026.08.06", "2026.08.06.232211", False), ("1.30", "1.30.0", False), ("1.31.0", "1.30.10", True),
+    ("1.30.10", "1.30.9", True), ("4.15", "instaloader 4.14.2", True), ("1.0", "no digits", None),
+])
+def test_newer(latest, installed, result):
+    import downloaders
+    assert downloaders.newer(latest, installed) is result

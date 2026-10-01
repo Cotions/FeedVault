@@ -178,5 +178,8 @@ The server binds to `127.0.0.1` only. Every `/api` call needs an `X-FeedVault`
 header and a local `Host`, and no CORS is ever granted, so other websites in
 your browser cannot read or change your library. Jobs are started by kind,
 with parameters each kind checks; the API never takes a command, and tools run
-without a shell. API reference:
+without a shell. The server itself contacts the network for one thing only,
+and only if you turn it on (**Settings → Downloaders → check for updates**):
+PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
+to say when an update is out. API reference:
 [docs/API.md](docs/API.md).

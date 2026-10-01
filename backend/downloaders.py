@@ -13,14 +13,23 @@ tools into ~/.local/bin):
 
 Found once and kept in memory; found again when the tools set in Settings
 change, or on request (Check again).
+
+The latest version of instaloader, gallery-dl and yt-dlp comes from PyPI,
+only when Settings turn the check on (``check_updates``, off by default): the
+only time the server itself reaches the network. One fixed URL per package,
+no redirects, a timeout and a size cap; at most once a day per package, the
+answers kept in ``<data_dir>/downloaders/pypi.json`` across restarts.
+ffmpeg is not on PyPI: no check.
 """
+import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 
 import config
 import jobs
@@ -28,6 +37,13 @@ import jobs
 VERSION_TIMEOUT = 10                           # seconds for a tool's --version
 VERSION_MAX = 200                              # characters kept of its first line
 INSTALLS = ("venv", "pipx", "system", "missing")
+
+PACKAGES = {"instaloader": "instaloader", "gallery-dl": "gallery-dl", "yt-dlp": "yt-dlp"}   # tool -> PyPI name
+PYPI_URL = "https://pypi.org/pypi/{}/json"
+PYPI_TIMEOUT = 10                              # seconds for the whole answer
+PYPI_MAX = 8 * 1024 * 1024                     # bytes; yt-dlp's page lists every release
+PYPI_EVERY = 86400                             # seconds between two checks of a package
+_PYPI_VERSION_RE = re.compile(r"[0-9][0-9A-Za-z.+!_-]{0,63}")
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +153,157 @@ def forget():
 
 
 # ---------------------------------------------------------------------------
+# Latest versions (PyPI)
+# ---------------------------------------------------------------------------
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """The URL is fixed: a redirect is an error, never followed."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def fetch_latest(name):
+    """(version, error): PyPI's latest release of a package, ``name`` one of
+    PACKAGES' values. The answer must come within PYPI_TIMEOUT, be at most
+    PYPI_MAX bytes of JSON, and its ``info.version`` look like a version."""
+    request = urllib.request.Request(PYPI_URL.format(name), headers={
+        "Accept": "application/json", "User-Agent": f"FeedVault/{config.__version__}"})
+    deadline = time.monotonic() + PYPI_TIMEOUT
+    body = b""
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=PYPI_TIMEOUT) as r:
+            while len(body) <= PYPI_MAX:
+                if time.monotonic() > deadline:
+                    return None, f"PyPI did not answer within {PYPI_TIMEOUT} s"
+                chunk = r.read(65536)
+                if not chunk:
+                    break
+                body += chunk
+    except urllib.error.HTTPError as e:
+        return None, f"PyPI answered {e.code}"
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return None, f"could not reach PyPI: {getattr(e, 'reason', None) or e}"
+    if len(body) > PYPI_MAX:
+        return None, "PyPI's answer is too large"
+    try:
+        version = json.loads(body)["info"]["version"]
+    except (ValueError, KeyError, TypeError, RecursionError):
+        version = None
+    if not isinstance(version, str) or not _PYPI_VERSION_RE.fullmatch(version):
+        return None, "PyPI's answer is not what was expected"
+    return version, None
+
+
+_pypi_lock = threading.Lock()
+
+
+def _pypi_path(cfg):
+    return os.path.join(cfg["data_directory"], "downloaders", "pypi.json")
+
+
+def _read_pypi(cfg):
+    """{name: {version, error, checked_at}} as last saved; what does not fit is dropped."""
+    try:
+        with open(_pypi_path(cfg), encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for name in PACKAGES.values():
+        e = saved.get(name) if isinstance(saved, dict) else None
+        if (isinstance(e, dict) and isinstance(e.get("checked_at"), int)
+                and (e.get("version") is None or isinstance(e["version"], str))
+                and (e.get("error") is None or isinstance(e["error"], str))):
+            out[name] = {"version": e.get("version"), "error": e.get("error"), "checked_at": e["checked_at"]}
+    return out
+
+
+def latest(cfg=None):
+    """{PyPI name: {version, error, checked_at}}, asking PyPI for each
+    package not asked in the last PYPI_EVERY seconds (a failed ask counts:
+    no retry before then either). Empty, and nothing asked, while
+    ``check_updates`` is off."""
+    cfg = cfg or config.load()
+    if cfg.get("check_updates") is not True:
+        return {}
+    with _pypi_lock:
+        saved = _read_pypi(cfg)
+        now = int(time.time())
+        due = [n for n in PACKAGES.values() if n not in saved or not 0 <= now - saved[n]["checked_at"] < PYPI_EVERY]
+        if not due:
+            return saved
+        got = {}
+
+        def one(name):
+            version, error = fetch_latest(name)
+            got[name] = {"version": version, "error": error, "checked_at": now}
+        threads = [threading.Thread(target=one, args=(n,), daemon=True) for n in due]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        for name, e in got.items():
+            print(f"[downloaders] PyPI {name}: {e['version'] or e['error']}")
+        saved.update(got)
+        path = _pypi_path(cfg)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(saved, f, indent=1)
+            os.replace(path + ".tmp", path)
+        except OSError as e:                   # still shown; asked again on the next start
+            print(f"[downloaders] could not save {path}: {e}")
+        return saved
+
+
+def _release(text):
+    """A version's release numbers, trailing zeros dropped (``1.30.0`` is
+    ``1.30``): the first run of dot-separated numbers in ``text``."""
+    m = re.search(r"\d+(?:\.\d+)*", text or "")
+    if m is None:
+        return None
+    parts = [int(p) for p in m.group().split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def newer(latest_version, installed):
+    """Whether PyPI's version is newer than the installed one; None when
+    either cannot be read. A nightly yt-dlp (``2026.08.06.232211``) is not
+    older than the release it follows."""
+    a, b = _release(latest_version), _release(installed)
+    return None if a is None or b is None else a > b
+
+
+# ---------------------------------------------------------------------------
 # Status (GET /api/downloaders)
 # ---------------------------------------------------------------------------
 
 def status(refresh=False):
     cfg = config.load()
     tools, checked_at = found(refresh, cfg)
-    return {"checked_at": checked_at, "tools": [tools[t] for t in jobs.TOOLS]}
+    pypi = latest(cfg)
+    out = []
+    for t in jobs.TOOLS:
+        info = dict(tools[t])
+        known = pypi.get(PACKAGES.get(t))
+        info["latest"] = known
+        info["outdated"] = newer(known["version"], info["version"]) if known and known["version"] else None
+        out.append(info)
+    return {"checked_at": checked_at, "check_updates": cfg.get("check_updates") is True, "tools": out}
+
+
+def outdated(tool):
+    """(installed, latest) when the latest-version check is on and ``tool``
+    is older than PyPI's latest release, from what is already known (no
+    PyPI request, no --version run unless the tools were never found)."""
+    cfg = config.load()
+    if cfg.get("check_updates") is not True or tool not in PACKAGES:
+        return None
+    known = _read_pypi(cfg).get(PACKAGES[tool])
+    info = found(cfg=cfg)[0][tool]
+    if known and known["version"] and newer(known["version"], info["version"]):
+        return info["version"], known["version"]
+    return None

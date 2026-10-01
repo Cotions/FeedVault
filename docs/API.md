@@ -94,8 +94,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30 }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30 }, "youtube_max_seconds": 180, "routes": {…} }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30 }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30 }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
@@ -1268,7 +1268,7 @@ What FeedVault knows of each tool, for the Downloaders card in Settings.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/downloaders` | `{ "checked_at": 1727500000, "tools": [tool, …] }`, one per tool, in the order `instaloader`, `gallery-dl`, `yt-dlp`, `ffmpeg` |
+| GET | `/api/downloaders` | `{ "checked_at": 1727500000, "check_updates": false, "tools": [tool, …] }`, one per tool, in the order `instaloader`, `gallery-dl`, `yt-dlp`, `ffmpeg` |
 | POST | `/api/downloaders/check` | the same with `"ok": true`, every tool found again (Check again) |
 
 A tool:
@@ -1283,7 +1283,9 @@ A tool:
   "install": "pipx",
   "venv": "/home/me/.local/share/pipx/venvs/yt-dlp",
   "version": "2026.08.06",
-  "version_error": null
+  "version_error": null,
+  "latest": { "version": "2026.09.20", "error": null, "checked_at": 1727500000 },
+  "outdated": true
 }
 ```
 
@@ -1301,5 +1303,25 @@ A tool:
   to its copyright notice), run without a shell and stopped after 10
   seconds; else `null` and `version_error` says why.
 
+- `latest`: PyPI's latest release, when `check_updates` is on (see below),
+  else `null`; always `null` for ffmpeg. `version` is `null` and `error`
+  says why when PyPI could not be asked or answered something unexpected.
+- `outdated`: `true` when `latest.version` is newer than `version`
+  (comparing their release numbers, `1.30.0` = `1.30`; a nightly yt-dlp
+  `2026.08.06.232211` is not older than `2026.08.06`), `false` when not,
+  `null` when either is unknown.
+
 The tools are found once and kept in memory; they are found again when the
 tools set in Settings (or `PATH`) change, and on `POST /api/downloaders/check`.
+
+**Latest versions.** Off by default: `POST /api/config` with
+`{ "check_updates": true }` turns it on. This is the only request the
+server itself makes to the network. For instaloader, gallery-dl and yt-dlp
+it fetches `https://pypi.org/pypi/<name>/json` (fixed URLs, `<name>` one of
+the three, never from a request), without following redirects, within 10
+seconds and at most 8 MB, and keeps `info.version` if it looks like a
+version (a digit, then at most 63 of `0-9A-Za-z.+!_-`). Each package is
+asked at most once a day, a failed ask included; the answers are kept in
+`<data_directory>/downloaders/pypi.json`, so a restart does not ask again.
+They are asked when `GET /api/downloaders` finds them due; Check again
+does not ask sooner.

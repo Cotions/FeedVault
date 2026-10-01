@@ -53,6 +53,7 @@ Rows marked settled are decided; the rest are proposals.
 | Post identity | `platform:post_id` (e.g. `instagram:C8xYz…`, `twitter:1834…`) |
 | Parsers | One parser per tool, not per platform: `instaloader`, `gallery-dl`, `yt-dlp`. Each turns a tool's metadata file plus its media files into a normalized post. Unknown files are listed as unmatched, never guessed at |
 | Ports | Live on 3380, test instance on 3389 (ChannelVault uses 3360 and 3399, RecipeVault 3370 and 3399 for its demo vault) |
+| Outbound network | **Settled.** The server makes one kind of request itself: PyPI's JSON page of instaloader, gallery-dl and yt-dlp (`https://pypi.org/pypi/<name>/json`), to say when an update is out. Off until turned on in Settings → Downloaders, at most once a day per package, fixed URLs, no redirects, a timeout and a size cap. Everything else that reaches the network is a downloader (or pip / pipx updating one) started as a job |
 | Security | Copy ChannelVault's origin lockdown: no CORS, a required `X-FeedVault` header on every API call, a Host allowlist |
 
 ### Recommended downloader settings

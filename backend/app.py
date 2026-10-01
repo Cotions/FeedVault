@@ -837,7 +837,8 @@ def _public_config(cfg):
             "version": config.__version__, "tools": cfg.get("tools") or {},
             "instaloader": sync.settings(cfg), "routes": sources.routes(cfg),
             "gallery-dl": sync.tool_settings("gallery-dl", cfg), "yt-dlp": sync.tool_settings("yt-dlp", cfg),
-            "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg)}
+            "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg),
+            "check_updates": cfg.get("check_updates") is True}
 
 
 @app.get("/api/config")
@@ -865,6 +866,10 @@ def set_config():
         if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= YOUTUBE_MAX:
             return jsonify({"ok": False, "error": f"youtube_max_seconds must be whole seconds from 1 to {YOUTUBE_MAX}"})
         changes["youtube_max_seconds"] = v
+    if "check_updates" in body:
+        if not isinstance(body["check_updates"], bool):
+            return jsonify({"ok": False, "error": "check_updates must be true or false"})
+        changes["check_updates"] = body["check_updates"]
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
         if error:
