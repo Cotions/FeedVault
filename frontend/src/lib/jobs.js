@@ -1,0 +1,32 @@
+import { createContext, useContext } from "react";
+
+/* Job status shared by the sidebar indicator, the Jobs page and the Tools
+   card. Provided by App, which polls GET /api/jobs: every second or so while
+   a job is queued or running, rarely otherwise.
+
+   { list, running, active, started(job) }
+   - list:       last GET /api/jobs answer ({ running, queued, jobs }) or null
+   - active:     running + queued
+   - started(job): tell the poller a job was just started, so it polls now
+                 and fast until the job ends (a toast says how it ended) */
+export const JobsContext = createContext({
+  list: null,
+  running: 0,
+  active: 0,
+  started: () => {},
+});
+
+export function useJobs() {
+  return useContext(JobsContext);
+}
+
+export const ENDED = new Set(["done", "failed", "cancelled", "interrupted"]);
+
+// "1 s", "2 min 5 s", "1 h 4 min"; null while it has not started
+export function jobDuration(job, now = Date.now() / 1000) {
+  if (!job.started_at || (ENDED.has(job.state) && !job.ended_at)) return null;   // ended when FeedVault crashed: unknown
+  const s = Math.max(0, Math.round((job.ended_at ?? now) - job.started_at));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}`;
+  return `${Math.floor(s / 3600)} h${Math.floor((s % 3600) / 60) ? ` ${Math.floor((s % 3600) / 60)} min` : ""}`;
+}

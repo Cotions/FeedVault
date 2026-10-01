@@ -19,6 +19,7 @@ import config
 import db
 import duplicates
 import hashing
+import jobs
 import organize
 import scanner
 import thumbs
@@ -523,7 +524,7 @@ def scan_start():
 
 def _public_config(cfg):
     return {"media_roots": cfg["media_roots"], "data_directory": cfg["data_directory"],
-            "version": config.__version__}
+            "version": config.__version__, "tools": cfg.get("tools") or {}}
 
 
 @app.get("/api/config")
@@ -535,16 +536,84 @@ def get_config():
 def set_config():
     body = request.get_json(silent=True) or {}
     cfg = config.load()
+    tools = roots = None
+    if "tools" in body:                        # checked before anything is saved
+        tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
+        if error:
+            return jsonify({"ok": False, "error": error})
     if "media_roots" in body:
         roots, error = config.clean_roots(body["media_roots"])
         if error:
             return jsonify({"ok": False, "error": error})
-        changed = roots != cfg["media_roots"]
+    if tools is not None:
+        # Only the tools sent change; one sent empty is dropped: back to PATH.
+        kept = {k: v for k, v in (cfg.get("tools") or {}).items() if k not in body["tools"]}
+        cfg["tools"] = {**kept, **tools}
+    changed = roots is not None and roots != cfg["media_roots"]
+    if roots is not None:
         cfg["media_roots"] = roots
+    if tools is not None or roots is not None:
         config.save(cfg)
-        if changed:
-            scanner.start(roots)
+    if changed:
+        scanner.start(roots)
     return jsonify({"ok": True, "config": _public_config(cfg)})
+
+
+# ---------------------------------------------------------------------------
+# Jobs (jobs.py: started by kind, never from a command in the request)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/jobs")
+def list_jobs():
+    return jsonify(jobs.listing())
+
+
+@app.get("/api/jobs/kinds")
+def job_kinds():
+    return jsonify(jobs.kinds())
+
+
+@app.post("/api/jobs")
+def start_job():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "send { kind, params }"}), 400
+    try:
+        job = jobs.submit(body.get("kind"), body.get("params"))
+    except jobs.BadRequest as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    print(f"[jobs] #{job['id']} {job['kind']} queued")
+    return jsonify({"ok": True, "job": job})
+
+
+@app.get("/api/jobs/<int:job_id>")
+def get_job(job_id):
+    job = jobs.get(job_id)
+    if job is None:
+        return jsonify({"ok": False, "error": "no such job"}), 404
+    return jsonify(job)
+
+
+@app.get("/api/jobs/<int:job_id>/log")
+def job_log(job_id):
+    log = jobs.log(job_id, _int_arg("after", 0, 0, 2**53))
+    if log is None:
+        return jsonify({"ok": False, "error": "no such job"}), 404
+    return jsonify(log)
+
+
+@app.post("/api/jobs/<int:job_id>/cancel")
+def cancel_job(job_id):
+    try:
+        job = jobs.cancel(job_id)
+    except jobs.TooLate as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    if job is None:
+        if jobs.get(job_id) is None:
+            return jsonify({"ok": False, "error": "no such job"}), 404
+        return jsonify({"ok": False, "error": "the job has already ended"}), 409
+    print(f"[jobs] #{job_id} cancelled")
+    return jsonify({"ok": True, "job": job})
 
 
 @app.get("/api/browse")
@@ -565,6 +634,7 @@ def browse():
 @app.post("/api/quit")
 def quit_app():
     def stop():
+        jobs.shutdown()                        # os._exit skips atexit
         userdata.flush()
         os._exit(0)
 
@@ -690,8 +760,11 @@ def main():
         print(f"[db] {e}")
         sys.exit(1)
     userdata.restore_all(db.connect(), cfg["data_directory"])
-    # Ctrl+C and SIGTERM still write the last few seconds of user data.
+    jobs.recover()
+    # Ctrl+C and SIGTERM still write the last few seconds of user data, after
+    # stopping running jobs (atexit runs the last registered first).
     atexit.register(userdata.flush)
+    atexit.register(jobs.shutdown)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     scanner.start(cfg["media_roots"])
     if "--no-browser" not in sys.argv and os.environ.get("FEEDVAULT_NO_BROWSER") != "1":

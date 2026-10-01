@@ -94,8 +94,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev" }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }` |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" } }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
 | POST | `/api/quit` | stops the backend |
@@ -633,3 +633,111 @@ measured on disk instead.
 from the index, never by walking the media folders (only the trash total is
 read from disk). Their answers are cached until anything in the index changes
 (a scan, a delete, a restore, a review decision, a tag change).
+
+## Jobs
+
+Command-line tools run as **jobs**, started from the dashboard (later from
+the userscript too). A request never carries a command, a path to run or
+shell text: it names a **kind** and gives its parameters, and the kind,
+defined in `backend/jobs.py`, checks them and builds the argument list. It
+runs without a shell, so every parameter is exactly one argument. An unknown
+kind, an unknown parameter or a bad value is a 400.
+
+One job runs at a time per **lock group** (one instaloader session at a
+time); jobs of different groups run side by side, at most 2 at once. The
+rest wait in the queue, oldest first.
+
+A **job**:
+
+```json
+{
+  "id": 12,
+  "kind": "tool-version",
+  "label": "Check a tool's version",
+  "params": { "tool": "yt-dlp" },
+  "argv": ["yt-dlp", "--version"],
+  "cwd": "/home/me/.local/share/feedvault",
+  "group": "tool-version",
+  "state": "done",
+  "created_at": 1727500000, "started_at": 1727500000, "ended_at": 1727500001,
+  "exit_code": 0,
+  "rescan": null,
+  "result": { "version": "2024.08.06" },
+  "message": "2024.08.06"
+}
+```
+
+- `state`: `queued` → `running` → `done` (exit code 0) | `failed` |
+  `cancelled` | `interrupted` (FeedVault stopped while it was queued or
+  running; set on quit, or on the next start after a crash, and then
+  `ended_at` is `null`: when it stopped is unknown).
+- `argv`: for display. The first item is the tool's name; the path actually
+  run is resolved when the job starts (see [Tools](#tools)).
+- `rescan`: a folder inside a media root, or `null`. When the job exits 0,
+  that folder (with its subfolders) is indexed and `result` is
+  `{ "added": 3, "updated": 0 }`.
+- `result`: what the job produced, by kind, or `null` (failed, cancelled).
+- `message`: one line for people: `"3 new posts"`, the version, the last
+  line of output of a failed job (or `"exit code 2"`), `"<tool> not found;
+  set its path in Settings"`, `"cancelled"`, `"FeedVault stopped while it ran"`.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …] }`: queued and running jobs and the last 100 ended ones, newest first |
+| GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
+| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
+| GET | `/api/jobs/<id>` | job, or 404 |
+| GET | `/api/jobs/<id>/log?after=<n>` | output lines numbered above `n` (default 0), see below; 404 if unknown |
+| POST | `/api/jobs/<id>/cancel` | → `{ "ok": true, "job": {…} }`; 404 if unknown, 409 if it has already ended, or if its process has exited and it is indexing what it downloaded |
+
+A parameter is `{ "type": "choice", "choices": […] }` or `{ "type": "text",
+"max": 500 }` (1 to `max` characters), required unless it says
+`"required": false`.
+
+Built-in kinds:
+
+| Kind | Params | Runs | Group |
+|---|---|---|---|
+| `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
+
+Download kinds come with profile sync (#4) and the userscript (#10).
+
+### Log
+
+```json
+{ "state": "running", "first": 1, "next": 42, "more": false,
+  "lines": [{ "n": 41, "text": "[instagram] Downloading …" }, { "n": 42, "text": "…" }] }
+```
+
+Standard output and error, merged, decoded as UTF-8 (bad bytes replaced).
+Lines are numbered from 1 and end at `\n` or at a lone `\r`; a line longer
+than 4 KB is cut and ends with ` …`. Progress bars redraw with `\r`, often
+without a `\n` for minutes: such a redraw is kept at most once a second, so
+the live log moves without filling up; a line ended by `\n` is always kept.
+Lines FeedVault adds itself start with `[feedvault]`.
+
+- While the job is queued or running: the last 5000 lines. Poll with
+  `after` set to the previous `next`. At most 1000 lines per answer; `more`
+  says there are others after them.
+- Once it has ended: the last 200 lines, kept with the job.
+- `first` is the oldest line still kept. A reader whose `after` is below
+  `first - 1` missed lines.
+
+Cancelling sends SIGTERM to the job's process group (the tool and anything
+it started), then SIGKILL after 10 seconds. Partial files stay, for the tool
+to resume. Quitting FeedVault (Quit, Ctrl+C, SIGTERM) stops running jobs the
+same way.
+
+Jobs are kept in the database (`jobs` table), not with the user data: they
+are not exported to `userdata/`.
+
+### Tools
+
+`instaloader`, `gallery-dl`, `yt-dlp` and `ffmpeg` are found on `PATH`, or
+at the path set for them in Settings (`tools` in `config.json`, for a tool
+installed in a virtualenv). `POST /api/config` with `{ "tools": { "yt-dlp":
+"/abs/path" } }` sets one (an empty string clears it, back to `PATH`); the
+other tools are left as they are. A path must be absolute, an executable
+file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); anything else is
+refused. A set path that stops working makes jobs fail with "not found"
+rather than fall back to `PATH`.

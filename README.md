@@ -100,6 +100,14 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open
 <http://localhost:3380/userscript/feedvault.user.js>. On Instagram, saved posts
 get a green "saved" badge in grids, and a post page shows an "in FeedVault" link.
 
+## Jobs and tools
+
+The **Jobs** page shows what FeedVault is running for you: the queue, a live
+log, and the last 100 jobs. Downloads started from the dashboard arrive with
+profile sync; for now, **Settings → Tools** checks that instaloader,
+gallery-dl, yt-dlp and ffmpeg are installed (and lets you point at one
+installed in a virtualenv). Quitting FeedVault stops running jobs.
+
 ## Where things live
 
 | What | Where |
@@ -112,5 +120,7 @@ get a green "saved" badge in grids, and a post page shows an "in FeedVault" link
 
 The server binds to `127.0.0.1` only. Every `/api` call needs an `X-FeedVault`
 header and a local `Host`, and no CORS is ever granted, so other websites in
-your browser cannot read or change your library. API reference:
+your browser cannot read or change your library. Jobs are started by kind,
+with parameters each kind checks; the API never takes a command, and tools run
+without a shell. API reference:
 [docs/API.md](docs/API.md).

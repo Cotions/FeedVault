@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { getScan, startScan, quitApp, onConnectionChange } from "./lib/api";
+import { getScan, startScan, getJobs, quitApp, onConnectionChange } from "./lib/api";
 import { ScanContext } from "./lib/scan";
+import { JobsContext, ENDED } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
 import { fmtAgo } from "./lib/fmt";
 import Icon            from "./components/Icon";
@@ -20,9 +21,15 @@ import Trash           from "./pages/Trash";
 import Unmatched       from "./pages/Unmatched";
 import Duplicates      from "./pages/Duplicates";
 import Settings        from "./pages/Settings";
+import Jobs            from "./pages/Jobs";
 
 const SCAN_POLL_MS    = 1500;
 const OFFLINE_POLL_MS = 4000;
+// Jobs: fast while one is queued or running, slow otherwise (a job may be
+// started from elsewhere), and slower again in a hidden tab.
+const JOBS_POLL_MS        = 1000;
+const JOBS_HIDDEN_POLL_MS = 5000;
+const JOBS_IDLE_POLL_MS   = 15000;
 
 export default function App() {
   const location = useLocation();
@@ -37,6 +44,11 @@ export default function App() {
   const wasRunning = useRef(false);
   const [toasts, setToasts] = useState([]);
   const toastId = useRef(0);
+  const [jobList, setJobList] = useState(null);
+  const [visible, setVisible] = useState(() => !document.hidden);
+  // Jobs already ended when the dashboard first loaded are not news: only
+  // those above that first answer's newest id get a toast, once each.
+  const jobsSeen = useRef(null);         // { since, told: Set } after the first poll
 
   const toast = useCallback((text, kind = "ok") => {
     const id = ++toastId.current;
@@ -121,6 +133,60 @@ export default function App() {
 
   useEffect(() => { getScan().then(applyScan, () => {}); }, [applyScan]);
 
+  // A job that has ended since: toast it, and refresh the pages if it
+  // indexed anything. Jobs started elsewhere (and fast ones that end between
+  // two polls) count too.
+  const applyJobs = useCallback(list => {
+    setJobList(list);
+    if (!jobsSeen.current) {
+      const active = list.jobs.filter(j => !ENDED.has(j.state)).map(j => j.id);
+      const since = Math.min(list.jobs[0]?.id ?? 0, ...active.map(id => id - 1));
+      jobsSeen.current = { since, told: new Set() };
+    }
+    const { since, told } = jobsSeen.current;
+    let changed = false;
+    for (const j of list.jobs) {
+      if (j.id <= since || told.has(j.id) || !ENDED.has(j.state)) continue;
+      told.add(j.id);
+      // Which tool or source, for jobs that name one ("Done, yt-dlp: 2024.08.06").
+      const what = Object.values(j.params || {}).join(" ");
+      const head = what ? `, ${what}` : "";
+      if (j.state === "done") toast(`Done${head}: ${j.message}`);
+      else if (j.state === "failed") toast(`Failed${head}: ${j.message}`, "err");
+      else toast(`${j.label}: ${j.message}`);
+      if (j.result?.added || j.result?.updated) changed = true;
+    }
+    if (changed) setRefreshKey(k => k + 1);
+  }, [toast]);
+  const pollJobs = useCallback(() => getJobs().then(applyJobs, () => {}), [applyJobs]);
+  // Poll now: the job may be over in less than a second.
+  const jobStarted = useCallback(() => { pollJobs(); }, [pollJobs]);
+
+  useEffect(() => { pollJobs(); }, [pollJobs]);
+  useEffect(() => {
+    function onVisibility() {
+      setVisible(!document.hidden);
+      if (!document.hidden) pollJobs();
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [pollJobs]);
+
+  const jobsRunning = jobList?.running ?? 0;
+  const jobsActive  = jobsRunning + (jobList?.queued ?? 0);
+  useEffect(() => {
+    if (quit || online === false) return;
+    const ms = jobsActive ? (visible ? JOBS_POLL_MS : JOBS_HIDDEN_POLL_MS) : visible ? JOBS_IDLE_POLL_MS : null;
+    if (!ms) return;
+    const t = setInterval(pollJobs, ms);
+    return () => clearInterval(t);
+  }, [jobsActive, visible, online, quit, pollJobs]);
+
+  const jobsCtx = useMemo(
+    () => ({ list: jobList, running: jobsRunning, active: jobsActive, started: jobStarted }),
+    [jobList, jobsRunning, jobsActive, jobStarted],
+  );
+
   const running = !!scan?.running;
   useEffect(() => {
     if (quit) return;
@@ -167,6 +233,7 @@ export default function App() {
 
   return (
     <ScanContext.Provider value={scanCtx}>
+    <JobsContext.Provider value={jobsCtx}>
     <ToastContext.Provider value={toast}>
       <CyberBackground />
       <ScrollManager />
@@ -216,6 +283,18 @@ export default function App() {
           <NavLink to="/trash" className="side-link"><Icon name="trash" />Trash</NavLink>
           <NavLink to="/unmatched" className="side-link"><Icon name="unmatched" />Unmatched</NavLink>
           <NavLink to="/duplicates" className="side-link"><Icon name="copy" />Duplicates</NavLink>
+          <NavLink
+            to="/jobs"
+            className="side-link"
+            title={jobsActive ? `${jobsRunning} running, ${jobsActive - jobsRunning} queued` : "Downloads and other jobs"}
+          >
+            <Icon name="terminal" />Jobs
+            {jobsActive > 0 && (
+              <span className="side-badge" aria-label={`${jobsActive} job${jobsActive === 1 ? "" : "s"} active`}>
+                <Icon name="refresh" size={11} className="spin" />{jobsActive}
+              </span>
+            )}
+          </NavLink>
           <NavLink to="/settings" className="side-link"><Icon name="settings" />Settings</NavLink>
           <div className="side-sep" />
           <button
@@ -291,6 +370,7 @@ export default function App() {
             <Route path="/trash" element={<Trash />} />
             <Route path="/unmatched" element={<Unmatched />} />
             <Route path="/duplicates" element={<Duplicates />} />
+            <Route path="/jobs" element={<Jobs />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<div className="card"><div className="empty">Nothing here.</div></div>} />
           </Routes>
@@ -314,6 +394,7 @@ export default function App() {
         ))}
       </div>
     </ToastContext.Provider>
+    </JobsContext.Provider>
     </ScanContext.Provider>
   );
 }

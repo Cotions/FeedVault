@@ -35,6 +35,30 @@ def start(roots):
     return True
 
 
+def run(roots):
+    """Scan now, in the calling thread, as start() would in its own (the
+    status and the hashing worker follow); waits for a scan already
+    running. Returns the report."""
+    while True:
+        with _lock:
+            if not _state["running"]:
+                _state["running"] = True
+                break
+        time.sleep(0.5)
+    _run(list(roots))
+    return status()["last"]
+
+
+def folders(top):
+    """``top`` and its subfolders, skipping those a scan skips."""
+    for dirpath, dirnames, filenames in os.walk(top):
+        if "pyvenv.cfg" in filenames:
+            dirnames[:] = []
+            continue
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS)
+        yield dirpath
+
+
 def _run(roots):
     report = None
     try:

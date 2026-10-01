@@ -179,3 +179,19 @@ export function removeFromCollection(id, posts) { return post(`/api/collections/
 export function orderCollection(id, posts) { return post(`/api/collections/${id}/order`, { posts }); }
 // post: an id in the collection, or null for the first post
 export function setCollectionCover(id, postId) { return post(`/api/collections/${id}/cover`, { post: postId }); }
+
+/* ── Jobs (see docs/API.md "Jobs") ───────────────────────── */
+
+// { running, queued, jobs: [job] }, newest first
+export function getJobs() { return get("/api/jobs"); }
+// [{ kind, label, params }]
+export function getJobKinds() { return get("/api/jobs/kinds"); }
+export function getJob(id) { return get(`/api/jobs/${id}`); }
+// → { ok, job } or { ok: false, error }
+export function startJob(kind, params = {}) { return post("/api/jobs", { kind, params }); }
+// Lines numbered above `after` → { state, first, next, more, lines: [{ n, text }] }
+export function getJobLog(id, after = 0, opts) { return get(`/api/jobs/${id}/log${qs({ after })}`, opts); }
+// → { ok, job }; 409 { ok: false } once it has ended
+export function cancelJob(id) { return post(`/api/jobs/${id}/cancel`); }
+// { tool: "/abs/path" or "" for PATH } → { ok, config } or { ok: false, error }
+export function saveToolPaths(tools) { return post("/api/config", { tools }); }
