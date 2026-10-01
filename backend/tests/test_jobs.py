@@ -386,3 +386,84 @@ def test_history_keeps_the_last_100(runner, monkeypatch):
 def test_jobs_are_not_user_data():
     import userdata
     assert "jobs" not in userdata.REGISTRY
+
+
+# ---------------------------------------------------------------------------
+# API
+# ---------------------------------------------------------------------------
+
+from conftest import H  # noqa: E402
+
+
+def test_api_start_watch_and_list(runner, client, monkeypatch):
+    monkeypatch.setenv("PATH", os.path.dirname(sys.executable))
+    kinds = client.get("/api/jobs/kinds", headers=H).get_json()
+    tv = next(k for k in kinds if k["kind"] == "tool-version")
+    assert tv["params"]["tool"]["choices"] == ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"]
+    r = client.post("/api/jobs", json={"kind": "tool-version", "params": {"tool": "gallery-dl"}}, headers=H)
+    assert r.status_code == 200 and r.get_json()["ok"] is True
+    job_id = r.get_json()["job"]["id"]
+    job = ended(job_id)
+    assert client.get(f"/api/jobs/{job_id}", headers=H).get_json() == job
+    assert job["message"] == "gallery-dl not found; set its path in Settings"
+    listed = client.get("/api/jobs", headers=H).get_json()
+    assert listed["running"] == 0 and [j["id"] for j in listed["jobs"]] == [job_id]
+    runner["kind"]("hello", "print('a'); print('b')")
+    job_id = client.post("/api/jobs", json={"kind": "hello"}, headers=H).get_json()["job"]["id"]
+    ended(job_id)
+    log = client.get(f"/api/jobs/{job_id}/log?after=1", headers=H).get_json()
+    assert log["lines"] == [{"n": 2, "text": "b"}] and log["next"] == 2 and log["state"] == "done"
+    assert client.get(f"/api/jobs/{job_id}/log?after=x", headers=H).get_json()["next"] == 2   # bad after: 0
+    assert client.post(f"/api/jobs/{job_id}/cancel", headers=H).status_code == 409
+
+
+def test_api_rejects_bad_requests(runner, client):
+    for body in [{"kind": "nope"}, {"kind": "tool-version"}, {"kind": "tool-version", "params": {"tool": "sh"}},
+                 {"kind": "tool-version", "params": {"tool": "yt-dlp", "argv": ["sh"]}},
+                 {"argv": ["sh", "-c", "id"]}, {"command": "id"}, [1], "x"]:
+        r = client.post("/api/jobs", json=body, headers=H)
+        assert r.status_code == 400 and r.get_json()["ok"] is False, body
+    assert client.get("/api/jobs/999", headers=H).status_code == 404
+    assert client.get("/api/jobs/999/log", headers=H).status_code == 404
+    assert client.post("/api/jobs/999/cancel", headers=H).status_code == 404
+    assert client.get("/api/jobs", headers=H).get_json()["jobs"] == []
+
+
+def test_api_guard(runner, client):
+    body = {"kind": "tool-version", "params": {"tool": "yt-dlp"}}
+    assert client.post("/api/jobs", json=body).status_code == 403
+    assert client.post("/api/jobs", json=body, headers={**H, "Host": "evil.example"}).status_code == 403
+    for path in ["/api/jobs", "/api/jobs/kinds", "/api/jobs/1", "/api/jobs/1/log"]:
+        assert client.get(path).status_code == 403
+    assert client.post("/api/jobs/1/cancel").status_code == 403
+    assert jobs.listing()["jobs"] == []
+
+
+def test_api_cancel(runner, client):
+    runner["gate_kind"]("gated", "g")
+    gate = str(runner["tmp"] / "never")
+    first = client.post("/api/jobs", json={"kind": "gated", "params": {"gate": gate}}, headers=H).get_json()["job"]
+    wait_for(lambda: state(first["id"]) == "running")
+    r = client.post(f"/api/jobs/{first['id']}/cancel", headers=H).get_json()
+    assert r["ok"] is True
+    assert ended(first["id"])["state"] == "cancelled"
+
+
+def test_api_tool_paths(env, client):
+    tool = env["tmp"] / "venv" / "instaloader"
+    tool.parent.mkdir()
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    r = client.post("/api/config", json={"tools": {"instaloader": str(tool)}}, headers=H).get_json()
+    assert r["ok"] is True and r["config"]["tools"] == {"instaloader": str(tool)}
+    for tools in [{"instaloader": "/bin/sh"}, {"sh": "/bin/sh"}, {"yt-dlp": str(tool)}, ["x"],
+                  {"instaloader": str(env["tmp"] / "nope" / "instaloader")}]:
+        r = client.post("/api/config", json={"tools": tools}, headers=H).get_json()
+        assert r["ok"] is False, tools
+    # A refused tool path saves nothing else either.
+    r = client.post("/api/config", json={"tools": {"ffmpeg": "/bin/sh"}, "media_roots": []}, headers=H).get_json()
+    assert r["ok"] is False
+    cfg = client.get("/api/config", headers=H).get_json()
+    assert cfg["tools"] == {"instaloader": str(tool)} and cfg["media_roots"] == env["roots"]
+    r = client.post("/api/config", json={"tools": {"instaloader": ""}}, headers=H).get_json()
+    assert r["ok"] is True and r["config"]["tools"] == {}
