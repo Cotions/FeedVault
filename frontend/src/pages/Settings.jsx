@@ -4,7 +4,7 @@ import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveTool
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED } from "../lib/jobs";
-import { fmtAgo, fmtBytes, fmtFullDate } from "../lib/fmt";
+import { fmtAgo, fmtBytes, fmtFullDate, plural } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 
@@ -556,8 +556,6 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
     </div>
   );
 }
-
-const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 
 /* Info JSONs written before FeedVault removed the cookies after each sync:
    counted first (a dry run), then cleaned once confirmed. */

@@ -72,9 +72,9 @@ class Fake:
         self.accounts = {}
         self.data.write_text(json.dumps({"accounts": {}, "fail": None}))
 
-    def put(self, url, account, fail=None):
+    def put(self, url, account, fail=None, config_cookies=False):
         self.accounts[url] = account
-        self.data.write_text(json.dumps({"accounts": self.accounts, "fail": fail}))
+        self.data.write_text(json.dumps({"accounts": self.accounts, "fail": fail, "config_cookies": config_cookies}))
 
     def runs(self, tool=None):
         runs = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -719,12 +719,17 @@ def test_sync_with_cookies_cleans_the_info_jsons_it_wrote(env, fake, client):
     with open(before, "w") as f:
         json.dump(with_cookies(json.load(open(TT_INFO, encoding="utf-8"))), f)
     os.utime(before, (1_600_000_000, 1_600_000_000))
+    # One whose mtime is ahead of the clock (a file system whose clock is off): known, so left alone too.
+    ahead = os.path.join(folder, "old-20200101-2.info.json")
+    with open(ahead, "w") as f:
+        json.dump(with_cookies(json.load(open(TT_INFO, encoding="utf-8"))), f)
+    os.utime(ahead, (time.time() + 3600, time.time() + 3600))
     elsewhere = env["media"] / "elsewhere" / "x.info.json"
     elsewhere.parent.mkdir()
     elsewhere.write_text(open(before).read())
     job = run_sync(client, s["id"])
     assert job["state"] == "done"
-    [new] = [os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".info.json") and n != os.path.basename(before)]
+    [new] = [os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".info.json") and not n.startswith("old-")]
     d = json.load(open(new))
     assert "cookies" not in json.dumps(d) and all("Cookie" not in f["http_headers"] for f in d["formats"])
     assert d["http_headers"] == {"User-Agent": "Mozilla/5.0", "Accept": "*/*"} and len(d["formats"]) == 2
@@ -735,6 +740,7 @@ def test_sync_with_cookies_cleans_the_info_jsons_it_wrote(env, fake, client):
     assert log.index("[feedvault] cookies removed from 1 info JSON") < next(
         i for i, t in enumerate(log) if t.startswith("[feedvault] indexing"))
     assert secret_in(before) and os.stat(before).st_mtime == 1_600_000_000 and secret_in(elsewhere)
+    assert secret_in(ahead)
 
 
 def test_sync_without_cookies_rewrites_nothing(env, fake, client):
@@ -742,6 +748,16 @@ def test_sync_without_cookies_rewrites_nothing(env, fake, client):
     s = add(client, TT)
     job = run_sync(client, s["id"])
     assert not any("[feedvault] cookies" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+
+
+def test_cookies_from_the_users_own_yt_dlp_config_are_removed_too(env, fake, client):
+    # No cookies setting in FeedVault, but yt-dlp's own config passes some.
+    fake.put(TT, tt_account(1), config_cookies=True)
+    s = add(client, TT)
+    job = run_sync(client, s["id"])
+    assert "--cookies-from-browser" not in job["argv"]
+    assert "[feedvault] cookies removed from 1 info JSON" in [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert not any(secret_in(os.path.join(s["folder"], n)) for n in os.listdir(s["folder"]) if n.endswith(".json"))
 
 
 def test_cookie_cleaning_failure_does_not_fail_the_sync(env, fake, client, monkeypatch):
@@ -795,6 +811,25 @@ def test_settings_action_reports_failures(env, fake, client, monkeypatch):
     monkeypatch.setattr(info_cookies, "clean", failing)
     r = post(client, "/api/yt-dlp/info-json-cookies", {"apply": True})
     assert (r["files"], r["failures"], r["failed"]) == (0, 1, [{"path": str(p), "error": "Permission denied"}])
+
+
+def test_settings_action_goes_on_past_a_bad_file_or_folder(env, client):
+    d = with_cookies(json.load(open(TT_INFO, encoding="utf-8")))
+    bad = env["media"] / "a.info.json"                             # a lone surrogate: not writable as UTF-8
+    bad.write_text(json.dumps({**d, "title": "\ud83d"}))                 # escaped: "\\ud83d"
+    good = env["media"] / "b.info.json"
+    good.write_text(json.dumps(d))
+    locked = env["media"] / "locked"
+    locked.mkdir()
+    (locked / "c.info.json").write_text(json.dumps(d))
+    locked.chmod(0)
+    try:
+        r = post(client, "/api/yt-dlp/info-json-cookies", {"apply": True})
+    finally:
+        locked.chmod(0o755)
+    assert (r["files"], r["failures"]) == (1, 2) and not secret_in(good) and secret_in(bad)
+    assert sorted(f["path"] for f in r["failed"]) == [str(bad), str(locked)]
+    assert not [n for n in os.listdir(env["media"]) if n.endswith(".tmp")]      # no temporary file left
 
 
 def test_settings_action_waits_for_a_running_yt_dlp_sync(env, client, monkeypatch):

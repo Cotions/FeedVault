@@ -1048,17 +1048,20 @@ never holds the other's syncs.
 
 yt-dlp copies the cookies it sent for a video into that video's info JSON
 (`cookies` in each format and at the top, a `Cookie` line in their
-`http_headers`), in the media folder. So after a `yt-dlp-sync` job that
-passed `--cookies-from-browser`, once yt-dlp has exited (cancelled or not)
-and before the folder is indexed, FeedVault rewrites the info JSONs right in
-the source's folder changed since the job started: every `cookies` key at
-any depth and every `Cookie` header inside an `http_headers` are dropped,
-everything else stays as it was once parsed. The rewrite is atomic (a
-temporary file in the same folder renamed over the JSON) and keeps the
-file's mode and mtime. Only regular files (never a symlink) that parse as
-yt-dlp's (`extractor_key`, `id`, `webpage_url`) are touched. The job log
-says `cookies removed from N info JSONs`; a file that cannot be rewritten
-gets a log line and does not change how the sync ended.
+`http_headers`), in the media folder. So after every `yt-dlp-sync` job (the
+cookies can come from `--cookies-from-browser` or from the user's own
+yt-dlp config), once yt-dlp has exited (cancelled or not) and before the
+folder is indexed, FeedVault rewrites the info JSONs right in the source's
+folder that are new or changed since just before yt-dlp started (compared
+with a listing of their names and mtimes taken then, not with the clock):
+every `cookies` key at any depth and every `Cookie` header inside an
+`http_headers` are dropped, everything else stays as it was once parsed.
+The rewrite is atomic (a temporary file in the same folder renamed over the
+JSON) and keeps the file's mode, mtime and, when FeedVault may set it, its
+owner. Only regular files (never a symlink) that parse as yt-dlp's
+(`extractor_key`, `id`, `webpage_url`) are touched. The job log says
+`cookies removed from N info JSONs`; a file that cannot be rewritten gets a
+log line and does not change how the sync ended.
 
 gallery-dl's metadata JSONs hold no cookies: it keeps request headers and
 cookies in private `_http_*` keys, which `--write-metadata` leaves out.
@@ -1072,8 +1075,9 @@ synced before this:
 ```
 
 `checked`: info JSONs looked at; `files`: yt-dlp ones holding cookies
-(with `apply`, cleaned); `failed`: the first 20 `{ path, error }` that
-could not be read or rewritten, `failures` how many in all. `400` for an
+(with `apply`, cleaned); `failed`: the first 20 `{ path, error }` (a file
+or folder that could not be read, a file that could not be rewritten),
+`failures` how many in all. `400` for an
 `apply` that is not a boolean, `409` while a yt-dlp sync runs or another
 check is under way. Settings counts first (`apply` false), then asks to
 confirm.

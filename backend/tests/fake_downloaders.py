@@ -15,7 +15,8 @@ this script), keyed by the profile link FeedVault passes:
             "channel": "Some One", "videos": [{"id": "7300000000000000001", "ts": 1717243200,
                                                "title": "…", "description": "…", "duration": 12}],
             "pinned": ["7300000000000000001"]}},
-     "fail": null | "429" | "login" | "private" | "notfound"}
+     "fail": null | "429" | "login" | "private" | "notfound",
+     "config_cookies": false}
 
 and behave like gallery-dl 1.32 and yt-dlp 2026.08 for one profile link with
 the flags FeedVault passes, newest post first:
@@ -30,7 +31,8 @@ the flags FeedVault passes, newest post first:
   ``%(id)s``, ``%(ext)s``, ``%%``), ``--match-filters "duration <= N"``. A
   YouTube channel also gets its playlist info JSON. ``pinned`` videos are
   listed first, as TikTok lists a profile's pinned videos. With
-  ``--cookies-from-browser`` the info JSON holds the cookies, as yt-dlp's
+  ``--cookies-from-browser`` (or ``config_cookies``: cookies from the
+  user's own yt-dlp config) the info JSON holds the cookies, as yt-dlp's
   does (``cookies`` in each format and at the top, a ``Cookie`` in their
   ``http_headers``).
 
@@ -299,7 +301,8 @@ def yt_dlp_main(argv):
                                "timestamp": v["ts"], "upload_date": day, "duration": v.get("duration"),
                                "uploader_url": account.get("uploader_url"), "like_count": 5, "view_count": 50,
                                "comment_count": 2, "ext": "mp4", "_version": {"version": "2026.08.19"},
-                               **_chosen(v["id"], args.cookies_from_browser), **base_fields}, f, indent=1)
+                               **_chosen(v["id"], args.cookies_from_browser or data.get("config_cookies")),
+                               **base_fields}, f, indent=1)
             if args.download_archive:
                 with open(args.download_archive, "a", encoding="utf-8") as f:
                     f.write(line + "\n")

@@ -35,8 +35,9 @@ gallery-dl and yt-dlp (archives.py):
 - metadata on (``--write-metadata``; ``--write-info-json --write-thumbnail``),
   into the source's folder; YouTube videos longer than ``youtube_max_seconds``
   are not downloaded (ChannelVault's).
-- after a yt-dlp sync with a browser's cookies, the info JSONs it wrote are
-  rewritten without them (info_cookies.py), before the folder is indexed.
+- after a yt-dlp sync, the info JSONs it wrote are rewritten without the
+  cookies yt-dlp copies into them (info_cookies.py), before the folder is
+  indexed.
 
 How it went is read from the output (login required, private, not found,
 rate limited) and stored on the source. Two syncs of one tool pause between
@@ -568,13 +569,25 @@ def _start_archive(tool):
     return start
 
 
+_seed_yt_dlp = _start_archive("yt-dlp")
+_info_before = {}                              # source id -> its folder's info JSONs right before yt-dlp starts
+
+
+def _start_yt_dlp(params, note):
+    src = sources.row(db.connect(), _source_id(params))
+    if src is not None:
+        _info_before[src["id"]] = info_cookies.listing(src["folder"])
+    _seed_yt_dlp(params, note)
+
+
 def _strip_cookies(job, note):
-    """After a yt-dlp run with a browser's cookies: take them out of the
-    info JSONs it wrote. A failure is logged; the sync goes on."""
-    if "--cookies-from-browser" not in job["argv"] or not job["rescan"] or job["started_at"] is None:
-        return
-    # A second early: the file system's clock may lag behind time.time().
-    cleaned, failed = info_cookies.after_sync(job["rescan"], job["started_at"] - 1)
+    """After a yt-dlp run: take the cookies out of the info JSONs it wrote,
+    whether they came from FeedVault's setting (--cookies-from-browser) or
+    the user's own yt-dlp config. A failure is logged; the sync goes on."""
+    before = _info_before.pop(int(job["params"]["source"]), None)
+    if before is None or not job["rescan"]:
+        return                                 # it never got to start
+    cleaned, failed = info_cookies.after_sync(job["rescan"], before)
     if cleaned:
         note(f"cookies removed from {cleaned} info JSON{'' if cleaned == 1 else 's'}")
     for path, error in failed:
@@ -595,7 +608,7 @@ jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source
               ended=_ended, pause=lambda: tool_settings("gallery-dl")["pause"],
               describe=_describe("Sync with gallery-dl"))
 jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
-              build=_build_yt_dlp, group="yt-dlp", start=_start_archive("yt-dlp"), after=_strip_cookies,
+              build=_build_yt_dlp, group="yt-dlp", start=_start_yt_dlp, after=_strip_cookies,
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "yt-dlp"),
               ended=_ended, pause=lambda: tool_settings("yt-dlp")["pause"],
               describe=_describe("Sync with yt-dlp"))

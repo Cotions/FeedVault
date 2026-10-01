@@ -5,7 +5,7 @@ import { dismissDuplicate, getDuplicates, getDuplicatesStatus, resolveDuplicates
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
-import { fmtBytes, fmtFullDate, fmtInt, fmtShortDate, postPath } from "../lib/fmt";
+import { fmtBytes, fmtFullDate, fmtInt, fmtShortDate, plural, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
@@ -28,7 +28,6 @@ const KINDS = [
 
 const PHASES = { partial: "Hashing files", full: "Hashing whole files", dhash: "Fingerprinting pictures", probe: "Measuring videos" };
 
-const plural = (n, word, many = `${word}s`) => `${fmtInt(n)} ${n === 1 ? word : many}`;
 const lastPart = path => path.split("/").filter(Boolean).pop() || path;
 
 // What differs for one member, in words: "no item 3 · item 2 other bytes".

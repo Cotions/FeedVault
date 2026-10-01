@@ -9,6 +9,11 @@ export function fmtInt(n) {
   return n == null ? "—" : Number(n).toLocaleString();
 }
 
+// "1 file", "1,204 files"; plural("copy", …, "copies") for an irregular one.
+export function plural(n, word, many = `${word}s`) {
+  return `${fmtInt(n)} ${n === 1 ? word : many}`;
+}
+
 export function fmtBytes(bytes) {
   if (bytes == null) return "—";
   if (bytes === 0) return "0 B";
