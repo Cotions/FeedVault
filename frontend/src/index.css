@@ -1901,6 +1901,7 @@ a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline
 .dup-state.is-identical { color: #a5f0bf; background: rgba(47, 158, 79, 0.14); border: 1px solid rgba(74, 222, 128, 0.3); }
 .dup-state.is-differs   { color: #ffd59a; background: rgba(255, 213, 154, 0.08); border: 1px solid rgba(255, 213, 154, 0.3); }
 .dup-state.is-pending   { color: var(--muted); border: 1px solid var(--border); }
+.dup-state.is-repost    { color: #c9b8ff; background: rgba(150, 120, 255, 0.1); border: 1px solid rgba(170, 150, 255, 0.35); }
 .dup-members {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 210px));
@@ -1923,6 +1924,44 @@ a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline
 .dup-folder { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dup-member-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dup-diff { font-family: var(--mono); font-size: 10.5px; color: #ffd59a; }
+.dup-state.is-similar { color: #9fd8ff; background: rgba(90, 170, 255, 0.1); border: 1px solid rgba(120, 190, 255, 0.32); }
+.dup-member .big-file-link.is-viewable { cursor: zoom-in; }
+
+/* Similar: how alike, and the full-size compare view */
+.dup-threshold {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: -4px 0 12px; font-size: 12.5px; color: var(--text-dim);
+}
+.dup-threshold label { font-weight: 700; color: var(--text); }
+.dup-threshold input[type="range"] { width: 220px; accent-color: var(--glow); }
+.dup-threshold-end { font-size: 11.5px; color: var(--muted); }
+.dup-threshold-value { min-width: 52px; color: var(--glow); }
+.dup-compare { padding: 16px; }
+.dup-compare-box {
+  width: min(1100px, 100%); height: min(92vh, 100%);
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.9);
+  animation: modalRise 0.22s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  outline: none;
+}
+.dup-compare-head, .dup-compare-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--text-dim); }
+.dup-compare-head strong { color: var(--text); }
+.dup-compare-stage {
+  position: relative; flex: 1; min-height: 0;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--bg-soft); border-radius: 10px; overflow: hidden;
+}
+.dup-compare-stage img, .dup-compare-stage video { flex: 1; min-width: 0; max-width: calc(100% - 100px); max-height: 100%; object-fit: contain; }
+.dup-compare-stage .big-file-ph { position: static; flex: 1; }
+.dup-compare-nav {
+  flex-shrink: 0; width: 40px; height: 64px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-dim); background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+}
+.dup-compare-nav:hover { color: var(--glow); border-color: rgba(74, 222, 128, 0.45); }
 
 /* Feed: size of what the filters match, and of the selection */
 .would-free { color: #ffd59a; }

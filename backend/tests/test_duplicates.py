@@ -151,9 +151,11 @@ def test_only_files_sharing_a_size_are_hashed(env):
     run_scan(env)
     conn = db.connect()
     assert hashing.run_pass(conn)
-    h = hashes()
+    h = {p: r for p, r in hashes().items() if r["partial"]}
     copy_paths = {m["path"] for m in copies()[0]["media"]}
     assert copy_paths <= set(h)
+    bob = [p for p in hashes() if "/bob/" in p]
+    assert bob and not set(bob) & set(h)                         # a size of its own: only a dHash
     # small files: the partial hash is the whole file, so it is the full one too
     assert all(r["full"] == r["partial"] for r in h.values())
     st = hashing.status()
@@ -210,7 +212,9 @@ def test_writes_are_batched_outside_file_reads(env, monkeypatch):
     monkeypatch.setattr(hashing, "_write", lambda conn, phase, pending: (
         writes.append((phase, len(pending))), real(conn, phase, pending)))
     assert hashing.run_pass(db.connect())
-    assert [w for w in writes if w[1]] == [("partial", len(hashes()))]
+    rows = hashes().values()
+    assert [w for w in writes if w[1]] == [("partial", sum(1 for r in rows if r["partial"])),
+                                           ("dhash", sum(1 for r in rows if r["dhash_at"]))]
 
 
 def test_copy_of_a_big_file_is_confirmed_by_a_full_hash(env):
@@ -343,7 +347,7 @@ def test_content_group_that_differs(env):
     [g] = duplicates.all_groups(conn, "content")
     assert g["identical"] is False
     assert g["differs"] == [{"member": "instagram:C2", "idx": 1, "reason": "only here"}]
-    assert g["suggested"] == "instagram:C2"                        # more media
+    assert g["suggested"] == "instagram:P1"                        # posted first, even with fewer media
 
 
 def test_dismissals_are_user_data(env):

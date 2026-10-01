@@ -52,6 +52,7 @@ def load():
             cfg = json.load(f)
     cfg.setdefault("data_directory", DEFAULT_DATA)
     cfg.setdefault("media_roots", [])
+    cfg.setdefault("similar_threshold", 6)        # dHash bits that may differ, see duplicates.py
     return cfg
 
 

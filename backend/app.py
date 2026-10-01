@@ -235,14 +235,35 @@ def trash_purge():
 # Duplicates
 # ---------------------------------------------------------------------------
 
+def _threshold(value):
+    """The similar kind's threshold from a request, else the config's (or the
+    default, if the config's is not usable); None when the request's is not
+    a whole number of bits in range."""
+    def bits(v):
+        if isinstance(v, str) and v.isascii() and v.isdigit():
+            v = int(v)
+        ok = isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= duplicates.SIMILAR_MAX
+        return v if ok else None
+    if value is None:
+        value = bits(config.load()["similar_threshold"])
+        return duplicates.SIMILAR_DEFAULT if value is None else value
+    return bits(value)
+
+
+THRESHOLD_ERROR = f"threshold must be a whole number from 0 to {duplicates.SIMILAR_MAX}"
+
+
 @app.get("/api/duplicates")
 def list_duplicates():
     kind = request.args.get("kind") or "copies"
     if kind not in duplicates.KINDS:
-        return jsonify({"ok": False, "error": "kind must be copies or content"}), 400
+        return jsonify({"ok": False, "error": "kind must be copies, content or similar"}), 400
+    threshold = _threshold(request.args.get("threshold"))
+    if threshold is None:
+        return jsonify({"ok": False, "error": THRESHOLD_ERROR}), 400
     return jsonify(duplicates.listing(db.connect(), kind,
                                       offset=_int_arg("offset", 0, 0, 10**9),
-                                      limit=_int_arg("limit", 50, 1, 500)))
+                                      limit=_int_arg("limit", 50, 1, 500), threshold=threshold))
 
 
 @app.get("/api/duplicates/status")
@@ -260,9 +281,12 @@ def duplicates_resolve():
     choices = body.get("groups") if "groups" in body else [body]
     if not isinstance(choices, list) or not choices or len(choices) > 500 or not all(map(_choice, choices)):
         return jsonify({"ok": False, "error": "send { group, keep } or groups: [{ group, keep }] (at most 500)"}), 400
+    threshold = _threshold(body.get("threshold"))
+    if threshold is None:
+        return jsonify({"ok": False, "error": THRESHOLD_ERROR}), 400
     cfg = config.load()
     report = duplicates.resolve([(c["group"], c["keep"]) for c in choices],
-                                cfg["media_roots"], cfg["data_directory"])
+                                cfg["media_roots"], cfg["data_directory"], threshold=threshold)
     if report.get("posts"):
         userdata.changed("decisions")          # a trashed post takes its decision along, or hands it on
     if report.get("posts") or report.get("copies"):
@@ -276,7 +300,10 @@ def duplicates_dismiss():
     body = request.get_json(silent=True) or {}
     if not isinstance(body.get("group"), str):
         return jsonify({"ok": False, "error": "group must be a group id"}), 400
-    if not duplicates.dismiss(db.connect(), body["group"]):
+    threshold = _threshold(body.get("threshold"))
+    if threshold is None:
+        return jsonify({"ok": False, "error": THRESHOLD_ERROR}), 400
+    if not duplicates.dismiss(db.connect(), body["group"], threshold):
         return jsonify({"ok": False, "error": "no such group; reload"}), 404
     userdata.changed("dismissed_duplicates")
     return jsonify({"ok": True})

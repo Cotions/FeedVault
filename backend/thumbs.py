@@ -111,6 +111,13 @@ def thumb_for(data_dir, row):
     return None
 
 
+def cached(data_dir, row):
+    """The cached thumbnail of a media row if one is there and up to date,
+    without making one."""
+    out = _cache_path(data_dir, row["path"])
+    return out if _fresh(out, row["poster_path"] or row["path"]) else None
+
+
 def forget(data_dir, media_path):
     """Drop the cached thumbnail of a media file that is going away."""
     out = _cache_path(data_dir, media_path)

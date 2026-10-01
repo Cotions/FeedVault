@@ -161,9 +161,35 @@ def _migrate_4(conn):
         )""")
 
 
+def _migrate_5(conn):
+    """Visually similar media: a 64-bit dHash per image and video, in the
+    same cache row as the content hashes (valid while size and mtime are
+    unchanged). Every image and video gets a row now, not only files with a
+    twin, so ``partial`` becomes optional: SQLite cannot drop NOT NULL in
+    place, so the table is rebuilt, keeping what was hashed."""
+    conn.execute("""
+        CREATE TABLE media_hash_v5 (
+            path      TEXT PRIMARY KEY,
+            size      INTEGER NOT NULL,
+            mtime_ns  INTEGER NOT NULL,
+            partial   TEXT,                         -- sha1 of the first and last MiB, files that may have a twin
+            full      TEXT,                         -- sha1 of the whole file, when needed
+            width     INTEGER,                      -- images: header; videos: ffprobe, 0 when it failed
+            height    INTEGER,
+            hashed_at INTEGER NOT NULL,
+            dhash     INTEGER,                      -- 64-bit difference hash (signed), NULL if unreadable
+            dhash_at  INTEGER                       -- when the dHash was attempted; NULL: not yet
+        )""")
+    conn.execute("""
+        INSERT INTO media_hash_v5(path, size, mtime_ns, partial, full, width, height, hashed_at)
+        SELECT path, size, mtime_ns, partial, full, width, height, hashed_at FROM media_hash""")
+    conn.execute("DROP TABLE media_hash")
+    conn.execute("ALTER TABLE media_hash_v5 RENAME TO media_hash")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
-MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4]
+MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5]
 
 BACKUPS_KEPT = 3
 

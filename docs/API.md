@@ -290,7 +290,7 @@ Scan status:
 
 ## Duplicates
 
-Exact duplicates come in two kinds:
+Duplicates come in three kinds, two exact and one visual:
 
 - `copies`: the same post downloaded again into another folder (a typo'd
   profile folder, a second download). Only the first copy is indexed as the
@@ -306,39 +306,66 @@ Exact duplicates come in two kinds:
   least one media file with the same size and full sha1. Posts linked
   through any shared file form one group, except through a file more than
   20 posts share (a placeholder or a watermark card is not a repost).
+- `similar`: different posts with a picture that looks the same, though
+  its bytes differ (a resized or recompressed repost, a re-upload). Two
+  pictures match when their perceptual hashes are at most `threshold` bits
+  apart (of 64; the config file's `similar_threshold`, 6 by default, or the
+  `threshold` parameter, 0 to 10). A group is a post and the posts with a
+  picture matching one of its own, so every member looks like that centre
+  (matches are not chained: A like B like C does not make A like C). The
+  post with the most matches is the first centre, then the next among the
+  rest. Left out: posts already in one `content` group, flat pictures (a
+  solid colour, a smooth gradient, a black frame: 6 bits or fewer set, or
+  unset) and a picture that matches more than 20 other posts. Similar groups
+  are never `identical`, so they are resolved one by one, never in bulk.
 
 Hashes are computed by a background worker after every scan, at the lowest
 CPU and disk priority, and cached by path, size and mtime. Only files whose
 size another file shares, and the files of posts that have extra copies,
 are read. It pauses while a scan or a delete runs.
 
+After the content hashes, the same worker takes a perceptual hash (a 64-bit
+dHash) of every image and video in the index, for the `similar` kind: from
+the cached grid thumbnail when there is one, else from the image or the
+video's poster, else from a frame ffmpeg extracts (kept as the thumbnail).
+A picture that cannot be decoded is tried again only when its file changes.
+
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/duplicates?kind=&offset=&limit=` | groups of one kind, see below |
+| GET | `/api/duplicates?kind=&offset=&limit=&threshold=` | groups of one kind, see below |
 | GET | `/api/duplicates/status` | the hashing worker's progress, see below |
-| POST | `/api/duplicates/resolve` | body `{ "group": "…", "keep": "…" }`, or `{ "groups": [{ "group": "…", "keep": "…" }, …] }` (at most 500): trashes every other member, see below |
-| POST | `/api/duplicates/dismiss` | body `{ "group": "…" }` → `{ "ok": true }`: "not a duplicate", for good |
+| POST | `/api/duplicates/resolve` | body `{ "group": "…", "keep": "…" }`, or `{ "groups": [{ "group": "…", "keep": "…" }, …] }` (at most 500), plus `"threshold"` for a similar group: trashes every other member, see below |
+| POST | `/api/duplicates/dismiss` | body `{ "group": "…" }`, plus `"threshold"` for a similar group → `{ "ok": true }`: "not a duplicate", for good |
 
-`GET /api/duplicates`: `kind` is `copies` (default) or `content`, `offset`
-(default 0), `limit` (default 50, max 500). Groups come biggest saving first.
+`GET /api/duplicates`: `kind` is `copies` (default), `content` or
+`similar`, `offset` (default 0), `limit` (default 50, max 500), `threshold`
+(similar only: 0 to 10, default from the config; anything else is a 400).
+Groups come biggest saving first. Resolve and dismiss rebuild a similar
+group at the threshold they are given, so send the one it was listed at.
 
 ```json
 {
-  "kind": "copies", "total": 120, "identical": 118, "pending": 0,
+  "kind": "copies", "threshold": null, "total": 120, "reposts": 0, "identical": 118, "pending": 0,
   "frees": 2147483648, "identical_frees": 2040109465, "dismissed": 1,
   "groups": [{
     "id": "4c1d9e0b7a2f3e5d6c8b", "kind": "copies",
     "identical": true, "pending": false, "differs": [],
-    "suggested": "instagram:C8x…", "frees": 5242880, "bytes": 10485760,
+    "suggested": "instagram:C8x…", "frees": 5242880, "bytes": 10485760, "repost": false,
     "members": [
       { "id": "instagram:C8x…", "type": "post", "post_id": "instagram:C8x…", "post": { "…": "post summary" },
         "folder": "/abs/cherrieskyl", "meta_path": "/abs/cherrieskyl/….json",
-        "paths": ["/abs/cherrieskyl/…_1.jpg"], "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…", "hash": "9a0c…" }],
-        "files": 1, "bytes": 5242880, "saved_at": 1727500000, "kept": false, "thumb_url": "/media/17/thumb" },
+        "paths": ["/abs/cherrieskyl/…_1.jpg"],
+        "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…", "hash": "9a0c…", "width": 1080, "height": 1350,
+                    "url": "/media/17", "thumb_url": "/media/17/thumb" }],
+        "files": 1, "bytes": 5242880, "saved_at": 1727500000, "posted_at": 1727400000, "match": null,
+        "kept": false, "thumb_url": "/media/17/thumb" },
       { "id": "copy:3", "type": "copy", "copy_id": 3, "post_id": "instagram:C8x…", "post": null,
         "folder": "/abs/cherrrieskyl", "meta_path": "/abs/cherrrieskyl/…_1.jpg",
-        "paths": ["/abs/cherrrieskyl/…_1.jpg"], "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…", "hash": "9a0c…" }],
-        "files": 1, "bytes": 5242880, "saved_at": 1727400000, "kept": false, "thumb_url": "/media/copy/3/thumb" }
+        "paths": ["/abs/cherrrieskyl/…_1.jpg"],
+        "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…", "hash": "9a0c…", "width": 1080, "height": 1350,
+                    "url": null, "thumb_url": null }],
+        "files": 1, "bytes": 5242880, "saved_at": 1727400000, "posted_at": null, "match": null,
+        "kept": false, "thumb_url": "/media/copy/3/thumb" }
     ]
   }]
 }
@@ -352,24 +379,42 @@ are read. It pauses while a scan or a delete runs.
   names, of the first media file). `items`, `paths`, `files` and `bytes`
   cover media files that are on disk (posters and side files are moved with
   them but not counted). `saved_at` is the post's, or the copy's metadata
-  file mtime. An item's `hash` is its full sha1, `null` until known (only
-  files that may have a twin are fully hashed).
+  file mtime; `posted_at` the post's (`null` for a copy). An item's `hash`
+  is its full sha1, `null` until known (only files that may have a twin
+  are fully hashed). `width` and `height` are its pixels, `null` when not
+  known (images are read while hashing; videos are measured with ffprobe,
+  when installed, once they are in a `content` or `similar` group). `url`
+  and `thumb_url` serve the file and its thumbnail (`null` for a copy).
+- `match` (content and similar groups): the `idx` of the member's first
+  item that matches another member's. The member's `thumb_url` is that
+  item's, and the keeper rule compares it.
 - `kept`: the post has the "keep" decision. In a `copies` group every member
   shares the post's decision, and it stays with whichever member is kept.
+- `repost`: the members are posts by different accounts, so one is most
+  likely a repost of another. Only `content` and `similar` groups can be.
+- `distance` (similar groups only): the most bits apart a member's
+  picture is from the centre's it matches.
 - `identical`: `true` when every member has the same files; `false` when
   something differs, and `differs` says what:
   `[{ "member": "copy:3", "idx": 2, "reason": "missing" }]`, with reasons
   `missing` (the post has the item, the copy does not), `extra` (the
   other way round), `size`, `content` (same size, other bytes), and for
-  `content` groups `only here` (no other member has this file). `null`
-  while some files are not hashed yet (`pending: true`).
-- `suggested`: the member to keep: the one marked kept, then the one with
-  more media, then the highest resolution (total pixels of its images, read
-  from their headers while hashing; only when known for every member, and
-  videos are not measured), then the oldest `saved_at`, then the shortest
-  path.
+  `content` and `similar` groups `only here` (no other member has this
+  file, or nothing like it). `null` while some files are not hashed yet
+  (`pending: true`). Always `false` for `similar` groups.
+- `suggested`: the member to keep.
+  - `copies` (one post, several downloads): the one marked kept, then the
+    one with more media, then the highest resolution (total pixels of its
+    images; only when known for every member, videos are not counted),
+    then the oldest `saved_at`, then the shortest path.
+  - `content` and `similar` (different posts): the one marked kept, then
+    the earliest `posted_at` (the original, not whichever was saved
+    first), then the highest resolution of the `match` item (when known
+    for every member), then the largest `match` file, then the shortest
+    path.
 - `frees`: the bytes of every member but the suggested one.
-- Top level: `total`, `identical`, `pending` count groups; `frees` and
+- Top level: `threshold` the similar kind's (`null` for the others);
+  `total`, `reposts`, `identical`, `pending` count groups; `frees` and
   `identical_frees` add up all groups (or the identical ones), all pages.
   `dismissed` counts groups of this kind marked "not a duplicate".
 
@@ -377,12 +422,14 @@ are read. It pauses while a scan or a delete runs.
 
 ```json
 { "running": true, "paused": false, "phase": "partial", "done": 1200, "total": 7496,
-  "bytes": 2516582400, "hashed": 6900, "started_at": 1727500000, "finished_at": null,
-  "errors": [{ "path": "/abs/x.mp4", "error": "Permission denied" }] }
+  "bytes": 2516582400, "hashed": 6900, "fingerprinted": 85120, "started_at": 1727500000,
+  "finished_at": null, "errors": [{ "path": "/abs/x.mp4", "error": "Permission denied" }] }
 ```
 
-`phase` is `partial` or `full` (`null` when idle), `done` and `total` count
-files in that phase, `bytes` what was read, `hashed` the rows in the cache,
+`phase` is `partial` or `full` (content hashes), `dhash` (perceptual
+hashes) or `probe` (video sizes from ffprobe), `null` when idle. `done` and
+`total` count files in that phase, `bytes` what was read, `hashed` the
+files with a content hash, `fingerprinted` those with a perceptual hash,
 `finished_at` when the last complete pass ended, `errors` the last 20
 files that could not be read.
 
@@ -398,7 +445,9 @@ of it moved) when:
 - it is still being hashed;
 - a file of any member changed (size or mtime) since it was hashed;
 - a file of the member to keep is gone;
-- a member to trash is the one kept in another group of the same call.
+- a member to trash is the one kept in another group of the same call;
+- it is a similar group sent along with other groups (similar groups are
+  resolved one at a time).
 
 When the kept member is a copy and the post is trashed, the copy becomes the
 post at once, and the post's "keep" decision moves with it.

@@ -11,6 +11,14 @@ Hashes are cached in the media_hash table and stay valid while a file's size
 and mtime do not change, so a pass after a rescan only reads new or changed
 files, and an interrupted pass resumes where it stopped.
 
+After the content hashes, every image and video gets a perceptual hash (a
+64-bit dHash) for finding visually similar media: resized, recompressed or
+reposted copies whose bytes differ. It is taken from the cached grid
+thumbnail when there is one, else from the image itself or the video's
+poster, else from a frame ffmpeg extracts (cached as the thumbnail, as the
+grid would). Videos that end up in a group are then measured with ffprobe,
+for the suggested keeper.
+
 The worker is one background thread at the lowest CPU and I/O priority. It
 starts after every scan, steps aside while anything holds db.write_lock (a
 scan, a delete, a restore), and commits in small batches so requests never
@@ -19,11 +27,16 @@ wait on it.
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
+import config
 import db
+import thumbs
 from parsers import IMAGE_EXT, ext_of
 
 CHUNK = 1 << 20                                  # 1 MiB
@@ -32,6 +45,10 @@ CHUNK = 1 << 20                                  # 1 MiB
 # drops the API's cached aggregates (db._memo), so not too often.
 COMMIT_EVERY = 10.0
 ERRORS_KEPT = 20
+# Threads for perceptual hashes. Most of a file's time there is waiting: on
+# the disk, on ffmpeg for a video frame (20k videos without a poster on the
+# reference archive), or in Pillow's decoder, which releases the GIL.
+PICTURE_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
 
 _wake = threading.Event()
 _lock = threading.Lock()
@@ -44,7 +61,8 @@ def status(conn=None):
     with _lock:
         out = {**_state, "errors": list(_state["errors"])}
     conn = conn or db.connect()
-    out["hashed"] = conn.execute("SELECT COUNT(*) FROM media_hash").fetchone()[0]
+    out["hashed"], out["fingerprinted"] = conn.execute(
+        "SELECT COUNT(partial), COUNT(dhash) FROM media_hash").fetchone()
     return out
 
 
@@ -152,6 +170,45 @@ def dimensions(path):
         return None, None
 
 
+def dhash(path):
+    """64-bit difference hash: the picture shrunk to 9x8 grey pixels, one bit
+    per pair of neighbours in a row (is the left one brighter). Resizing and
+    recompression leave it nearly unchanged; a crop or a filter moves a few
+    bits. The decoder skips detail it does not need (JPEG at 1/8 scale)."""
+    from PIL import Image, ImageOps
+    with Image.open(path) as im:
+        im.draft("L", (64, 64))
+        small = ImageOps.exif_transpose(im).convert("L").resize((9, 8), Image.Resampling.LANCZOS)
+    px = small.tobytes()
+    value = 0
+    for row in range(0, 72, 9):
+        for col in range(row, row + 8):
+            value = value << 1 | (px[col] > px[col + 1])
+    return value
+
+
+def to_db(value):
+    """A 64-bit hash as SQLite's signed INTEGER, and back."""
+    return value - (1 << 64) if value is not None and value >= 1 << 63 else value
+
+
+def from_db(value):
+    return value + (1 << 64) if value is not None and value < 0 else value
+
+
+def video_size(path):
+    """(width, height) of a video's first video stream from ffprobe, or None."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+             "-of", "csv=p=0:s=x", path],
+            capture_output=True, text=True, timeout=30)
+        w, h = r.stdout.strip().splitlines()[0].split("x")[:2]
+        return int(w), int(h)
+    except (subprocess.TimeoutExpired, OSError, ValueError, IndexError):
+        return None
+
+
 def stat(path):
     """(size, mtime_ns), or None when the file is gone."""
     try:
@@ -199,6 +256,7 @@ def _full_needed(conn):
         WHERE h.full IS NULL AND (h.size, h.partial) IN (
             SELECT h2.size, h2.partial FROM media_hash h2
             JOIN media m2 ON m2.path = h2.path AND m2.missing = 0
+            WHERE h2.partial IS NOT NULL
             GROUP BY h2.size, h2.partial HAVING COUNT(DISTINCT m2.post_id) > 1)""")}
     rows = {r[0]: (r[1], r[2], r[3]) for r in conn.execute("SELECT path, size, partial, full FROM media_hash")}
     for post_id, media in conn.execute("SELECT post_id, media FROM copies"):
@@ -206,30 +264,54 @@ def _full_needed(conn):
             "SELECT idx, path FROM media WHERE post_id = ? AND missing = 0", (post_id,))}
         for m in json.loads(media):
             a, b = rows.get(mine.get(m["idx"])), rows.get(m["path"])
-            if a and b and a[:2] == b[:2]:
+            if a and b and a[1] and a[:2] == b[:2]:
                 out.update(p for p, h in ((mine[m["idx"]], a), (m["path"], b)) if h[2] is None)
     return sorted(out)
 
 
-def run_pass(conn, restart=None):
+def pictures(conn):
+    """path -> (kind, poster_path) of every image and video in the index:
+    what gets a perceptual hash. Extra copies do not; the copies kind
+    already compares them item by item."""
+    return {r[0]: (r[1], r[2]) for r in conn.execute(
+        "SELECT path, kind, poster_path FROM media WHERE missing = 0 AND kind IN ('image', 'video') "
+        "ORDER BY path")}
+
+
+def _known(conn):
+    """path -> (size, mtime_ns, partial, full, dhash_at)."""
+    return {r[0]: tuple(r[1:]) for r in conn.execute(
+        "SELECT path, size, mtime_ns, partial, full, dhash_at FROM media_hash")}
+
+
+def run_pass(conn, restart=None, data_dir=None):
     """Bring media_hash up to date. Returns False when interrupted by
     ``restart`` (an Event) being set, True when done."""
     _set(running=True, paused=False, phase="partial", done=0, total=0, bytes=0,
          started_at=int(time.time()), finished_at=None)
+    data_dir = data_dir or config.load()["data_directory"]
     try:
         paths = candidates(conn)
-        known = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
-            "SELECT path, size, mtime_ns, full FROM media_hash")}
-        if not _hash_all(conn, paths, known, "partial", restart):
+        known = _known(conn)
+        if not _hash_all(conn, paths, "partial", restart, _fresh(known, 2), _partial_row):
             return False
-        # Rows for files that are gone or no longer have a twin.
-        keep = set(paths)
+        # Rows for files that are gone, or neither have a twin nor are pictures.
+        keep = set(paths) | set(pictures(conn))
         conn.executemany("DELETE FROM media_hash WHERE path = ?", [(p,) for p in known if p not in keep])
         conn.commit()
-        known = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
-            "SELECT path, size, mtime_ns, full FROM media_hash")}
-        if not _hash_all(conn, _full_needed(conn), known, "full", restart):
+        known = _known(conn)
+        if not _hash_all(conn, _full_needed(conn), "full", restart, _fresh(known, 3), _full_row):
             return False
+        pics = pictures(conn)
+        known = _known(conn)
+        if not _hash_all(conn, list(pics), "dhash", restart, _fresh(known, 4),
+                         lambda path, st: _dhash_row(path, st, *pics[path], data_dir), PICTURE_WORKERS):
+            return False
+        if shutil.which("ffprobe"):
+            import duplicates                     # it imports this module
+            if not _hash_all(conn, duplicates.videos_to_measure(conn), "probe", restart,
+                             lambda path, st: False, _probe_row, PICTURE_WORKERS):
+                return False
         _set(finished_at=int(time.time()))
         return True
     finally:
@@ -237,61 +319,142 @@ def run_pass(conn, restart=None):
         _set(running=False, paused=False, phase=None)
 
 
-def _hash_all(conn, paths, known, phase, restart):
+def _fresh(known, field):
+    """Whether a file's row is up to date (same size and mtime) and has
+    ``field`` (an index into the _known tuple) filled in."""
+    def fresh(path, st):
+        old = known.get(path)
+        return old is not None and (old[0], old[1]) == st and old[field] is not None
+    return fresh
+
+
+def _partial_row(path, st):
+    digest = partial_hash(path, st[0])
+    full = digest if st[0] <= 2 * CHUNK else None
+    return (path, *st, digest, full, *dimensions(path), int(time.time())), min(st[0], 2 * CHUNK)
+
+
+def _full_row(path, st):
+    full = full_hash(path, st[0])
+    if stat(path) != st:
+        raise Changed("modified while reading")
+    return (full, path, *st), st[0]
+
+
+def _dhash_row(path, st, kind, poster, data_dir):
+    """A row with the file's dHash, or a NULL one (tried, not retried until
+    the file changes) when its picture cannot be decoded. None, to try again
+    next pass, for a video without a poster while ffmpeg is not installed."""
+    row = {"path": path, "kind": kind, "poster_path": poster}
+    src = thumbs.cached(data_dir, row)
+    if src is None and (kind == "image" or poster):
+        src = poster or path
+    elif src is None:
+        if not thumbs.have_ffmpeg():
+            return None, 0
+        src = thumbs.thumb_for(data_dir, row)    # a frame from ffmpeg, kept as the grid's thumbnail
+    value, read = None, 0
+    if src is not None:
+        try:
+            read = os.path.getsize(src)
+            value = dhash(src)
+        except FileNotFoundError:
+            raise
+        except Exception as e:                   # any decoder or EXIF error: one bad file must not stop the pass
+            _note_error(path, f"not a readable picture: {type(e).__name__}: {e}")
+    if stat(path) != st:
+        raise Changed("modified while reading")
+    width, height = dimensions(path) if kind == "image" else (None, None)
+    now = int(time.time())
+    return (path, *st, width, height, now, to_db(value), now), read
+
+
+def _probe_row(path, st):
+    size = video_size(path) or (0, 0)            # 0: measured, unknown; not retried until the file changes
+    return (*size, path, *st), 0
+
+
+def _hash_all(conn, paths, phase, restart, fresh, work, workers=1):
+    """Run ``work(path, (size, mtime_ns))`` -> (row or None, bytes read) on
+    every path that is not ``fresh``, writing the rows in batches. With
+    ``workers``, that many threads (at the same low priority) take one file
+    each between checks for a restart or a lock."""
     _set(phase=phase, done=0, total=len(paths), bytes=0)
     pending = []                                 # rows to write, see COMMIT_EVERY
     last_write = time.monotonic()
-    for i, path in enumerate(paths):
-        if restart is not None and restart.is_set():
-            _write(conn, phase, pending)
-            return False
-        if db.write_lock.locked():               # a scan or a delete: step aside
-            _write(conn, phase, pending)
-            _set(paused=True)
-            while db.write_lock.locked():
-                if restart is not None and restart.is_set():
-                    return False
-                time.sleep(0.5)
-            _set(paused=False)
+
+    def one(path):
         st = stat(path)
-        old = known.get(path)
-        fresh = old is not None and st is not None and (old[0], old[1]) == st
-        if st is not None and not (fresh and (phase == "partial" or old[2])):
-            try:
-                if phase == "partial":
-                    digest = partial_hash(path, st[0])
-                    full = digest if st[0] <= 2 * CHUNK else None
-                    pending.append((path, st[0], st[1], digest, full, *dimensions(path), int(time.time())))
-                    read = min(st[0], 2 * CHUNK)
-                else:
-                    full = full_hash(path, st[0])
-                    if stat(path) != st:
-                        raise Changed("modified while reading")
-                    pending.append((full, path, *st))
-                    read = st[0]
+        if st is None or fresh(path, st):
+            return None, 0
+        try:
+            return work(path, st)
+        except (OSError, Changed) as e:
+            _note_error(path, str(getattr(e, "strerror", None) or e))
+            return None, 0
+
+    pool = ThreadPoolExecutor(workers, initializer=_lower_priority) if workers > 1 else None
+    step = workers if pool else 1                # one file per thread between checks
+    try:
+        for start in range(0, len(paths), step):
+            if restart is not None and restart.is_set():
+                _write(conn, phase, pending)
+                return False
+            if db.write_lock.locked():           # a scan or a delete: step aside
+                _write(conn, phase, pending)
+                _set(paused=True)
+                while db.write_lock.locked():
+                    if restart is not None and restart.is_set():
+                        return False
+                    time.sleep(0.5)
+                _set(paused=False)
+            batch = paths[start:start + step]
+            for row, read in (pool.map(one, batch) if pool else map(one, batch)):
+                if row is not None:
+                    pending.append(row)
                 with _lock:
                     _state["bytes"] += read
-            except (OSError, Changed) as e:
-                _note_error(path, str(getattr(e, "strerror", None) or e))
-        _set(done=i + 1)
-        if time.monotonic() - last_write >= COMMIT_EVERY:
-            _write(conn, phase, pending)
-            last_write = time.monotonic()
+            _set(done=start + len(batch))
+            if time.monotonic() - last_write >= COMMIT_EVERY:
+                _write(conn, phase, pending)
+                last_write = time.monotonic()
+    finally:
+        if pool:
+            pool.shutdown()
     _write(conn, phase, pending)
     return True
+
+
+# A row keeps what another phase stored only while it still describes the
+# same file (size and mtime unchanged). SQLite evaluates every SET against
+# the row as it was, so media_hash.size below is the old size.
+_SAME = "media_hash.size = excluded.size AND media_hash.mtime_ns = excluded.mtime_ns"
+_WRITES = {
+    "partial":
+        "INSERT INTO media_hash(path, size, mtime_ns, partial, full, width, height, hashed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, "
+        "mtime_ns = excluded.mtime_ns, partial = excluded.partial, full = excluded.full, "
+        f"width = COALESCE(excluded.width, CASE WHEN {_SAME} THEN media_hash.width END), "
+        f"height = COALESCE(excluded.height, CASE WHEN {_SAME} THEN media_hash.height END), "
+        f"dhash = CASE WHEN {_SAME} THEN media_hash.dhash END, "
+        f"dhash_at = CASE WHEN {_SAME} THEN media_hash.dhash_at END, hashed_at = excluded.hashed_at",
+    # Only if the file is still the one that was hashed.
+    "full": "UPDATE media_hash SET full = ? WHERE path = ? AND size = ? AND mtime_ns = ?",
+    "dhash":
+        "INSERT INTO media_hash(path, size, mtime_ns, width, height, hashed_at, dhash, dhash_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, "
+        "mtime_ns = excluded.mtime_ns, dhash = excluded.dhash, dhash_at = excluded.dhash_at, "
+        f"partial = CASE WHEN {_SAME} THEN media_hash.partial END, "
+        f"full = CASE WHEN {_SAME} THEN media_hash.full END, "
+        f"width = COALESCE(excluded.width, CASE WHEN {_SAME} THEN media_hash.width END), "
+        f"height = COALESCE(excluded.height, CASE WHEN {_SAME} THEN media_hash.height END)",
+    "probe": "UPDATE media_hash SET width = ?, height = ? WHERE path = ? AND size = ? AND mtime_ns = ?",
+}
 
 
 def _write(conn, phase, pending):
     if not pending:
         return
-    if phase == "partial":
-        conn.executemany(
-            "INSERT INTO media_hash(path, size, mtime_ns, partial, full, width, height, hashed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, "
-            "mtime_ns = excluded.mtime_ns, partial = excluded.partial, full = excluded.full, "
-            "width = excluded.width, height = excluded.height, hashed_at = excluded.hashed_at", pending)
-    else:
-        # Only if the file is still the one that was hashed.
-        conn.executemany("UPDATE media_hash SET full = ? WHERE path = ? AND size = ? AND mtime_ns = ?", pending)
+    conn.executemany(_WRITES[phase], pending)
     conn.commit()
     pending.clear()

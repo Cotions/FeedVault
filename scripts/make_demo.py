@@ -85,10 +85,27 @@ def nicer_png(rng):
     return png
 
 
+def photo(path, seed, size=(1080, 1350)):
+    """A picture with some structure (blurred shapes): the gradients above
+    are too flat to fingerprint."""
+    from PIL import Image, ImageDraw, ImageFilter
+    rng = random.Random(seed)
+    img = Image.new("RGB", size, tuple(rng.randrange(256) for _ in range(3)))
+    draw = ImageDraw.Draw(img)
+    w, h = size
+    for _ in range(40):
+        x, y, r = rng.randrange(w), rng.randrange(h), rng.randrange(w // 20, w // 4)
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=tuple(rng.randrange(256) for _ in range(3)))
+    img = img.filter(ImageFilter.GaussianBlur(3))
+    img.save(path, "JPEG", quality=92)
+    return img
+
+
 def add_duplicates(media, ts):
     """Something for the Duplicates page: a typo'd second folder holding
-    copies of a few posts (one of them missing a carousel item), and a repost
-    of one picture under another creator and post id."""
+    copies of a few posts (one of them missing a carousel item), a repost
+    of one picture under another creator and post id, and a smaller,
+    recompressed repost of another (similar, not identical)."""
     src = os.path.join(media, "pixel_bakery")
     dst = os.path.join(media, "pixel_bakerry")
     os.makedirs(dst, exist_ok=True)
@@ -111,6 +128,21 @@ def add_duplicates(media, ts):
                             fakes.owner(handle, uid, name), kind="image",
                             caption="Reposting this, too good not to share 🌿 (via @mossy.trails)")
     shutil.copyfile(os.path.join(mossy, image), base + ".jpg")
+
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        return
+    handle, uid, name = CREATORS[3]
+    base = fakes.write_post(os.path.join(media, handle), "DEMOglaze014", ts - 30 * 86_400,
+                            fakes.owner(handle, uid, name), kind="image",
+                            caption="Glaze test batch 14, the full set. #ceramics")
+    img = photo(base + ".jpg", 14)
+    handle, uid, name = CREATORS[4]
+    base = fakes.write_post(os.path.join(media, handle), "DEMOrepost02", ts + 2 * 86_400,
+                            fakes.owner(handle, uid, name), kind="image",
+                            caption="saw this and had to share (from @quiet_kiln)")
+    img.resize((540, 675)).save(base + ".jpg", "JPEG", quality=60)
 
 
 def main():
