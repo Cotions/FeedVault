@@ -132,3 +132,15 @@ export function restoreEntries(keys) { return post("/api/trash/restore", { keys 
 export function setDecision(posts, decision) { return post("/api/review", { posts, decision }); }
 // Moves posts' files back out of the trash → { ok, posts, files, errors }
 export function restorePosts(posts) { return post("/api/trash/restore", { posts }); }
+
+/* ── Duplicates (see docs/API.md "Duplicates") ───────────── */
+
+// kind: "copies" | "content" → { kind, total, identical, pending, frees, identical_frees, dismissed, groups }
+export function getDuplicates(params = {}) { return get(`/api/duplicates${qs(params)}`); }
+// The background hashing worker → { running, paused, phase, done, total, bytes, hashed, finished_at, errors }
+export function getDuplicatesStatus() { return get("/api/duplicates/status"); }
+// [{ group, keep }] → keeps one member per group, trashes the others
+// → { ok, resolved, skipped: [{ group, error }], posts, copies, files, bytes, errors }
+export function resolveDuplicates(groups) { return post("/api/duplicates/resolve", { groups }); }
+// "Not a duplicate", stored for good → { ok }
+export function dismissDuplicate(group) { return post("/api/duplicates/dismiss", { group }); }

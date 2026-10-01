@@ -82,7 +82,7 @@ def test_v1_upgraded_to_v2_storage(tmp_path):
     conn.commit()
     conn.close()
     db.init(path)
-    assert version(path) == (2, 2)
+    assert version(path) == (len(db.MIGRATIONS), len(db.MIGRATIONS))
     assert version(path + ".bak-v1")[0] == 1
     assert {"media_post_size", "media_size"} <= indexes(path)
     assert not {"media_post_size", "media_size"} & indexes(path + ".bak-v1")
@@ -171,3 +171,16 @@ def test_only_last_three_backups_kept(tmp_path):
     conn.close()
     left = sorted(f for f in os.listdir(tmp_path) if ".bak-v" in f)
     assert left == ["feedvault.db.bak-v1", "feedvault.db.bak-v13", "feedvault.db.bak-v14"]
+
+
+def test_v2_upgraded_to_v3_copies(tmp_path, monkeypatch):
+    path = str(tmp_path / "feedvault.db")
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:2])
+    db.init(path)
+    db.connect().execute("INSERT INTO decisions(post_id, decision, at) VALUES ('instagram:P1', 'keep', 1)")
+    db.connect().commit()
+    monkeypatch.undo()
+    db.init(path)
+    assert version(path)[0] >= 3 and version(path + ".bak-v2")[0] == 2
+    assert "copies" in tables(path) and "copies" not in tables(path + ".bak-v2")
+    assert db.connect().execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 1

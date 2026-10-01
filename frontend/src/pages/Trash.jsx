@@ -87,6 +87,7 @@ function TrashEntry({ entry: e, index, selectMode, selected, onToggle, onRestore
         )}
         <span className="trash-badges">
           {partial && <span className="trash-badge" title="Only part of the post was deleted; the rest is still in the feed">{partial}</span>}
+          {e.copy && <span className="trash-badge" title="An extra copy of a post, trashed from Duplicates; restoring puts it back as a copy">copy</span>}
           {e.missing && (
             <span className="trash-badge trash-badge-missing" title="A file of this entry is no longer in the trash folder (moved or deleted by hand)">
               <Icon name="warn" size={11} />missing

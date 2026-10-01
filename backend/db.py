@@ -120,9 +120,50 @@ def _migrate_2(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS media_size ON media(size)")
 
 
+def _migrate_3(conn):
+    """Duplicates: the same post downloaded again into another folder. Only
+    the first copy becomes a post; every other one is recorded here, with its
+    files, so it can be compared and trashed. Derived from disk like posts:
+    a rescan drops a copy whose metadata file is gone."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS copies (
+            id         INTEGER PRIMARY KEY,
+            post_id    TEXT NOT NULL,              -- the indexed post it is another copy of
+            meta_path  TEXT NOT NULL UNIQUE,
+            meta_mtime REAL,
+            media      TEXT NOT NULL DEFAULT '[]', -- JSON [{idx, kind, path, poster_path, size}]
+            first_seen INTEGER NOT NULL
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS copies_post ON copies(post_id)")
+
+
+def _migrate_4(conn):
+    """Exact duplicates by content. media_hash is a cache filled by the
+    background worker in hashing.py, valid while a file's size and mtime are
+    unchanged. dismissed_duplicates is user data ("not a duplicate"), never
+    touched by scans and mirrored to JSON by userdata.py."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS media_hash (
+            path      TEXT PRIMARY KEY,
+            size      INTEGER NOT NULL,
+            mtime_ns  INTEGER NOT NULL,
+            partial   TEXT NOT NULL,                -- sha1 of the first and last MiB
+            full      TEXT,                         -- sha1 of the whole file, when needed
+            width     INTEGER,                      -- images: read from the header while hashing
+            height    INTEGER,
+            hashed_at INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dismissed_duplicates (
+            key  TEXT PRIMARY KEY,                  -- JSON list, sorted: the group's members
+            kind TEXT NOT NULL,                     -- copies | content
+            at   INTEGER NOT NULL
+        )""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
-MIGRATIONS = [_migrate_1, _migrate_2]
+MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4]
 
 BACKUPS_KEPT = 3
 
@@ -305,6 +346,39 @@ def upsert_post(conn, p, meta_mtime, meta_size, now):
     conn.execute(f"DELETE FROM media WHERE post_id = ? AND path NOT IN ({marks or 'NULL'})",
                  (p.id, *keep))
     return "updated" if row else "added"
+
+
+def save_copies(conn, found, now, prune):
+    """Record extra copies of indexed posts: ``found`` is [(parsed post,
+    meta mtime)]. Rows are keyed by metadata path, so ids and first-seen
+    times survive rescans. ``prune`` (a full scan) drops every copy not found
+    this time: its files are gone, or it became the indexed post."""
+    paths = []
+    for p, mtime in found:
+        media = []
+        for m in p.media:
+            try:
+                size = os.path.getsize(m.path)
+            except OSError:
+                size = None
+            media.append({"idx": m.idx, "kind": m.kind, "path": m.path,
+                          "poster_path": m.poster_path, "size": size})
+        conn.execute(
+            "INSERT INTO copies(post_id, meta_path, meta_mtime, media, first_seen) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(meta_path) DO UPDATE SET post_id = excluded.post_id, "
+            "meta_mtime = excluded.meta_mtime, media = excluded.media",
+            (p.id, p.meta_path, mtime, json.dumps(media), now))
+        paths.append(p.meta_path)
+    if prune:
+        keep = set(paths)
+        gone = [(r[0],) for r in conn.execute("SELECT meta_path FROM copies") if r[0] not in keep]
+        conn.executemany("DELETE FROM copies WHERE meta_path = ?", gone)
+
+
+def copy_row(conn, copy_id):
+    """A copy with its media list decoded, or None."""
+    row = conn.execute("SELECT * FROM copies WHERE id = ?", (copy_id,)).fetchone()
+    return {**dict(row), "media": json.loads(row["media"])} if row else None
 
 
 # ---------------------------------------------------------------------------

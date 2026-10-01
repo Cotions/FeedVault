@@ -22,6 +22,9 @@ def env(tmp_path, monkeypatch):
     cfg["media_roots"] = [str(media)]
     config.save(cfg)
     db.init(config.db_path(cfg))
+    # No background hashing: tests run passes themselves, on their own database.
+    import hashing
+    monkeypatch.setattr(hashing, "kick", lambda: None)
     yield {"tmp": tmp_path, "media": media, "roots": [str(media)]}
     # A userdata write still pending would fire after FEEDVAULT_CONFIG is
     # restored, into the real data directory.
