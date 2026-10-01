@@ -12,6 +12,7 @@ import Feed            from "./pages/Feed";
 import PostPage        from "./pages/PostPage";
 import Review          from "./pages/Review";
 import Creators        from "./pages/Creators";
+import PersonPage      from "./pages/PersonPage";
 import Tags            from "./pages/Tags";
 import Collections     from "./pages/Collections";
 import CollectionView  from "./pages/CollectionView";
@@ -275,7 +276,7 @@ export default function App() {
         <nav className="sidebar" aria-label="Main">
           <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
           <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
-          <NavLink to="/creators" className="side-link"><Icon name="users" />Creators</NavLink>
+          <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
           <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
           <NavLink to="/collections" className="side-link"><Icon name="bookmark" />Collections</NavLink>
           <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
@@ -362,6 +363,7 @@ export default function App() {
             <Route path="/p/:platform/:postId" element={<PostPage />} />
             <Route path="/review" element={<Review />} />
             <Route path="/creators" element={<Creators />} />
+            <Route path="/people/:id" element={<PersonPage />} />
             <Route path="/tags" element={<Tags />} />
             <Route path="/collections" element={<Collections />} />
             <Route path="/collections/:id" element={<CollectionView />} />

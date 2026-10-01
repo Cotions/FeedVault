@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getTrashItems, purgeTrash, restoreEntries } from "../lib/api";
+import { getPeople, getTrashItems, purgeTrash, restoreEntries } from "../lib/api";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
+import { useApi } from "../lib/useApi";
 import { fmtAgo, fmtBytes, fmtFullDate, fmtInt, platformLabel, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -38,9 +39,10 @@ function rangeFor(when, now = Date.now()) {
 const authorValue = a => `${a.platform}:${a.id || a.handle}`;
 
 // "from @someone, deleted today" for the filters in effect.
-function filterText(authors, author, when) {
+function filterText(authors, author, when, person) {
   const parts = [];
-  if (author) {
+  if (person) parts.push(`from ${person.name}`);
+  else if (author) {
     const a = authors?.find(x => authorValue(x) === author);
     parts.push(a ? `from @${a.handle || a.id}` : "from this creator");
   }
@@ -127,10 +129,12 @@ function TrashEntry({ entry: e, index, selectMode, selected, onToggle, onRestore
 export default function Trash() {
   const { refreshKey } = useScan();
   const toast = useToast();
+  const { data: peopleData } = useApi(getPeople, 0);
   const [params, setParams] = useSearchParams();
   const author = params.get("author") || "";
+  const person = /^\d+$/.test(params.get("person") || "") ? params.get("person") : "";
   const when   = WHEN.some(w => w.value === params.get("when")) ? params.get("when") : "";
-  const filterKey = `${author}|${when}`;
+  const filterKey = `${author}|${person}|${when}`;
 
   const [result,  setResult]  = useState(null);     // the last /api/trash/items answer, entries accumulated
   const [loaded,  setLoaded]  = useState(null);     // filterKey the result belongs to
@@ -147,8 +151,8 @@ export default function Trash() {
   const fetchPage = useCallback((offset, limit, r) => {
     // Capped at the first load, so later pages do not pick up newer deletions.
     const before = Math.min(r.before ?? Infinity, r.asOf);
-    return getTrashItems({ platform, author: authorId, since: r.since, before, offset, limit });
-  }, [platform, authorId]);
+    return getTrashItems({ platform, author: authorId, person: person || undefined, since: r.since, before, offset, limit });
+  }, [platform, authorId, person]);
 
   // First page on a new filter; on a reload (after restore or purge) as many
   // entries as were on screen, so the page does not jump back to the top.
@@ -229,6 +233,7 @@ export default function Trash() {
   function askBulk() {
     const filter = { before: Math.min(range.before ?? Infinity, range.asOf) };
     if (authorId) Object.assign(filter, { platform, author: authorId });
+    if (person) filter.person = Number(person);
     if (range.since != null) filter.since = range.since;
     setDlgError(null);
     setBulk({ total: result.total, files: result.files, bytes: result.bytes, filter });
@@ -305,7 +310,10 @@ export default function Trash() {
 
   const authors = result.authors || [];
   const authorKnown = !author || authors.some(a => authorValue(a) === author);
-  const anyFilter = author || when;
+  const people = (peopleData || []).filter(p => p.accounts.length);
+  const shownPerson = person ? people.find(p => String(p.id) === person) || { id: person, name: `person ${person}` } : null;
+  const creator = person ? `person:${person}` : authorKnown ? author : "__unknown";
+  const anyFilter = author || person || when;
 
   return (
     <div className="trash-page">
@@ -330,14 +338,27 @@ export default function Trash() {
           <div className="feed-filters" role="group" aria-label="Filters">
             <label className="filter filter-author">
               <span>Creator</span>
-              <select className="sort-select" value={authorKnown ? author : "__unknown"} onChange={e => setParam({ author: e.target.value })}>
+              <select className="sort-select" value={creator} onChange={e => {
+                const v = e.target.value;
+                setParam(v.startsWith("person:") ? { person: v.slice(7), author: "" } : { author: v, person: "" });
+              }}>
                 <option value="">All</option>
-                {!authorKnown && <option value="__unknown" disabled>{authorId}</option>}
-                {authors.map(a => (
-                  <option key={authorValue(a)} value={authorValue(a)}>
-                    @{a.handle || a.id} · {platformLabel(a.platform)} ({a.entries}, {fmtBytes(a.bytes)})
-                  </option>
-                ))}
+                {!authorKnown && !person && <option value="__unknown" disabled>{authorId}</option>}
+                {shownPerson && !people.some(p => String(p.id) === person) && (
+                  <option value={`person:${person}`} disabled>{shownPerson.name}</option>
+                )}
+                {people.length > 0 && (
+                  <optgroup label="People">
+                    {people.map(p => <option key={p.id} value={`person:${p.id}`}>{p.name}</option>)}
+                  </optgroup>
+                )}
+                <optgroup label="Accounts">
+                  {authors.map(a => (
+                    <option key={authorValue(a)} value={authorValue(a)}>
+                      @{a.handle || a.id} · {platformLabel(a.platform)} ({a.entries}, {fmtBytes(a.bytes)})
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             </label>
             <label className="filter">
@@ -369,7 +390,7 @@ export default function Trash() {
             <DeleteErrors errors={errors?.list} summary={errors?.summary} onDismiss={() => setErrors(null)} />
             {current && entries.length === 0 ? (
               <div className="empty">
-                Nothing in the trash {filterText(authors, author, when)}.{" "}
+                Nothing in the trash {filterText(authors, author, when, shownPerson)}.{" "}
                 <button type="button" className="btn-link" onClick={() => setParams(new URLSearchParams(), { replace: true })}>Show everything</button>
               </div>
             ) : (
@@ -424,7 +445,7 @@ export default function Trash() {
         <p>
           This <strong>permanently deletes {plural(bulk ? bulk.files : selFiles, "file")} ({fmtBytes(bulk ? bulk.bytes : selBytes)})</strong> of{" "}
           {plural(bulk ? bulk.total : sel.count, "trashed entry", "trashed entries")}
-          {bulk ? `, every one the filters match (${filterText(result?.authors, author, when)})` : ""} from
+          {bulk ? `, every one the filters match (${filterText(result?.authors, author, when, shownPerson)})` : ""} from
           disk. They do not go to the system trash, and this cannot be undone.
         </p>
       </ConfirmDialog>

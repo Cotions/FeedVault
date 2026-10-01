@@ -173,6 +173,7 @@ def _stamp(ts):
 X_USERS = {
     "tram_spotter": {"id": 4100001, "name": "tram_spotter", "nick": "Tram Spotter"},
     "kiln_notes": {"id": 4100002, "name": "kiln_notes", "nick": "Kiln Notes"},
+    "junipervale": {"id": 4100003, "name": "junipervale", "nick": "Juniper Vale"},
 }
 
 
@@ -213,16 +214,16 @@ def add_gallery_dl(media, ts):
           "RT @kiln_notes: Shino glaze, second firing. Happy with this one. #ceramics", t + 60_000,
           [("jpg", "photo"), ("jpg", "photo")], retweet_id=1790000000000000099, date_original=_stamp(t - 86_400))
 
-    def tiktok(pid, text, when, files, post_type):
+    def tiktok(pid, text, when, files, post_type, who=("6900000000000000001", "lo.fi.garden", "lo-fi garden")):
         tpl = _gdl_template("tiktok/video", 1)
-        author = {**tpl["author"], "id": "6900000000000000001", "uniqueId": "lo.fi.garden", "nickname": "lo-fi garden"}
+        author = {**tpl["author"], "id": who[0], "uniqueId": who[1], "nickname": who[2], "signature": ""}
         common = {**tpl, "id": pid, "desc": text, "createTime": str(when), "date": _stamp(when), "author": author,
-                  "user": "lo.fi.garden", "post_type": post_type, "textExtra": [], "challenges": [],
+                  "user": who[1], "post_type": post_type, "textExtra": [], "challenges": [],
                   "stats": {"diggCount": random.Random(pid).randint(100, 90_000), "shareCount": 12,
                             "commentCount": random.Random(pid).randint(0, 300),
                             "playCount": random.Random(pid).randint(1_000, 900_000), "collectCount": "40"}}
         common["video"] = {**tpl["video"], "id": pid}
-        folder = os.path.join(base, "tiktok", "lo.fi.garden")
+        folder = os.path.join(base, "tiktok", who[1])
         for num, (ext, ftype, file_id) in enumerate(files, 1):
             n = num if ftype == "image" else 0
             d = {**common, "filename": f"demo{pid}{num}", "extension": ext, "type": ftype, "num": n,
@@ -236,6 +237,40 @@ def add_gallery_dl(media, ts):
     tiktok("7300000000000000202", "", t + 90_000,
            [("jpg", "image", "a1b2c3"), ("jpg", "image", "d4e5f6"), ("jpg", "image", "a7b8c9"),
             ("mp3", "audio", "7300000000000000999")], "image")
+
+    # Juniper Vale (see add_person) on X and TikTok, under other handles.
+    tweet("junipervale", 1790000000000000201, "junipervale",
+          "Kiln day. Twelve mugs in, fingers crossed. #ceramics", t + 100_000, [("jpg", "photo")])
+    tweet("junipervale", 1790000000000000202, "junipervale",
+          "Repotted the monstera. It did not thank me.", t + 130_000, [])
+    juni = ("6900000000000000002", "juni.vale", "Juniper Vale")
+    tiktok("7300000000000000301", "Throwing a mug in 40 seconds #pottery", t + 110_000,
+           [("mp4", "video", ""), ("jpg", "cover", "cover")], "video", juni)
+    tiktok("7300000000000000302", "Watering day 🌿 #plants", t + 150_000,
+           [("mp4", "video", ""), ("jpg", "cover", "cover")], "video", juni)
+
+
+def add_person(media, ts):
+    """One person across platforms for the People views: Juniper Vale is
+    @juniper.makes on Instagram (called @juni.studio before a rename, so the
+    older posts sit in that folder), @junipervale on X and @juni.vale on
+    TikTok (add_gallery_dl). The Instagram profile file links to both, which
+    is what the link suggestions read; nothing is linked yet."""
+    uid, name = 9006, "Juniper Vale"
+    for i, (handle, caption) in enumerate([
+            ("juni.studio", "First market stall! Small batch of planters. #ceramics"),
+            ("juni.studio", "Glaze tests, round two. #pottery"),
+            ("juniper.makes", "New name, same mud. I'm @juniper.makes now 🌱"),
+            ("juniper.makes", "Planters for the spring market. #ceramics #plants"),
+            ("juniper.makes", "Studio cat inspecting the drying rack.")]):
+        fakes.write_post(os.path.join(media, handle), f"DEMOjuni{i:04d}", ts - (60 - 10 * i) * 86_400,
+                         fakes.owner(handle, uid, name), kind="image", caption=caption)
+    fakes.write_meta(os.path.join(media, "juniper.makes", f"juniper.makes_{uid}"),
+                     {"id": str(uid), "username": "juniper.makes", "full_name": name,
+                      "biography": "Pots and plants. Slow videos on TikTok.",
+                      "external_url": "https://x.com/junipervale",
+                      "bio_links": [{"title": "TikTok", "url": "https://www.tiktok.com/@juni.vale"}]},
+                     node_type="Profile", compress=True)
 
 
 def seed_tags(data, tagged):
@@ -291,6 +326,7 @@ def main():
     fakes.png(os.path.join(media, "pixel_bakery", "screenshot_from_phone.png"), (200, 60, 60))
     add_duplicates(media, ts)
     add_gallery_dl(media, ts)
+    add_person(media, ts)
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     seed_tags(os.path.join(root, "data"), tagged)
