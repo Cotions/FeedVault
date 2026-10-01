@@ -40,6 +40,7 @@ const PATHS = {
   tag:       <><path d="M3.8 12.6V5.2a1.4 1.4 0 0 1 1.4-1.4h7.4l7.6 7.6a1.5 1.5 0 0 1 0 2.1l-6.2 6.2a1.5 1.5 0 0 1-2.1 0z" /><circle cx="8.3" cy="8.3" r="1.5" /></>,
   bookmark:  <><path d="M6.5 3.8h11a1 1 0 0 1 1 1v15.6L12 16.3l-6.5 4.1V4.8a1 1 0 0 1 1-1z" /></>,
   grip:      <><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" /></>,
+  terminal:  <><rect x="3" y="4.5" width="18" height="15" rx="2" /><path d="m7.2 9.6 2.8 2.4-2.8 2.4" /><path d="M12.6 14.6h4.4" /></>,
   vault:     <><rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2.4" /><circle cx="10.6" cy="12" r="3.6" /><path d="M10.6 8.4v7.2" /><path d="M7 12h7.2" /><path d="M17 9.4v5.2" /></>,
 };
 

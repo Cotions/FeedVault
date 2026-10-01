@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
+import { useJobs, ENDED } from "../lib/jobs";
 import { fmtAgo, fmtBytes, fmtFullDate } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -255,6 +256,94 @@ function TrashCard() {
   );
 }
 
+const TOOLS = ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"];
+
+/* One tool: its last check (a tool-version job, read from the shared jobs
+   poll, so it survives leaving the page) and the path to run it from. */
+function ToolRow({ tool, saved, check, onSaved }) {
+  const { started } = useJobs();
+  const [path,   setPath]   = useState(saved || "");
+  const [saving, setSaving] = useState(false);
+  const [msg,    setMsg]    = useState(null);
+  const checking = check && !ENDED.has(check.state);
+  const dirty = path.trim() !== (saved || "");
+
+  async function runCheck() {
+    setMsg(null);
+    try {
+      const r = await startJob("tool-version", { tool });
+      if (r?.ok) started(r.job);
+      else setMsg({ ok: false, text: r?.error || "Could not start the check." });
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const r = await saveToolPaths({ [tool]: path.trim() });
+      if (r?.ok) { onSaved(); runCheck(); }
+      else setMsg({ ok: false, text: r?.error || "Save failed." });
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <li className="tool-row">
+      <code className="tool-name">{tool}</code>
+      <span
+        className={`tool-status${check?.state === "done" ? " is-ok" : check && ENDED.has(check.state) ? " is-err" : ""}`}
+        title={check?.ended_at ? `checked ${fmtAgo(check.ended_at)}` : undefined}
+      >
+        {checking ? <><Icon name="refresh" size={12} className="spin" /> checking…</>
+          : check ? check.message || check.state : <span className="dim">not checked</span>}
+      </span>
+      <form className="tool-path" onSubmit={e => { e.preventDefault(); if (dirty) save(); }}>
+        <input
+          type="text"
+          placeholder="found on PATH"
+          aria-label={`Path to ${tool}`}
+          value={path}
+          onChange={e => { setPath(e.target.value); setMsg(null); }}
+        />
+        {dirty && <button type="submit" className="btn-secondary" disabled={saving}>{saving ? "Saving…" : "Save"}</button>}
+      </form>
+      <button type="button" className="btn-secondary" onClick={runCheck} disabled={checking}>
+        <Icon name="check" size={13} />Check
+      </button>
+      {msg && <div className={`msg ${msg.ok ? "ok" : "err"} tool-msg`} role="alert">{msg.text}</div>}
+    </li>
+  );
+}
+
+function ToolsCard({ saved, onSaved }) {
+  const { list } = useJobs();
+  // The newest check of each tool (the list is newest first).
+  const checks = {};
+  for (const j of list?.jobs || []) {
+    if (j.kind === "tool-version" && !(j.params.tool in checks)) checks[j.params.tool] = j;
+  }
+  return (
+    <div className="card">
+      <div className="card-title">Tools</div>
+      <p className="page-lede">
+        The downloaders FeedVault runs, and ffmpeg for video frames. Each is looked up on your PATH;
+        set a path for one installed elsewhere (a virtualenv, say). The file must be named after the tool.
+      </p>
+      <ul className="tool-list">
+        {TOOLS.map(t => (
+          <ToolRow key={`${t}:${saved[t] || ""}`} tool={t} saved={saved[t]} check={checks[t]} onSaved={onSaved} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { refreshKey } = useScan();
   const { data: config, error, reload } = useApi(getConfig, refreshKey);
@@ -277,6 +366,7 @@ export default function Settings() {
             msg={msg}
             setMsg={setMsg}
           />
+          <ToolsCard saved={config.tools || {}} onSaved={reload} />
           <TrashCard />
           <LastScan />
           <div className="card">
