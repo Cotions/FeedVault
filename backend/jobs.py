@@ -15,7 +15,9 @@ exits cleanly, that folder is indexed and the job reports its new posts.
 
 Jobs are kept in the ``jobs`` table: the queue, and the last HISTORY_KEPT
 ended jobs with the tail of their output. Jobs a stopped FeedVault left
-queued or running are marked interrupted on the next start (recover).
+queued or running are marked interrupted on the next start (recover), and a
+process a killed FeedVault left running is stopped, when its pid, start time
+and executable all still match.
 """
 import collections
 import json
@@ -311,6 +313,7 @@ def _run(job):
         except OSError as e:
             _finish(job, "failed", message=f"{job.tool} could not start: {e.strerror or e}")
             return
+        _record_process(job, proc.pid)
         with _lock:
             job.proc = proc
             stop = job.cancelled or job.interrupted
@@ -349,6 +352,29 @@ def _run(job):
             _finish(job, "done", message="finished")
     except Exception as e:                     # keep the app alive; show it in the UI
         _finish(job, "failed", message=f"job runner error: {e}")
+
+
+def identity(pid):
+    """(start time, executable) of a live process, else None. The start time
+    is in clock ticks since boot: a pid reused by another process, or after a
+    reboot, has another."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().rsplit(")", 1)[1].split()   # the name, in brackets, may hold anything
+        if fields[0] == "Z":
+            return None                        # a zombie has no executable left
+        return int(fields[19]), os.readlink(f"/proc/{pid}/exe")
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _record_process(job, pid):
+    """Remember who the job's process is, for recover() after a crash."""
+    found = identity(pid)
+    conn = db.connect()
+    conn.execute("UPDATE jobs SET pid = ?, pid_start = ?, pid_exe = ? WHERE id = ?",
+                 (pid, *(found or (None, None)), job.id))
+    conn.commit()
 
 
 def _index(job):
@@ -563,9 +589,14 @@ def _prune():
 
 
 def recover():
-    """At startup: jobs a stopped FeedVault left queued or running."""
+    """At startup: jobs a stopped FeedVault left queued or running. A process
+    one of them left behind is stopped, its whole group, if it is still the
+    same process: same pid, start time and executable."""
     conn = db.connect()
-    ids = [r[0] for r in conn.execute("SELECT id FROM jobs WHERE state IN ('queued', 'running')")]
+    rows = conn.execute("SELECT id, pid, pid_start, pid_exe FROM jobs WHERE state IN ('queued', 'running')").fetchall()
+    ids = [r["id"] for r in rows]
+    _stop_leftovers([r["pid"] for r in rows if r["pid"] and r["pid_start"] is not None
+                     and identity(r["pid"]) == (r["pid_start"], r["pid_exe"])])
     # When it really ended is unknown: ended_at stays NULL.
     conn.executemany("UPDATE jobs SET state = 'interrupted', message = ?, ended_at = NULL WHERE id = ?",
                      [(INTERRUPTED, i) for i in ids])
@@ -574,6 +605,30 @@ def recover():
         _ended(get(i))
     if ids:
         print(f"[jobs] {len(ids)} job{'' if len(ids) == 1 else 's'} interrupted when FeedVault last stopped")
+
+
+def _stop_leftovers(pids):
+    """SIGTERM to each group, then SIGKILL after KILL_AFTER to the groups whose
+    leader is still the same process. One whose leader has gone is left: its
+    pid may already belong to someone else."""
+    groups = {}
+    for pid in pids:
+        found = identity(pid)
+        try:
+            os.killpg(pid, signal.SIGTERM)     # the job's process leads its own group
+        except (ProcessLookupError, PermissionError):
+            continue
+        groups[pid] = found
+        print(f"[jobs] stopping process {pid}, left running when FeedVault last stopped")
+    deadline = time.monotonic() + KILL_AFTER
+    while groups and time.monotonic() < deadline:
+        groups = {pid: found for pid, found in groups.items() if identity(pid) == found}
+        time.sleep(0.05)
+    for pid in groups:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 _COLUMNS = "id, kind, params, argv, cwd, lock_group, state, created_at, started_at, ended_at, " \

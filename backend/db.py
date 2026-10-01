@@ -348,10 +348,19 @@ def _migrate_12(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS sources_account ON sources(platform, author_id)")
 
 
+def _migrate_13(conn):
+    """A running job's process (jobs.py): pid, start time in clock ticks since
+    boot (field 22 of /proc/<pid>/stat) and executable, so the next start
+    can stop a process a killed FeedVault left behind, and nothing else."""
+    for column in ("pid INTEGER", "pid_start INTEGER", "pid_exe TEXT"):
+        conn.execute(f"ALTER TABLE jobs ADD COLUMN {column}")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
-              _migrate_9, _migrate_10, _migrate_11, _migrate_12]
+              _migrate_9, _migrate_10, _migrate_11, _migrate_12,
+              _migrate_13]
 
 BACKUPS_KEPT = 3
 

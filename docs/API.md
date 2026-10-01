@@ -1039,8 +1039,8 @@ If FeedVault itself is killed (SIGKILL, a crash, a power cut), a job's
 process may still be running when it starts again. Each running job records
 its process id, the process's start time (field 22 of `/proc/<pid>/stat`)
 and its executable; on the next start, a job left `running` has its process
-group stopped (SIGTERM, then SIGKILL) only if that pid still exists with the
-same start time and executable. A pid reused by another program is never
+group stopped (SIGTERM, then SIGKILL after 10 seconds if it is still there)
+only if that pid still exists with the same start time and executable. A pid reused by another program is never
 signalled. The job is then `interrupted`.
 
 Jobs are kept in the database (`jobs` table), not with the user data: they
