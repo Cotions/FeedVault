@@ -88,6 +88,32 @@ def clean_roots(roots):
     return out, None
 
 
+def is_executable(path):
+    return os.path.isabs(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def clean_tools(tools, known):
+    """Check {tool: path} from Settings: each a known tool, and a path to an
+    executable file named after it (``yt-dlp``, ``yt-dlp_linux``), or empty
+    to use PATH again. Returns (tools, error)."""
+    if not isinstance(tools, dict) or not all(isinstance(v, str) or v is None for v in tools.values()):
+        return None, "tools must map a tool name to a path"
+    out = {}
+    for name, path in tools.items():
+        if name not in known:
+            return None, f"unknown tool: {name}"
+        path = (path or "").strip()
+        if not path:
+            continue
+        path = os.path.abspath(os.path.expanduser(path))
+        if not is_executable(path):
+            return None, f"{name}: not an executable file: {path}"
+        if not os.path.basename(path).lower().startswith(name):
+            return None, f"{name}: the file must be named {name} (or start with it): {path}"
+        out[name] = path
+    return out, None
+
+
 def db_path(cfg=None):
     cfg = cfg or load()
     return os.path.join(cfg["data_directory"], "feedvault.db")
