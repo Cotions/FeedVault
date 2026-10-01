@@ -7,14 +7,14 @@ already have while you browse.
 
 FeedVault does not download anything itself. It reads what
 [instaloader](https://instaloader.github.io/) and
-[gallery-dl](https://github.com/mikf/gallery-dl) write (yt-dlp is next). A post whose files disappear stays in the index, marked missing.
+[gallery-dl](https://github.com/mikf/gallery-dl) and [yt-dlp](https://github.com/yt-dlp/yt-dlp) write. A post whose files disappear stays in the index, marked missing.
 
 The **Review** page is for sorting: one post at a time, keep or trash it from
 the keyboard. Deleting moves files to `.feedvault-trash/` inside the media
 folder; only **Empty trash** in Settings removes them for good.
 
-Status: early. Instagram via instaloader and X/Twitter and TikTok via
-gallery-dl work end to end; see
+Status: early. Instagram via instaloader, X/Twitter and TikTok via
+gallery-dl, and TikTok and YouTube Shorts via yt-dlp work end to end; see
 [PLANNING.md](PLANNING.md) for what comes next.
 
 ## Start
@@ -61,7 +61,7 @@ when their metadata has an id and a date.
 ```bash
 gallery-dl --write-metadata \
   -d ~/Media/gallery-dl \
-  --download-archive ~/.local/share/feedvault/gallery-dl.sqlite3 \
+  --download-archive ~/.local/share/feedvault/gallery-dl/archive.sqlite3 \
   https://x.com/some_account/media https://www.tiktok.com/@some_account
 ```
 
@@ -74,9 +74,9 @@ gallery-dl --write-metadata \
   if you set your own `directory`, keep the author in it
 - `--download-archive` remembers what was downloaded, so a later run skips it.
   Keep it in FeedVault's data directory (`data_directory` in the config,
-  `~/.local/share/feedvault` by default), not next to the media, so trashing a
-  post in FeedVault does not make the next run download it again (see
-  [#4](https://github.com/Cotions/FeedVault/issues/4))
+  `~/.local/share/feedvault` by default), at the path FeedVault's syncs use:
+  a post trashed in FeedVault is added to it, so the next run does not
+  download it again
 - `-o previews=true` (X) and `-o covers=true` (TikTok) also save a video's
   thumbnail, used as its poster
 - retweets (`-o retweets=true`) show under the original author with "Retweeted
@@ -94,7 +94,32 @@ gallery-dl --write-metadata \
 X timelines need a logged-in session (`--cookies-from-browser firefox`);
 single public tweets and TikTok usually do not.
 
-## Userscript
+## Downloading with yt-dlp
+
+yt-dlp writes an info JSON per video when asked to; FeedVault reads it and
+the files that share its name: the video, the thumbnail (its poster),
+subtitles and the description file. It suits TikTok and short videos;
+long YouTube videos are left to ChannelVault (see below).
+
+```bash
+yt-dlp --write-info-json --write-thumbnail \
+  --download-archive ~/.local/share/feedvault/yt-dlp/archive.txt \
+  -o "~/Media/yt-dlp/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s" \
+  https://www.tiktok.com/@some_account
+```
+
+- `--write-info-json` is required: `<name>.info.json` beside `<name>.mp4`.
+  Keep the two in the same folder with the same base name
+- `--write-thumbnail` saves the poster (TikTok's keeps the `.image` its URL
+  has; FeedVault serves it as the image it is)
+- `--download-archive` remembers what was downloaded; keep it in FeedVault's
+  data directory, as for gallery-dl, so a trashed post stays trashed
+- a playlist or channel run also writes the playlist's own info JSON: it is
+  recognized and ignored, not listed as unmatched
+- YouTube videos longer than `youtube_max_seconds` in the config (default
+  180) are not indexed: they show on the **Unmatched** page as "left to
+  ChannelVault". Shorts and short clips are indexed like TikTok videos
+
 
 Install [Tampermonkey](https://www.tampermonkey.net/), then open
 <http://localhost:3380/userscript/feedvault.user.js>. On Instagram, saved posts
@@ -110,10 +135,18 @@ left running by a crash is stopped on the next start.
 
 ## Syncing profiles
 
-A person (or an account) can have **sources**: an Instagram profile and the
-folder its posts go to. **Sync** runs instaloader for it as a job and indexes
-the folder, so new posts show up in the Feed without a terminal. Only new
-posts are fetched: FeedVault keeps instaloader's `--latest-stamps` file in
+A person (or an account) can have **sources**: a profile link and the folder
+its posts go to. Paste the link (Instagram, X, TikTok, YouTube, Reddit,
+Bluesky, pixiv) and FeedVault picks the tool from **Settings → Link
+routing**: instaloader for Instagram, gallery-dl for X, Reddit, Bluesky and
+pixiv, yt-dlp for YouTube and TikTok. **Sync** runs that tool as a job and
+indexes the folder, so new posts show up in the Feed without a terminal.
+gallery-dl and yt-dlp keep their download archives in FeedVault's data
+directory: a sync stops at what they already have, a first sync skips what
+is already indexed, and a post you trash is never downloaded again (until
+you restore it).
+
+For Instagram, only new posts are fetched: FeedVault keeps instaloader's `--latest-stamps` file in
 its data directory, and a first sync starts after the newest post already
 indexed (tick "Full history" to fetch everything). **Creators** offers your
 existing instaloader folders as sources to confirm, and **Sync all** runs
@@ -124,6 +157,9 @@ Instagram sync** can make instaloader use your browser's Instagram cookies
 (`--load-cookies`) or a session it saved after `instaloader --login` in a
 terminal. FeedVault only passes the browser or user name on; it never reads
 or stores cookies, passwords or session files.
+
+gallery-dl and yt-dlp can use a browser's cookies the same way
+(`--cookies-from-browser`, **Settings → gallery-dl / yt-dlp sync**).
 
 ## Where things live
 

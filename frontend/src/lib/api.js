@@ -233,7 +233,11 @@ export function saveToolPaths(tools) { return post("/api/config", { tools }); }
 
 // { sources: [source], suggestions: [suggestion] }
 export function getSources() { return get("/api/sources"); }
-// { tool, target (a handle or profile URL), folder?, person?, account?, options? } → { ok, source }
+// What adding a pasted link would make: { ok, tool, platform, target, folder, source }
+// or { ok: false, error } (a link that is not accepted, see docs/API.md "Link routing").
+export function resolveSource(url, opts) { return get(`/api/sources/resolve${qs({ url })}`, opts); }
+// { tool?, target (a profile link, or an Instagram name with tool "instaloader"), folder?, person?,
+//   account?, options? } → { ok, source }
 export function createSource(body) { return post("/api/sources", body); }
 // options: { full_history?, session? } → { ok, source }
 export function updateSource(id, options) { return post(`/api/sources/${id}`, { options }); }
@@ -252,3 +256,5 @@ export function syncSource(id) { return post(`/api/sources/${id}/sync`); }
 export function syncAllSources() { return post("/api/sources/sync-all"); }
 // { session?, pause? } → { ok, config } or { ok: false, error }
 export function saveInstaloaderSettings(settings) { return post("/api/config", { instaloader: settings }); }
+// Any of { "gallery-dl": { session }, "yt-dlp": { session }, youtube_max_seconds, routes } → { ok, config }
+export function saveSettings(changes) { return post("/api/config", changes); }

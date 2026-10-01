@@ -72,6 +72,9 @@ class DirResult:
     # What the metadata says about accounts beyond their posts, for link
     # suggestions (Profile below), at most one per account and directory.
     profiles: list = field(default_factory=list)
+    # (path, reason) for files that are ours but deliberately not indexed
+    # (a long YouTube video): listed on the Unmatched page with the reason.
+    skipped: list = field(default_factory=list)
 
 
 @dataclass
@@ -85,11 +88,11 @@ class Profile:
     source: str                     # the metadata file it was read from
 
 
-from . import instaloader, gallery_dl  # noqa: E402
+from . import instaloader, gallery_dl, yt_dlp  # noqa: E402
 
 # Parsers that read metadata first; guessing posts from file names comes last,
 # on whatever is left.
-PARSERS = [instaloader.parse_dir, gallery_dl.parse_dir, instaloader.parse_filenames]
+PARSERS = [instaloader.parse_dir, gallery_dl.parse_dir, yt_dlp.parse_dir, instaloader.parse_filenames]
 
 
 def parse_dir(root, dirpath, names):
@@ -106,5 +109,6 @@ def parse_dir(root, dirpath, names):
         result.claimed |= r.claimed
         result.errors.extend(r.errors)
         result.profiles.extend(r.profiles)
+        result.skipped.extend(r.skipped)
         remaining = [n for n in remaining if n not in r.claimed]
     return result

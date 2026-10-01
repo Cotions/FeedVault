@@ -887,6 +887,7 @@ PROFILE_URLS = {
     "instagram": "https://www.instagram.com/{}/",
     "twitter": "https://x.com/{}",
     "tiktok": "https://www.tiktok.com/@{}",
+    "youtube": "https://www.youtube.com/@{}",
 }
 
 

@@ -28,6 +28,7 @@ import sync
 import thumbs
 import trash
 import userdata
+from parsers import yt_dlp
 
 app = Flask(__name__, static_folder=None)
 
@@ -695,15 +696,42 @@ def _source_or_404(sid):
     return s
 
 
+@app.get("/api/sources/resolve")
+def resolve_source():
+    """What pasting a profile link would add: the tool, platform, target and
+    default folder, shown before saving."""
+    cfg = config.load()
+    try:
+        r = sources.resolve(request.args.get("url"), sources.routes(cfg), cfg["media_roots"])
+    except sources.Refused as e:
+        # An answer, not a failed request: the page asks as the user types.
+        return jsonify({"ok": False, "error": str(e)})
+    conn = db.connect()
+    folder = sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]
+    return jsonify({"ok": True, **r, "source": sources.existing(conn, r["tool"], r["target"], folder)})
+
+
 @app.post("/api/sources")
 def create_source():
     body = request.get_json(silent=True) or {}
     tool = body.get("tool")
-    if tool not in sources.TOOLS:
+    if tool is not None and tool not in sources.TOOLS:
         return jsonify({"ok": False, "error": f"tool must be one of: {', '.join(sources.TOOLS)}"}), 400
-    target = sources.parse_target(tool, body.get("target"))
-    if target is None:
-        return jsonify({"ok": False, "error": "target must be a profile name, @name or profile URL"}), 400
+    cfg = config.load()
+    table = sources.routes(cfg)
+    if tool == "instaloader":
+        target = sources.parse_target(tool, body.get("target"))
+        if target is None:
+            return jsonify({"ok": False, "error": "target must be a profile name, @name or profile URL"}), 400
+    else:
+        # A link: the routing table picks the tool.
+        try:
+            r = sources.resolve(body.get("target"), table, cfg["media_roots"])
+        except sources.Refused as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        if tool is not None and r["tool"] != tool:
+            return jsonify({"ok": False, "error": f"this link syncs with {r['tool']} (Settings → Link routing)"}), 400
+        tool, target = r["tool"], r["target"]
     folder, person, account = body.get("folder"), body.get("person"), body.get("account")
     if folder is not None and not isinstance(folder, str):
         return jsonify({"ok": False, "error": "folder must be an absolute path inside a media root"}), 400
@@ -714,12 +742,13 @@ def create_source():
         if not account:
             return jsonify({"ok": False, "error": "account must be { platform, id }"}), 400
         account = account[0]
-    options = sources.clean_options(body.get("options"))
+    options = sources.clean_options(body.get("options"), tool=tool)
     if options is None:
         return jsonify({"ok": False, "error": "options must be { full_history, session }"}), 400
     conn = db.connect()
     try:
-        sid = sources.create(conn, _roots(), tool, target, folder, person, account, options, int(time.time()))
+        sid = sources.create(conn, cfg["media_roots"], tool, target, folder, person, account, options,
+                             int(time.time()), table)
     except sources.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     userdata.changed("sources")
@@ -741,7 +770,7 @@ def update_source(sid):
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
     body = request.get_json(silent=True) or {}
-    options = sources.clean_options(body["options"], base=s["options"]) \
+    options = sources.clean_options(body["options"], base=s["options"], tool=s["tool"]) \
         if isinstance(body.get("options"), dict) else None
     if options is None:
         return jsonify({"ok": False, "error": "send options: { full_history, session }"}), 400
@@ -798,10 +827,15 @@ def scan_start():
     return jsonify({"ok": True})
 
 
+YOUTUBE_MAX = 24 * 3600
+
+
 def _public_config(cfg):
     return {"media_roots": cfg["media_roots"], "data_directory": cfg["data_directory"],
             "version": config.__version__, "tools": cfg.get("tools") or {},
-            "instaloader": sync.settings(cfg)}
+            "instaloader": sync.settings(cfg), "routes": sources.routes(cfg),
+            "gallery-dl": sync.tool_settings("gallery-dl", cfg), "yt-dlp": sync.tool_settings("yt-dlp", cfg),
+            "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg)}
 
 
 @app.get("/api/config")
@@ -814,6 +848,21 @@ def set_config():
     body = request.get_json(silent=True) or {}
     cfg = config.load()
     tools = roots = insta = None
+    changes = {}                               # config key -> new value, saved as they are
+    if "routes" in body:
+        changes["routes"], error = sources.clean_routes(body["routes"])
+        if error:
+            return jsonify({"ok": False, "error": error})
+    for tool in ("gallery-dl", "yt-dlp"):
+        if tool in body:
+            changes[tool], error = sync.clean_tool_settings(tool, body[tool], sync.tool_settings(tool, cfg))
+            if error:
+                return jsonify({"ok": False, "error": error})
+    if "youtube_max_seconds" in body:
+        v = body["youtube_max_seconds"]
+        if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= YOUTUBE_MAX:
+            return jsonify({"ok": False, "error": f"youtube_max_seconds must be whole seconds from 1 to {YOUTUBE_MAX}"})
+        changes["youtube_max_seconds"] = v
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
         if error:
@@ -835,7 +884,8 @@ def set_config():
         cfg["media_roots"] = roots
     if insta is not None:
         cfg["instaloader"] = insta
-    if tools is not None or roots is not None or insta is not None:
+    cfg.update(changes)
+    if tools is not None or roots is not None or insta is not None or changes:
         config.save(cfg)
     if changed:
         scanner.start(roots)
@@ -933,10 +983,28 @@ def quit_app():
 # never a path.
 # ---------------------------------------------------------------------------
 
-def _send(path):
+# Image types by their first bytes, for files whose name does not say
+# (yt-dlp keeps TikTok's thumbnails as ".image").
+_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG", "image/png"), (b"RIFF", "image/webp"), (b"GIF8", "image/gif"))
+
+
+def _sniff(path):
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+    except OSError:
+        return None
+    for magic, mimetype in _MAGIC:
+        if head.startswith(magic) and (mimetype != "image/webp" or head[8:12] == b"WEBP"):
+            return mimetype
+    return None
+
+
+def _send(path, sniff=False):
     if not path or not os.path.isfile(path):
         abort(404)
-    resp = send_file(path, conditional=True, max_age=3600)
+    mimetype = _sniff(path) if sniff and path.endswith(".image") else None
+    resp = send_file(path, mimetype=mimetype, conditional=True, max_age=3600)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     return resp
 
@@ -964,7 +1032,7 @@ def serve_thumb(media_id):
 @app.get("/media/<int:media_id>/poster")
 def serve_poster(media_id):
     row = db.media_row(db.connect(), media_id)
-    return _send(row["poster_path"] if row else None)
+    return _send(row["poster_path"] if row else None, sniff=True)
 
 
 @app.get("/media/copy/<int:copy_id>/thumb")

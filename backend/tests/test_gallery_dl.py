@@ -128,6 +128,17 @@ def test_unknown_category_uses_generic_keys(tmp_path):
     assert r.claimed == set(os.listdir(tmp_path))
 
 
+def test_bluesky_author(tmp_path):
+    # Bluesky's author is {did, handle, displayName} (gallery-dl 1.32).
+    png(str(tmp_path / "3abc_1.jpg"))
+    jdump(tmp_path / "3abc_1.jpg.json", _generic(
+        category="bluesky", id=None, post_id="3abc", user=None, text="hi",
+        author={"did": "did:plc:example", "handle": "someone.bsky.social", "displayName": "Some One"}))
+    p = parse(tmp_path).posts[0]
+    assert (p.post_id, p.author_id, p.author_handle, p.author_name) == (
+        "3abc", "did:plc:example", "someone.bsky.social", "Some One")
+
+
 def test_unknown_category_without_date_goes_to_unmatched(tmp_path):
     png(str(tmp_path / "42_1.jpg"))
     jdump(tmp_path / "42_1.jpg.json", _generic(date=None))

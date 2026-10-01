@@ -173,11 +173,13 @@ SITES = {
 # Any other category: the keys most extractors use.
 GENERIC = {
     "post_id": ["post_id", "id"],
-    "author_id": [("author", "id"), ("user", "id"), ("owner", "id"), "author_id", "user_id"],
+    # Bluesky: author {did, handle, displayName}.
+    "author_id": [("author", "id"), ("user", "id"), ("owner", "id"), "author_id", "user_id", ("author", "did")],
     "author_handle": [("author", "name"), ("author", "username"), ("user", "name"), ("user", "username"),
-                      ("owner", "username"), "username", "author", "user", "uploader"],
+                      ("owner", "username"), "username", ("author", "handle"), "author", "user", "uploader"],
     "author_name": [("author", "nick"), ("author", "display_name"), ("user", "nick"),
-                    ("user", "display_name"), ("owner", "full_name"), "nick", "display_name"],
+                    ("user", "display_name"), ("owner", "full_name"), "nick", "display_name",
+                    ("author", "displayName")],
     "text": ["content", "description", "desc", "caption", "text", "title"],
     "date": ["date", "created_at", "timestamp"],
     "hashtags": "hashtags",

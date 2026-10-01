@@ -1,0 +1,85 @@
+{
+ "id": "7100000000000000001",
+ "formats": [
+  {
+   "format_id": "audio",
+   "url": "https://media.example/x.jpg",
+   "ext": "mp3",
+   "acodec": "mp3",
+   "vcodec": "none",
+   "protocol": "https",
+   "audio_ext": "mp3",
+   "video_ext": "none",
+   "vbr": 0,
+   "resolution": "audio only",
+   "format": "audio - audio only"
+  }
+ ],
+ "subtitles": {},
+ "http_headers": {
+  "User-Agent": "Mozilla/5.0"
+ },
+ "channel": "Some Body",
+ "channel_id": "MS4wLjABAAAAexampleSecUidForAFakeTikTokAccountOnlyUsedInTests000000000000",
+ "uploader": "somebody_tt",
+ "uploader_id": "6800000000000000002",
+ "channel_url": "https://www.tiktok.com/@MS4wLjABAAAAexampleSecUidForAFakeTikTokAccountOnlyUsedInTests000000000000",
+ "uploader_url": "https://www.tiktok.com/@somebody_tt",
+ "track": "original sound",
+ "artists": [
+  "someone"
+ ],
+ "duration": 10,
+ "title": "Guess what this is 😍❤️ #foryoupage #petsoftikt...",
+ "description": "Guess what this is 😍❤️ #foryoupage #petsoftiktok #aesthetic",
+ "timestamp": 1564234358,
+ "view_count": 1234,
+ "like_count": 56,
+ "repost_count": 8,
+ "comment_count": 7,
+ "save_count": 8,
+ "thumbnails": [
+  {
+   "id": "dynamicCover",
+   "url": "https://media.example/x.jpg",
+   "preference": -2
+  }
+ ],
+ "webpage_url": "https://www.tiktok.com/@somebody_tt/video/7100000000000000001",
+ "webpage_url_basename": "7100000000000000001",
+ "webpage_url_domain": "tiktok.com",
+ "extractor": "TikTok",
+ "extractor_key": "TikTok",
+ "thumbnail": "https://media.example/x.jpg",
+ "display_id": "7100000000000000001",
+ "fulltitle": "Guess what this is 😍❤️ #foryoupage #petsoftikt...",
+ "duration_string": "10",
+ "upload_date": "20190727",
+ "artist": "someone",
+ "epoch": 1790875660,
+ "ext": "mp4",
+ "vcodec": "h265",
+ "acodec": "aac",
+ "format_id": "bytevc1_720p_1504834-1",
+ "tbr": 1504,
+ "quality": 2,
+ "preference": -1,
+ "filesize": 2004627,
+ "width": 720,
+ "height": 1280,
+ "url": "https://media.example/file",
+ "protocol": "https",
+ "video_ext": "mp4",
+ "audio_ext": "none",
+ "resolution": "720x1280",
+ "dynamic_range": "SDR",
+ "aspect_ratio": 0.56,
+ "cookies": "",
+ "format": "bytevc1_720p_1504834-1 - 720x1280",
+ "_type": "video",
+ "_version": {
+  "version": "2026.08.19",
+  "release_git_head": "594bd50c2c78ac432f81600d309fdc4e0a92d82c",
+  "repository": "yt-dlp/yt-dlp"
+ }
+}

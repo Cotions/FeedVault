@@ -94,8 +94,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 } }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools) and [instaloader settings](#instaloader-settings) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" } }, "yt-dlp": { "session": { "mode": "none" } }, "youtube_max_seconds": 180, "routes": {…} }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
 | POST | `/api/quit` | stops the backend |
@@ -140,6 +140,20 @@ already gone is simply dropped from the index. Response:
 item with any file that could not be moved stays in the index, and the reason
 is in `errors`. `ok` is `false` only when nothing could be done at all (bad
 body, or a scan held the index for more than 30 s).
+
+**Never again.** Deleting a gallery-dl or yt-dlp post also adds it to the
+download archives in the data directory (see
+[gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs)), so no sync
+downloads it again: gallery-dl's entry for each of its files, and the
+yt-dlp line `<platform> <id>` (both tools download TikTok and X). A media
+item deleted on its own adds its file's gallery-dl entry. The entries a
+deletion added (not those the archive already had) are kept on its
+manifest lines (`"archive": { "gallery-dl": [...], "yt-dlp": [...] }`), and
+restoring it takes them out again. Emptying the trash or purging keeps them.
+instaloader has no archive: its `--latest-stamps` keeps a trashed post
+older than the profile's newest download from coming back, but a trashed
+post newer than the stamp (trashed before any sync passed it) can be
+downloaded again by the next sync.
 
 ### Trash contents
 
@@ -722,11 +736,14 @@ downloaded. Nothing is ever fetched.
 ## Sources
 
 A **source** is where a person's posts come from: a tool and its target
-(`instaloader` and a profile name), and the folder inside a media root the
-tool writes to. Clicking **Sync** runs the tool for that source as a
-[job](#jobs) and indexes the folder when it ends, so only new posts are
-downloaded and they show up in the Feed without a terminal. This slice has
-`instaloader` only; gallery-dl and yt-dlp come later.
+(`instaloader` and a profile name, `gallery-dl` or `yt-dlp` and a profile
+link), and the folder inside a media root the tool writes to. Clicking
+**Sync** runs the tool for that source as a [job](#jobs) and indexes the
+folder when it ends, so only new posts are downloaded and they show up in
+the Feed without a terminal.
+
+A source is added by pasting a profile link: the link's host picks the tool
+from the [routing table](#link-routing).
 
 Sources are user data: table `sources`, written to
 `<data_directory>/userdata/sources.json` (by tool and target, the person by
@@ -754,7 +771,12 @@ no person yet.
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 } }
 ```
 
-- `target`: the profile name, lowercase. `url`: its address on the site.
+- `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
+  the profile link, normalized (see [Link routing](#link-routing)). `url`:
+  its address on the site (the link itself for a link).
+- `platform`: what its posts are indexed under: `instagram`, or from the
+  link's host (`twitter` for x.com and twitter.com, `tiktok`, `youtube`,
+  `reddit`, `bluesky`, `pixiv`; another host, the first part of its name).
 - `folder`: absolute, inside a media root (it need not exist before the
   first sync; the sync creates it).
 - `account`: the indexed account the source belongs to (an alias is
@@ -767,18 +789,23 @@ no person yet.
     the folder yet (without `--fast-update`, the stamp dropped first); once
     it succeeds, it is set back to `false`.
   - `session`: `null` to use the global setting (see
-    [Settings](#instaloader-settings)), or one of the session values.
+    [instaloader settings](#instaloader-settings) and
+    [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings)), or
+    one of the session values (gallery-dl and yt-dlp: none or cookies).
 - `last_sync_at`: when the last sync ended (any outcome), or `null`.
 - `last_result`: how it ended, or `null` before the first sync:
   - `state`: the job's (`done`, `failed`, `cancelled`, `interrupted`)
   - `error`: `null` when it worked, else what the output says went wrong:
-    `login_required` (Instagram wants a logged-in session),
+    `login_required` (the site wants a logged-in session),
     `private` (a private profile the session does not follow),
     `not_found` (no such profile: renamed or deleted),
     `rate_limited` (HTTP 429, "Please wait a few minutes"), or `generic`.
     An HTTP 403 counts as `login_required`: it is how Instagram turns away
     an anonymous client, after which instaloader reports the profile as
-    missing
+    missing. gallery-dl and yt-dlp failures are classified from their
+    error lines the same way (gallery-dl's `AuthRequired`, `NotFoundError`,
+    "Tweets are protected"; yt-dlp's "Sign in to confirm", "Private video",
+    "Video unavailable")
   - `message`: one line for people; `line`: the tool's last line of output
     behind it, or `null`
   - `added`: new posts indexed (also after a failure: what was downloaded
@@ -789,24 +816,35 @@ no person yet.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
-| POST | `/api/sources` | body `{ "tool": "instaloader", "target": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
+| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null }` (`source`: the id of the source already there for it). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }` |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |
 
-- `target`: a profile name, `@name`, or a profile URL
-  (`https://www.instagram.com/name/`, with or without `www.`, a query
-  string or a trailing slash). Anything else (a post or reel link, a name
-  with other characters) is a 400.
-- `folder`: optional. Absent: `<first media root>/<target>`. Present: an
-  absolute path that resolves inside a media root (symlinks followed);
-  anything else is a 400.
+- `target`: a profile link. Its host picks the tool from the routing
+  table; `tool` is optional, and when sent must be that tool (else a 400
+  naming it). With `"tool": "instaloader"`, a profile name or `@name` works
+  too. An Instagram link (`https://www.instagram.com/name/`, with or without
+  `www.`, a query string or a trailing slash) gives instaloader the profile
+  name. Anything else (a post or reel link, a name with other characters, a
+  host not in the table) is a 400.
+- `folder`: optional. Absent: `<first media root>/<target>` for
+  instaloader, `<first media root>/<platform>/<name>` for a link, the name
+  being the link's first path part that is not a page kind (`/user/`,
+  `/media`, `/en/`…), lowercase, without `@`. Present: an absolute path
+  that resolves inside a media root (symlinks followed); anything else is
+  a 400.
 - `person` (an id) and `account` are optional. With `account`, the source
   belongs to that indexed account (unknown: 400); without, to the account of
-  the folder's posts when there are some.
-- A second source for the same tool and target is a 400.
+  the folder's posts when there are some, else (a link) to the one account
+  of that platform whose handle, current or old, is the link's profile
+  name, any case.
+- A second source for the same tool and target is a 400, the target
+  compared in any case, and so is one for the same tool and folder (an
+  x.com and a twitter.com link to one profile).
 - The request never carries flags, paths to run or a command: the sync job
   takes the source id only and builds everything from the stored source.
 
@@ -825,6 +863,39 @@ source, one per folder right under a media root, for the user to confirm
 the handle is a valid profile name, else the folder's name (file names alone
 do not say whose profile a folder is: a stray file can be named after
 someone else).
+
+### Link routing
+
+`GET /api/config` has `"routes": { "<host>": "<tool>", … }`;
+`POST /api/config` with `{ "routes": {…} }` replaces the table (1 to 100
+entries). The defaults:
+
+| Host | Tool |
+|---|---|
+| `instagram.com` | `instaloader` |
+| `x.com`, `twitter.com`, `reddit.com`, `bsky.app`, `pixiv.net` | `gallery-dl` |
+| `youtube.com` | `yt-dlp` |
+| `tiktok.com` | `yt-dlp` (or `gallery-dl`) |
+
+- A host is a lowercase domain name (`www.` is dropped); a tool one of
+  `instaloader`, `gallery-dl`, `yt-dlp`, and `instaloader` only for
+  `instagram.com`. Anything else is `{ "ok": false, "error" }` and nothing
+  is saved. A broken table in `config.json` counts as the defaults.
+- A link matches an entry when its host is the entry or a subdomain of it
+  (`www.x.com`, `mobile.twitter.com`, `m.youtube.com`); the longest entry
+  wins. A host that only starts or ends like one (`x.com.evil.example`,
+  `evilx.com`) matches nothing.
+- Accepted links: `http` or `https` (a missing scheme is `https`), no login
+  part (`user@`), no port other than 80 or 443, a host name (not an IP
+  address), and a path of letters, digits and `. _ ~ @ % + -` between
+  slashes, not empty, no `.` or `..` part, at most 500 characters. Not a
+  page that is what its query string says (`/watch?v=`, `/playlist?list=`,
+  `/search?q=`, …): the query is dropped, so such a link is refused.
+- Normalized to `https://<host><path>`: lowercase host without `www.`,
+  `m.` or `mobile.`, no query string or fragment, no repeated or trailing
+  slash. That is the stored target, the same however the link was pasted;
+  the sync checks it again (still normalized, host still in the table) and
+  gives it to the tool after `--`.
 
 ### How a sync runs
 
@@ -885,6 +956,75 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
 FeedVault only passes the browser's name or the user name on. It never
 stores, reads or sends cookies, passwords or session files. `pause`: whole
 seconds from 0 to 3600.
+
+### gallery-dl and yt-dlp syncs
+
+Job kinds `gallery-dl-sync` (group `gallery-dl`) and `yt-dlp-sync` (group
+`yt-dlp`), params `{ "source": "<id>" }` and nothing else. The source must
+have that tool; its target is checked again (a normalized https link whose
+host is still in the routing table; a source keeps its tool when the table
+later routes the host to another one) and so is its folder
+(inside a media root; for yt-dlp, without `$`, which yt-dlp would expand):
+
+```
+gallery-dl --write-metadata --download-archive <data_directory>/gallery-dl/archive.sqlite3
+           -o skip=abort:5 -D <folder> [--cookies-from-browser <browser>] -- <link>
+
+yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
+       --break-on-existing -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
+       [--match-filters "duration <= <youtube_max_seconds>"] [--cookies-from-browser <browser>] -- <link>
+```
+
+- **Incremental.** Each tool's download archive, in FeedVault's data
+  directory, lists what it already has: gallery-dl stops after 5 files in
+  a row that it has (`skip=abort:5`), yt-dlp at the first video it has
+  (`--break-on-existing`, exit code 101, which counts as success). With
+  `options.full_history` the whole profile is walked (`-o skip=true`, no
+  `--break-on-existing`), still skipping what the archive lists. A YouTube
+  channel's own page (`/@name`, `/channel/<id>`, not a tab such as
+  `/shorts`) never gets `--break-on-existing`: it lists the Videos tab and
+  then the Shorts tab, and stopping in the first would never reach the
+  second.
+- **First sync.** When the source has never synced, the archive is seeded
+  first with what FeedVault already indexed for its account (aliases
+  included): gallery-dl gets the entry of every file of the account's
+  gallery-dl posts (from their metadata JSONs: `<category>` and the
+  extractor's archive format, for twitter, tiktok, instagram, reddit,
+  bluesky and pixiv), yt-dlp a line `<platform> <id>` for every post. The
+  job log says how many. With `options.full_history` too (the profile is
+  walked, what is indexed is still not fetched again); not for a source
+  with no account yet.
+- **YouTube.** A youtube.com source only downloads videos up to
+  `youtube_max_seconds` long (the same rule the parser applies: longer
+  ones are left to ChannelVault).
+- **The folder.** `-D` (gallery-dl) puts every file directly in it; the
+  yt-dlp template is the folder with `%` doubled, so it stays literal.
+- **Trash.** Trashing a post adds it to the archives so no sync brings it
+  back; restoring it takes out what trashing added (see [Deleting](#deleting)).
+- **Result**: as for instaloader: the folder is indexed when the job ends,
+  `result` `{ "added", "updated", "error", "line" }`, stored on the source.
+  There is no pause between gallery-dl or yt-dlp jobs. A non-zero exit
+  whose error lines are all about single items (yt-dlp's `ERROR: [youtube]
+  <id>: Private video`, against `[youtube:tab]` or `[tiktok:user]` for the
+  profile; gallery-dl's `[download][error] Failed to download …`), and are
+  not a rate limit or a login wall, is `done`: `message` says how many
+  items could not be downloaded, `line` the last of them.
+
+### gallery-dl and yt-dlp settings
+
+`GET /api/config` has `"gallery-dl": { "session": {…} }` and
+`"yt-dlp": { "session": {…} }`; `POST /api/config` with either changes it.
+
+| `session` | Flags | What it means |
+|---|---|---|
+| `{ "mode": "none" }` (default) | none | Anonymous: public profiles only |
+| `{ "mode": "cookies", "browser": "firefox" }` | `--cookies-from-browser firefox` | The tool reads that browser's cookies itself. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
+
+FeedVault only passes the browser's name on. It never stores, reads or
+sends cookies. Note that yt-dlp copies the cookies it sent for a video into
+that video's info JSON (`cookies` key), in the media folder.
+
+`youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
 
 ## Storage
 
@@ -1013,8 +1153,10 @@ Built-in kinds:
 |---|---|---|---|
 | `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
 | `instaloader-sync` | `source`: a source id | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line" }` | `instaloader` |
+| `gallery-dl-sync` | `source`: a source id | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
+| `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 
-More download kinds come with #4's next slices and the userscript (#10).
+More download kinds come with the userscript (#10).
 
 ### Log
 

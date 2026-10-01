@@ -4,7 +4,11 @@
     python3 scripts/make_demo.py /tmp/feedvault-demo
 
 Writes <dir>/media (fake posts), <dir>/data (database goes here) and
-<dir>/config.json. Start the backend against it with:
+<dir>/config.json. It also installs stand-ins for gallery-dl and yt-dlp in
+<dir>/bin (set as the tools in the config; they never touch the network), so
+adding https://x.com/demo_skies, https://tiktok.com/@demo.clips or
+https://youtube.com/@demoshorts as a source and syncing it downloads invented
+posts (<dir>/fake_downloads.json). Start the backend against it with:
 
     FEEDVAULT_CONFIG=<dir>/config.json backend/venv/bin/python backend/app.py
 
@@ -287,6 +291,47 @@ def seed_tags(data, tagged):
         json.dump({"version": 1, "rows": [{"post_id": p, "tag": t, "at": 1_700_000_000} for p, t in tagged]}, f)
 
 
+TESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend", "tests")
+
+
+def add_fake_tools(root, ts):
+    """gallery-dl and yt-dlp stand-ins (backend/tests/fake_downloaders.py),
+    with a few invented profiles to sync. Returns the config's tools."""
+    day = 86_400
+    accounts = {
+        "https://x.com/demo_skies": {
+            "category": "twitter", "user": {"id": 7001, "name": "demo_skies", "nick": "Demo Skies"},
+            "posts": [{"id": str(1900000000000000000 + i), "ts": ts - i * day, "text": f"evening sky, take {i}",
+                       "files": 1 + i % 3} for i in range(1, 7)]},
+        "https://tiktok.com/@demo.clips": {
+            "extractor_key": "TikTok", "uploader_id": "6900000000000000777", "uploader": "demo.clips",
+            "channel": "Demo Clips", "uploader_url": "https://www.tiktok.com/@demo.clips",
+            "videos": [{"id": str(7400000000000000000 + i), "ts": ts - i * day, "title": f"clip {i}",
+                        "description": f"clip {i} #demo", "duration": 15} for i in range(1, 5)]},
+        "https://youtube.com/@demoshorts": {
+            "extractor_key": "Youtube", "uploader_id": "@demoshorts", "uploader": "demoshorts",
+            "channel": "Demo Shorts", "channel_id": "UCdemoShortsChannel00001",
+            "uploader_url": "https://www.youtube.com/@demoshorts",
+            "videos": [{"id": f"DEMOshort{i:02d}", "ts": ts - i * day, "title": f"short {i}",
+                        "duration": 40 if i % 4 else 1200} for i in range(1, 6)]},
+    }
+    data = os.path.join(root, "fake_downloads.json")
+    with open(data, "w") as f:
+        json.dump({"accounts": accounts, "fail": None}, f, indent=1)
+    bin_dir = os.path.join(root, "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    tools = {}
+    for tool, main in (("gallery-dl", "gallery_dl_main"), ("yt-dlp", "yt_dlp_main")):
+        exe = os.path.join(bin_dir, tool)
+        with open(exe, "w") as f:
+            f.write(f"#!{sys.executable}\nimport os, sys\nos.environ.setdefault('FAKE_DOWNLOADS', {data!r})\n"
+                    f"sys.path.insert(0, {os.path.abspath(TESTS)!r})\nimport fake_downloaders\n"
+                    f"sys.exit(fake_downloaders.{main}(sys.argv[1:]))\n")
+        os.chmod(exe, 0o755)
+        tools[tool] = exe
+    return tools
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -330,8 +375,9 @@ def main():
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     seed_tags(os.path.join(root, "data"), tagged)
+    tools = add_fake_tools(root, ts)
     with open(os.path.join(root, "config.json"), "w") as f:
-        json.dump({"data_directory": os.path.join(root, "data"), "media_roots": [media]}, f, indent=2)
+        json.dump({"data_directory": os.path.join(root, "data"), "media_roots": [media], "tools": tools}, f, indent=2)
     print(f"Demo vault at {root} ({'real' if have_ffmpeg else 'placeholder'} videos)")
     print(f"Start: FEEDVAULT_CONFIG={root}/config.json backend/venv/bin/python backend/app.py")
 
