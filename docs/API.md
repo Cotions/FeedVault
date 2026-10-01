@@ -42,6 +42,8 @@ A **post summary** (list endpoints):
 - `missing`: the metadata file is gone from disk. The post stays in the index.
 - `bytes`: sum of `size` over the post's media items that are not missing
   (see [Sizes](#sizes)). `media_count` counts every item, missing ones too.
+  The Feed adds these up to show the size of a selection in select mode, so
+  no extra request is needed for it.
 
 `url` is `null` when the post has no public address (highlight items).
 `text` is an empty string when the downloader saved no caption.

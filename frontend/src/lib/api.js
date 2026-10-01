@@ -32,8 +32,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method, path, body) {
-  const opts = { method, headers: { ...CSRF_HEADERS } };
+async function request(method, path, body, { signal } = {}) {
+  const opts = { method, headers: { ...CSRF_HEADERS }, signal };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
@@ -42,6 +42,7 @@ async function request(method, path, body) {
   try {
     r = await fetch(`${BASE}${path}`, opts);
   } catch (e) {
+    if (e.name === "AbortError") throw e;      // cancelled by the caller, not a lost backend
     setOnline(false);
     throw new ApiError(`backend unreachable (${e.message})`, 0, null);
   }
@@ -58,7 +59,7 @@ async function request(method, path, body) {
   return data;
 }
 
-const get  = path       => request("GET", path);
+const get  = (path, opts) => request("GET", path, undefined, opts);
 // POST endpoints answer { ok: false, error } for refusals the UI should show
 // (bad config, scan already running), so those come back as data, not throws.
 async function post(path, body = {}) {
@@ -87,6 +88,9 @@ export function getPosts(params = {}) { return get(`/api/posts${qs(params)}`); }
 export function getPost(platform, postId) {
   return get(`/api/posts/${encodeURIComponent(platform)}/${encodeURIComponent(postId)}`);
 }
+// { posts, media, bytes } over every post the filters match. params: q,
+// platform, author, kind, review (the /api/posts filters; paging is ignored).
+export function getPostsSummary(params = {}, opts) { return get(`/api/posts/summary${qs(params)}`, opts); }
 export function getAuthors()   { return get("/api/authors"); }
 export function getStats()     { return get("/api/stats"); }
 // { totals, by_author, by_kind, by_year, largest, trash }, see docs/API.md "Storage".

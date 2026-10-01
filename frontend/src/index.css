@@ -1836,6 +1836,11 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .big-file-author { flex: 1; min-width: 0; font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .big-file-trash { width: 28px; height: 28px; flex-shrink: 0; }
 
+/* Feed: size of what the filters match, and of the selection */
+.would-free { color: #ffd59a; }
+.would-free::before { content: "·"; margin-right: 10px; color: var(--muted); }
+.select-size { font-size: 12px; font-weight: 800; color: #ffd59a; }
+
 /* ── Narrow layout ──────────────────────────────────────── */
 /* Last in the file on purpose: overrides base rules declared above. */
 @media (max-width: 860px) {
