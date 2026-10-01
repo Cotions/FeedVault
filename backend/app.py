@@ -24,6 +24,7 @@ import organize
 import people
 import scanner
 import sources
+import sync
 import thumbs
 import trash
 import userdata
@@ -678,7 +679,7 @@ def person_accounts(pid):
 
 def _sources_active():
     """{source id: its queued or running sync}."""
-    return {}
+    return sync.active()
 
 
 @app.get("/api/sources")
@@ -748,6 +749,28 @@ def update_source(sid):
     return jsonify({"ok": True, "source": _source_or_404(sid)})
 
 
+@app.post("/api/sources/<int:sid>/sync")
+def sync_source(sid):
+    if sources.row(db.connect(), sid) is None:
+        return jsonify({"ok": False, "error": "no such source"}), 404
+    try:
+        job = sync.sync(sid)
+    except sync.Busy as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    except jobs.BadRequest as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    print(f"[jobs] #{job['id']} {job['kind']} queued")
+    return jsonify({"ok": True, "job": job})
+
+
+@app.post("/api/sources/sync-all")
+def sync_all_sources():
+    queued, skipped, errors = sync.sync_all()
+    if queued:
+        print(f"[jobs] sync all: {len(queued)} queued")
+    return jsonify({"ok": True, "jobs": queued, "skipped": skipped, "errors": errors})
+
+
 @app.delete("/api/sources/<int:sid>")
 def delete_source(sid):
     if sid in _sources_active():
@@ -776,7 +799,8 @@ def scan_start():
 
 def _public_config(cfg):
     return {"media_roots": cfg["media_roots"], "data_directory": cfg["data_directory"],
-            "version": config.__version__, "tools": cfg.get("tools") or {}}
+            "version": config.__version__, "tools": cfg.get("tools") or {},
+            "instaloader": sync.settings(cfg)}
 
 
 @app.get("/api/config")
@@ -788,9 +812,13 @@ def get_config():
 def set_config():
     body = request.get_json(silent=True) or {}
     cfg = config.load()
-    tools = roots = None
+    tools = roots = insta = None
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
+        if error:
+            return jsonify({"ok": False, "error": error})
+    if "instaloader" in body:
+        insta, error = sync.clean_settings(body["instaloader"], sync.settings(cfg))
         if error:
             return jsonify({"ok": False, "error": error})
     if "media_roots" in body:
@@ -804,7 +832,9 @@ def set_config():
     changed = roots is not None and roots != cfg["media_roots"]
     if roots is not None:
         cfg["media_roots"] = roots
-    if tools is not None or roots is not None:
+    if insta is not None:
+        cfg["instaloader"] = insta
+    if tools is not None or roots is not None or insta is not None:
         config.save(cfg)
     if changed:
         scanner.start(roots)

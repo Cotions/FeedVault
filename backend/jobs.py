@@ -48,15 +48,19 @@ class BadRequest(ValueError):
 
 
 class Kind:
-    def __init__(self, name, label, params, build, group, summarize=None):
+    def __init__(self, name, label, params, build, group, summarize=None, start=None, outcome=None,
+                 ended=None, pause=None, describe=None):
         self.name, self.label, self.params = name, label, params
         self.build, self.group, self.summarize = build, group, summarize
+        self.start, self.outcome, self.ended = start, outcome, ended
+        self.pause, self.describe = pause, describe
 
 
 _kinds = {}
 
 
-def register(name, *, label, params, build, group, summarize=None):
+def register(name, *, label, params, build, group, summarize=None, start=None, outcome=None, ended=None,
+             pause=None, describe=None):
     """Add a job kind.
 
     params:    {name: {"type": "choice", "choices": [...]}
@@ -67,8 +71,22 @@ def register(name, *, label, params, build, group, summarize=None):
     group:     lock group, or a function of the params returning one
     summarize: optional, output lines -> (result dict, message) for a job
                that exited 0 and has no rescan target
+    start:     optional, (params, note) -> None, run in the job's thread right before
+               the process starts (no other job of its group is running);
+               an exception fails the job with its message; note(text) adds a
+               [feedvault] line to its log
+    outcome:   optional, (params, exit code, output lines, index result or
+               None) -> (state, result, message) for a job whose process
+               exited and was not cancelled. With it, the rescan folder is
+               indexed whatever the exit code (what a download got before it
+               failed counts too)
+    ended:     optional, public job dict -> None, once the job has ended in
+               any way, recover() included
+    pause:     optional, () -> seconds: once a job of this kind has run,
+               the next one of this kind in its group waits that long
+    describe:  optional, (params, argv) -> label shown instead of ``label``
     """
-    _kinds[name] = Kind(name, label, params, build, group, summarize)
+    _kinds[name] = Kind(name, label, params, build, group, summarize, start, outcome, ended, pause, describe)
 
 
 def kinds():
@@ -145,16 +163,32 @@ class Job:
         self.interrupted = False
 
     def public(self):
-        return {"id": self.id, "kind": self.kind, "label": _kinds[self.kind].label if self.kind in _kinds else self.kind,
+        waits = _cool.get(self.group) if self.state == "queued" and _pauses(self.kind) else None
+        return {"id": self.id, "kind": self.kind, "label": _label(self.kind, self.params, self.argv),
                 "params": self.params, "argv": self.argv, "cwd": self.cwd, "group": self.group,
                 "state": self.state, "created_at": self.created_at, "started_at": self.started_at,
                 "ended_at": self.ended_at, "exit_code": self.exit_code, "rescan": self.rescan,
-                "result": self.result, "message": self.message}
+                "result": self.result, "message": self.message,
+                "waits_until": int(waits) + 1 if waits and waits > time.time() else None}
+
+
+def _label(kind_name, params, argv):
+    kind = _kinds.get(kind_name)
+    if kind is None:
+        return kind_name
+    return kind.describe(params, argv) if kind.describe else kind.label
+
+
+def _pauses(kind_name):
+    kind = _kinds.get(kind_name)
+    return kind is not None and kind.pause is not None
 
 
 _lock = threading.Lock()
 _active = collections.OrderedDict()            # id -> Job, queued and running, oldest first
 _closing = False
+_cool = {}                                     # group -> time.time() before which a pausing kind may not start
+_wake = None                                   # (time, timer) that pumps once a pause is over
 
 
 def _under_root(path, roots):
@@ -203,23 +237,46 @@ def submit(kind_name, params):
 
 
 def _pump():
-    """Start whatever queued jobs may run now, oldest first."""
+    """Start whatever queued jobs may run now, oldest first. A job of a kind
+    with a pause waits until its group's pause is over (and holds the rest
+    of its group, so the queue keeps its order)."""
+    global _wake
     starting = []
     with _lock:
         if _closing:
             return
         running = [j for j in _active.values() if j.state == "running"]
         busy = {j.group for j in running}
+        now, wake = time.time(), None
         for job in _active.values():
             if len(running) + len(starting) >= MAX_RUNNING:
                 break
-            if job.state == "queued" and job.group not in busy:
-                job.state, job.started_at = "running", int(time.time())
+            if job.state != "queued" or job.group in busy:
+                continue
+            until = _cool.get(job.group, 0) if _pauses(job.kind) else 0
+            if until > now:
                 busy.add(job.group)
-                starting.append(job)
+                wake = min(wake or until, until)
+                continue
+            job.state, job.started_at = "running", int(now)
+            busy.add(job.group)
+            starting.append(job)
+        if wake is not None and (_wake is None or wake < _wake[0]):
+            if _wake:
+                _wake[1].cancel()
+            _wake = (wake, threading.Timer(wake - now + 0.05, _woken))
+            _wake[1].daemon = True
+            _wake[1].start()
     for job in starting:
         _save(job)
         threading.Thread(target=_run, args=(job,), daemon=True, name=f"job-{job.id}").start()
+
+
+def _woken():
+    global _wake
+    with _lock:
+        _wake = None
+    _pump()
 
 
 def _killpg(proc, sig):
@@ -239,6 +296,13 @@ def _run(job):
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")
             return
+        kind = _kinds[job.kind]
+        if kind.start:
+            try:
+                kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"))
+            except Exception as e:
+                _finish(job, "failed", message=str(e) or type(e).__name__)
+                return
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}      # the downloaders are Python: live output
         try:
             proc = subprocess.Popen([exe, *job.args], cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
@@ -264,6 +328,13 @@ def _run(job):
         job.exit_code = code
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")
+        elif kind.outcome:
+            index = None
+            if job.rescan:
+                _note(job, f"[feedvault] indexing {job.rescan}")
+                index = _index(job)
+            state, result, message = kind.outcome(job.params, code, list(job.lines), index)
+            _finish(job, state, result=result, message=message)
         elif code != 0:
             _finish(job, "failed", message=_last_line(job) or f"exit code {code}")
         elif job.rescan:
@@ -346,18 +417,31 @@ def _last_line(job):
 
 
 def _finish(job, state, result=None, message=None):
+    kind = _kinds.get(job.kind)
     with _lock:
         if job.interrupted:
             state, message = "interrupted", INTERRUPTED
         job.state, job.result, job.message = state, result, message
         job.ended_at = int(time.time())
         tail = list(job.lines)[-TAIL_KEPT:]
+        if kind and kind.pause and job.proc is not None:     # it ran, so it reached the site
+            _cool[job.group] = time.time() + max(0, kind.pause())
     _save(job, tail)                           # before leaving _active: the log never has a gap
+    _ended(job.public())                       # also before: whoever sees it ended sees its effects
     with _lock:
         _active.pop(job.id, None)
         job.lines.clear()
     _prune()
     _pump()
+
+
+def _ended(public):
+    kind = _kinds.get(public["kind"])
+    if kind and kind.ended:
+        try:
+            kind.ended(public)
+        except Exception as e:                 # a hook must not stop the queue
+            print(f"[jobs] #{public['id']} {public['kind']}: after-job step failed: {e}")
 
 
 def _terminate(job):
@@ -396,6 +480,7 @@ def cancel(job_id):
         public = job.public()                  # as it was: the job may end right after SIGTERM
     if queued:
         _save(job, [])
+        _ended(job.public())
         _prune()
     elif job.proc is not None:                 # else _run sees the flag once it has started it
         _terminate(job)
@@ -408,6 +493,8 @@ def shutdown():
     global _closing
     with _lock:
         _closing = True
+        if _wake:
+            _wake[1].cancel()
         jobs = list(_active.values())
         for job in jobs:
             job.interrupted = True
@@ -424,10 +511,13 @@ def shutdown():
     now = int(time.time())
     for job in jobs:
         with _lock:
-            if job.ended_at is None:
+            ended = job.ended_at is not None
+            if not ended:
                 job.state, job.ended_at, job.message = "interrupted", now, INTERRUPTED
             tail = list(job.lines)[-TAIL_KEPT:]
         _save(job, tail)
+        if not ended:
+            _ended(job.public())
     if jobs:
         print(f"[jobs] stopped {len(jobs)} job{'' if len(jobs) == 1 else 's'}")
 
@@ -435,6 +525,12 @@ def shutdown():
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
+
+def active():
+    """Public dicts of the queued and running jobs, oldest first."""
+    with _lock:
+        return [j.public() for j in _active.values()]
+
 
 def _insert(kind, params, spec, group, cwd, rescan, now):
     conn = db.connect()
@@ -469,12 +565,15 @@ def _prune():
 def recover():
     """At startup: jobs a stopped FeedVault left queued or running."""
     conn = db.connect()
+    ids = [r[0] for r in conn.execute("SELECT id FROM jobs WHERE state IN ('queued', 'running')")]
     # When it really ended is unknown: ended_at stays NULL.
-    n = conn.execute("UPDATE jobs SET state = 'interrupted', message = ?, ended_at = NULL "
-                     "WHERE state IN ('queued', 'running')", (INTERRUPTED,)).rowcount
+    conn.executemany("UPDATE jobs SET state = 'interrupted', message = ?, ended_at = NULL WHERE id = ?",
+                     [(INTERRUPTED, i) for i in ids])
     conn.commit()
-    if n:
-        print(f"[jobs] {n} job{'' if n == 1 else 's'} interrupted when FeedVault last stopped")
+    for i in ids:
+        _ended(get(i))
+    if ids:
+        print(f"[jobs] {len(ids)} job{'' if len(ids) == 1 else 's'} interrupted when FeedVault last stopped")
 
 
 _COLUMNS = "id, kind, params, argv, cwd, lock_group, state, created_at, started_at, ended_at, " \
@@ -482,13 +581,13 @@ _COLUMNS = "id, kind, params, argv, cwd, lock_group, state, created_at, started_
 
 
 def _public(row):
-    kind = _kinds.get(row["kind"])
-    return {"id": row["id"], "kind": row["kind"], "label": kind.label if kind else row["kind"],
-            "params": json.loads(row["params"]), "argv": json.loads(row["argv"]), "cwd": row["cwd"],
+    params, argv = json.loads(row["params"]), json.loads(row["argv"])
+    return {"id": row["id"], "kind": row["kind"], "label": _label(row["kind"], params, argv),
+            "params": params, "argv": argv, "cwd": row["cwd"],
             "group": row["lock_group"], "state": row["state"], "created_at": row["created_at"],
             "started_at": row["started_at"], "ended_at": row["ended_at"], "exit_code": row["exit_code"],
             "rescan": row["rescan"], "result": json.loads(row["result"]) if row["result"] else None,
-            "message": row["message"]}
+            "message": row["message"], "waits_until": None}
 
 
 def listing():
