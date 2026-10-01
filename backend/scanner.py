@@ -68,6 +68,7 @@ def _scan(roots):
               "added": 0, "updated": 0, "missing": 0, "unmatched": 0, "errors": []}
     seen_meta = set()
     unmatched = []                             # (path, size, mtime, reason)
+    copies = []                                # (parsed post, meta mtime), see db.save_copies
 
     for root in roots:
         if not os.path.isdir(root):
@@ -86,7 +87,7 @@ def _scan(roots):
                 report["errors"].append({"path": path, "error": message})
                 unmatched.append((path, *_size_mtime(path), message))
             for post in result.posts:
-                _index_post(conn, post, started, report, seen_meta, unmatched)
+                _index_post(conn, post, started, report, seen_meta, unmatched, copies)
             for n in names:
                 if n not in result.claimed and parsers.is_media(n):
                     path = os.path.join(dirpath, n)
@@ -94,6 +95,7 @@ def _scan(roots):
             conn.commit()
 
     report["missing"] = _mark_missing(conn, seen_meta)
+    db.save_copies(conn, copies, started, prune=True)
     conn.execute("DELETE FROM unmatched")
     conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
                      unmatched)
@@ -108,17 +110,19 @@ def _size_mtime(path):
     return size, mtime
 
 
-def _index_post(conn, post, now, report, seen_meta, unmatched):
+def _index_post(conn, post, now, report, seen_meta, unmatched, copies):
     mtime, size = _stat(post.meta_path)
     existing = conn.execute("SELECT meta_path, meta_mtime, meta_size, missing FROM posts WHERE id = ?",
                             (post.id,)).fetchone()
 
     # The same post downloaded twice into different folders: first one wins
-    # while its file still exists; the copy is reported, not indexed.
+    # while its file still exists; the copy is reported, not indexed, and
+    # recorded with its files for the Duplicates page.
     if (existing and existing["meta_path"] != post.meta_path
             and (existing["meta_path"] in seen_meta or os.path.exists(existing["meta_path"]))):
         unmatched.append((post.meta_path, size, mtime,
                           f"duplicate of {post.id} ({existing['meta_path']})"))
+        copies.append((post, mtime))
         return
 
     # A metadata file that used to describe a different post id.
@@ -159,6 +163,7 @@ def index_dirs(roots, dirs):
         conn = db.connect()
         now = int(time.time())
         report = {"added": 0, "updated": 0}
+        unmatched, copies, indexed = [], [], []
         for d in sorted(set(dirs)):
             real = os.path.realpath(d)
             root = next((r for r in roots
@@ -168,9 +173,17 @@ def index_dirs(roots, dirs):
                 continue
             names = [n for n in os.listdir(d) if not n.startswith(".") and os.path.isfile(os.path.join(d, n))]
             result = parsers.parse_dir(root, d, names)
+            seen = set()
             for post in result.posts:
-                _index_post(conn, post, now, report, set(), [])
+                _index_post(conn, post, now, report, seen, unmatched, copies)
+            indexed.extend(seen)
             conn.execute(f"DELETE FROM unmatched WHERE path IN ({', '.join('?' for _ in result.claimed) or 'NULL'})",
                          [os.path.join(d, n) for n in result.claimed])
+        # A copy that is back keeps its "duplicate of" line; one that became
+        # the post (the first copy was trashed) is no longer a copy.
+        conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
+                         unmatched)
+        conn.executemany("DELETE FROM copies WHERE meta_path = ?", [(p,) for p in indexed])
+        db.save_copies(conn, copies, now, prune=False)
         conn.commit()
         return report
