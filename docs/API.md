@@ -102,8 +102,8 @@ Only **Empty trash** and **purge** (below) remove files for good.
 | POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
 | GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }` |
 | POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }` |
-| GET | `/api/trash/items?offset=&limit=&author=&since=&before=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
-| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "author": …, "since": …, "before": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
+| GET | `/api/trash/items?offset=&limit=&platform=&author=&since=&before=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
+| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "since": …, "before": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
 | GET | `/trash/<key>/thumb` | small JPEG of a trashed entry (no header needed, like `/media`) |
 
 `/api/delete` removes each listed post with all its files (media, posters,
@@ -166,18 +166,19 @@ deletion first:
 }
 ```
 
-- Query parameters, all optional: `author` (an author id, or a handle for
-  authors without one), `since` (Unix seconds: deleted at or after),
+- Query parameters, all optional: `platform`, `author` (an author id, or a
+  handle for authors without one; ids are only unique within a platform, so
+  send `platform` with it), `since` (Unix seconds: deleted at or after),
   `before` (deleted strictly before), `offset` (default 0), `limit`
   (default 60, max 500).
 - `total`, `files` and `bytes` add up every entry the filters match, not just
   one page. `trash` and `authors` cover the whole trash, whatever the filters.
 - `key` is opaque. It names one entry and is what restore and purge take.
-- `files` counts the entry's lines, `bytes` the size of those still in the
-  trash. `items` counts its media items, `of` the post's media count when it
+- `files` and `bytes` (here and in the totals) count the entry's files still
+  in the trash. `items` counts its media items, `of` the post's media count when it
   was deleted (`null` for old lines).
 - `partial`: only some media items of the post were deleted; the rest is still
-  in the index.
+  in the index. Not set when the same call went on to delete the whole post.
 - `missing`: at least one of the entry's files is no longer in the trash
   (moved or deleted by hand). Purging the entry drops its lines.
 - `author` is `null` when the line predates author fields.
@@ -206,7 +207,7 @@ reported. Lines of files already gone are dropped. Response:
 ```
 
 Instead of `keys`, `{ "filter": { … } }` purges every entry the same filters
-as `/api/trash/items` match (`author`, `since`, `before`; each optional, but
+as `/api/trash/items` match (`platform`, `author`, `since`, `before`; each optional, but
 the filter must name at least one, use `/api/trash/empty` for everything).
 The match is made under the same lock as the purge itself. The page sends the
 time it loaded the list as `before`, so nothing trashed after the user saw

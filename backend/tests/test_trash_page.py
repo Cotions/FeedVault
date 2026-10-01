@@ -358,3 +358,39 @@ def test_purge_filter_validation(env, client):
                  {"filter": {"before": True}}, {"filter": {"before": 5}, "keys": ["a"]}):
         assert client.post("/api/trash/purge", json=body, headers=H).status_code == 400, body
     assert client.post("/api/trash/purge", json={"filter": {"before": 5}}).status_code == 403
+
+
+def test_items_one_by_one_until_the_post_goes_is_not_partial(env, client):
+    write_post(env["media"], "C1", 1717243200, ALICE, "carousel", slides=[False, False])
+    scan(env)
+    ids = [m["id"] for m in media_of(client, "C1")]
+    client.post("/api/delete", json={"media": ids}, headers=H)       # the last one takes the post
+    e = items(client)["entries"][0]
+    assert e["partial"] is False and e["items"] == 2
+
+
+def test_items_counts_files_still_in_the_trash(env, client):
+    write_post(env["media"], "P1", 1717243200, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    os.remove(next(line["to"] for line in manifest(env) if line["role"] == "media"))
+    r = items(client)
+    assert r["entries"][0]["files"] == r["files"] == r["trash"]["files"] == 1
+    assert r["trash"]["files"] == client.get("/api/trash", headers=H).get_json()["files"]
+
+
+def test_author_filter_is_per_platform(env, client):
+    write_post(env["media"], "P1", 1717243200, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    # The same author id on another platform (line edited: no second parser yet).
+    lines = manifest(env)
+    twin = [{**line, "post": "tiktok:T1", "platform": "tiktok", "batch": "other"} for line in lines]
+    with open(trash_root(env) / ".manifest.jsonl", "a", encoding="utf-8") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in twin))
+    assert items(client, author="111")["total"] == 2
+    assert [e["post"] for e in items(client, platform="tiktok", author="111")["entries"]] == ["tiktok:T1"]
+    r = client.post("/api/trash/purge", json={"filter": {"platform": "instagram", "author": "111"}},
+                    headers=H).get_json()
+    assert r["entries"] == 1                                           # the twin lines point at the same files
+    assert {line["post"] for line in manifest(env)} == {"tiktok:T1"}

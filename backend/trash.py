@@ -122,7 +122,8 @@ def _move_all(files, roots, post_id, info, report, data_dir):
             size, dest = _move(path, roots, {"post": post_id, "batch": report["batch"], **info, **fields})
             report["bytes"] += size
             report["files"] += 1
-            thumbs.move(data_dir, path, dest)   # the Trash page shows it from there
+            if fields.get("role") == "media":   # thumbnails are keyed by the media file
+                thumbs.move(data_dir, path, dest)   # the Trash page shows it from there
         except (TrashError, OSError) as e:
             ok = False
             report["errors"].append({"path": path, "error": str(e)})
@@ -227,7 +228,7 @@ def empty(roots, data_dir=None):
 # size changed, so the cache misses).
 # ---------------------------------------------------------------------------
 
-_cache = {}                     # manifest path -> ((mtime_ns, size, inode), lines, entries)
+_cache = {}                     # manifest path -> ((mtime_ns, size, inode), lines, entries, entries by key)
 _cache_lock = threading.Lock()
 
 
@@ -253,23 +254,24 @@ def _parse(path):
 
 
 def _load(root):
-    """(lines, entries) of one root's manifest, parsed once per version of the
-    file. Shared between callers: never mutate them."""
+    """(lines, entries, entries by key) of one root's manifest, parsed once per
+    version of the file. Shared between callers: never mutate them."""
     path = _manifest_path(root)
     try:
         st = os.stat(path)
     except OSError:
-        return [], []
+        return [], [], {}
     sig = (st.st_mtime_ns, st.st_size, st.st_ino)
     with _cache_lock:
         hit = _cache.get(path)
     if hit and hit[0] == sig:
-        return hit[1], hit[2]
+        return hit[1:]
     lines = _parse(path)
     entries = _group(root, lines)
+    by_key = {g["key"]: g for g in entries}
     with _cache_lock:
-        _cache[path] = (sig, lines, entries)
-    return lines, entries
+        _cache[path] = (sig, lines, entries, by_key)
+    return lines, entries, by_key
 
 
 def _read_manifest(root):
@@ -359,7 +361,10 @@ def _group(root, lines):
             "posted_at": first.get("posted_at"),
             "items": len(g["media"]),
             "of": max((line["items"] for line in ls if isinstance(line.get("items"), int)), default=None),
-            "partial": any(line.get("partial") is True for line in ls),
+            # Items deleted one by one, then the last one taking the post
+            # with it, in the same call: the whole post is gone, not partial.
+            "partial": any(line.get("partial") is True for line in ls)
+            and not any(line.get("partial") is False for line in ls),
         }
     return list(groups.values())
 
@@ -377,20 +382,26 @@ def _author_key(a):
 
 
 def _measure(g):
-    """(bytes on disk, missing) of an entry, from the files as they are now."""
-    size, missing = 0, False
+    """(bytes, files, missing) of an entry, from the files still in the trash.
+    One lstat per file: a file moved out by hand is only noticed this way."""
+    size = files = 0
+    missing = False
     for line in g["lines"]:
         try:
             st = os.lstat(line["to"])
         except OSError:
             missing = True
             continue
+        files += 1
         size += line["size"] if isinstance(line.get("size"), int) else st.st_size
-    return size, missing
+    return size, files, missing
 
 
-def _matches(g, author=None, since=None, before=None):
+def _matches(g, author=None, since=None, before=None, platform=None):
     p = g["public"]
+    # Author ids and handles are only unique within a platform.
+    if platform is not None and p["platform"] != platform:
+        return False
     if author is not None and _author_key(p["author"]) != author:
         return False
     if since is not None and p["at"] < since:
@@ -400,15 +411,16 @@ def _matches(g, author=None, since=None, before=None):
     return True
 
 
-def items(roots, author=None, since=None, before=None, offset=0, limit=60):
+def items(roots, author=None, since=None, before=None, platform=None, offset=0, limit=60):
     entries = _all_entries(roots)
+    ffmpeg = thumbs.have_ffmpeg()
     out = {"total": 0, "files": 0, "bytes": 0,
            "trash": {"entries": len(entries), "files": 0, "bytes": 0}, "authors": [], "entries": []}
     authors = {}
     for g in entries:
-        size, missing = _measure(g)
+        size, files, missing = _measure(g)
         p = g["public"]
-        out["trash"]["files"] += len(g["lines"])
+        out["trash"]["files"] += files
         out["trash"]["bytes"] += size
         ak = _author_key(p["author"])
         if ak is not None:
@@ -417,21 +429,24 @@ def items(roots, author=None, since=None, before=None, offset=0, limit=60):
                 "entries": 0, "bytes": 0})
             a["entries"] += 1
             a["bytes"] += size
-        if not _matches(g, author, since, before):
+        if not _matches(g, author, since, before, platform):
             continue
         out["total"] += 1
-        out["files"] += len(g["lines"])
+        out["files"] += files
         out["bytes"] += size
         if offset < out["total"] <= offset + limit:
-            out["entries"].append({**p, "files": len(g["lines"]), "bytes": size, "missing": missing,
-                                   "thumb_url": f"/trash/{g['key']}/thumb" if _thumb_source(g) else None})
+            out["entries"].append({**p, "files": files, "bytes": size, "missing": missing,
+                                   "thumb_url": f"/trash/{g['key']}/thumb" if _thumb_source(g, ffmpeg) else None})
     out["authors"] = sorted(authors.values(), key=lambda a: (-a["bytes"], a["handle"] or ""))
     return out
 
 
-def _find(roots, keys):
-    wanted = set(keys)
-    return [g for g in _all_entries(roots) if g["key"] in wanted]
+def _find(roots, key):
+    for root in roots:
+        g = _load(root)[2].get(key)
+        if g is not None:
+            return g
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +460,7 @@ def _inside_trash(path, root):
     return real.startswith(base + os.sep) and real != os.path.join(base, MANIFEST)
 
 
-def _thumb_source(g):
+def _thumb_source(g, ffmpeg=None):
     """(media line, poster path or None) to make the entry's thumbnail from."""
     if not g["media"]:
         return None
@@ -456,27 +471,27 @@ def _thumb_source(g):
         if role == "poster" and (line.get("idx") == m.get("idx") if "idx" in m
                                  else os.path.splitext(line["to"])[0] == os.path.splitext(m["to"])[0]):
             return m, line["to"]
-    return (m, None) if thumbs.have_ffmpeg() else None
+    return (m, None) if (thumbs.have_ffmpeg() if ffmpeg is None else ffmpeg) else None
 
 
 def thumb(roots, key, data_dir):
-    """(path to send, is a generated thumbnail) for an entry, or None.
+    """Path of a thumbnail to send for an entry (or of the trashed image itself
+    when none can be made), or None.
 
     Only files listed in a manifest, and only those that resolve inside that
     root's trash folder, are ever read."""
-    for g in _find(roots, [key]):
-        src = _thumb_source(g)
-        if src is None:
-            return None
-        m, poster = src
-        if not _inside_trash(m["to"], g["root"]) or (poster and not _inside_trash(poster, g["root"])):
-            return None
-        row = {"path": m["to"], "kind": _media_kind(m), "poster_path": poster}
-        out = thumbs.thumb_for(data_dir, row)
-        if out:
-            return out
-        return m["to"] if row["kind"] == "image" else None
-    return None
+    g = _find(roots, key)
+    src = g and _thumb_source(g)
+    if not src:
+        return None
+    m, poster = src
+    if not _inside_trash(m["to"], g["root"]) or (poster and not _inside_trash(poster, g["root"])):
+        return None
+    row = {"path": m["to"], "kind": _media_kind(m), "poster_path": poster}
+    out = thumbs.thumb_for(data_dir, row)
+    if out:
+        return out
+    return m["to"] if row["kind"] == "image" else None
 
 
 # ---------------------------------------------------------------------------

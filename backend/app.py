@@ -191,6 +191,7 @@ def trash_items():
     return jsonify(trash.items(
         _roots(),
         author=request.args.get("author") or None,
+        platform=request.args.get("platform") or None,
         since=_int_arg("since", 0, 0, 2**53) if request.args.get("since") else None,
         before=_int_arg("before", 0, 0, 2**53) if request.args.get("before") else None,
         offset=_int_arg("offset", 0, 0, 10**9),
@@ -199,11 +200,11 @@ def trash_items():
 
 
 def _purge_filter(f):
-    """A purge filter, checked: {author, since, before} with at least one set."""
-    if not isinstance(f, dict) or set(f) - {"author", "since", "before"}:
+    """A purge filter, checked: {platform, author, since, before} with at least one set."""
+    if not isinstance(f, dict) or set(f) - {"platform", "author", "since", "before"}:
         return None
-    out = {k: f.get(k) for k in ("author", "since", "before")}
-    if out["author"] is not None and not (isinstance(out["author"], str) and out["author"]):
+    out = {k: f.get(k) for k in ("platform", "author", "since", "before")}
+    if any(out[k] is not None and not (isinstance(out[k], str) and out[k]) for k in ("platform", "author")):
         return None
     for k in ("since", "before"):
         if out[k] is not None and (not isinstance(out[k], int) or isinstance(out[k], bool) or out[k] < 0):
@@ -218,7 +219,7 @@ def trash_purge():
     if match is not None:
         match = _purge_filter(match)
         if match is None or keys is not None:
-            return jsonify({"ok": False, "error": "filter needs author, since or before (and no keys)"}), 400
+            return jsonify({"ok": False, "error": "filter needs platform, author, since or before (and no keys)"}), 400
     elif not _str_list(keys):
         return jsonify({"ok": False, "error": "keys must be a non-empty list"}), 400
     cfg = config.load()

@@ -33,11 +33,15 @@ function rangeFor(when, now = Date.now()) {
   return {};
 }
 
+// The creator filter's value: author ids and handles are only unique within
+// a platform, so the platform travels with them ("instagram:123").
+const authorValue = a => `${a.platform}:${a.id || a.handle}`;
+
 // "from @someone, deleted today" for the filters in effect.
 function filterText(authors, author, when) {
   const parts = [];
   if (author) {
-    const a = authors?.find(x => (x.id || x.handle) === author);
+    const a = authors?.find(x => authorValue(x) === author);
     parts.push(a ? `from @${a.handle || a.id}` : "from this creator");
   }
   const w = WHEN.find(x => x.value === when);
@@ -138,9 +142,12 @@ export default function Trash() {
   const [range, setRange] = useState(null);       // { key, since, before, asOf }
   const rangeNow = useCallback(() => ({ key: filterKey, ...rangeFor(when), asOf: Math.floor(Date.now() / 1000) + 1 }),
     [filterKey, when]);
+  const [platform, authorId] = author.includes(":") ? [author.slice(0, author.indexOf(":")), author.slice(author.indexOf(":") + 1)] : ["", ""];
   const fetchPage = useCallback((offset, limit, r) => {
-    return getTrashItems({ author, since: r.since, before: r.before, offset, limit });
-  }, [author]);
+    // Capped at the first load, so later pages do not pick up newer deletions.
+    const before = Math.min(r.before ?? Infinity, r.asOf);
+    return getTrashItems({ platform, author: authorId, since: r.since, before, offset, limit });
+  }, [platform, authorId]);
 
   // First page on a new filter; on a reload (after restore or purge) as many
   // entries as were on screen, so the page does not jump back to the top.
@@ -220,7 +227,7 @@ export default function Trash() {
   // after the list was loaded goes with it: `before` is at most that moment.
   function askBulk() {
     const filter = { before: Math.min(range.before ?? Infinity, range.asOf) };
-    if (author) filter.author = author;
+    if (authorId) Object.assign(filter, { platform, author: authorId });
     if (range.since != null) filter.since = range.since;
     setDlgError(null);
     setBulk({ total: result.total, files: result.files, bytes: result.bytes, filter });
@@ -296,7 +303,7 @@ export default function Trash() {
   }
 
   const authors = result.authors || [];
-  const authorKnown = !author || authors.some(a => (a.id || a.handle) === author);
+  const authorKnown = !author || authors.some(a => authorValue(a) === author);
   const anyFilter = author || when;
 
   return (
@@ -324,9 +331,9 @@ export default function Trash() {
               <span>Creator</span>
               <select className="sort-select" value={authorKnown ? author : "__unknown"} onChange={e => setParam({ author: e.target.value })}>
                 <option value="">All</option>
-                {!authorKnown && <option value="__unknown" disabled>{author}</option>}
+                {!authorKnown && <option value="__unknown" disabled>{authorId}</option>}
                 {authors.map(a => (
-                  <option key={`${a.platform}:${a.id || a.handle}`} value={a.id || a.handle}>
+                  <option key={authorValue(a)} value={authorValue(a)}>
                     @{a.handle || a.id} · {platformLabel(a.platform)} ({a.entries}, {fmtBytes(a.bytes)})
                   </option>
                 ))}
