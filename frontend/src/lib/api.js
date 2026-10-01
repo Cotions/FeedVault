@@ -228,3 +228,27 @@ export function getJobLog(id, after = 0, opts) { return get(`/api/jobs/${id}/log
 export function cancelJob(id) { return post(`/api/jobs/${id}/cancel`); }
 // { tool: "/abs/path" or "" for PATH } → { ok, config } or { ok: false, error }
 export function saveToolPaths(tools) { return post("/api/config", { tools }); }
+
+/* ── Sources (see docs/API.md "Sources") ─────────────────── */
+
+// { sources: [source], suggestions: [suggestion] }
+export function getSources() { return get("/api/sources"); }
+// { tool, target (a handle or profile URL), folder?, person?, account?, options? } → { ok, source }
+export function createSource(body) { return post("/api/sources", body); }
+// options: { full_history?, session? } → { ok, source }
+export function updateSource(id, options) { return post(`/api/sources/${id}`, { options }); }
+// The folder, files and posts stay → { ok }; 409 while its sync is queued or running
+export async function deleteSource(id) {
+  try {
+    return await request("DELETE", `/api/sources/${id}`);
+  } catch (e) {
+    if (e.body && typeof e.body === "object") return e.body;
+    throw e;
+  }
+}
+// → { ok, job } or { ok: false, error } (already queued, cannot be synced)
+export function syncSource(id) { return post(`/api/sources/${id}/sync`); }
+// → { ok, jobs, skipped, errors: [{ source, error }] }
+export function syncAllSources() { return post("/api/sources/sync-all"); }
+// { session?, pause? } → { ok, config } or { ok: false, error }
+export function saveInstaloaderSettings(settings) { return post("/api/config", { instaloader: settings }); }

@@ -9,6 +9,8 @@ import { accountKey, accountRef, formerHandles } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import CreatorPicker from "../components/CreatorPicker";
+import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
+import { useSources } from "../lib/sources";
 
 function AccountRow({ account: a, busy, onUnlink }) {
   const url = safeUrl(a.url);
@@ -60,6 +62,8 @@ export default function PersonPage() {
   const [notes,    setNotes]    = useState(null);     // edited notes, null when untouched
   const [confirm,  setConfirm]  = useState(false);
   const [dlgError, setDlgError] = useState(null);
+  const [removing, setRemoving] = useState(null);     // the source to remove
+  const sources = useSources();
 
   const linked = useMemo(() => new Set((p?.accounts || []).map(accountKey)), [p]);
 
@@ -117,6 +121,7 @@ export default function PersonPage() {
     );
   }
 
+  const mine = (sources.data?.sources || []).filter(s => s.person?.id === p.id);
   const scoped = path => `${path}?${new URLSearchParams({ person: p.id })}`;
   const notesValue = notes ?? p.notes;
 
@@ -196,6 +201,22 @@ export default function PersonPage() {
       </section>
 
       <section className="person-section">
+        <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
+        {mine.length === 0 ? (
+          <div className="empty">
+            {sources.data ? "Nothing to sync yet. Add a profile below to download their new posts from here." : "Loading…"}
+          </div>
+        ) : (
+          <ul className="source-list">
+            {mine.map(s => (
+              <SourceRow key={s.id} source={s} job={sources.jobOf(s)} onSync={sources.sync} onRemove={setRemoving} />
+            ))}
+          </ul>
+        )}
+        <AddSource person={p.id} onAdded={sources.reload} />
+      </section>
+
+      <section className="person-section">
         <h3 className="card-title">Notes</h3>
         <textarea
           className="person-notes"
@@ -213,6 +234,8 @@ export default function PersonPage() {
           </div>
         )}
       </section>
+
+      <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
 
       <ConfirmDialog
         open={confirm}

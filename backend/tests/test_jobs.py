@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -539,3 +540,119 @@ def test_rescan_skips_what_a_scan_skips(runner):
     write_post(folder / ".hidden", "P4", 1717243500, ALICE, "image")
     runner["kind"]("dl", "pass", rescan=str(folder))
     assert ended(jobs.submit("dl", {})["id"])["result"] == {"added": 1, "updated": 0}
+
+
+# ---------------------------------------------------------------------------
+# Leftover processes after a crash
+# ---------------------------------------------------------------------------
+
+# A FeedVault that starts a long job, then dies without stopping it.
+CRASHER = """
+import os, signal, sys, time
+sys.path[:0] = [{backend!r}, {tests!r}]
+import config, db, jobs
+db.init(config.db_path(config.load()))
+jobs.register("long", label="long", params={{}}, group="g", build=lambda p: {{"tool": sys.executable, "args": [
+    "-c", "import subprocess, sys, time\\n"
+          "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(1000)'])\\n"
+          "open({pids!r}, 'w').write(f'{{c.pid}}')\\n"
+          "time.sleep(1000)"]}})
+job = jobs.submit("long", {{}})
+while not os.path.exists({pids!r}):
+    time.sleep(0.02)
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+def test_crash_leaves_a_process_that_the_next_start_stops(runner):
+    import db
+    pids = runner["tmp"] / "pids"
+    backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    crasher = subprocess.run([sys.executable, "-c", CRASHER.format(
+        backend=backend, tests=os.path.join(backend, "tests"), pids=str(pids))], timeout=30)
+    assert crasher.returncode == -signal.SIGKILL
+    [row] = db.connect().execute("SELECT id, state, pid, pid_start, pid_exe FROM jobs").fetchall()
+    leader, child = row["pid"], int(pids.read_text())
+    try:
+        assert row["state"] == "running" and alive(leader) and alive(child)
+        assert jobs.identity(leader) == (row["pid_start"], row["pid_exe"])
+        assert os.path.realpath(row["pid_exe"]) == os.path.realpath(sys.executable)
+        jobs.recover()                                 # the next start
+        wait_for(lambda: not alive(leader) and not alive(child))
+        assert jobs.get(row["id"])["state"] == "interrupted"
+    finally:
+        for pid in (leader, child):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def bystander():
+    """A process in a group of its own that FeedVault did not start."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1000)"], start_new_session=True)
+    wait_for(lambda: jobs.identity(proc.pid))
+    return proc
+
+
+@pytest.mark.parametrize("change", ["start", "exe", "gone", "none"])
+def test_only_the_exact_process_is_stopped(runner, change):
+    import db
+    proc = bystander()
+    try:
+        start, exe = jobs.identity(proc.pid)
+        pid = proc.pid
+        if change == "start":
+            start += 1                                 # the pid was reused by another process
+        elif change == "exe":
+            exe = "/usr/bin/instaloader"
+        elif change == "gone":
+            pid = 2 ** 22 + 1                          # above pid_max: no such process
+        elif change == "none":
+            start = exe = None                         # recorded without an identity
+        conn = db.connect()
+        with conn:
+            conn.execute("INSERT INTO jobs(kind, params, argv, cwd, lock_group, state, created_at, started_at, "
+                         "pid, pid_start, pid_exe) VALUES ('x', '{}', '[\"x\"]', '/', 'g', 'running', 1, 2, ?, ?, ?)",
+                         (pid, start, exe))
+        jobs.recover()
+        time.sleep(0.3)
+        assert proc.poll() is None and alive(proc.pid)
+        assert conn.execute("SELECT state FROM jobs").fetchone()[0] == "interrupted"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_exact_match_is_stopped_even_when_it_ignores_sigterm(runner):
+    import db
+    proc = subprocess.Popen([sys.executable, "-c", "import signal, time\n"
+                             "signal.signal(signal.SIGTERM, signal.SIG_IGN)\nprint('ready', flush=True)\n"
+                             "time.sleep(1000)"], start_new_session=True, stdout=subprocess.PIPE)
+    try:
+        proc.stdout.readline()
+        start, exe = jobs.identity(proc.pid)
+        conn = db.connect()
+        with conn:
+            conn.execute("INSERT INTO jobs(kind, params, argv, cwd, lock_group, state, created_at, started_at, "
+                         "pid, pid_start, pid_exe) VALUES ('x', '{}', '[\"x\"]', '/', 'g', 'running', 1, 2, ?, ?, ?)",
+                         (proc.pid, start, exe))
+        t0 = time.monotonic()
+        jobs.recover()
+        assert proc.wait(5) == -signal.SIGKILL and time.monotonic() - t0 >= jobs.KILL_AFTER
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_running_job_records_its_process(runner):
+    import db
+    runner["gate_kind"]("gated", "g")
+    gate = runner["tmp"] / "gate"
+    job = jobs.submit("gated", {"gate": str(gate)})
+    wait_for(lambda: state(job["id"]) == "running")
+    row = wait_for(lambda: db.connect().execute("SELECT pid, pid_start, pid_exe FROM jobs WHERE id = ? "
+                                                "AND pid IS NOT NULL", (job["id"],)).fetchone())
+    assert jobs.identity(row["pid"]) == (row["pid_start"], row["pid_exe"])
+    gate.touch()
+    assert ended(job["id"])["state"] == "done"

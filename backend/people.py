@@ -282,7 +282,8 @@ def link(conn, pid, add, remove, now):
 
 def merge(conn, ids, name, accounts, now):
     """Fold several people (and accounts) into the first id: its links,
-    notes and name stay, the others' accounts move to it and they are gone."""
+    notes and name stay, the others' accounts and sources move to it and
+    they are gone."""
     keep = ids[0]
     if name is not None and not _name_free(conn, name, but=ids):
         raise Refused("a person with that name exists")
@@ -293,6 +294,7 @@ def merge(conn, ids, name, accounts, now):
         notes = [rows[i]["notes"].strip() for i in ids if rows[i]["notes"].strip()]
         for other in ids[1:]:
             conn.execute("UPDATE person_accounts SET person_id = ? WHERE person_id = ?", (keep, other))
+            conn.execute("UPDATE sources SET person_id = ? WHERE person_id = ?", (keep, other))
             conn.execute("DELETE FROM people WHERE id = ?", (other,))
         _attach(conn, keep, accounts, now)
         conn.execute("UPDATE people SET notes = ? WHERE id = ?", ("\n\n".join(notes)[:MAX_NOTES], keep))

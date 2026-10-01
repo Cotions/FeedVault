@@ -1,7 +1,7 @@
 """The user's own data, mirrored to JSON.
 
 The index is derived from the media folders and rebuilds from a rescan. A few
-tables are not: review decisions, tags, collections, people, later sources. Each one is
+tables are not: review decisions, tags, collections, people, sources. Each one is
 registered here once, and gets the same treatment:
 
 - written to ``<data_dir>/userdata/<name>.json`` shortly after it changes
@@ -90,6 +90,19 @@ register("person_accounts", "person_accounts", ("platform", "author_id", "person
                  "SELECT id, :platform, :author_id, COALESCE(:at, 0) FROM people WHERE name = :person"))
 # "Not the same person": keyed by the group's accounts, like duplicates.
 register("dismissed_suggestions", "dismissed_suggestions", ("key", "at"), "key")
+# Sources by tool and target, their person by name (after people). The last
+# sync's outcome travels with them; the job it points at does not (jobs are
+# not user data). A row without its platform or folder is skipped.
+register("sources", "sources", ("tool", "target", "platform", "author_id", "person", "folder", "options",
+                                "created_at", "last_sync_at", "last_result"), ("tool", "target"),
+         select="SELECT s.tool, s.target, s.platform, s.author_id, p.name, s.folder, s.options, s.created_at, "
+                "s.last_sync_at, s.last_result FROM sources s LEFT JOIN people p ON p.id = s.person_id "
+                "ORDER BY s.tool, s.target",
+         insert=("INSERT OR IGNORE INTO sources(person_id, platform, author_id, tool, target, folder, options, "
+                 "created_at, last_sync_at, last_result) "
+                 "SELECT (SELECT id FROM people WHERE name = :person), :platform, :author_id, :tool, :target, "
+                 ":folder, COALESCE(:options, '{}'), COALESCE(:created_at, 0), :last_sync_at, :last_result "
+                 "WHERE :platform IS NOT NULL AND :folder IS NOT NULL",))
 
 
 def path(data_dir, name):

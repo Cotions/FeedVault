@@ -2,7 +2,7 @@
 
 Everything here is derived from the media folders and can be rebuilt by a
 rescan, except the user's own tables (review decisions, tags,
-collections, people). Those are mirrored to JSON files by
+collections, people, sources). Those are mirrored to JSON files by
 userdata.py so a rebuild can restore them.
 """
 import glob
@@ -321,10 +321,46 @@ def _migrate_11(conn):
         )""")
 
 
+def _migrate_12(conn):
+    """Sources (sources.py): where a person's or an account's posts are
+    downloaded from, a tool and its target, and the folder it writes to. User
+    data, mirrored to JSON by userdata.py; one source per tool and target.
+    person_id is set for a source added to a person before any of its posts
+    is indexed; once the source has an account, the account's person wins
+    (see sources.owner)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sources (
+            id           INTEGER PRIMARY KEY,
+            person_id    INTEGER REFERENCES people(id) ON DELETE SET NULL,
+            platform     TEXT NOT NULL,
+            author_id    TEXT,                         -- the account, as indexed, or NULL before its first post
+            tool         TEXT NOT NULL,
+            target       TEXT NOT NULL,                -- what the tool is given: a handle, a URL
+            folder       TEXT NOT NULL,                -- absolute, inside a media root
+            options      TEXT NOT NULL DEFAULT '{}',   -- JSON object, see sources.clean_options
+            created_at   INTEGER NOT NULL,
+            last_sync_at INTEGER,                      -- when the last sync ended
+            last_job_id  INTEGER,
+            last_result  TEXT,                         -- JSON {state, error, message, added}, or NULL
+            UNIQUE (tool, target)
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS sources_person ON sources(person_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS sources_account ON sources(platform, author_id)")
+
+
+def _migrate_13(conn):
+    """A running job's process (jobs.py): pid, start time in clock ticks since
+    boot (field 22 of /proc/<pid>/stat) and executable, so the next start
+    can stop a process a killed FeedVault left behind, and nothing else."""
+    for column in ("pid INTEGER", "pid_start INTEGER", "pid_exe TEXT"):
+        conn.execute(f"ALTER TABLE jobs ADD COLUMN {column}")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
-              _migrate_9, _migrate_10, _migrate_11]
+              _migrate_9, _migrate_10, _migrate_11, _migrate_12,
+              _migrate_13]
 
 BACKUPS_KEPT = 3
 

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getAuthors, getPeople, getSuggestions, createPerson, mergePeople, linkAccounts, dismissSuggestion } from "../lib/api";
+import { getAuthors, getPeople, getSuggestions, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
@@ -10,6 +10,8 @@ import { accountKey, accountRef, accountText, matchedFormer, matches, personPath
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import SelectionBar from "../components/SelectionBar";
+import { AddSource, RemoveSourceDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton } from "../components/Sources";
+import { useSources, useSyncAll } from "../lib/sources";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -20,7 +22,38 @@ function freeName(name, people) {
   for (let i = 2; ; i++) if (!taken.has(`${name} ${i}`.toLowerCase())) return `${name} ${i}`;
 }
 
-function PersonCard({ person: p, index, selectMode, selected, onToggle }) {
+/* A card's sources: which one to show (syncing, else a failed one, else
+   the latest sync), its job, and those not syncing already. */
+function cardSync(sources, jobOf) {
+  if (!sources?.length) return null;
+  const jobs = sources.map(jobOf);
+  const job = jobs.find(j => j?.state === "running") || jobs.find(Boolean) || null;
+  const shown = sources[jobs.indexOf(job)]
+    || sources.find(s => s.last_result?.state === "failed")
+    || [...sources].sort((a, b) => (b.last_sync_at || 0) - (a.last_sync_at || 0))[0];
+  return { shown, job, idle: sources.filter((s, i) => !jobs[i]), sources };
+}
+
+// Under the card's name: how the last sync went.
+function CardSyncStatus({ sync }) {
+  if (!sync) return null;
+  return <SourceStatus source={sync.shown} job={sync.job} compact />;
+}
+
+// Sync every source of the card that is not syncing already.
+function CardSyncButton({ sync, onSync }) {
+  if (!sync) return null;
+  return (
+    <SyncButton
+      source={sync.idle[0] || sync.shown}
+      job={sync.idle.length ? null : sync.job}
+      small
+      onSync={() => sync.idle.forEach(onSync)}
+    />
+  );
+}
+
+function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync }) {
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
@@ -34,6 +67,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle }) {
             </span>
           ))}
         </span>
+        <CardSyncStatus sync={sync} />
       </span>
       <span className="person-stats">
         <span className="creator-count">{fmtInt(p.count)}</span>
@@ -53,11 +87,12 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle }) {
       ) : (
         <Link to={personPath(p.id)} className="creator-main" title={`Open ${p.name}`}>{body}</Link>
       )}
+      {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
   );
 }
 
-function AccountCard({ account: a, index, query, selectMode, selected, onToggle }) {
+function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync }) {
   const former = matchedFormer(a, query);
   const body = (
     <>
@@ -68,6 +103,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle 
           {a.name && a.name !== a.handle ? `${a.name} · ` : ""}{platformLabel(a.platform)}
           {former && ` · was @${former}`}
         </span>
+        <CardSyncStatus sync={sync} />
       </span>
       <span className="creator-count">{a.count}</span>
     </>
@@ -95,6 +131,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle 
           <Icon name="review" size={15} />
         </Link>
       )}
+      {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
   );
 }
@@ -148,6 +185,54 @@ function Suggestions({ data, busy, onLink, onDismiss }) {
   );
 }
 
+// "Sync these?": profile folders already downloaded with instaloader, offered
+// as sources. Nothing is added until the user says so.
+function SourceSuggestions({ list, busy, onAdd, onAddAll }) {
+  const [all, setAll] = useState(false);
+  if (!list?.length) return null;
+  const shown = all ? list : list.slice(0, SUGGESTIONS_SHOWN);
+  return (
+    <section className="suggestions" aria-label="Source suggestions">
+      <div className="suggestions-head">
+        <h3 className="card-title">Sync these?</h3>
+        <span className="page-count">{fmtInt(list.length)} instaloader folder{list.length === 1 ? "" : "s"} without a source</span>
+        <div className="page-head-spacer" />
+        {list.length > SUGGESTIONS_SHOWN && (
+          <button type="button" className="btn-ghost" onClick={() => setAll(a => !a)}>
+            {all ? "Show fewer" : `Show all ${fmtInt(list.length)}`}
+          </button>
+        )}
+        <button type="button" className="btn-secondary" disabled={busy} onClick={onAddAll}>
+          <Icon name="plus" size={13} />Add all
+        </button>
+      </div>
+      <ul className="suggestion-list">
+        {shown.map(s => (
+          <li key={s.folder} className="suggestion source-suggestion">
+            <div className="suggestion-accounts">
+              <span className="chip platform-chip" title={platformLabel(s.platform)}>{platformShort(s.platform)} @{s.target}</span>
+              {s.person && <span className="suggestion-into">for <Link to={personPath(s.person.id)} className="text-link">{s.person.name}</Link></span>}
+            </div>
+            <div className="suggestion-why">
+              <code className="source-folder" title={s.folder}>{s.folder}</code>
+              <span>{fmtInt(s.count)} posts indexed</span>
+            </div>
+            <div className="suggestion-actions">
+              <button type="button" className="btn-primary" disabled={busy} onClick={() => onAdd(s)}>
+                <Icon name="plus" size={14} /> Add
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function suggestionBody(s) {
+  return { tool: s.tool, target: s.target, folder: s.folder, account: s.account };
+}
+
 export default function Creators() {
   const { refreshKey } = useScan();
   const toast = useToast();
@@ -161,6 +246,10 @@ export default function Creators() {
   const [busy,   setBusy]   = useState(false);
   const [merge,  setMerge]  = useState(null);                // { name, error } while the dialog is open
   const nameRef = useRef(null);
+  const sources = useSources();
+  const syncAll = useSyncAll();
+  const [removing, setRemoving] = useState(null);           // the source to remove
+  const [addAll,   setAddAll]   = useState(null);           // { error } while that dialog is open
 
   const data = authorsApi.data;
   const peopleAll = useMemo(() => peopleApi.data || [], [peopleApi.data]);
@@ -186,6 +275,42 @@ export default function Creators() {
   const canMerge = chosen.length > 0 && !(chosenPeople.length === 1 && chosenAccounts.length === 0);
 
   function reload() { setVersion(v => v + 1); }
+
+  // Sources by the card that shows them: a person's (theirs or their
+  // accounts'), else an unlinked account's. The rest (no posts yet, no
+  // person) are listed on their own.
+  const sourceList = useMemo(() => sources.data?.sources || [], [sources.data]);
+  const cardSources = useMemo(() => {
+    const m = new Map();
+    for (const src of sourceList) {
+      const k = src.person ? `person:${src.person.id}` : src.account ? `account:${accountKey(src.account)}` : null;
+      if (k) m.set(k, [...(m.get(k) || []), src]);
+    }
+    return m;
+  }, [sourceList]);
+  const shownAccounts = useMemo(() => new Set((data || []).map(accountKey)), [data]);
+  const loose = sourceList.filter(src => !src.person && !(src.account && shownAccounts.has(accountKey(src.account))));
+  const syncOf = k => cardSync(cardSources.get(k), sources.jobOf);
+
+  async function addSuggested(list) {
+    setBusy(true);
+    let added = 0, failed = null;
+    try {
+      for (const s of list) {
+        const r = await createSource(suggestionBody(s));
+        if (r?.ok) added++;
+        else failed = failed || `@${s.target}: ${r?.error || "could not add"}`;
+      }
+    } catch (err) {
+      failed = err.message;
+    } finally {
+      setBusy(false);
+      sources.reload();
+    }
+    if (added) toast(`${added} source${added === 1 ? "" : "s"} added.`);
+    if (failed) toast(failed, "err");
+    return !failed;
+  }
 
   function askMerge() {
     const name = chosenPeople[0]?.name || freeName(suggestName(chosenAccounts) || "New person", peopleAll);
@@ -281,6 +406,29 @@ export default function Creators() {
       </div>
 
       {!sel.active && !filter && (
+        <section className="sources-panel" aria-label="Sources">
+          <AddSource onAdded={sources.reload} />
+          <SyncAllBar count={sourceList.length} syncAll={syncAll} />
+          {loose.length > 0 && (
+            <ul className="source-list">
+              {loose.map(src => (
+                <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving} />
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {!sel.active && !filter && (
+        <SourceSuggestions
+          list={sources.data?.suggestions}
+          busy={busy}
+          onAdd={s => addSuggested([s])}
+          onAddAll={() => setAddAll({ error: null })}
+        />
+      )}
+
+      {!sel.active && !filter && (
         <Suggestions data={suggestApi.data} busy={busy} onLink={linkSuggestion} onDismiss={dismiss} />
       )}
 
@@ -304,6 +452,8 @@ export default function Creators() {
                     selectMode={sel.active}
                     selected={sel.isSelected(`person:${p.id}`)}
                     onToggle={shift => sel.toggle(index(`person:${p.id}`), shift)}
+                    sync={syncOf(`person:${p.id}`)}
+                    onSync={sources.sync}
                   />
                 ))}
               </div>
@@ -324,6 +474,8 @@ export default function Creators() {
                     selectMode={sel.active}
                     selected={sel.isSelected(`account:${accountKey(a)}`)}
                     onToggle={shift => sel.toggle(index(`account:${accountKey(a)}`), shift)}
+                    sync={a.id != null ? syncOf(`account:${accountKey(a)}`) : null}
+                    onSync={sources.sync}
                   />
                 ))}
               </div>
@@ -340,6 +492,24 @@ export default function Creators() {
           </button>
         </SelectionBar>
       )}
+
+      <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
+
+      <ConfirmDialog
+        open={!!addAll}
+        title={`Add ${fmtInt(sources.data?.suggestions?.length || 0)} sources?`}
+        confirmLabel="Add all"
+        busy={busy}
+        error={addAll?.error}
+        onConfirm={async () => {
+          if (await addSuggested(sources.data?.suggestions || [])) setAddAll(null);
+          else setAddAll({ error: "Some could not be added; see the messages." });
+        }}
+        onCancel={() => setAddAll(null)}
+      >
+        Every instaloader folder listed becomes a source, with the profile name shown. Nothing is
+        downloaded until you sync; each first sync starts after the newest post already in the folder.
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={!!merge}

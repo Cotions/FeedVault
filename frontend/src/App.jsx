@@ -150,7 +150,8 @@ export default function App() {
       if (j.id <= since || told.has(j.id) || !ENDED.has(j.state)) continue;
       told.add(j.id);
       // Which tool or source, for jobs that name one ("Done, yt-dlp: 2024.08.06").
-      const what = Object.values(j.params || {}).join(" ");
+      // A source sync names its profile in its label, not its params (an id).
+      const what = j.params?.source ? j.label : Object.values(j.params || {}).join(" ");
       const head = what ? `, ${what}` : "";
       if (j.state === "done") toast(`Done${head}: ${j.message}`);
       else if (j.state === "failed") toast(`Failed${head}: ${j.message}`, "err");

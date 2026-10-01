@@ -138,3 +138,25 @@ def gallery_dl_case(case, folder, media=True):
             with open(path, "wb") as f:        # music, subtitles
                 f.write(b"ID3" + b"\x00" * 32)
     return names
+
+
+# --- instaloader without metadata -------------------------------------------
+
+def write_filename_post(folder, target, shortcode, ts, slides=1, video=False):
+    """Write one post as instaloader does with save_metadata off and the
+    filename pattern ``{target}-{date_utc:%Y-%m-%d}-{shortcode}`` (``_N`` per
+    carousel item): media only, mtime set to the post time. Returns the paths."""
+    os.makedirs(folder, exist_ok=True)
+    stem = f"{target}-{datetime.fromtimestamp(ts, timezone.utc):%Y-%m-%d}-{shortcode}"
+    colour = tuple((sum(map(ord, shortcode)) * k) % 256 for k in (3, 7, 11))
+    paths = []
+    for i in range(1, slides + 1):
+        base = os.path.join(folder, f"{stem}_{i}" if slides > 1 else stem)
+        if video:
+            fake_video(base + ".mp4")
+            paths.append(base + ".mp4")
+        png(base + ".jpg", colour)
+        paths.append(base + ".jpg")
+    for p in paths:
+        os.utime(p, (ts, ts))
+    return paths

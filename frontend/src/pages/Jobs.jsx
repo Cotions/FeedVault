@@ -86,7 +86,8 @@ function StateChip({ state }) {
 }
 
 function JobTitle({ job }) {
-  const params = Object.values(job.params || {});
+  // A source sync's label names its profile; its param is only an id.
+  const params = job.params?.source ? [] : Object.values(job.params || {});
   return (
     <span className="job-title">
       <span className="dim mono">#{job.id}</span> {job.label}
@@ -139,7 +140,9 @@ export default function Jobs() {
         <JobTitle job={j} />
         <code className="job-argv" title={j.argv.join(" ")}>{j.argv.join(" ")}</code>
         <span className="dim mono job-when" title={fmtFullDate(j.started_at ?? j.created_at)}>
-          {j.state === "running" ? `started ${fmtAgo(j.started_at)}` : `queued ${fmtAgo(j.created_at)}`}
+          {j.state === "running" ? `started ${fmtAgo(j.started_at)}`
+            : j.waits_until ? `pause, starts at ${new Date(j.waits_until * 1000).toLocaleTimeString()}`
+            : `queued ${fmtAgo(j.created_at)}`}
         </span>
         {j.id !== shown?.id && (
           <button type="button" className="btn-ghost" onClick={() => pick(j.id)}>Show log</button>
