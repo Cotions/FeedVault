@@ -77,7 +77,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/posts/summary?q=&platform=&author=&kind=&review=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/authors` | `[{ "platform", "id", "handle", "name", "count", "bytes" }]`, most posts first |
 | GET | `/api/storage` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
-| GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }` |
+| GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
@@ -207,8 +207,9 @@ Scan status:
 ```
 
 - `totals.posts` counts every post in the index (the same number as
-  `/api/stats`); `media` and `bytes` leave out media items marked missing, so
-  they can be lower than the `/api/stats` figures.
+  `/api/stats`); `media` and `bytes` leave out media items marked missing.
+  `bytes` therefore equals `/api/stats` `bytes`; `media` can be lower than its
+  `media`, which counts every indexed item.
 - `by_author`: one row per author id (posts without an author are only in the
   totals), biggest first. Handle and name are the newest post's, as in
   `/api/authors`. `kept_bytes` is the share in posts marked kept,

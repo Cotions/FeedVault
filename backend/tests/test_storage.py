@@ -102,6 +102,7 @@ def test_missing_media_excluded(env, client):
     assert (alice["posts"], alice["media"], alice["bytes"]) == (1, 0, 0)
     assert next(a for a in get(client, "/api/authors") if a["id"] == "111")["bytes"] == 0
     assert get(client, "/api/posts/summary") == {"posts": 2, "media": 1, "bytes": here[1]}
+    assert get(client, "/api/stats")["bytes"] == s["totals"]["bytes"]
     gone = get(client, "/api/posts?author=111")["posts"][0]
     assert (gone["media_count"], gone["bytes"]) == (1, 0)
 

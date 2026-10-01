@@ -606,7 +606,7 @@ def stats(conn):
         "media": one("SELECT COUNT(*) FROM media"),
         "authors": one("SELECT COUNT(DISTINCT platform || ':' || author_id) FROM posts "
                        "WHERE author_id IS NOT NULL"),
-        "bytes": one("SELECT COALESCE(SUM(size), 0) FROM media"),
+        "bytes": one("SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0"),
         "missing": one("SELECT COUNT(*) FROM posts WHERE missing = 1"),
         "kept": one("SELECT COUNT(*) FROM decisions d JOIN posts p ON p.id = d.post_id "
                     "WHERE d.decision = 'keep'"),
