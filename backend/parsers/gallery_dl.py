@@ -120,6 +120,12 @@ def _tiktok_url(post, d):
     return f"https://www.tiktok.com/@{post.author_handle}/{kind}/{post.post_id}"
 
 
+def _tiktok_hashtags(d):
+    tags = [t.get("hashtagName") for t in d.get("textExtra") or () if isinstance(t, dict)]
+    tags += [c.get("title") for c in d.get("challenges") or () if isinstance(c, dict)]
+    return [t for t in tags if isinstance(t, str) and t]
+
+
 # One entry per gallery-dl category. Values are a key, a tuple of keys into
 # nested dicts, or a list of those to try in order.
 #   post_id      the key all files of one post share
@@ -153,8 +159,10 @@ SITES = {
         "likes": [("stats", "diggCount"), ("statsV2", "diggCount")],
         "comments": [("stats", "commentCount"), ("statsV2", "commentCount")],
         "views": [("stats", "playCount"), ("statsV2", "playCount")],
+        "hashtags": _tiktok_hashtags,
         "url": _tiktok_url,
         "posters": {"cover"},
+        "sides": {"audio", "subtitle"},
     },
 }
 
@@ -223,13 +231,14 @@ def _post_from(category, entries, dirpath):
     site = _site(category)
     entries.sort(key=lambda e: (_num(e[1]), e[0]))
     files = [e for e in entries if "filename" in e[1]]
-    # The first file's JSON names the post (it stays put when later items are
-    # deleted); a text-only post only has its post-level JSON.
-    head = files[0] if files else entries[0]
-    d = head[1]
-
     posters = site.get("posters", set())
     sides = site.get("sides", set())
+    # The first media file's JSON names the post (it stays put when later
+    # items are deleted); a text-only post only has its post-level JSON.
+    main = [e for e in files if e[1].get("type") not in posters | sides]
+    head = (main or files or entries)[0]
+    d = head[1]
+
     media, side_files, pending_posters = [], [], []
     expected = []                              # kinds the JSONs list, present or not
     for name, fd, fname in files:

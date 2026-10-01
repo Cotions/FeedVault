@@ -335,3 +335,57 @@ def test_twitter_post_json_beside_file_jsons(tmp_path):
     assert len(r.posts) == 1 and len(r.posts[0].media) == 4
     assert r.posts[0].meta_path.endswith("491623932184993703_1.jpg.json")
     assert str(tmp_path / "491623932184993703.json") in r.posts[0].side_files
+
+
+# --- tiktok -------------------------------------------------------------------
+
+def test_tiktok_video_with_cover(tmp_path):
+    gallery_dl_case("tiktok/video", tmp_path)
+    r = parse(tmp_path)
+    p = r.posts[0]
+    assert p.id == "tiktok:3914719032600086255"
+    assert p.kind == "video"
+    assert [(m.kind, os.path.basename(m.path), os.path.basename(m.poster_path)) for m in p.media] == [
+        ("video", "3914719032600086255 Example text.mp4", "3914719032600086255 Example text [cover].jpg")]
+    assert (p.author_id, p.author_handle, p.author_name) == ("8419594197139637801", "example_user6", "Example User 6")
+    assert p.posted_at == 1734520379
+    assert (p.likes, p.comments, p.views) == (3900000, 11000, 32700000)
+    assert p.text == "Example text"
+    assert r.claimed == set(os.listdir(tmp_path))
+
+
+def test_tiktok_slideshow_music_is_claimed_not_media(tmp_path):
+    gallery_dl_case("tiktok/photos", tmp_path)
+    r = parse(tmp_path)
+    assert len(r.posts) == 1
+    p = r.posts[0]
+    assert p.kind == "carousel"
+    assert [(m.idx, m.kind) for m in p.media] == [(1, "image"), (2, "image")]
+    assert all(m.path.endswith(".jpg") for m in p.media)
+    assert p.text == ""
+    mp3 = [n for n in os.listdir(tmp_path) if n.endswith(".mp3")]
+    assert len(mp3) == 1 and str(tmp_path / mp3[0]) in p.side_files
+    assert r.claimed == set(os.listdir(tmp_path))
+
+
+def test_tiktok_hashtags(tmp_path):
+    gallery_dl_case("tiktok/video", tmp_path)
+    name = [n for n in os.listdir(tmp_path) if n.endswith(".mp4.json")][0]
+    d = json.load(open(tmp_path / name))
+    # As TikTok lists them: textExtra entries of type 1, and challenges.
+    d["textExtra"].append({"awemeId": "", "start": 0, "end": 4, "hashtagName": "Cats", "type": 1,
+                           "subType": 0, "isCommerce": False})
+    d["challenges"] = [{"id": "1", "title": "funny", "desc": ""}]
+    d["desc"] = "#cats and #more"
+    jdump(tmp_path / name, d)
+    assert parse(tmp_path).posts[0].hashtags == ["cats", "funny", "more"]
+
+
+def test_tiktok_trash_takes_the_music(env, client):
+    import scanner
+    folder = env["media"] / "tiktok" / "example_user8"
+    gallery_dl_case("tiktok/photos", folder)
+    assert scanner.scan(env["roots"])["unmatched"] == 0
+    r = client.post("/api/delete", json={"posts": ["tiktok:5228323407601338200"]}, headers=H).get_json()
+    assert r["ok"] and r["files"] == 6 and r["errors"] == []
+    assert os.listdir(folder) == []
