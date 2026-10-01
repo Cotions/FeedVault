@@ -560,7 +560,7 @@ def test_archive_file_kept_intact_by_concurrent_appends(env):
         f.write("tiktok 3\n")
     assert archives.remove("yt-dlp", ["tiktok 1"], data) == 1
     assert open(p).read() == "tiktok 2\ntiktok 3\n"
-    assert archives.add("yt-dlp", ["tiktok 2", "tiktok 4", "bad\nline"], data) == ["tiktok 4"]
+    assert archives.add("yt-dlp", ["tiktok 2", "tiktok 4", "bad\nline", "bad\rline", "bad\u2028line"], data) == ["tiktok 4"]
 
 
 # ---------------------------------------------------------------------------

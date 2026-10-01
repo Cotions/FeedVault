@@ -85,7 +85,7 @@ def yt_dlp_entry(post_id):
     """yt-dlp's line for a post id ("tiktok:123": "tiktok 123"): the
     platform is the extractor's key, lowercase, and the id its own."""
     platform, _, pid = post_id.partition(":")
-    return f"{platform} {pid}" if platform and pid and "\n" not in pid else None
+    return f"{platform} {pid}" if platform and pid and pid.splitlines() == [pid] else None
 
 
 def post_entries(post):
@@ -139,7 +139,8 @@ def _locked(p):
 
 def add(tool, entries, data_dir):
     """Add entries to a tool's archive. Returns those that were not there."""
-    entries = list(dict.fromkeys(e for e in entries if isinstance(e, str) and e and "\n" not in e))
+    # One line each: splitlines() also breaks at \r, \x1c, \u2028 ….
+    entries = list(dict.fromkeys(e for e in entries if isinstance(e, str) and e and e.splitlines() == [e]))
     if not entries:
         return []
     p = path(tool, data_dir)
