@@ -14,6 +14,9 @@ function fmtIn(ts) {
   return s < 60 ? `in ${s} s` : `in ${Math.ceil(s / 60)} min`;
 }
 
+// Failures the Downloaders card in Settings can fix: install, log in, update.
+const SETUP_ERRORS = new Set(["missing", "login_required"]);
+
 /* Where a source stands: its sync now (queued, waiting out the pause,
    running), else how its last one went. */
 export function SourceStatus({ source: s, job, compact = false }) {
@@ -36,6 +39,9 @@ export function SourceStatus({ source: s, job, compact = false }) {
       {(r.state === "cancelled" || r.state === "interrupted") && <span className="chip job-state-interrupted source-badge">{r.state}</span>}
       {!compact && r.state === "done" && <span>{r.message}</span>}
       {!compact && failed && <span className="source-message">{r.message}</span>}
+      {!compact && failed && (SETUP_ERRORS.has(r.error) || r.outdated) && (
+        <Link to="/settings#downloaders" className="text-link source-setup">Settings → Downloaders</Link>
+      )}
       {s.last_sync_at && <span className="dim">{compact ? "synced " : " · "}{fmtAgo(s.last_sync_at)}</span>}
     </span>
   );

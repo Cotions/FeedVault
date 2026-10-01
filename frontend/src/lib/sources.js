@@ -19,6 +19,7 @@ export const ERRORS = {
   login_required: "login needed",
   private: "private",
   not_found: "not found",
+  missing: "tool missing",
   generic: "failed",
 };
 

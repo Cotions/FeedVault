@@ -429,7 +429,22 @@ def _outcome(params, code, lines, index, tool="instaloader"):
         message = f"{message}: {result['line'][:200]}"
     if added:
         message += f" ({added} new post{'' if added == 1 else 's'} before it stopped)"
+    old = _outdated(tool)
+    if old:
+        result["outdated"] = True
+        message += f". {tool} {old[0]} is out of date ({old[1]} is out): update it in Settings → Downloaders"
     return "failed", result, message
+
+
+def _outdated(tool):
+    """(installed, latest) when the latest-version check is on and the tool
+    is older than PyPI's latest, else None (and when that cannot be told)."""
+    import downloaders                         # it imports this module
+    try:
+        return downloaders.outdated(tool)
+    except Exception as e:                     # a failed sync still ends as it went
+        print(f"[sync] could not tell whether {tool} is out of date: {e}")
+        return None
 
 
 def _ended(job):
@@ -441,7 +456,8 @@ def _ended(job):
     conn = db.connect()
     if not sources.record(conn, sid, job["id"], job["ended_at"] or int(time.time()), {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
-            "line": r.get("line"), "added": r.get("added", 0), "job": job["id"]}):
+            "line": r.get("line"), "added": r.get("added", 0), "job": job["id"],
+            "outdated": r.get("outdated", False)}):
         return
     changed = {"sources"}
     src = sources.row(conn, sid)

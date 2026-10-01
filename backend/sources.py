@@ -45,7 +45,7 @@ HOST_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com
 BROWSERS = ("firefox", "chrome", "chromium", "brave", "edge")
 SESSION_MODES = ("none", "cookies", "login")
 COOKIE_MODES = ("none", "cookies")             # gallery-dl and yt-dlp: a browser's cookies or nothing
-ERRORS = ("login_required", "private", "not_found", "rate_limited", "generic")
+ERRORS = ("login_required", "private", "not_found", "rate_limited", "missing", "generic")
 
 # An Instagram username: letters, digits, dots and underscores, at most 30.
 _HANDLE_RE = re.compile(r"[A-Za-z0-9._]{1,30}")

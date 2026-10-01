@@ -548,3 +548,46 @@ def test_update_and_sync_never_run_at_once(layout, client):
     assert ended(update["id"])["state"] == "done"
     assert ended(sync_job["id"])["state"] == "done"
     assert len(runs(layout["bin"] / "yt-dlp")) == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Sync failures that point to the Downloaders card
+# ---------------------------------------------------------------------------
+
+def sync_once(client, url):
+    src = client.post("/api/sources", json={"target": url}, headers=H).get_json()["source"]
+    job = client.post(f"/api/sources/{src['id']}/sync", json={}, headers=H).get_json()["job"]
+    ended(job["id"])
+    return client.get(f"/api/sources/{src['id']}", headers=H).get_json()["last_result"]
+
+
+def test_sync_of_a_missing_tool(layout, client):
+    r = sync_once(client, "https://www.instagram.com/someone")
+    assert (r["state"], r["error"], r["outdated"]) == ("failed", "missing", False)
+    assert r["message"] == "instaloader not found; set its path in Settings"
+
+
+def test_failed_sync_says_the_tool_is_outdated(layout, client, env):
+    with open(os.path.realpath(layout["bin"] / "yt-dlp") + ".fail", "w") as f:
+        f.write("ERROR: [youtube:tab] @someone: Sign in to confirm you're not a bot")
+    assert client.post("/api/config", json={"yt-dlp": {"pause": 0}}, headers=H).get_json()["ok"]
+    # Off: nothing said, nothing asked.
+    r = sync_once(client, "https://www.youtube.com/@someone")
+    assert (r["error"], r["outdated"]) == ("login_required", False) and "out of date" not in r["message"]
+    # On, with today's answer already known: said, without asking PyPI again.
+    folder = env["tmp"] / "data" / "downloaders"
+    folder.mkdir(parents=True, exist_ok=True)
+    now = int(__import__("time").time())
+    (folder / "pypi.json").write_text(json.dumps({n: {"version": "2026.08.06", "error": None, "checked_at": now}
+                                                 for n in ("instaloader", "gallery-dl", "yt-dlp")}))
+    check_updates(client)
+    r = sync_once(client, "https://www.youtube.com/@other")
+    assert (r["state"], r["error"], r["outdated"]) == ("failed", "login_required", True)
+    assert r["message"].endswith(". yt-dlp 2026.01.01 is out of date (2026.08.06 is out): "
+                                 "update it in Settings → Downloaders")
+    # Up to date: not said.
+    with open(os.path.join(layout["venv"], "bin", "yt-dlp.version"), "w") as f:
+        f.write("2026.08.06")
+    client.post("/api/downloaders/check", headers=H)
+    r = sync_once(client, "https://www.youtube.com/@third")
+    assert r["outdated"] is False and "out of date" not in r["message"]

@@ -2349,6 +2349,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(74, 
 }
 .source-status .icon { color: var(--blue); }
 .source-message { color: #ffb3b5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.source-setup { white-space: nowrap; }
 .source-badge { flex-shrink: 0; }
 .source-sync { font-size: 12px; padding: 6px 11px; flex-shrink: 0; }
 .creator-id .source-status { font-size: 11px; }

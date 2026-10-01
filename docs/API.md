@@ -768,7 +768,7 @@ no person yet.
   "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait before syncing again",
-                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41 },
+                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 } }
 ```
 
@@ -806,9 +806,15 @@ no person yet.
     missing. gallery-dl and yt-dlp failures are classified from their
     error lines the same way (gallery-dl's `AuthRequired`, `NotFoundError`,
     "Tweets are protected"; yt-dlp's "Sign in to confirm", "Private video",
-    "Video unavailable")
+    "Video unavailable"). `missing`: the tool was not found (no output);
+    the dashboard links `missing` and `login_required` to Settings →
+    Downloaders
   - `message`: one line for people; `line`: the tool's last line of output
-    behind it, or `null`
+    behind it, or `null`. When the latest-version check is on (see
+    [Downloaders](#downloaders)) and the tool is older than PyPI's latest
+    release, a failed sync's message ends with
+    `. yt-dlp 2026.01.01 is out of date (2026.08.06 is out): update it in
+    Settings → Downloaders`, and `outdated` is `true` (else `false`)
   - `added`: new posts indexed (also after a failure: what was downloaded
     before it stopped is indexed)
 - `job`: the source's sync while it is queued or running (`waits_until`,
@@ -1184,6 +1190,7 @@ A **job**:
   that folder (with its subfolders) is indexed and `result` is
   `{ "added": 3, "updated": 0 }`.
 - `result`: what the job produced, by kind, or `null` (failed, cancelled).
+  A job whose tool was not found has `{ "error": "missing" }`.
 - `message`: one line for people: `"3 new posts"`, the version, the last
   line of output of a failed job (or `"exit code 2"`), `"<tool> not found;
   set its path in Settings"`, `"cancelled"`, `"FeedVault stopped while it ran"`.

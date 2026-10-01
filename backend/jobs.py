@@ -302,7 +302,7 @@ def _run(job):
     try:
         exe = tool_path(job.tool)
         if exe is None:
-            _finish(job, "failed", message=f"{job.tool} not found; set its path in Settings")
+            _finish(job, "failed", result={"error": "missing"}, message=f"{job.tool} not found; set its path in Settings")
             return
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")
