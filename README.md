@@ -103,10 +103,27 @@ get a green "saved" badge in grids, and a post page shows an "in FeedVault" link
 ## Jobs and tools
 
 The **Jobs** page shows what FeedVault is running for you: the queue, a live
-log, and the last 100 jobs. Downloads started from the dashboard arrive with
-profile sync; for now, **Settings → Tools** checks that instaloader,
+log, and the last 100 jobs. **Settings → Tools** checks that instaloader,
 gallery-dl, yt-dlp and ffmpeg are installed (and lets you point at one
-installed in a virtualenv). Quitting FeedVault stops running jobs.
+installed in a virtualenv). Quitting FeedVault stops running jobs; a job
+left running by a crash is stopped on the next start.
+
+## Syncing profiles
+
+A person (or an account) can have **sources**: an Instagram profile and the
+folder its posts go to. **Sync** runs instaloader for it as a job and indexes
+the folder, so new posts show up in the Feed without a terminal. Only new
+posts are fetched: FeedVault keeps instaloader's `--latest-stamps` file in
+its data directory, and a first sync starts after the newest post already
+indexed (tick "Full history" to fetch everything). **Creators** offers your
+existing instaloader folders as sources to confirm, and **Sync all** runs
+every source one after another with a pause between them.
+
+By default syncs run without a login (public profiles only). **Settings →
+Instagram sync** can make instaloader use your browser's Instagram cookies
+(`--load-cookies`) or a session it saved after `instaloader --login` in a
+terminal. FeedVault only passes the browser or user name on; it never reads
+or stores cookies, passwords or session files.
 
 ## Where things live
 

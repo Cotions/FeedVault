@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds, saveInstaloaderSettings } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED } from "../lib/jobs";
@@ -346,6 +346,100 @@ function ToolsCard({ saved, onSaved }) {
   );
 }
 
+const BROWSERS = ["firefox", "chrome", "chromium", "brave", "edge"];
+
+/* How instaloader reaches Instagram when FeedVault syncs a source. FeedVault
+   only passes a browser's name or a user name on; instaloader does the rest. */
+function InstaloaderCard({ saved, onSaved }) {
+  const [mode,    setMode]    = useState(saved.session?.mode || "none");
+  const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
+  const [user,    setUser]    = useState(saved.session?.user || "");
+  const [pause,   setPause]   = useState(String(saved.pause ?? 60));
+  const [saving,  setSaving]  = useState(false);
+  const [msg,     setMsg]     = useState(null);
+
+  const session = mode === "cookies" ? { mode, browser } : mode === "login" ? { mode, user: user.trim() } : { mode };
+  const dirty = JSON.stringify(session) !== JSON.stringify(saved.session || { mode: "none" })
+    || pause.trim() !== String(saved.pause ?? 60);
+
+  async function save(e) {
+    e.preventDefault();
+    const seconds = Number(pause);
+    if (!/^\d+$/.test(pause.trim()) || seconds > 3600) {
+      setMsg({ ok: false, text: "The pause is whole seconds, from 0 to 3600." });
+      return;
+    }
+    setSaving(true);
+    setMsg(null);
+    try {
+      const r = await saveInstaloaderSettings({ session, pause: seconds });
+      if (r?.ok) { onSaved(); setMsg({ ok: true, text: "Saved. The next sync uses it." }); }
+      else setMsg({ ok: false, text: r?.error || "Save failed." });
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">Instagram sync (instaloader)</div>
+      <p className="page-lede">
+        How instaloader signs in when you click Sync on a source. FeedVault only passes on the browser's
+        name or your user name: it never sees, reads or stores your cookies, password or session file.
+      </p>
+      <form className="insta-form" onSubmit={save}>
+        <fieldset className="insta-modes">
+          <legend className="insta-legend">Session</legend>
+          <label className="insta-mode">
+            <input type="radio" name="insta-mode" value="none" checked={mode === "none"} onChange={() => setMode("none")} />
+            <span>
+              <b>No login</b> (default)
+              <span className="creator-sub">Public profiles only. Instagram limits anonymous requests sooner, so expect &ldquo;rate limited&rdquo; on big runs.</span>
+            </span>
+          </label>
+          <label className="insta-mode">
+            <input type="radio" name="insta-mode" value="cookies" checked={mode === "cookies"} onChange={() => setMode("cookies")} />
+            <span>
+              <b>Use my browser&rsquo;s Instagram login</b>
+              <span className="creator-sub">instaloader reads the cookies of the browser where you are logged in to Instagram (<code>--load-cookies</code>). Close that browser first if it fails.</span>
+            </span>
+          </label>
+          {mode === "cookies" && (
+            <select className="insta-input" aria-label="Browser" value={browser} onChange={e => setBrowser(e.target.value)}>
+              {BROWSERS.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          )}
+          <label className="insta-mode">
+            <input type="radio" name="insta-mode" value="login" checked={mode === "login"} onChange={() => setMode("login")} />
+            <span>
+              <b>Use a saved instaloader session</b>
+              <span className="creator-sub">Run <code>instaloader --login your_name</code> once in a terminal; instaloader keeps its own session file and syncs reuse it (<code>--login</code>). FeedVault never asks for a password: without that file, syncs fail with &ldquo;login needed&rdquo;.</span>
+            </span>
+          </label>
+          {mode === "login" && (
+            <input type="text" className="insta-input" placeholder="your Instagram user name" aria-label="Instagram user name"
+                   maxLength={30} value={user} onChange={e => setUser(e.target.value)} />
+          )}
+        </fieldset>
+        <label className="insta-pause">
+          <span>Pause between two syncs</span>
+          <input type="text" inputMode="numeric" className="insta-input" aria-label="Pause in seconds" value={pause}
+                 onChange={e => { setPause(e.target.value); setMsg(null); }} />
+          <span className="dim">seconds, so Instagram does not see profiles fetched back to back</span>
+        </label>
+        <div>
+          <button type="submit" className="btn-primary" disabled={saving || !dirty || (mode === "login" && !user.trim())}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+        {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="alert">{msg.text}</div>}
+      </form>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { refreshKey } = useScan();
   const { data: config, error, reload } = useApi(getConfig, refreshKey);
@@ -369,6 +463,7 @@ export default function Settings() {
             setMsg={setMsg}
           />
           <ToolsCard saved={config.tools || {}} onSaved={reload} />
+          <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} />
           <TrashCard />
           <LastScan />
           <div className="card">
