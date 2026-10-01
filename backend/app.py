@@ -77,22 +77,34 @@ def _int_arg(name, default, lo, hi):
     return max(lo, min(hi, v))
 
 
+def _post_filters():
+    """The /api/posts filter parameters, shared with /api/posts/summary."""
+    return dict(
+        q=request.args.get("q", "").strip() or None,
+        platform=request.args.get("platform") or None,
+        author=request.args.get("author") or None,
+        kind=request.args.get("kind") or None,
+        review=request.args.get("review") if request.args.get("review") in ("unreviewed", "kept") else None,
+    )
+
+
 @app.get("/api/posts")
 def list_posts():
     sort = request.args.get("sort", "posted")
     total, posts = db.list_posts(
         db.connect(),
-        q=request.args.get("q", "").strip() or None,
-        platform=request.args.get("platform") or None,
-        author=request.args.get("author") or None,
-        kind=request.args.get("kind") or None,
+        **_post_filters(),
         sort=sort if sort in ("posted", "saved") else "posted",
         order="asc" if request.args.get("order") == "asc" else "desc",
-        review=request.args.get("review") if request.args.get("review") in ("unreviewed", "kept") else None,
         offset=_int_arg("offset", 0, 0, 10**9),
         limit=_int_arg("limit", 60, 1, 200),
     )
     return jsonify({"total": total, "posts": posts})
+
+
+@app.get("/api/posts/summary")
+def posts_summary():
+    return jsonify(db.post_summary(db.connect(), **_post_filters()))
 
 
 @app.get("/api/posts/<platform>/<post_id>")
@@ -111,6 +123,13 @@ def list_authors():
 @app.get("/api/stats")
 def get_stats():
     return jsonify(db.stats(db.connect()))
+
+
+@app.get("/api/storage")
+def get_storage():
+    t = trash.usage(_roots())
+    # The cached result is shared: extend a copy.
+    return jsonify({**db.storage(db.connect()), "trash": {"files": t["files"], "bytes": t["bytes"]}})
 
 
 @app.get("/api/unmatched")

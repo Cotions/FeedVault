@@ -53,14 +53,51 @@ def test_fresh_database(tmp_path):
     assert version(path)[0] == len(db.MIGRATIONS)
 
 
-def test_v1_database_is_version_1(tmp_path):
+def test_v1_database_is_version_1(tmp_path, monkeypatch):
     path = str(tmp_path / "feedvault.db")
     make_v1(path).close()
     assert version(path) == (1, 0)
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:1])
     db.init(path)                           # already current: stamped, no backup, data untouched
     assert version(path) == (1, 1)
     assert not os.path.exists(path + ".bak-v1")
     assert db.connect().execute("SELECT post_id FROM decisions").fetchall()[0][0] == "instagram:P1"
+
+
+def indexes(path):
+    conn = sqlite3.connect(path)
+    try:
+        return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    finally:
+        conn.close()
+
+
+def test_v1_upgraded_to_v2_storage(tmp_path):
+    # The first real migration: a v1 file made before migrations existed.
+    path = str(tmp_path / "feedvault.db")
+    conn = make_v1(path)
+    conn.execute("INSERT INTO posts(id, platform, post_id, kind, saved_at, tool, meta_path, indexed_at) "
+                 "VALUES ('instagram:P1', 'instagram', 'P1', 'image', 1, 'instaloader', '/m/p1.json', 1)")
+    conn.execute("INSERT INTO media(post_id, idx, kind, path, size) VALUES ('instagram:P1', 1, 'image', '/m/p1.jpg', 100)")
+    conn.commit()
+    conn.close()
+    db.init(path)
+    assert version(path) == (2, 2)
+    assert version(path + ".bak-v1")[0] == 1
+    assert {"media_post_size", "media_size"} <= indexes(path)
+    assert not {"media_post_size", "media_size"} & indexes(path + ".bak-v1")
+    c = db.connect()
+    assert c.execute("SELECT post_id FROM decisions").fetchone()[0] == "instagram:P1"
+    assert db.storage(c)["totals"] == {"posts": 1, "media": 1, "bytes": 100}
+    # the cached answer follows a commit, from this connection or another one
+    c.execute("UPDATE media SET size = 250")
+    c.commit()
+    assert db.storage(c)["totals"]["bytes"] == 250
+    other = sqlite3.connect(path)
+    other.execute("UPDATE media SET missing = 1")
+    other.commit()
+    other.close()
+    assert db.storage(c)["totals"] == {"posts": 1, "media": 0, "bytes": 0}
 
 
 def test_early_v1_file_gets_missing_tables(tmp_path):
@@ -73,13 +110,13 @@ def test_early_v1_file_gets_missing_tables(tmp_path):
     conn.close()
     db.init(path)
     assert "decisions" in tables(path)
-    assert version(path) == (1, 1)
+    assert version(path) == (len(db.MIGRATIONS), len(db.MIGRATIONS))
 
 
 def test_v1_upgraded_with_backup(tmp_path, monkeypatch):
     path = str(tmp_path / "feedvault.db")
     live = make_v1(path)                    # stays open: the decision may still sit in the WAL
-    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, add_note_column])
+    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS[:1], add_note_column])
     db.init(path)
     live.close()
     assert version(path) == (2, 2)
@@ -96,7 +133,7 @@ def test_v1_upgraded_with_backup(tmp_path, monkeypatch):
 def test_failed_migration_rolls_back_and_keeps_backup(tmp_path, monkeypatch):
     path = str(tmp_path / "feedvault.db")
     make_v1(path).close()
-    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS, add_note_column, half_then_fail])
+    monkeypatch.setattr(db, "MIGRATIONS", [*db.MIGRATIONS[:1], add_note_column, half_then_fail])
     with pytest.raises(RuntimeError, match="boom"):
         db.init(path)
     # step 2 committed, step 3 left nothing behind
