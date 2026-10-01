@@ -12,6 +12,7 @@ import PostPage        from "./pages/PostPage";
 import Review          from "./pages/Review";
 import Creators        from "./pages/Creators";
 import Stats           from "./pages/Stats";
+import Storage         from "./pages/Storage";
 import Unmatched       from "./pages/Unmatched";
 import Settings        from "./pages/Settings";
 
@@ -204,6 +205,7 @@ export default function App() {
           <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
           <NavLink to="/creators" className="side-link"><Icon name="users" />Creators</NavLink>
           <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
+          <NavLink to="/storage" className="side-link"><Icon name="disk" />Storage</NavLink>
           <NavLink to="/unmatched" className="side-link"><Icon name="unmatched" />Unmatched</NavLink>
           <NavLink to="/settings" className="side-link"><Icon name="settings" />Settings</NavLink>
           <div className="side-sep" />
@@ -273,6 +275,7 @@ export default function App() {
             <Route path="/review" element={<Review />} />
             <Route path="/creators" element={<Creators />} />
             <Route path="/stats" element={<Stats />} />
+            <Route path="/storage" element={<Storage />} />
             <Route path="/unmatched" element={<Unmatched />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<div className="card"><div className="empty">Nothing here.</div></div>} />

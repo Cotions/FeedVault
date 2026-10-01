@@ -89,6 +89,8 @@ export function getPost(platform, postId) {
 }
 export function getAuthors()   { return get("/api/authors"); }
 export function getStats()     { return get("/api/stats"); }
+// { totals, by_author, by_kind, by_year, largest, trash }, see docs/API.md "Storage".
+export function getStorage()   { return get("/api/storage"); }
 export function getUnmatched() { return get("/api/unmatched"); }
 export function getScan()      { return get("/api/scan"); }
 export function startScan()    { return post("/api/scan"); }

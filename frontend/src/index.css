@@ -1733,6 +1733,109 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
 }
 
+/* ── Storage page ───────────────────────────────────────── */
+.storage-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: -8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.storage-note .icon { color: #ffb3b5; }
+.storage-bars .channel-bar-row { grid-template-columns: 80px 1fr 72px; }
+.storage-bars .channel-bar-count { text-align: right; white-space: nowrap; }
+
+.storage-table td { vertical-align: middle; }
+.storage-table th:has(.th-sort) { padding: 0; }
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  justify-content: inherit;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.data-table th.num .th-sort { justify-content: flex-end; }
+.th-sort:hover, .th-sort.is-on { color: var(--accent-hover); }
+.th-sort-arrow { display: inline-block; width: 8px; font-family: var(--mono); }
+.storage-creator { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 240px; }
+.storage-creator-name { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.storage-creator:hover .storage-creator-name { color: var(--accent-hover); }
+.storage-creator-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.data-table .storage-size { color: var(--accent-hover); font-weight: 800; }
+.storage-share { min-width: 150px; }
+.storage-share, .storage-split { white-space: nowrap; }
+.storage-share .channel-bar-track { display: inline-block; width: calc(100% - 52px); min-width: 80px; height: 10px; vertical-align: middle; }
+.storage-pct { display: inline-block; width: 46px; text-align: right; font-size: 11.5px; color: var(--text-dim); vertical-align: middle; }
+.storage-split { min-width: 150px; }
+.split-track {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+}
+.split-kept  { background: var(--accent-hover); }
+.split-unrev { background: #ffd59a; opacity: 0.75; }
+.split-labels { display: flex; justify-content: space-between; gap: 10px; margin-top: 4px; font-size: 11px; }
+.split-kept-label  { color: #a5f0bf; }
+.split-unrev-label { color: #ffd59a; }
+.storage-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+.big-files {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.big-file {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  opacity: 0;
+  animation: statRise 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+  transition: border-color 0.15s;
+}
+.big-file:hover { border-color: rgba(74, 222, 128, 0.45); }
+.big-file-link { position: relative; display: block; aspect-ratio: 1; background: var(--bg-soft); }
+.big-file-link img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.big-file-ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: var(--muted); }
+.big-file-kind {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 6px;
+  background: rgba(10, 12, 17, 0.75);
+  color: var(--text);
+}
+.big-file-size {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(10, 12, 17, 0.82);
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--accent-hover);
+}
+.big-file-foot { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; }
+.big-file-author { flex: 1; min-width: 0; font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.big-file-trash { width: 28px; height: 28px; flex-shrink: 0; }
+
 /* ── Narrow layout ──────────────────────────────────────── */
 /* Last in the file on purpose: overrides base rules declared above. */
 @media (max-width: 860px) {
