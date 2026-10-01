@@ -1211,6 +1211,7 @@ Built-in kinds:
 | `instaloader-sync` | `source`: a source id | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line" }` | `instaloader` |
 | `gallery-dl-sync` | `source`: a source id | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
 | `tool-test` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | the tool once on a fixed public item, see [Downloaders](#downloaders); `result` `{ "ok", "error", "line" }` | the tool's name |
+| `tool-update` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | pip or pipx, picked from how the tool is installed, see [Downloaders](#downloaders) | the tool's name |
 | `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 
 More download kinds come with the userscript (#10).
@@ -1287,7 +1288,9 @@ A tool:
   "version_error": null,
   "latest": { "version": "2026.09.20", "error": null, "checked_at": 1727500000 },
   "outdated": true,
-  "login": { "mode": "cookies", "browser": "firefox" }
+  "login": { "mode": "cookies", "browser": "firefox" },
+  "update": { "possible": true, "command": "pipx upgrade yt-dlp", "reason": null },
+  "install_hint": null
 }
 ```
 
@@ -1327,6 +1330,14 @@ tools set in Settings (or `PATH`) change, and on `POST /api/downloaders/check`.
   lowercased, as instaloader does). FeedVault only checks that the file is
   there; it never opens it, nor any cookie. `null` for ffmpeg.
 
+- `update`: whether the Update button can run (`possible`), the command it
+  runs or, when it cannot, the command to run yourself (`command`, shown
+  with a copy button), and why it cannot (`reason`, else `null`); see
+  **Update** below.
+- `install_hint`: for a missing tool, the command that installs it
+  (`pipx install <name>`, `sudo apt install ffmpeg`), shown with a copy
+  button and never run; else `null`.
+
 **Latest versions.** Off by default: `POST /api/config` with
 `{ "check_updates": true }` turns it on. This is the only request the
 server itself makes to the network. For instaloader, gallery-dl and yt-dlp
@@ -1358,3 +1369,21 @@ and yt-dlp download nothing (`--simulate`). `state` `done`, `result`
 `failed`, `result` `{ "ok": false, "error", "line" }` with `error` read from
 the output as for a sync (`login_required`, `rate_limited`, `private`,
 `not_found`, `generic`) and `message` saying what it means.
+
+**Update.** Job kind `tool-update`, params `{ "tool": "instaloader" |
+"gallery-dl" | "yt-dlp" }` and nothing else, group: the tool's name, so an
+update never runs during a sync of that tool, nor a sync during its update.
+When it is queued, the tool is found again (not from the cache) and the
+command picked from how it is installed:
+
+| `install` | Runs |
+|---|---|
+| `venv` | `<venv>/bin/python -m pip install --no-input --disable-pip-version-check -U <name>` |
+| `pipx` | `pipx upgrade <name>` (pipx found on `PATH`) |
+| `system`, `missing` | nothing: 400, the error says the command to run instead |
+
+`<name>` is the tool's PyPI name, fixed in code. A virtualenv without its
+`bin/python`, or a pipx install with no `pipx` on `PATH`, is refused the
+same way. ffmpeg is not a choice: it comes from the system's packages. Once
+the job has ended, the tool is found again, so `GET /api/downloaders` shows
+its new version.

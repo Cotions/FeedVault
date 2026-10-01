@@ -27,14 +27,26 @@ file exists (os.path.exists on the path instaloader uses). The ``tool-test``
 job runs a tool once against a fixed public item with the session flags a
 sync would use, and says how it went in sync.py's terms (login required,
 rate limited, not found, …).
+
+The ``tool-update`` job updates a tool where it is installed, its command
+picked here from how it is installed, never from the request:
+
+    <the virtualenv's bin/python> -m pip install -U <name>      (venv)
+    pipx upgrade <name>                                          (pipx)
+
+Refused for system installs and missing tools: the card shows the command
+to run instead. It shares its tool's lock group, so it never runs during a
+sync of that tool; the tool is found again once it ends.
 """
 import getpass
 import json
 import os
 import re
-import tempfile
+import shlex
+import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -375,6 +387,86 @@ jobs.register("tool-test", label="Test a downloader", params={"tool": {"type": "
 
 
 # ---------------------------------------------------------------------------
+# Updating
+# ---------------------------------------------------------------------------
+
+INSTALL_HINTS = {"ffmpeg": "sudo apt install ffmpeg"}
+
+
+def install_hint(tool):
+    """The command to install a missing tool, shown with a copy button, never run."""
+    return INSTALL_HINTS.get(tool) or f"pipx install {PACKAGES[tool]}"
+
+
+def update_plan(info):
+    """How the tool of ``info`` (a detect() answer) can be updated:
+    {"argv": [...] or None, "command": text to show, "reason": why not, or None}."""
+    tool, kind = info["tool"], info["install"]
+    name = PACKAGES.get(tool)
+    if name is None:
+        return {"argv": None, "command": None,
+                "reason": "ffmpeg is updated with your system's package manager" if info["found"]
+                else "ffmpeg is installed with your system's package manager"}
+    if kind == "venv":
+        python = os.path.join(info["venv"], "bin", "python")
+        command = f"{shlex.quote(python)} -m pip install -U {name}"
+        if not config.is_executable(python):
+            return {"argv": None, "command": command, "reason": f"no Python at {python}"}
+        return {"argv": [python, "-m", "pip", "install", "--no-input", "--disable-pip-version-check", "-U", name],
+                "command": command, "reason": None}
+    if kind == "pipx":
+        if shutil.which("pipx") is None:
+            return {"argv": None, "command": f"pipx upgrade {name}", "reason": "pipx is not on the PATH"}
+        return {"argv": ["pipx", "upgrade", name], "command": f"pipx upgrade {name}", "reason": None}
+    if kind == "missing":
+        return {"argv": None, "command": install_hint(tool), "reason": f"{tool} is not installed"}
+    return {"argv": None, "command": f"pipx install {name}",
+            "reason": f"{tool} is not in a virtualenv FeedVault can update: update it the way it was installed "
+                      "(your package manager, pip), or install a copy with pipx and set its path here"}
+
+
+def _build_update(params):
+    """The argument list from where the tool is installed now (found again,
+    not the cache): never from the request, which only names the tool."""
+    tool = params["tool"]
+    info = detect_install(tool)
+    plan = update_plan(info)
+    if plan["argv"] is None:
+        raise jobs.BadRequest(f"{tool} cannot be updated from FeedVault: {plan['reason']}; run {plan['command']}")
+    return {"tool": plan["argv"][0], "args": plan["argv"][1:]}
+
+
+def detect_install(tool):
+    """detect() without running the tool: where it is and how it is installed."""
+    path = jobs.tool_path(tool)
+    kind, venv = install_of(path)
+    return {"tool": tool, "found": path is not None, "path": path, "install": kind, "venv": venv}
+
+
+def _updated(job):
+    """Once an update has ended, the tool is found again: the card shows its new version."""
+    tool = job["params"].get("tool")
+    if tool in jobs.TOOLS and job["started_at"] is not None:
+        refresh_tool(tool)
+
+
+def refresh_tool(tool):
+    """Find one tool again, the others kept as they are."""
+    cfg = config.load()
+    info = detect(tool, cfg)
+    with _lock:
+        if _cache["tools"] is not None and _cache["key"] == _key(cfg):
+            _cache["tools"] = {**_cache["tools"], tool: info}
+            _cache["checked_at"] = int(time.time())
+
+
+jobs.register("tool-update", label="Update a downloader",
+              params={"tool": {"type": "choice", "choices": list(PACKAGES)}},
+              build=_build_update, group=lambda p: p["tool"], ended=_updated,
+              describe=lambda params, argv: f"Update {params.get('tool', 'a downloader')}")
+
+
+# ---------------------------------------------------------------------------
 # Status (GET /api/downloaders)
 # ---------------------------------------------------------------------------
 
@@ -389,6 +481,9 @@ def status(refresh=False):
         info["latest"] = known
         info["outdated"] = newer(known["version"], info["version"]) if known and known["version"] else None
         info["login"] = login(t, cfg)
+        plan = update_plan(info)
+        info["update"] = {"possible": plan["argv"] is not None, "command": plan["command"], "reason": plan["reason"]}
+        info["install_hint"] = install_hint(t) if not info["found"] else None
         out.append(info)
     return {"checked_at": checked_at, "check_updates": cfg.get("check_updates") is True, "tools": out}
 

@@ -407,3 +407,144 @@ def test_test_job_classification(layout, client, tool, output, error):
 def test_test_job_of_a_missing_tool(layout):
     job = ended(jobs.submit("tool-test", {"tool": "instaloader"})["id"])
     assert job["state"] == "failed" and job["message"] == "instaloader not found; set its path in Settings"
+
+
+# ---------------------------------------------------------------------------
+# Updating: a fake pip in a fake virtualenv, a fake pipx
+# ---------------------------------------------------------------------------
+
+# A virtualenv's python that only knows "-m pip install ... -U <name>": it
+# writes <name>.version beside it from python.next. pipx: "upgrade <name>"
+# writes $PIPX_HOME/venvs/<name>/bin/<name>.version from pipx.next. Both log
+# their arguments (<self>.argv) and wait while <self>.hold exists.
+FAKE_UPDATER = """#!{python}
+import json, os, sys, time
+me = os.path.abspath(__file__)
+here = os.path.dirname(me)
+with open(me + ".argv", "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\\n")
+while os.path.exists(me + ".hold"):
+    time.sleep(0.02)
+args = sys.argv[1:]
+if {pipx}:
+    assert args[0] == "upgrade"
+    target = os.path.join(os.environ["PIPX_HOME"], "venvs", args[1], "bin", args[1] + ".version")
+else:
+    assert args[:3] == ["-m", "pip", "install"] and "-U" in args
+    target = os.path.join(here, args[-1] + ".version")
+new = open(me + ".next").read().strip()
+print("Successfully installed", args[-1], new)
+with open(target, "w") as f:
+    f.write(new)
+"""
+
+
+def fake_updater(path, new, pipx=False):
+    with open(path, "w") as f:
+        f.write(FAKE_UPDATER.format(python=sys.executable, pipx=pipx))
+    os.chmod(path, 0o755)
+    with open(f"{path}.next", "w") as f:
+        f.write(new)
+    return path
+
+
+def updater_runs(path):
+    try:
+        with open(f"{path}.argv") as f:
+            return [json.loads(line) for line in f]
+    except FileNotFoundError:
+        return []
+
+
+def version_of(client, tool):
+    return by_tool(client.get("/api/downloaders", headers=H).get_json())[tool]["version"]
+
+
+def test_update_a_venv_tool(layout, client):
+    python = fake_updater(os.path.join(layout["venv"], "bin", "python"), "2026.09.09")
+    t = by_tool(client.get("/api/downloaders", headers=H).get_json())["yt-dlp"]
+    assert t["update"] == {"possible": True, "command": f"{python} -m pip install -U yt-dlp", "reason": None}
+    r = client.post("/api/jobs", json={"kind": "tool-update", "params": {"tool": "yt-dlp"}}, headers=H).get_json()
+    assert r["job"]["argv"] == [python, "-m", "pip", "install", "--no-input", "--disable-pip-version-check",
+                                "-U", "yt-dlp"]
+    assert r["job"]["group"] == "yt-dlp" and r["job"]["label"] == "Update yt-dlp"
+    job = ended(r["job"]["id"])
+    assert job["state"] == "done"
+    assert updater_runs(python) == [r["job"]["argv"][1:]]
+    # Found again once it ended: the new version shows without Check again.
+    assert version_of(client, "yt-dlp") == "2026.09.09"
+
+
+def test_update_a_pipx_tool(layout, client):
+    pipx = fake_updater(str(layout["bin"] / "pipx"), "1.31.0", pipx=True)
+    assert version_of(client, "gallery-dl") == "1.30.0"
+    t = by_tool(client.get("/api/downloaders", headers=H).get_json())["gallery-dl"]
+    assert t["update"] == {"possible": True, "command": "pipx upgrade gallery-dl", "reason": None}
+    job = ended(jobs.submit("tool-update", {"tool": "gallery-dl"})["id"])
+    assert job["state"] == "done" and job["argv"] == ["pipx", "upgrade", "gallery-dl"]
+    assert updater_runs(pipx) == [["upgrade", "gallery-dl"]]
+    assert version_of(client, "gallery-dl") == "1.31.0"
+
+
+def test_update_refused_for_system_missing_and_without_pipx(layout, client):
+    def refused(tool):
+        r = client.post("/api/jobs", json={"kind": "tool-update", "params": {"tool": tool}}, headers=H)
+        assert r.status_code == 400
+        return r.get_json()["error"]
+    tools = by_tool(client.get("/api/downloaders", headers=H).get_json())
+    # Missing: the install command, shown, never run.
+    assert tools["instaloader"]["update"]["possible"] is False
+    assert tools["instaloader"]["install_hint"] == "pipx install instaloader"
+    assert "run pipx install instaloader" in refused("instaloader")
+    # ffmpeg: never updated from here, not even a choice.
+    assert tools["ffmpeg"]["update"]["possible"] is False and tools["ffmpeg"]["install_hint"] is None
+    assert "must be one of" in refused("ffmpeg")
+    # A system install.
+    fake_tool(str(layout["bin"]), "instaloader")
+    client.post("/api/downloaders/check", headers=H)
+    t = by_tool(client.get("/api/downloaders", headers=H).get_json())["instaloader"]
+    assert (t["install"], t["update"]["possible"], t["update"]["command"]) == ("system", False, "pipx install instaloader")
+    assert "not in a virtualenv" in refused("instaloader")
+    # pipx install, but no pipx to run.
+    assert "pipx is not on the PATH" in refused("gallery-dl")
+    # A venv without its python.
+    assert "no Python at" in refused("yt-dlp")
+    assert all(not updater_runs(p) for p in (os.path.join(layout["venv"], "bin", "python"),))
+
+
+@pytest.mark.parametrize("params", [
+    {"tool": "yt-dlp", "package": "evil"}, {"tool": "yt-dlp", "command": "pip install evil"},
+    {"tool": "yt-dlp; pip install evil"}, {"tool": ["yt-dlp"]}, {"tool": "pip"},
+])
+def test_nothing_from_the_request_reaches_the_update_argv(layout, client, params):
+    python = fake_updater(os.path.join(layout["venv"], "bin", "python"), "2026.09.09")
+    r = client.post("/api/jobs", json={"kind": "tool-update", "params": params}, headers=H)
+    assert r.status_code == 400 and updater_runs(python) == []
+
+
+def test_update_and_sync_never_run_at_once(layout, client):
+    python = fake_updater(os.path.join(layout["venv"], "bin", "python"), "2026.09.09")
+    assert client.post("/api/config", json={"yt-dlp": {"pause": 0}}, headers=H).get_json()["ok"]
+    hold = os.path.realpath(layout["bin"] / "yt-dlp") + ".hold"
+    open(hold, "w").close()
+    src = client.post("/api/sources", json={"target": "https://www.youtube.com/@someone"}, headers=H).get_json()
+    sync_job = client.post(f"/api/sources/{src['source']['id']}/sync", json={}, headers=H).get_json()["job"]
+    wait_for(lambda: runs(layout["bin"] / "yt-dlp"))           # the sync's yt-dlp is running
+    update = jobs.submit("tool-update", {"tool": "yt-dlp"})
+    other = jobs.submit("tool-test", {"tool": "gallery-dl"})   # another tool's group is not held
+    assert ended(other["id"])["state"] == "done"
+    assert jobs.get(update["id"])["state"] == "queued" and updater_runs(python) == []
+    os.remove(hold)
+    assert ended(sync_job["id"])["state"] == "done"
+    assert ended(update["id"])["state"] == "done"
+    # And the other way round: a sync waits for the update.
+    open(python + ".hold", "w").close()
+    update = jobs.submit("tool-update", {"tool": "yt-dlp"})
+    wait_for(lambda: len(updater_runs(python)) == 2)
+    sync_job = client.post(f"/api/sources/{src['source']['id']}/sync", json={}, headers=H).get_json()["job"]
+    before = len(runs(layout["bin"] / "yt-dlp"))
+    assert jobs.get(sync_job["id"])["state"] == "queued"
+    os.remove(python + ".hold")
+    assert ended(update["id"])["state"] == "done"
+    assert ended(sync_job["id"])["state"] == "done"
+    assert len(runs(layout["bin"] / "yt-dlp")) == before + 1
