@@ -1901,6 +1901,7 @@ a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline
 .dup-state.is-identical { color: #a5f0bf; background: rgba(47, 158, 79, 0.14); border: 1px solid rgba(74, 222, 128, 0.3); }
 .dup-state.is-differs   { color: #ffd59a; background: rgba(255, 213, 154, 0.08); border: 1px solid rgba(255, 213, 154, 0.3); }
 .dup-state.is-pending   { color: var(--muted); border: 1px solid var(--border); }
+.dup-state.is-repost    { color: #c9b8ff; background: rgba(150, 120, 255, 0.1); border: 1px solid rgba(170, 150, 255, 0.35); }
 .dup-members {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 210px));

@@ -289,12 +289,12 @@ def test_similar_group_for_a_resized_repost(env):
     [g] = duplicates.all_groups(conn, "similar")
     assert [m["id"] for m in g["members"]] == ["instagram:P1", "instagram:R9"]
     assert g["identical"] is False and g["pending"] is False and g["differs"] == []
-    assert 0 <= g["distance"] <= 4
+    assert g["repost"] is True and 0 <= g["distance"] <= 4
     p1, r9 = g["members"]
     assert (p1["match"], p1["items"][0]["width"], p1["items"][0]["height"]) == (1, 640, 800)
     assert (r9["items"][0]["width"], r9["items"][0]["height"]) == (320, 400)
     assert p1["thumb_url"] == p1["items"][0]["thumb_url"] and p1["thumb_url"].startswith("/media/")
-    assert g["suggested"] == "instagram:P1"                        # larger
+    assert g["suggested"] == "instagram:P1"                        # posted first, larger
 
 
 def test_similar_excludes_content_groups_and_flat_pictures(env):
@@ -387,7 +387,7 @@ def similar(client, **params):
 def test_api_threshold(env, client):
     repost(env)
     r = similar(client)
-    assert (r["threshold"], r["total"], r["identical"]) == (6, 1, 0)
+    assert (r["threshold"], r["total"], r["reposts"], r["identical"]) == (6, 1, 1, 0)
     g = r["groups"][0]
     assert all("author" not in m for m in g["members"])
     assert similar(client, threshold=0)["total"] in (0, 1)
@@ -439,3 +439,73 @@ def test_dismiss_similar(env, client):
     userdata.flush()
     saved = json.load(open(userdata.path(str(env["tmp"] / "data"), "dismissed_duplicates")))
     assert [row["kind"] for row in saved["rows"]] == ["similar"]
+
+
+# ---------------------------------------------------------------------------
+# Step 3: keeper rule and reposts (#19)
+# ---------------------------------------------------------------------------
+
+def test_content_keeper_is_the_original_not_the_first_saved(env, client):
+    """The repost was downloaded first (older saved_at), the original later."""
+    b = write_post(env["media"] / "bob", "R9", TS + 3600, BOB, "image")
+    photo(b + ".jpg", 1)
+    scanner.scan(env["roots"])
+    time.sleep(1.1)                                                # saved_at is in seconds
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    shutil.copyfile(b + ".jpg", a + ".jpg")
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    [g] = duplicates.all_groups(db.connect(), "content")
+    by_id = {m["id"]: m for m in g["members"]}
+    assert by_id["instagram:R9"]["saved_at"] < by_id["instagram:P1"]["saved_at"]
+    assert g["identical"] is True and g["repost"] is True
+    assert g["suggested"] == "instagram:P1"
+    assert duplicates.suggest(g["members"], duplicates._hashes(db.connect()))["id"] == "instagram:R9"   # the copies rule
+    r = client.get("/api/duplicates?kind=content", headers=H).get_json()
+    assert (r["reposts"], r["groups"][0]["repost"]) == (1, True)
+
+
+def test_same_account_twice_is_not_a_repost(env):
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    b = write_post(env["media"] / "alice", "C2", TS + 99, ALICE, "carousel", slides=[False, False])
+    photo(a + ".jpg", 1)
+    shutil.copyfile(a + ".jpg", b + "_2.jpg")
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    [g] = duplicates.all_groups(db.connect(), "content")
+    assert g["repost"] is False
+    shutil.copytree(env["media"] / "alice", env["media"] / "alicee")         # copies: one post, never a repost
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    assert [g["repost"] for g in duplicates.all_groups(db.connect(), "copies")] == [False, False]
+
+
+def member(id, kept=False, posted_at=None, size=100, width=None, height=None, path=None):
+    item = {"idx": 1, "size": size, "width": width, "height": height}
+    return {"id": id, "kept": kept, "posted_at": posted_at, "match": 1, "items": [item],
+            "meta_path": path or f"/m/{id}.json"}
+
+
+def test_keeper_rule_for_different_posts():
+    pick = lambda *ms: duplicates.suggest_original(list(ms))["id"]      # noqa: E731
+    # kept, then earliest posted (unknown last)
+    assert pick(member("a", posted_at=5), member("b", kept=True, posted_at=9)) == "b"
+    assert pick(member("a", posted_at=9), member("b", posted_at=5)) == "b"
+    assert pick(member("a"), member("b", posted_at=9)) == "b"
+    # then resolution, when known for everyone
+    assert pick(member("a", 0, 5, width=10, height=10), member("b", 0, 5, width=20, height=20)) == "b"
+    assert pick(member("a", 0, 5, size=900, width=10, height=10), member("b", 0, 5, width=20)) == "a"
+    # then the largest file, then the shortest path
+    assert pick(member("a", 0, 5, size=100), member("b", 0, 5, size=200)) == "b"
+    assert pick(member("a", 0, 5, path="/m/long/a.json"), member("b", 0, 5, path="/m/b.json")) == "b"
+
+
+def test_similar_keeper_prefers_higher_resolution_at_the_same_date(env):
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    b = write_post(env["media"] / "bob", "R9", TS, BOB, "image")             # posted the same second
+    photo(b + ".jpg", 1)
+    resized(b + ".jpg", a + ".jpg", scale=0.5, quality=95)
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    [g] = duplicates.all_groups(db.connect(), "similar")
+    assert g["suggested"] == "instagram:R9" and g["repost"] is True

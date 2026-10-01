@@ -347,7 +347,7 @@ def test_content_group_that_differs(env):
     [g] = duplicates.all_groups(conn, "content")
     assert g["identical"] is False
     assert g["differs"] == [{"member": "instagram:C2", "idx": 1, "reason": "only here"}]
-    assert g["suggested"] == "instagram:C2"                        # more media
+    assert g["suggested"] == "instagram:P1"                        # posted first, even with fewer media
 
 
 def test_dismissals_are_user_data(env):

@@ -342,12 +342,12 @@ group at the threshold they are given, so send the one it was listed at.
 
 ```json
 {
-  "kind": "copies", "threshold": null, "total": 120, "identical": 118, "pending": 0,
+  "kind": "copies", "threshold": null, "total": 120, "reposts": 0, "identical": 118, "pending": 0,
   "frees": 2147483648, "identical_frees": 2040109465, "dismissed": 1,
   "groups": [{
     "id": "4c1d9e0b7a2f3e5d6c8b", "kind": "copies",
     "identical": true, "pending": false, "differs": [],
-    "suggested": "instagram:C8x…", "frees": 5242880, "bytes": 10485760,
+    "suggested": "instagram:C8x…", "frees": 5242880, "bytes": 10485760, "repost": false,
     "members": [
       { "id": "instagram:C8x…", "type": "post", "post_id": "instagram:C8x…", "post": { "…": "post summary" },
         "folder": "/abs/cherrieskyl", "meta_path": "/abs/cherrieskyl/….json",
@@ -384,9 +384,11 @@ group at the threshold they are given, so send the one it was listed at.
   and `thumb_url` serve the file and its thumbnail (`null` for a copy).
 - `match` (content and similar groups): the `idx` of the member's first
   item that matches another member's. The member's `thumb_url` is that
-  item's.
+  item's, and the keeper rule compares it.
 - `kept`: the post has the "keep" decision. In a `copies` group every member
   shares the post's decision, and it stays with whichever member is kept.
+- `repost`: the members are posts by different accounts, so one is most
+  likely a repost of another. Only `content` and `similar` groups can be.
 - `distance` (similar groups only): the most bits apart two linked
   pictures of the group are.
 - `identical`: `true` when every member has the same files; `false` when
@@ -397,14 +399,19 @@ group at the threshold they are given, so send the one it was listed at.
   `content` and `similar` groups `only here` (no other member has this
   file, or nothing like it). `null` while some files are not hashed yet
   (`pending: true`). Always `false` for `similar` groups.
-- `suggested`: the member to keep: the one marked kept, then the one with
-  more media, then the highest resolution (total pixels of its images, read
-  from their headers while hashing; only when known for every member, and
-  videos are not measured), then the oldest `saved_at`, then the shortest
-  path.
+- `suggested`: the member to keep.
+  - `copies` (one post, several downloads): the one marked kept, then the
+    one with more media, then the highest resolution (total pixels of its
+    images; only when known for every member, videos are not counted),
+    then the oldest `saved_at`, then the shortest path.
+  - `content` and `similar` (different posts): the one marked kept, then
+    the earliest `posted_at` (the original, not whichever was saved
+    first), then the highest resolution of the `match` item (when known
+    for every member), then the largest `match` file, then the shortest
+    path.
 - `frees`: the bytes of every member but the suggested one.
 - Top level: `threshold` the similar kind's (`null` for the others);
-  `total`, `identical`, `pending` count groups; `frees` and
+  `total`, `reposts`, `identical`, `pending` count groups; `frees` and
   `identical_frees` add up all groups (or the identical ones), all pages.
   `dismissed` counts groups of this kind marked "not a duplicate".
 

@@ -135,7 +135,7 @@ export function restorePosts(posts) { return post("/api/trash/restore", { posts 
 
 /* ── Duplicates (see docs/API.md "Duplicates") ───────────── */
 
-// kind: "copies" | "content" → { kind, total, identical, pending, frees, identical_frees, dismissed, groups }
+// kind: "copies" | "content" | "similar" (+ threshold) → { kind, threshold, total, reposts, identical, pending, frees, identical_frees, dismissed, groups }
 export function getDuplicates(params = {}) { return get(`/api/duplicates${qs(params)}`); }
 // The background hashing worker → { running, paused, phase, done, total, bytes, hashed, finished_at, errors }
 export function getDuplicatesStatus() { return get("/api/duplicates/status"); }

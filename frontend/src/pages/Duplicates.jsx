@@ -55,6 +55,8 @@ function Member({ m, group, chosen, onChoose, disabled }) {
   const suggested = group.suggested === m.id;
   const diff = differsText(group, m.id);
   const who = m.post?.author?.handle ? `@${m.post.author.handle}` : null;
+  // Different posts: who posted it and when tells the original from a repost.
+  const posts = group.kind !== "copies";
   return (
     <label className={`big-file dup-member${chosen ? " is-chosen" : ""}`}>
       <span className="big-file-link">
@@ -82,9 +84,11 @@ function Member({ m, group, chosen, onChoose, disabled }) {
       <span className="dup-member-foot">
         <span className="dup-folder" title={m.meta_path}>{lastPart(m.folder)}/</span>
         <span className="dup-member-sub">
-          {plural(m.files, "file")}
-          {" · "}<span title={`Saved ${fmtFullDate(m.saved_at)}`}>saved {fmtShortDate(m.saved_at)}</span>
-          {m.post && who && <> · <Link to={postPath(m.post)} className="text-link" onClick={e => e.stopPropagation()}>{who}</Link></>}
+          {m.post && who && <><Link to={postPath(m.post)} className="text-link" onClick={e => e.stopPropagation()}>{who}</Link> · </>}
+          {posts
+            ? <span title={`Posted ${fmtFullDate(m.posted_at)} · saved ${fmtFullDate(m.saved_at)}`}>posted {fmtShortDate(m.posted_at)}</span>
+            : <span title={`Saved ${fmtFullDate(m.saved_at)}`}>saved {fmtShortDate(m.saved_at)}</span>}
+          {" · "}{plural(m.files, "file")}
         </span>
         {diff && <span className="dup-diff">{diff}</span>}
       </span>
@@ -92,7 +96,7 @@ function Member({ m, group, chosen, onChoose, disabled }) {
   );
 }
 
-function Group({ g, index, busy, selectMode, selected, onToggle, onResolve, onDismiss }) {
+function Group({ g, index, busy, selectMode, selectable: canSelect, selected, onToggle, onResolve, onDismiss }) {
   const [keep, setKeep] = useState(g.suggested);
   const [seenSuggested, setSeenSuggested] = useState(g.suggested);
   if (g.suggested !== seenSuggested) {               // a reload changed the suggestion: follow it
@@ -102,7 +106,7 @@ function Group({ g, index, busy, selectMode, selected, onToggle, onResolve, onDi
   const kept = g.members.find(m => m.id === keep) || g.members[0];
   const frees = g.members.reduce((n, m) => n + (m.id === kept.id ? 0 : m.bytes), 0);
   const others = g.members.length - 1;
-  const selectable = selectMode && g.identical;
+  const selectable = selectMode && canSelect;
 
   function toggle(ev) {
     ev.stopPropagation();
@@ -111,7 +115,7 @@ function Group({ g, index, busy, selectMode, selected, onToggle, onResolve, onDi
 
   return (
     <section
-      className={`dup-group${selectable ? " is-selecting" : ""}${selected ? " is-selected" : ""}${selectMode && !g.identical ? " is-muted" : ""}`}
+      className={`dup-group${selectable ? " is-selecting" : ""}${selected ? " is-selected" : ""}${selectMode && !canSelect ? " is-muted" : ""}`}
       style={{ animationDelay: `${Math.min(index % PAGE, 30) * 18}ms` }}
       aria-label={`Duplicate group ${index + 1}`}
     >
@@ -128,6 +132,11 @@ function Group({ g, index, busy, selectMode, selected, onToggle, onResolve, onDi
           <span className="dup-state is-pending">hashing…</span>
         ) : (
           <span className="dup-state is-differs" title="Trashing a member that has something the kept one lacks loses it"><Icon name="warn" size={13} />differs</span>
+        )}
+        {g.repost && (
+          <span className="dup-state is-repost" title="Posted by different accounts: one is likely a repost. The earliest posted is suggested.">
+            repost
+          </span>
         )}
         <span className="dup-group-sub">{plural(g.members.length, "copy", "copies")} · {fmtBytes(g.bytes)}</span>
         <div className="page-head-spacer" />
@@ -217,14 +226,19 @@ export default function Duplicates() {
 
   const current = loaded === kind;
   const groups = (current && result?.groups) || [];
-  const identical = groups.filter(g => g.identical);
+  // Bulk select takes identical groups, but a repost only when asked for:
+  // one click must never trash another account's post unseen.
+  const [withReposts, setWithReposts] = useState(false);
+  const bulkable = useCallback(g => g.identical && (!g.repost || withReposts), [withReposts]);
+  const identical = groups.filter(bulkable);
+  const reposts = groups.filter(g => g.identical && g.repost).length;
 
   /* ── Actions ─────────────────────────────────────────── */
   const [busy,     setBusy]     = useState(false);
   const [confirm,  setConfirm]  = useState(null);    // { choices, count, bytes, lost } awaiting confirmation
   const [dlgError, setDlgError] = useState(null);
   const [errors,   setErrors]   = useState(null);
-  const sel = useSelection(identical, { resetKey: kind, escapeBlocked: !!confirm });
+  const sel = useSelection(identical, { resetKey: `${kind}:${withReposts}`, escapeBlocked: !!confirm });
   if (sel.active && current && identical.length === 0) sel.exit();
   const selBytes = sel.selectedItems.reduce((n, g) => n + g.frees, 0);
 
@@ -301,6 +315,17 @@ export default function Duplicates() {
         </span>
       )}
       <div className="page-head-spacer" />
+      {reposts > 0 && (
+        <button
+          type="button"
+          className={`btn-secondary select-toggle${withReposts ? " is-on" : ""}`}
+          aria-pressed={withReposts}
+          onClick={() => setWithReposts(v => !v)}
+          title="Reposts are posts by different accounts. Include them in Select, where the earliest posted is kept."
+        >
+          {withReposts ? "Reposts included" : "Include reposts"}
+        </button>
+      )}
       {identical.length > 0 && !sel.active && (
         <button type="button" className="btn-secondary" onClick={sel.enter} title="Pick identical groups to resolve with the suggested copy">
           <Icon name="check" size={14} />Select
@@ -365,7 +390,8 @@ export default function Duplicates() {
           {current && result.identical > 0 && !sel.active && (
             <div className="dup-summary">
               {plural(result.identical, "identical group")} would free {fmtBytes(result.identical_frees)}.
-              {" "}Use <strong>Select</strong> to resolve them with the suggested copy in one go.
+              {" "}Use <strong>Select</strong> to resolve them with the suggested copy in one go
+              {reposts > 0 && !withReposts ? ` (${plural(reposts, "repost")} left out: turn on Include reposts)` : ""}.
             </div>
           )}
           <div className="dup-groups" aria-busy={busy}>
@@ -378,6 +404,7 @@ export default function Duplicates() {
                   index={i}
                   busy={busy}
                   selectMode={sel.active}
+                  selectable={bulkable(g)}
                   selected={sel.isSelected(g.id)}
                   onToggle={shift => at >= 0 && sel.toggle(at, shift)}
                   onResolve={resolveOne}

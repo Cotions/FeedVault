@@ -150,7 +150,7 @@ def _pixels(member, hashes):
 
 
 def suggest(members, hashes=None):
-    """The member to keep: kept decision, then more media, then the highest
+    """The copy to keep: kept decision, then more media, then the highest
     resolution (when known for every member), then the oldest saved, then
     the shortest path."""
     pixels = {m["id"]: _pixels(m, hashes) if hashes is not None else None for m in members}
@@ -159,8 +159,27 @@ def suggest(members, hashes=None):
                                        m["saved_at"] or 0, len(m["meta_path"]), m["meta_path"]))
 
 
+def _matched(member):
+    return next((i for i in member["items"] if i["idx"] == member["match"]), None)
+
+
+def suggest_original(members):
+    """The post to keep among different posts (a repost, a re-upload): kept
+    decision, then the earliest posted (the original, whoever saved it
+    first), then the highest resolution of the matching picture (when known
+    for every member), then the largest file, then the shortest path."""
+    def pixels(m):
+        i = _matched(m)
+        return i["width"] * i["height"] if i and i["width"] and i["height"] else None
+    px = {m["id"]: pixels(m) for m in members}
+    known = None not in px.values()
+    return min(members, key=lambda m: (not m["kept"], m["posted_at"] is None, m["posted_at"] or 0,
+                                       -px[m["id"]] if known else 0, -((_matched(m) or {}).get("size") or 0),
+                                       len(m["meta_path"]), m["meta_path"]))
+
+
 def _finish(kind, members, differs, pending, hashes, **extra):
-    keep = suggest(members, hashes)
+    keep = suggest(members, hashes) if kind == "copies" else suggest_original(members)
     key = _key(members)
     return {
         "id": group_id(kind, key), "kind": kind, "key": key,
@@ -171,6 +190,8 @@ def _finish(kind, members, differs, pending, hashes, **extra):
         "suggested": keep["id"],
         "frees": sum(m["bytes"] for m in members if m is not keep),
         "bytes": sum(m["bytes"] for m in members),
+        # Posts by different accounts: one is likely a repost of the other.
+        "repost": kind != "copies" and len({m["author"] for m in members}) > 1,
         **extra,
     }
 
@@ -437,6 +458,7 @@ def listing(conn, kind, offset=0, limit=50, threshold=SIMILAR_DEFAULT):
         "kind": kind,
         "threshold": threshold if kind == "similar" else None,
         "total": len(gs),
+        "reposts": sum(1 for g in gs if g["repost"]),
         "identical": sum(1 for g in gs if g["identical"]),
         "pending": sum(1 for g in gs if g["pending"]),
         "frees": sum(g["frees"] for g in gs),
