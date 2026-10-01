@@ -94,8 +94,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 } }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools) and [instaloader settings](#instaloader-settings) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" } }, "yt-dlp": { "session": { "mode": "none" } }, "youtube_max_seconds": 180, "routes": {…} }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
 | POST | `/api/quit` | stops the backend |
@@ -775,18 +775,23 @@ no person yet.
     the folder yet (without `--fast-update`, the stamp dropped first); once
     it succeeds, it is set back to `false`.
   - `session`: `null` to use the global setting (see
-    [Settings](#instaloader-settings)), or one of the session values.
+    [instaloader settings](#instaloader-settings) and
+    [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings)), or
+    one of the session values (gallery-dl and yt-dlp: none or cookies).
 - `last_sync_at`: when the last sync ended (any outcome), or `null`.
 - `last_result`: how it ended, or `null` before the first sync:
   - `state`: the job's (`done`, `failed`, `cancelled`, `interrupted`)
   - `error`: `null` when it worked, else what the output says went wrong:
-    `login_required` (Instagram wants a logged-in session),
+    `login_required` (the site wants a logged-in session),
     `private` (a private profile the session does not follow),
     `not_found` (no such profile: renamed or deleted),
     `rate_limited` (HTTP 429, "Please wait a few minutes"), or `generic`.
     An HTTP 403 counts as `login_required`: it is how Instagram turns away
     an anonymous client, after which instaloader reports the profile as
-    missing
+    missing. gallery-dl and yt-dlp failures are classified from their
+    error lines the same way (gallery-dl's `AuthRequired`, `NotFoundError`,
+    "Tweets are protected"; yt-dlp's "Sign in to confirm", "Private video",
+    "Video unavailable")
   - `message`: one line for people; `line`: the tool's last line of output
     behind it, or `null`
   - `added`: new posts indexed (also after a failure: what was downloaded
@@ -932,6 +937,62 @@ FeedVault only passes the browser's name or the user name on. It never
 stores, reads or sends cookies, passwords or session files. `pause`: whole
 seconds from 0 to 3600.
 
+### gallery-dl and yt-dlp syncs
+
+Job kinds `gallery-dl-sync` (group `gallery-dl`) and `yt-dlp-sync` (group
+`yt-dlp`), params `{ "source": "<id>" }` and nothing else. The source must
+have that tool; its target is checked again (a normalized https link whose
+host is in the routing table and routes to that tool) and so is its folder
+(inside a media root; for yt-dlp, without `$`, which yt-dlp would expand):
+
+```
+gallery-dl --write-metadata --download-archive <data_directory>/gallery-dl/archive.sqlite3
+           -o skip=abort:5 -D <folder> [--cookies-from-browser <browser>] -- <link>
+
+yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
+       --break-on-existing -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
+       [--match-filters "duration <= <youtube_max_seconds>"] [--cookies-from-browser <browser>] -- <link>
+```
+
+- **Incremental.** Each tool's download archive, in FeedVault's data
+  directory, lists what it already has: gallery-dl stops after 5 files in
+  a row that it has (`skip=abort:5`), yt-dlp at the first video it has
+  (`--break-on-existing`, exit code 101, which counts as success). With
+  `options.full_history` the whole profile is walked (`-o skip=true`, no
+  `--break-on-existing`), still skipping what the archive lists.
+- **First sync.** When the source has never synced, the archive is seeded
+  first with what FeedVault already indexed for its account (aliases
+  included): gallery-dl gets the entry of every file of the account's
+  gallery-dl posts (from their metadata JSONs: `<category>` and the
+  extractor's archive format, for twitter, tiktok, instagram, reddit,
+  bluesky and pixiv), yt-dlp a line `<platform> <id>` for every post. The
+  job log says how many. Not with `options.full_history`, nor for a source
+  with no account yet.
+- **YouTube.** A youtube.com source only downloads videos up to
+  `youtube_max_seconds` long (the same rule the parser applies: longer
+  ones are left to ChannelVault).
+- **The folder.** `-D` (gallery-dl) puts every file directly in it; the
+  yt-dlp template is the folder with `%` doubled, so it stays literal.
+- **Result**: as for instaloader: the folder is indexed when the job ends,
+  `result` `{ "added", "updated", "error", "line" }`, stored on the source.
+  There is no pause between gallery-dl or yt-dlp jobs.
+
+### gallery-dl and yt-dlp settings
+
+`GET /api/config` has `"gallery-dl": { "session": {…} }` and
+`"yt-dlp": { "session": {…} }`; `POST /api/config` with either changes it.
+
+| `session` | Flags | What it means |
+|---|---|---|
+| `{ "mode": "none" }` (default) | none | Anonymous: public profiles only |
+| `{ "mode": "cookies", "browser": "firefox" }` | `--cookies-from-browser firefox` | The tool reads that browser's cookies itself. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
+
+FeedVault only passes the browser's name on. It never stores, reads or
+sends cookies. Note that yt-dlp copies the cookies it sent for a video into
+that video's info JSON (`cookies` key), in the media folder.
+
+`youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
+
 ## Storage
 
 `GET /api/storage`:
@@ -1059,8 +1120,10 @@ Built-in kinds:
 |---|---|---|---|
 | `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
 | `instaloader-sync` | `source`: a source id | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line" }` | `instaloader` |
+| `gallery-dl-sync` | `source`: a source id | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
+| `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 
-More download kinds come with #4's next slices and the userscript (#10).
+More download kinds come with the userscript (#10).
 
 ### Log
 

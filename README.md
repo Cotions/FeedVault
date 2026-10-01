@@ -135,10 +135,17 @@ left running by a crash is stopped on the next start.
 
 ## Syncing profiles
 
-A person (or an account) can have **sources**: an Instagram profile and the
-folder its posts go to. **Sync** runs instaloader for it as a job and indexes
-the folder, so new posts show up in the Feed without a terminal. Only new
-posts are fetched: FeedVault keeps instaloader's `--latest-stamps` file in
+A person (or an account) can have **sources**: a profile link and the folder
+its posts go to. Paste the link (Instagram, X, TikTok, YouTube, Reddit,
+Bluesky, pixiv) and FeedVault picks the tool from **Settings → Link
+routing**: instaloader for Instagram, gallery-dl for X, Reddit, Bluesky and
+pixiv, yt-dlp for YouTube and TikTok. **Sync** runs that tool as a job and
+indexes the folder, so new posts show up in the Feed without a terminal.
+gallery-dl and yt-dlp keep their download archives in FeedVault's data
+directory: a sync stops at what they already have, and a first sync skips
+what is already indexed.
+
+For Instagram, only new posts are fetched: FeedVault keeps instaloader's `--latest-stamps` file in
 its data directory, and a first sync starts after the newest post already
 indexed (tick "Full history" to fetch everything). **Creators** offers your
 existing instaloader folders as sources to confirm, and **Sync all** runs
@@ -149,6 +156,9 @@ Instagram sync** can make instaloader use your browser's Instagram cookies
 (`--load-cookies`) or a session it saved after `instaloader --login` in a
 terminal. FeedVault only passes the browser or user name on; it never reads
 or stores cookies, passwords or session files.
+
+gallery-dl and yt-dlp can use a browser's cookies the same way
+(`--cookies-from-browser`, **Settings → gallery-dl / yt-dlp sync**).
 
 ## Where things live
 

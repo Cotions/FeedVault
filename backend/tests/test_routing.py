@@ -1,5 +1,4 @@
 """Profile links: the routing table, normalization, and adding a source by link."""
-import os
 
 from conftest import H
 

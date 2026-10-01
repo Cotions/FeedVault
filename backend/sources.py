@@ -44,6 +44,7 @@ HOST_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com
                   "youtube.com": "youtube", "tiktok.com": "tiktok"}
 BROWSERS = ("firefox", "chrome", "chromium", "brave", "edge")
 SESSION_MODES = ("none", "cookies", "login")
+COOKIE_MODES = ("none", "cookies")             # gallery-dl and yt-dlp: a browser's cookies or nothing
 ERRORS = ("login_required", "private", "not_found", "rate_limited", "generic")
 
 # An Instagram username: letters, digits, dots and underscores, at most 30.
@@ -139,8 +140,10 @@ def parse_url(text, table):
     if found is None:
         return None, f"{host} is not in the routing table (Settings → Link routing)"
     path = re.sub(r"/{2,}", "/", u.path).rstrip("/")
-    if not path or not _PATH_RE.fullmatch(path) or any(p in (".", "..") for p in path.split("/")):
+    if not path:
         return None, "paste a link to a profile, not to the site's home page"
+    if not _PATH_RE.fullmatch(path) or any(p in (".", "..") for p in path.split("/")):
+        return None, "the link has characters a profile link does not"
     return (f"https://{host}{path}", found[0], found[1]), None
 
 
@@ -206,13 +209,13 @@ def parse_target(tool, text):
     return handle.lower()
 
 
-def clean_session(value):
-    """An instaloader session setting, or None when malformed:
-    {"mode": "none"} | {"mode": "cookies", "browser": "firefox"} |
-    {"mode": "login", "user": "name"}. FeedVault only passes the browser's
-    name or the user name on; instaloader reads the cookies or its own saved
-    session file, never FeedVault."""
-    if not isinstance(value, dict) or value.get("mode") not in SESSION_MODES:
+def clean_session(value, modes=SESSION_MODES):
+    """A session setting, or None when malformed: {"mode": "none"} |
+    {"mode": "cookies", "browser": "firefox"} | {"mode": "login", "user":
+    "name"} (instaloader only), among ``modes``. FeedVault only passes the
+    browser's name or the user name on; the tool reads the cookies or its
+    own saved session file, never FeedVault."""
+    if not isinstance(value, dict) or value.get("mode") not in modes:
         return None
     mode = value["mode"]
     if set(value) - {"mode", {"cookies": "browser", "login": "user"}.get(mode)}:
@@ -225,11 +228,11 @@ def clean_session(value):
     return {"mode": "none"}
 
 
-def clean_options(value, base=None):
+def clean_options(value, base=None, tool="instaloader"):
     """A source's options merged over ``base``, or None when malformed:
-    full_history (bool: the first sync downloads everything instead of
-    starting after the newest post indexed) and session (null: the global
-    setting, else see clean_session)."""
+    full_history (bool: the next sync walks everything instead of starting
+    after what is already there) and session (null: the tool's setting,
+    else see clean_session; no login for gallery-dl and yt-dlp)."""
     out = {"full_history": False, "session": None, **(base or {})}
     if value is None:
         return out
@@ -243,7 +246,7 @@ def clean_options(value, base=None):
         if value["session"] is None:
             out["session"] = None
         else:
-            out["session"] = clean_session(value["session"])
+            out["session"] = clean_session(value["session"], SESSION_MODES if tool == "instaloader" else COOKIE_MODES)
             if out["session"] is None:
                 return None
     return out

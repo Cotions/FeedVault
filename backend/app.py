@@ -28,6 +28,7 @@ import sync
 import thumbs
 import trash
 import userdata
+from parsers import yt_dlp
 
 app = Flask(__name__, static_folder=None)
 
@@ -740,7 +741,7 @@ def create_source():
         if not account:
             return jsonify({"ok": False, "error": "account must be { platform, id }"}), 400
         account = account[0]
-    options = sources.clean_options(body.get("options"))
+    options = sources.clean_options(body.get("options"), tool=tool)
     if options is None:
         return jsonify({"ok": False, "error": "options must be { full_history, session }"}), 400
     conn = db.connect()
@@ -768,7 +769,7 @@ def update_source(sid):
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
     body = request.get_json(silent=True) or {}
-    options = sources.clean_options(body["options"], base=s["options"]) \
+    options = sources.clean_options(body["options"], base=s["options"], tool=s["tool"]) \
         if isinstance(body.get("options"), dict) else None
     if options is None:
         return jsonify({"ok": False, "error": "send options: { full_history, session }"}), 400
@@ -825,10 +826,15 @@ def scan_start():
     return jsonify({"ok": True})
 
 
+YOUTUBE_MAX = 24 * 3600
+
+
 def _public_config(cfg):
     return {"media_roots": cfg["media_roots"], "data_directory": cfg["data_directory"],
             "version": config.__version__, "tools": cfg.get("tools") or {},
-            "instaloader": sync.settings(cfg), "routes": sources.routes(cfg)}
+            "instaloader": sync.settings(cfg), "routes": sources.routes(cfg),
+            "gallery-dl": sync.tool_settings("gallery-dl", cfg), "yt-dlp": sync.tool_settings("yt-dlp", cfg),
+            "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg)}
 
 
 @app.get("/api/config")
@@ -840,11 +846,22 @@ def get_config():
 def set_config():
     body = request.get_json(silent=True) or {}
     cfg = config.load()
-    tools = roots = insta = table = None
+    tools = roots = insta = None
+    changes = {}                               # config key -> new value, saved as they are
     if "routes" in body:
-        table, error = sources.clean_routes(body["routes"])
+        changes["routes"], error = sources.clean_routes(body["routes"])
         if error:
             return jsonify({"ok": False, "error": error})
+    for tool in ("gallery-dl", "yt-dlp"):
+        if tool in body:
+            changes[tool], error = sync.clean_tool_settings(tool, body[tool], sync.tool_settings(tool, cfg))
+            if error:
+                return jsonify({"ok": False, "error": error})
+    if "youtube_max_seconds" in body:
+        v = body["youtube_max_seconds"]
+        if not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= YOUTUBE_MAX:
+            return jsonify({"ok": False, "error": f"youtube_max_seconds must be whole seconds from 1 to {YOUTUBE_MAX}"})
+        changes["youtube_max_seconds"] = v
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
         if error:
@@ -866,9 +883,8 @@ def set_config():
         cfg["media_roots"] = roots
     if insta is not None:
         cfg["instaloader"] = insta
-    if table is not None:
-        cfg["routes"] = table
-    if tools is not None or roots is not None or insta is not None or table is not None:
+    cfg.update(changes)
+    if tools is not None or roots is not None or insta is not None or changes:
         config.save(cfg)
     if changed:
         scanner.start(roots)
