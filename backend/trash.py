@@ -184,7 +184,9 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
                 continue
             files = _media_files(m)
             info = _never_again(_post_info(post, len(others) + 1, True), archives.media_entries(post, m), data_dir)
+            moved = report["files"]
             if not _move_all(files, roots, post["id"], info, report, data_dir):
+                _not_moved(info, report["files"] == moved, data_dir)
                 continue
             for f, _ in files:
                 thumbs.forget(data_dir, f)
@@ -208,11 +210,21 @@ def _never_again(info, entries, data_dir):
     return {**info, "archive": added} if added else info
 
 
+def _not_moved(info, nothing, data_dir):
+    """A deletion that failed: when no file moved, no manifest line keeps
+    the archive entries it added, so they are taken out again (the post
+    stays, and can still be synced). When some did, their lines keep them."""
+    if nothing and info.get("archive"):
+        archives.take_back(info["archive"], data_dir)
+
+
 def _delete_post(conn, post, roots, data_dir, report):
     files = _post_files(conn, post)
     items = conn.execute("SELECT COUNT(*) FROM media WHERE post_id = ?", (post["id"],)).fetchone()[0]
     info = _never_again(_post_info(post, items, False), archives.post_entries(post), data_dir)
+    moved = report["files"]
     if not _move_all(files, roots, post["id"], info, report, data_dir):
+        _not_moved(info, report["files"] == moved, data_dir)
         conn.commit()                           # keep the index in step with what did move
         return
     for f, _ in files:

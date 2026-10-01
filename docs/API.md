@@ -839,8 +839,12 @@ no person yet.
   a 400.
 - `person` (an id) and `account` are optional. With `account`, the source
   belongs to that indexed account (unknown: 400); without, to the account of
-  the folder's posts when there are some.
-- A second source for the same tool and target is a 400.
+  the folder's posts when there are some, else (a link) to the one account
+  of that platform whose handle, current or old, is the link's profile
+  name, any case.
+- A second source for the same tool and target is a 400, the target
+  compared in any case, and so is one for the same tool and folder (an
+  x.com and a twitter.com link to one profile).
 - The request never carries flags, paths to run or a command: the sync job
   takes the source id only and builds everything from the stored source.
 
@@ -884,13 +888,14 @@ entries). The defaults:
 - Accepted links: `http` or `https` (a missing scheme is `https`), no login
   part (`user@`), no port other than 80 or 443, a host name (not an IP
   address), and a path of letters, digits and `. _ ~ @ % + -` between
-  slashes, not empty, no `.` or `..` part, at most 500 characters.
+  slashes, not empty, no `.` or `..` part, at most 500 characters. Not a
+  page that is what its query string says (`/watch?v=`, `/playlist?list=`,
+  `/search?q=`, …): the query is dropped, so such a link is refused.
 - Normalized to `https://<host><path>`: lowercase host without `www.`,
   `m.` or `mobile.`, no query string or fragment, no repeated or trailing
-  slash. That is the
-  stored target, the same however the link was pasted; the sync checks it
-  again (still normalized, host still in the table) and gives it to the
-  tool after `--`.
+  slash. That is the stored target, the same however the link was pasted;
+  the sync checks it again (still normalized, host still in the table) and
+  gives it to the tool after `--`.
 
 ### How a sync runs
 
@@ -957,7 +962,8 @@ seconds from 0 to 3600.
 Job kinds `gallery-dl-sync` (group `gallery-dl`) and `yt-dlp-sync` (group
 `yt-dlp`), params `{ "source": "<id>" }` and nothing else. The source must
 have that tool; its target is checked again (a normalized https link whose
-host is in the routing table and routes to that tool) and so is its folder
+host is still in the routing table; a source keeps its tool when the table
+later routes the host to another one) and so is its folder
 (inside a media root; for yt-dlp, without `$`, which yt-dlp would expand):
 
 ```
@@ -974,14 +980,19 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   a row that it has (`skip=abort:5`), yt-dlp at the first video it has
   (`--break-on-existing`, exit code 101, which counts as success). With
   `options.full_history` the whole profile is walked (`-o skip=true`, no
-  `--break-on-existing`), still skipping what the archive lists.
+  `--break-on-existing`), still skipping what the archive lists. A YouTube
+  channel's own page (`/@name`, `/channel/<id>`, not a tab such as
+  `/shorts`) never gets `--break-on-existing`: it lists the Videos tab and
+  then the Shorts tab, and stopping in the first would never reach the
+  second.
 - **First sync.** When the source has never synced, the archive is seeded
   first with what FeedVault already indexed for its account (aliases
   included): gallery-dl gets the entry of every file of the account's
   gallery-dl posts (from their metadata JSONs: `<category>` and the
   extractor's archive format, for twitter, tiktok, instagram, reddit,
   bluesky and pixiv), yt-dlp a line `<platform> <id>` for every post. The
-  job log says how many. Not with `options.full_history`, nor for a source
+  job log says how many. With `options.full_history` too (the profile is
+  walked, what is indexed is still not fetched again); not for a source
   with no account yet.
 - **YouTube.** A youtube.com source only downloads videos up to
   `youtube_max_seconds` long (the same rule the parser applies: longer
@@ -992,7 +1003,12 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   back; restoring it takes out what trashing added (see [Deleting](#deleting)).
 - **Result**: as for instaloader: the folder is indexed when the job ends,
   `result` `{ "added", "updated", "error", "line" }`, stored on the source.
-  There is no pause between gallery-dl or yt-dlp jobs.
+  There is no pause between gallery-dl or yt-dlp jobs. A non-zero exit
+  whose error lines are all about single items (yt-dlp's `ERROR: [youtube]
+  <id>: Private video`, against `[youtube:tab]` or `[tiktok:user]` for the
+  profile; gallery-dl's `[download][error] Failed to download …`), and are
+  not a rate limit or a login wall, is `done`: `message` says how many
+  items could not be downloaded, `line` the last of them.
 
 ### gallery-dl and yt-dlp settings
 

@@ -53,7 +53,8 @@ def test_bad_links_refused():
                  "https://x.com", "https://x.com/", "https://x.com/some one", "https://x.com/a\nb",
                  "https://x.com/a\x00b", "https://x.com/../etc", "https://x.com/a/./b", 'https://x.com/a"b',
                  "https://x.com/$(id)", "https://x.com/a;rm", "https://x.com/a`id`", "https://x.com/a\\b",
-                 "https://x.com/" + "a" * 600]:
+                 "https://x.com/" + "a" * 600, "https://www.youtube.com/playlist?list=PLexample",
+                 "https://www.youtube.com/watch?v=AAAAAAAAAA1", "https://x.com/search?q=cats"]:
         parsed, error = sources.parse_url(text, T)
         assert parsed is None and error, repr(text)
 

@@ -17,6 +17,7 @@ Long YouTube videos belong to ChannelVault: one longer than the config's
 ``youtube_max_seconds`` (default 180) is claimed and listed on the Unmatched
 page with that reason, never indexed.
 """
+import bisect
 import json
 import os
 import re
@@ -106,11 +107,21 @@ def _text(d):
     return f"{title}\n\n{desc}" if desc else title
 
 
-def _files_of(base, names):
+def _named(base, ordered):
+    """The names in ``ordered`` (sorted) that start with ``<base>.``: found by
+    bisection, so a folder of thousands of videos is not walked per video."""
+    prefix = base + "."
+    i = bisect.bisect_left(ordered, prefix)
+    while i < len(ordered) and ordered[i].startswith(prefix):
+        yield ordered[i]
+        i += 1
+
+
+def _files_of(base, ordered):
     """(media, thumbnails, side files) named ``<base>.<something>``."""
     media, thumbs, sides = [], [], []
-    for n in names:
-        if not n.startswith(base + ".") or n == base + INFO:
+    for n in _named(base, ordered):
+        if n == base + INFO:
             continue
         rest = n[len(base) + 1:]
         ext = ext_of(n)
@@ -164,7 +175,8 @@ def parse_dir(root, dirpath, names):
     result = DirResult()
     max_seconds = None                         # read from the config once a YouTube video turns up
 
-    for n in sorted(names):
+    ordered = sorted(names)
+    for n in ordered:
         if not n.endswith(INFO):
             continue
         path = os.path.join(dirpath, n)
@@ -173,13 +185,13 @@ def parse_dir(root, dirpath, names):
             d = _load(path)
         except (OSError, ValueError) as e:
             # Only ours when something beside it shares its name.
-            if any(m.startswith(base + ".") and m != n for m in names):
+            if any(m != n for m in _named(base, ordered)):
                 result.errors.append((path, f"unreadable metadata: {e}"))
                 result.claimed.add(n)
             continue
         if not _is_ours(d):
             continue
-        media_files, thumbs, sides = _files_of(base, names)
+        media_files, thumbs, sides = _files_of(base, ordered)
         mine = {n, *media_files, *thumbs, *sides}
         result.claimed |= mine
         if d.get("_type") == "playlist":

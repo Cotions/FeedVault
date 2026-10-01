@@ -222,7 +222,9 @@ def yt_dlp_main(argv):
     for url in args.urls:
         account = data["accounts"].get(url)
         if data.get("fail") or account is None:
-            ie = (account or {}).get("extractor_key", "generic")
+            # A profile's errors come from its list extractor, as yt-dlp's do.
+            ie = {"TikTok": "tiktok:user", "Youtube": "youtube:tab"}.get(
+                (account or {}).get("extractor_key"), "generic")
             print(YT_DLP_FAIL[data.get("fail") or "notfound"].format(ie=ie, id=url.rsplit("/", 1)[-1]),
                   file=sys.stderr)
             status = 1

@@ -559,7 +559,7 @@ function RoutesCard({ saved, onSaved, msg, setMsg }) {
     setMsg(null);
     try {
       const r = await saveSettings({ routes: table });
-      if (r?.ok) { onSaved(); setMsg({ ok: true, text: "Saved. New links use it; existing sources keep their tool." }); }
+      if (r?.ok) { onSaved(); setMsg({ ok: true, text: "Saved. New links use it; existing sources keep their tool, but one whose site is no longer listed cannot sync." }); }
       else setMsg({ ok: false, text: r?.error || "Save failed." });
     } catch (err) {
       setMsg({ ok: false, text: err.message });
@@ -639,7 +639,7 @@ export default function Settings() {
           <ToolsCard saved={config.tools || {}} onSaved={reload} />
           <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} />
           {Object.keys(COOKIE_TOOLS).map(t => (
-            <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${config.youtube_max_seconds}`} tool={t}
+            <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
                          saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} />
           ))}
           <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} />

@@ -16,6 +16,7 @@ import config
 import db
 import jobs
 import scanner
+import sources
 import sync
 
 TS = 1717243200                                     # 2024-06-01 12:00 UTC
@@ -180,6 +181,17 @@ def test_yt_dlp_argv(env, fake, client):
     assert sync._build_yt_dlp({"source": str(y["id"])})["args"][-4:] == ["--cookies-from-browser", "chromium", "--", YT]
 
 
+def test_youtube_channel_page_does_not_stop_at_the_first_tab(env, fake, client):
+    # A channel's page lists Videos, then Shorts: no --break-on-existing there.
+    root = add(client, YT)
+    assert "--break-on-existing" not in sync._build_yt_dlp({"source": str(root["id"])})["args"]
+    for tab in ("https://youtube.com/@somechannel/shorts", "https://tiktok.com/@somechannel"):
+        s = add(client, tab, folder=str(env["media"] / tab.rsplit("/", 1)[-1] / "x"))
+        assert "--break-on-existing" in sync._build_yt_dlp({"source": str(s["id"])})["args"], tab
+    for page in ("https://youtube.com/channel/UCexampleChannelAAAAAAA1", "https://youtube.com/@x/featured"):
+        assert sync._youtube_root(page) is (page.endswith("1"))
+
+
 def test_folder_escaped_for_yt_dlp(env, fake, client):
     folder = env["media"] / "100% clips {x}"
     s = add(client, TT, folder=str(folder))
@@ -301,6 +313,28 @@ def test_failures_per_tool(env, fake, client):
     assert run_sync(client, y["id"])["state"] == "done"
 
 
+def test_one_item_failing_is_not_the_profile_failing():
+    index = {"added": 3, "updated": 0}
+    for tool, lines in [
+            ("yt-dlp", ["[download] Destination: a.mp4", "ERROR: [youtube] AAAAAAAAAA1: Private video. Sign in if "
+                                                         "you've been granted access to this video"]),
+            ("yt-dlp", ["ERROR: [TikTok] 7300000000000000001: Video unavailable"]),
+            ("gallery-dl", ["/a/1.jpg", "[download][error] Failed to download 2.jpg"])]:
+        state, result, message = sync._outcome({}, 1, list(enumerate(lines)), index, tool)
+        assert state == "done" and result["error"] is None, lines
+        assert message.startswith("3 new posts; 1 item could not be downloaded: "), message
+    for tool, lines, error in [
+            ("yt-dlp", ["ERROR: [youtube:tab] @x: This channel does not exist"], "not_found"),
+            ("yt-dlp", ["ERROR: [youtube] A: Private video", "ERROR: [tiktok:user] x: Unable to find user"],
+             "private"),
+            ("yt-dlp", ["ERROR: [youtube] A: Sign in to confirm you’re not a bot"], "login_required"),
+            ("yt-dlp", ["ERROR: [youtube] A: HTTP Error 429: Too Many Requests"], "rate_limited"),
+            ("gallery-dl", ["[twitter][error] NotFoundError: Requested user could not be found"], "not_found"),
+            ("gallery-dl", ["something broke"], "generic")]:
+        state, result, _ = sync._outcome({}, 1, list(enumerate(lines)), index, tool)
+        assert (state, result["error"]) == ("failed", error), lines
+
+
 def test_classification_lines():
     for line, error in [
             ("[twitter][error] HttpError: '429 Too Many Requests' for 'https://x.com/i/api'", "rate_limited"),
@@ -381,15 +415,46 @@ def test_first_yt_dlp_sync_skips_what_any_tool_indexed(env, fake, client):
     assert len(fake.runs("yt-dlp")) == 1
 
 
-def test_no_seeding_with_full_history_or_after_the_first_sync(env, fake, client):
+def test_seeding_with_full_history_but_not_after_the_first_sync(env, fake, client):
     folder = env["media"] / "tiktok" / "someone"
     yt_dlp_case("tiktok/video", folder)
     scanner.scan(env["roots"])
-    fake.put(TT, tt_account(1))
+    fake.put(TT, {**tt_account(1), "uploader_id": "6800000000000000002"})
     s = add(client, TT, folder=str(folder), options={"full_history": True})
     run_sync(client, s["id"])
-    assert "tiktok 7100000000000000001" not in archive_entries(env, "yt-dlp")
+    # Full history walks the whole profile, but what is indexed is not fetched again.
+    assert "tiktok 7100000000000000001" in archive_entries(env, "yt-dlp")
     assert get(client, f"/api/sources/{s['id']}")["options"]["full_history"] is False      # once is enough
+    # Indexed later, by hand: the next sync does not seed again.
+    yt_dlp_case("youtube/short", env["media"] / "tiktok" / "someone" / "later")
+    scanner.scan(env["roots"])
+    job = run_sync(client, s["id"])
+    assert not any("archive entr" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+
+
+def test_first_sync_finds_the_account_by_its_handle(env, fake, client):
+    # Downloaded earlier into another folder: the link's name is the account's handle.
+    yt_dlp_case("tiktok/video", env["media"] / "old" / "tiktok")
+    scanner.scan(env["roots"])
+    s = add(client, "https://tiktok.com/@SomeBody_TT")
+    assert s["account"] == {"platform": "tiktok", "id": "6800000000000000002"}
+    fake.put("https://tiktok.com/@SomeBody_TT", {**tt_account(3), "uploader_id": "6800000000000000002"})
+    run_sync(client, s["id"])
+    assert "tiktok 7100000000000000001" in archive_entries(env, "yt-dlp")
+    # No account has the name: none.
+    assert add(client, "https://tiktok.com/@nobody")["account"] is None
+
+
+def test_same_profile_twice_is_refused(env, client):
+    add(client, "https://x.com/Someone")
+    for again in ["https://x.com/someone", "https://twitter.com/someone"]:
+        assert "already" in post(client, "/api/sources", {"target": again}, 400)["error"], again
+        r = get(client, f"/api/sources/resolve?url={again}")
+        assert r["source"] is not None, again
+    # Another tool into the same folder is allowed (gallery-dl and yt-dlp for TikTok).
+    add(client, "https://tiktok.com/@someone")
+    set_config(routes={**sources.ROUTES, "tiktok.com": "gallery-dl"})
+    add(client, "https://tiktok.com/@someone")
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +531,21 @@ def test_instaloader_posts_add_nothing(env, fake, client):
     assert not os.path.exists(env["tmp"] / "data" / "gallery-dl") and not os.path.exists(env["tmp"] / "data" / "yt-dlp")
     lines = [json.loads(ln) for ln in open(env["media"] / ".feedvault-trash" / ".manifest.jsonl")]
     assert all("archive" not in ln for ln in lines)
+
+
+def test_trash_that_moves_nothing_takes_its_entries_back(env, fake, client, monkeypatch):
+    import trash
+    fake.put(TT, tt_account(1))
+    s = add(client, TT)
+    run_sync(client, s["id"])
+    open(archives.path("yt-dlp", str(env["tmp"] / "data")), "w").close()
+
+    def refuse(path, roots, line):
+        raise trash.TrashError("read-only")
+    monkeypatch.setattr(trash, "_move", refuse)
+    r = post(client, "/api/delete", {"posts": ["tiktok:7300000000000000001"]})
+    assert r["posts"] == [] and r["errors"]
+    assert archive_entries(env, "yt-dlp") == set()             # the post stays, and can sync again
 
 
 # ---------------------------------------------------------------------------

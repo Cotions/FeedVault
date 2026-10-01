@@ -706,8 +706,8 @@ def resolve_source():
     except sources.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     conn = db.connect()
-    taken = conn.execute("SELECT id FROM sources WHERE tool = ? AND target = ?", (r["tool"], r["target"])).fetchone()
-    return jsonify({"ok": True, **r, "source": taken[0] if taken else None})
+    folder = sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]
+    return jsonify({"ok": True, **r, "source": sources.existing(conn, r["tool"], r["target"], folder)})
 
 
 @app.post("/api/sources")

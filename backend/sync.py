@@ -43,6 +43,7 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 import archives
 import config
@@ -337,11 +338,43 @@ def classify(lines, failures=None):
     return "generic", texts[-1].strip()[:500] if texts else None
 
 
+# An error line about one item, not the profile: yt-dlp names the video's
+# extractor ("[youtube]", "[TikTok]"; a channel or user is "[youtube:tab]",
+# "[tiktok:user]"), gallery-dl logs a file it could not get under "[download]".
+_YT_DLP_ERROR = re.compile(r"ERROR: \[([^\]]+)\]")
+_GALLERY_DL_ERROR = re.compile(r"^\[([^\]]+)\]\[error\]")
+
+
+def _item_errors(tool, lines):
+    """The error lines of a run when every one is about a single item (a
+    private or removed video in a channel), else None."""
+    pattern = _YT_DLP_ERROR if tool == "yt-dlp" else _GALLERY_DL_ERROR
+    found = []
+    for _, t in lines:
+        m = pattern.match(t.strip()) if tool == "gallery-dl" else pattern.search(t)
+        if m is None:
+            continue
+        if (":" in m.group(1)) if tool == "yt-dlp" else (m.group(1) != "download"):
+            return None
+        found.append(t.strip())
+    return found or None
+
+
 def _outcome(params, code, lines, index, tool="instaloader"):
     added = index["added"] if index else 0
     result = {"added": added, "updated": index["updated"] if index else 0, "error": None, "line": None}
+    new = f"{added} new post{'' if added == 1 else 's'}"
     if code == 0 or (tool == "yt-dlp" and code == BREAK_ON_EXISTING):
-        return "done", result, f"{added} new post{'' if added == 1 else 's'}"
+        return "done", result, new
+    if tool != "instaloader":
+        # One video or file that could not be had is not the profile failing.
+        items = _item_errors(tool, lines)
+        # Not a rate limit or a login wall: those stop every item, not one.
+        if items and classify([(0, t) for t in items], GALLERY_DL_FAILURES if tool == "gallery-dl"
+                              else YT_DLP_FAILURES)[0] in ("private", "not_found", "generic"):
+            result["line"] = items[-1][:500]
+            skipped = f"{len(items)} item{'' if len(items) == 1 else 's'}"
+            return "done", result, f"{new}; {skipped} could not be downloaded: {items[-1][:200]}"
     if tool == "instaloader":
         result["error"], result["line"] = classify(lines)
         message = MESSAGES[result["error"]]
@@ -430,15 +463,29 @@ def _build_gallery_dl(params):
     ]}
 
 
+YOUTUBE_TABS = {"videos", "shorts", "streams", "live", "podcasts", "releases", "playlists", "featured"}
+
+
+def _youtube_root(target):
+    """Whether a YouTube link is a channel's own page (``/@name``,
+    ``/channel/<id>``), not one of its tabs or a playlist."""
+    parts = urlsplit(target).path.strip("/").split("/")
+    return parts[-1].lower() not in YOUTUBE_TABS and parts[0].lower() != "playlist"
+
+
 def _build_yt_dlp(params):
     src, target, folder, cfg = _archive_source(params, "yt-dlp")
     options = _options(src)
     session = options["session"] or tool_settings("yt-dlp", cfg)["session"]
     longest = yt_dlp.youtube_max_seconds(cfg)
+    # A YouTube channel's own page lists its tabs (Videos, then Shorts, …)
+    # one after the other: stopping at the first video already there would
+    # never reach the next tab. The archive still skips what it lists.
+    tabs = src["platform"] == "youtube" and _youtube_root(target)
     return {"tool": "yt-dlp", "rescan": folder, "args": [
         "--write-info-json", "--write-thumbnail",
         "--download-archive", archives.path("yt-dlp", cfg["data_directory"]),
-        *([] if options["full_history"] else ["--break-on-existing"]),
+        *([] if options["full_history"] or tabs else ["--break-on-existing"]),
         # The output template is %-formatted: a % in the folder is doubled.
         "-o", os.path.join(folder.replace("%", "%%"), YT_DLP_NAME),
         # Long YouTube videos are ChannelVault's; one without a duration (live) is skipped too.
@@ -459,7 +506,6 @@ def _start_archive(tool):
         os.makedirs(os.path.dirname(archives.path(tool, data_dir)), exist_ok=True)
         if _options(src)["full_history"]:
             note("full history: every post not in the archive yet")
-            return
         if src["last_sync_at"] is not None:
             return
         if src["author_id"] is None:

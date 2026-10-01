@@ -66,6 +66,9 @@ _PATH_RE = re.compile(r"(?:/[A-Za-z0-9._~@%+-]+)+")
 URL_MAX = 500
 # Path parts that say what kind of page it is, not whose: skipped when
 # naming a source's folder.
+# Pages that are what their query string says (?v=…, ?list=…, ?q=…): the
+# query is dropped, so they are refused rather than saved as a broken link.
+_QUERY_PAGES = {"watch", "playlist", "results", "search", "hashtag", "explore"}
 _PAGE_WORDS = {"user", "users", "u", "profile", "channel", "c", "en", "ja", "media", "videos", "shorts",
                "streams", "tweets", "with_replies", "likes", "submitted", "posts", "artworks", "illustrations",
                "featured", "playlists", "member", "creator"}
@@ -145,6 +148,8 @@ def parse_url(text, table):
     path = re.sub(r"/{2,}", "/", u.path).rstrip("/")
     if not path:
         return None, "paste a link to a profile, not to the site's home page"
+    if path.rsplit("/", 1)[-1].lower() in _QUERY_PAGES:
+        return None, "that is a link to a video, playlist or search, not to a profile"
     if not _PATH_RE.fullmatch(path) or any(p in (".", "..") for p in path.split("/")):
         return None, "the link has characters a profile link does not"
     return (f"https://{host}{path}", found[0], found[1]), None
@@ -154,16 +159,20 @@ def platform_of(table_host):
     return HOST_PLATFORMS.get(table_host) or table_host.split(".")[0]
 
 
-def folder_name(url):
-    """A folder name for a profile link: its first part that is not a page
-    kind (``/user/``, ``/media``), without ``@``, lowercase; else "profile"."""
+def profile_handle(url):
+    """The profile's name in a link: its first part that is not a page kind
+    (``/user/``, ``/media``), without ``@``; else None."""
     for part in urlsplit(url).path.split("/"):
         part = part.lstrip("@")
         if part and part.lower() not in _PAGE_WORDS:
-            name = re.sub(r"[^a-z0-9._-]+", "_", part.lower()).strip("._")
-            if name:
-                return name[:80]
-    return "profile"
+            return part
+    return None
+
+
+def folder_name(url):
+    """A folder name for a profile link: its profile name, lowercase; else "profile"."""
+    name = re.sub(r"[^a-z0-9._-]+", "_", (profile_handle(url) or "").lower()).strip("._")
+    return name[:80] or "profile"
 
 
 def resolve(text, table, roots):
@@ -413,14 +422,16 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
         raise Refused("the folder must be inside a media root")
     if os.path.exists(real) and not os.path.isdir(real):
         raise Refused("the folder path is a file")
-    if conn.execute("SELECT 1 FROM sources WHERE tool = ? AND target = ?", (tool, target)).fetchone():
-        raise Refused(f"there is already a {tool} source for {target}")
+    if existing(conn, tool, target, real) is not None:
+        raise Refused(f"there is already a {tool} source for {target} or its folder")
     if account is not None:
         key = people.canonical(conn, *account)
         if key not in db.accounts(conn) or key[0] != platform:
             raise Refused(f"unknown account {account[0]}:{account[1]}")
     else:
         key = _folder_account(conn, platform, real, roots)
+        if key is None and tool != "instaloader":
+            key = _handle_account(conn, platform, profile_handle(target))
     if person_id is not None and not people.exists(conn, person_id):
         raise Refused("no such person")
     with conn:
@@ -429,6 +440,29 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (person_id, platform, key[1] if key else None, tool, target, real, json.dumps(options), now)).lastrowid
     return sid
+
+
+def existing(conn, tool, target, folder=None):
+    """The id of the source of ``tool`` that is already there for a target:
+    the same one in any case (X, TikTok and YouTube names are not
+    case-sensitive), or one that downloads into the same folder (x.com and
+    twitter.com links to one profile). Else None."""
+    row = conn.execute("SELECT id FROM sources WHERE tool = ? AND (lower(target) = lower(?) OR folder = ?) "
+                       "ORDER BY lower(target) = lower(?) DESC, id LIMIT 1",
+                       (tool, target, folder, target)).fetchone()
+    return row[0] if row else None
+
+
+def _handle_account(conn, platform, handle):
+    """The indexed account whose handle (any it had) is a link's profile
+    name, when exactly one has it: posts downloaded before, into another
+    folder, so the first sync does not fetch them again."""
+    if not handle:
+        return None
+    handle = handle.lower()
+    found = [key for key, a in db.accounts(conn).items() if key[0] == platform and handle in
+             {h.lower() for h in [a["handle"], *a["handles"]] if isinstance(h, str)}]
+    return found[0] if len(found) == 1 else None
 
 
 def _folder_account(conn, platform, folder, roots):
