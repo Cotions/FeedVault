@@ -141,6 +141,7 @@ class Job:
         self.n = 0
         self.proc = None
         self.cancelled = False
+        self.exited = False
         self.interrupted = False
 
     def public(self):
@@ -182,13 +183,21 @@ def submit(kind_name, params):
             raise BadRequest("the job's folder is not inside a media root")
     cwd = spec.get("cwd") or cfg["data_directory"]
     os.makedirs(cwd, exist_ok=True)
+    if _closing:
+        raise BadRequest("FeedVault is stopping")
     now = int(time.time())
-    with _lock:                                # ids and queue order agree
-        if _closing:
-            raise BadRequest("FeedVault is stopping")
-        job = Job(_insert(kind.name, params, spec, group, cwd, rescan, now),
-                  kind.name, params, spec, group, cwd, rescan, now)
-        _active[job.id] = job
+    # Written before taking the lock, which every output line needs: a
+    # database busy with a scan must not stall running jobs.
+    job = Job(_insert(kind.name, params, spec, group, cwd, rescan, now),
+              kind.name, params, spec, group, cwd, rescan, now)
+    with _lock:
+        closing = _closing
+        if not closing:
+            _active[job.id] = job
+    if closing:
+        job.state, job.ended_at, job.message = "interrupted", now, INTERRUPTED
+        _save(job, [])
+        raise BadRequest("FeedVault is stopping")
     _pump()
     return job.public()
 
@@ -246,6 +255,8 @@ def _run(job):
         reader = threading.Thread(target=_read, args=(job, proc.stdout), daemon=True, name=f"job-{job.id}-log")
         reader.start()
         code = proc.wait()
+        with _lock:
+            job.exited = True                  # too late to cancel: what it downloaded gets indexed
         _killpg(proc, signal.SIGKILL)          # whatever it left behind in its group
         reader.join(5)                         # a process that left the group may still hold the pipe
         if not reader.is_alive():
@@ -272,29 +283,55 @@ def _run(job):
 def _index(job):
     roots = config.load()["media_roots"]
     if job.full_scan:
-        report = scanner.scan(roots)           # every root: a scan of one would mark the others missing
+        report = scanner.run(roots)            # every root: a scan of one would mark the others missing
     else:
-        dirs = []
-        for dirpath, dirnames, _ in os.walk(job.rescan):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in scanner._SKIP_DIRS]
-            dirs.append(dirpath)
-        report = scanner.index_dirs(roots, dirs)
+        report = scanner.index_dirs(roots, list(scanner.folders(job.rescan)))
     return {"added": report["added"], "updated": report["updated"]}
 
 
-def _decode(raw):
-    text = raw.decode("utf-8", "replace").rstrip("\r\n")
-    if "\r" in text:                           # progress bars redraw with \r: keep the last state
-        text = next((s for s in reversed(text.split("\r")) if s), "")
-    return text
+PROGRESS_EVERY = 1.0                           # seconds between two kept progress redraws
 
 
 def _read(job, stream):
-    skipping = False                           # inside a line longer than LINE_MAX
-    for raw in iter(lambda: stream.readline(LINE_MAX), b""):
-        if not skipping:
-            _note(job, _decode(raw) + ("" if raw.endswith(b"\n") else " …"))
-        skipping = not raw.endswith(b"\n")
+    """Split the output into lines at \n, and at a lone \r too: progress
+    bars redraw with \r and might not print a \n for minutes. A redraw is
+    kept at most once per PROGRESS_EVERY; a line ended by \n always is."""
+    buf, skipping, last_redraw = b"", False, 0.0
+    after_cr = False                           # the last line ended with \r: a \n now completes a \r\n
+    while True:
+        chunk = stream.read1(65536)
+        eof = not chunk
+        buf += chunk
+        while buf:
+            if after_cr and buf.startswith(b"\n"):
+                buf = buf[1:]
+            after_cr = False
+            cut = min((k for k in (buf.find(b"\n"), buf.find(b"\r")) if k >= 0), default=-1)
+            if cut < 0:
+                break
+            crlf = buf[cut:cut + 2] == b"\r\n"
+            redraw = buf[cut:cut + 1] == b"\r" and not crlf
+            line, buf = buf[:cut], buf[cut + (2 if crlf else 1):]
+            after_cr = redraw and not buf      # the \n may come in the next read
+            if skipping:
+                skipping = False
+            elif not redraw:
+                _note(job, _decode(line))
+            elif line and time.monotonic() - last_redraw >= PROGRESS_EVERY:
+                last_redraw = time.monotonic()
+                _note(job, _decode(line))
+        if len(buf) > LINE_MAX:                # cut it; drop the rest up to the next line end
+            if not skipping:
+                _note(job, _decode(buf[:LINE_MAX]) + " …")
+            buf, skipping = b"", True
+        if eof:
+            if buf and not skipping:
+                _note(job, _decode(buf))
+            return
+
+
+def _decode(raw):
+    return raw.decode("utf-8", "replace")
 
 
 def _note(job, text):
@@ -336,12 +373,19 @@ def _terminate(job):
     t.start()
 
 
+class TooLate(Exception):
+    """The job's process has exited; it is indexing what it downloaded."""
+
+
 def cancel(job_id):
-    """Cancel a queued or running job: its public dict, or None if it is not active."""
+    """Cancel a queued or running job: its public dict, or None if it is not
+    active. Raises TooLate once its process has exited."""
     with _lock:
         job = _active.get(job_id)
         if job is None:
             return None
+        if job.exited:
+            raise TooLate("the job has finished and is indexing its files")
         if job.state == "queued":
             del _active[job_id]
             job.state, job.ended_at, job.message = "cancelled", int(time.time()), "cancelled"
@@ -367,7 +411,7 @@ def shutdown():
         jobs = list(_active.values())
         for job in jobs:
             job.interrupted = True
-    procs = [j.proc for j in jobs if j.proc is not None]
+    procs = [j.proc for j in jobs if j.proc is not None and not j.exited]
     for proc in procs:
         _killpg(proc, signal.SIGTERM)
     deadline = time.monotonic() + KILL_AFTER
@@ -425,7 +469,8 @@ def _prune():
 def recover():
     """At startup: jobs a stopped FeedVault left queued or running."""
     conn = db.connect()
-    n = conn.execute("UPDATE jobs SET state = 'interrupted', message = ?, ended_at = COALESCE(started_at, created_at) "
+    # When it really ended is unknown: ended_at stays NULL.
+    n = conn.execute("UPDATE jobs SET state = 'interrupted', message = ?, ended_at = NULL "
                      "WHERE state IN ('queued', 'running')", (INTERRUPTED,)).rowcount
     conn.commit()
     if n:

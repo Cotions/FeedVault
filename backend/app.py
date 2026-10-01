@@ -604,7 +604,10 @@ def job_log(job_id):
 
 @app.post("/api/jobs/<int:job_id>/cancel")
 def cancel_job(job_id):
-    job = jobs.cancel(job_id)
+    try:
+        job = jobs.cancel(job_id)
+    except jobs.TooLate as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
     if job is None:
         if jobs.get(job_id) is None:
             return jsonify({"ok": False, "error": "no such job"}), 404

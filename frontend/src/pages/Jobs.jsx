@@ -19,31 +19,33 @@ function JobLog({ jobId }) {
   const stickRef = useRef(true);              // follow the end unless the user scrolled up
 
   useEffect(() => {
-    let alive = true, timer = null, after = 0, ended = false;
+    let alive = true, timer = null, busy = false, after = 0, ended = false;
     async function tick() {
       timer = null;
+      busy = true;
       try {
         const r = await getJobLog(jobId, after);
         if (!alive) return;
         setError(null);
-        if (r.first > after + 1 && after > 0) setGap(true);
+        if (r.first > after + 1) setGap(true);
         if (r.lines.length) {
           setLines(ls => [...ls, ...r.lines].slice(-LOG_KEPT));
           after = r.next;
         }
-        if (r.more) { schedule(0); return; }
-        ended = ENDED.has(r.state);
+        ended = ENDED.has(r.state) && !r.more;
+        if (r.more) { busy = false; schedule(0); return; }
       } catch (e) {
         if (!alive) return;
         setError(e.message);
       }
+      busy = false;
       if (!ended) schedule(LOG_POLL_MS);
     }
     function schedule(ms) {
       if (alive && !document.hidden) timer = setTimeout(tick, ms);
     }
     function onVisibility() {
-      if (!document.hidden && !timer && !ended) tick();
+      if (!document.hidden && !timer && !busy && !ended) tick();
     }
     tick();
     document.addEventListener("visibilitychange", onVisibility);
@@ -96,6 +98,7 @@ function JobTitle({ job }) {
 export default function Jobs() {
   const { list } = useJobs();
   const [picked,   setPicked]   = useState(null);   // a job clicked in the history
+  const [closed,   setClosed]   = useState(null);   // the log closed by the user, not shown again
   const [confirm,  setConfirm]  = useState(null);   // job to cancel
   const [busy,     setBusy]     = useState(false);
   const [dlgErr,   setDlgErr]   = useState(null);
@@ -110,7 +113,9 @@ export default function Jobs() {
   const autoId = running[0]?.id ?? null;
   const [lastAuto, setLastAuto] = useState(autoId);
   if (autoId !== null && autoId !== lastAuto) setLastAuto(autoId);
-  const shown = jobs.find(j => j.id === (picked ?? lastAuto)) || null;
+  const shownId = picked ?? lastAuto;
+  const shown = shownId === closed ? null : jobs.find(j => j.id === shownId) || null;
+  function pick(id) { setPicked(id); setClosed(null); }
 
   async function runCancel() {
     setBusy(true);
@@ -137,7 +142,7 @@ export default function Jobs() {
           {j.state === "running" ? `started ${fmtAgo(j.started_at)}` : `queued ${fmtAgo(j.created_at)}`}
         </span>
         {j.id !== shown?.id && (
-          <button type="button" className="btn-ghost" onClick={() => setPicked(j.id)}>Show log</button>
+          <button type="button" className="btn-ghost" onClick={() => pick(j.id)}>Show log</button>
         )}
         <button type="button" className="btn-danger-soft job-cancel" onClick={() => { setDlgErr(null); setConfirm(j); }}>
           <Icon name="close" size={13} />Cancel…
@@ -181,7 +186,7 @@ export default function Jobs() {
             {ENDED.has(shown.state) && shown.message && (
               <span className={`job-message${shown.state === "failed" ? " is-err" : ""}`}>{shown.message}</span>
             )}
-            <button type="button" className="del-btn" onClick={() => { setPicked(null); setLastAuto(null); }} aria-label="Close the log" title="Close">
+            <button type="button" className="del-btn" onClick={() => { setClosed(shown.id); setPicked(null); }} aria-label="Close the log" title="Close">
               <Icon name="close" size={14} />
             </button>
           </div>
@@ -212,11 +217,11 @@ export default function Jobs() {
                     key={j.id}
                     className={j.id === shown?.id ? "is-selected" : undefined}
                     style={{ animationDelay: `${Math.min(i, 30) * 20}ms` }}
-                    onClick={() => setPicked(j.id)}
+                    onClick={() => pick(j.id)}
                   >
                     <td><StateChip state={j.state} /></td>
                     <td>
-                      <button type="button" className="btn-link" onClick={e => { e.stopPropagation(); setPicked(j.id); }} title="Show its log">
+                      <button type="button" className="btn-link" onClick={e => { e.stopPropagation(); pick(j.id); }} title="Show its log">
                         <JobTitle job={j} />
                       </button>
                     </td>

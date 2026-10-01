@@ -148,8 +148,11 @@ export default function App() {
     for (const j of list.jobs) {
       if (j.id <= since || told.has(j.id) || !ENDED.has(j.state)) continue;
       told.add(j.id);
-      if (j.state === "done") toast(`Done: ${j.message}`);
-      else if (j.state === "failed") toast(`Failed: ${j.message}`, "err");
+      // Which tool or source, for jobs that name one ("Done, yt-dlp: 2024.08.06").
+      const what = Object.values(j.params || {}).join(" ");
+      const head = what ? `, ${what}` : "";
+      if (j.state === "done") toast(`Done${head}: ${j.message}`);
+      else if (j.state === "failed") toast(`Failed${head}: ${j.message}`, "err");
       else toast(`${j.label}: ${j.message}`);
       if (j.result?.added || j.result?.updated) changed = true;
     }

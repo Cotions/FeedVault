@@ -283,10 +283,30 @@ def test_log_pages(runner):
     assert seen[-1] == "2499" and len(seen) >= jobs.TAIL_KEPT
 
 
-def test_progress_lines_keep_their_last_state(runner):
+def test_progress_redraws_are_throttled(runner):
     runner["kind"]("progress", "import sys; sys.stdout.write('10%\\r50%\\r100%\\r\\ndone\\n')")
     job = ended(jobs.submit("progress", {})["id"])
-    assert [ln["text"] for ln in jobs.log(job["id"])["lines"]] == ["100%", "done"]
+    # The first redraw shows, the next ones within a second do not; the
+    # line a \\r\\n ends is always kept.
+    assert [ln["text"] for ln in jobs.log(job["id"])["lines"]] == ["10%", "100%", "done"]
+
+
+def test_progress_without_newline_shows_live(runner, monkeypatch):
+    monkeypatch.setattr(jobs, "PROGRESS_EVERY", 0)
+    gate = runner["tmp"] / "gate"
+    runner["kind"]("bar", f"""
+import os, sys, time
+for i in range(3):
+    sys.stdout.write(f"[download] {{i * 50}}%\\r"); sys.stdout.flush()
+while not os.path.exists({str(gate)!r}): time.sleep(0.02)
+""")
+    job_id = jobs.submit("bar", {})["id"]
+    # No newline yet, the job still running: the redraws are already there.
+    wait_for(lambda: len(jobs.log(job_id)["lines"]) == 3)
+    assert state(job_id) == "running"
+    assert [ln["text"] for ln in jobs.log(job_id)["lines"]] == ["[download] 0%", "[download] 50%", "[download] 100%"]
+    gate.touch()
+    ended(job_id)
 
 
 def test_invalid_utf8_is_replaced(runner):
@@ -374,7 +394,7 @@ def test_interrupted_on_restart(runner):
     for job_id in (running, queued):
         job = jobs.get(job_id)
         assert job["state"] == "interrupted" and job["message"] == jobs.INTERRUPTED
-        assert job["ended_at"] is not None
+        assert job["ended_at"] is None                 # unknown
     with jobs._lock:
         jobs._active.update(orphans)                   # so teardown stops the "old" process
 
@@ -474,3 +494,48 @@ def test_api_tool_paths(env, client):
     assert cfg["tools"] == {"instaloader": str(tool)} and cfg["media_roots"] == env["roots"]
     r = client.post("/api/config", json={"tools": {"instaloader": ""}}, headers=H).get_json()
     assert r["ok"] is True and r["config"]["tools"] == {}
+
+
+def test_cancel_while_indexing_is_refused(runner, monkeypatch, client):
+    folder = runner["media"] / "f"
+    folder.mkdir()
+    runner["kind"]("dl", "pass", rescan=str(folder))
+    indexing, release = jobs.threading.Event(), jobs.threading.Event()
+    real = jobs.scanner.index_dirs
+
+    def slow(roots, dirs):
+        indexing.set()
+        release.wait(10)
+        return real(roots, dirs)
+    monkeypatch.setattr(jobs.scanner, "index_dirs", slow)
+    job_id = jobs.submit("dl", {})["id"]
+    assert indexing.wait(10)
+    with pytest.raises(jobs.TooLate):
+        jobs.cancel(job_id)
+    r = client.post(f"/api/jobs/{job_id}/cancel", headers=H)
+    assert r.status_code == 409 and "indexing" in r.get_json()["error"]
+    release.set()
+    assert ended(job_id)["state"] == "done"
+
+
+def test_full_scan_goes_through_the_scanner(runner, monkeypatch):
+    import scanner
+    kicks = []
+    monkeypatch.setattr(jobs.scanner.hashing, "kick", lambda: kicks.append(1))
+    folder = runner["media"] / "alice.example"
+    write_post(folder, "P1", 1717243200, ALICE, "image")
+    runner["kind"]("full", "pass", rescan=str(folder), full_scan=True)
+    job = ended(jobs.submit("full", {})["id"])
+    assert job["result"] == {"added": 1, "updated": 0}
+    assert scanner.status()["last"]["added"] == 1 and not scanner.status()["running"] and kicks
+
+
+def test_rescan_skips_what_a_scan_skips(runner):
+    folder = runner["media"] / "dl"
+    write_post(folder, "P1", 1717243200, ALICE, "image")
+    write_post(folder / "venv" , "P2", 1717243300, ALICE, "image")
+    write_post(folder / "tool", "P3", 1717243400, ALICE, "image")
+    (folder / "tool" / "pyvenv.cfg").write_text("")
+    write_post(folder / ".hidden", "P4", 1717243500, ALICE, "image")
+    runner["kind"]("dl", "pass", rescan=str(folder))
+    assert ended(jobs.submit("dl", {})["id"])["result"] == {"added": 1, "updated": 0}

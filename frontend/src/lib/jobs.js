@@ -24,7 +24,7 @@ export const ENDED = new Set(["done", "failed", "cancelled", "interrupted"]);
 
 // "1 s", "2 min 5 s", "1 h 4 min"; null while it has not started
 export function jobDuration(job, now = Date.now() / 1000) {
-  if (!job.started_at) return null;
+  if (!job.started_at || (ENDED.has(job.state) && !job.ended_at)) return null;   // ended when FeedVault crashed: unknown
   const s = Math.max(0, Math.round((job.ended_at ?? now) - job.started_at));
   if (s < 60) return `${s} s`;
   if (s < 3600) return `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}`;

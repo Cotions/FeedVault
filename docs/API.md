@@ -669,7 +669,8 @@ A **job**:
 
 - `state`: `queued` → `running` → `done` (exit code 0) | `failed` |
   `cancelled` | `interrupted` (FeedVault stopped while it was queued or
-  running; set on quit, or on the next start after a crash).
+  running; set on quit, or on the next start after a crash, and then
+  `ended_at` is `null`: when it stopped is unknown).
 - `argv`: for display. The first item is the tool's name; the path actually
   run is resolved when the job starts (see [Tools](#tools)).
 - `rescan`: a folder inside a media root, or `null`. When the job exits 0,
@@ -687,7 +688,7 @@ A **job**:
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
 | GET | `/api/jobs/<id>` | job, or 404 |
 | GET | `/api/jobs/<id>/log?after=<n>` | output lines numbered above `n` (default 0), see below; 404 if unknown |
-| POST | `/api/jobs/<id>/cancel` | → `{ "ok": true, "job": {…} }`; 404 if unknown, 409 if it has already ended |
+| POST | `/api/jobs/<id>/cancel` | → `{ "ok": true, "job": {…} }`; 404 if unknown, 409 if it has already ended, or if its process has exited and it is indexing what it downloaded |
 
 A parameter is `{ "type": "choice", "choices": […] }` or `{ "type": "text",
 "max": 500 }` (1 to `max` characters), required unless it says
@@ -709,9 +710,11 @@ Download kinds come with profile sync (#4) and the userscript (#10).
 ```
 
 Standard output and error, merged, decoded as UTF-8 (bad bytes replaced).
-Lines are numbered from 1; a line longer than 4 KB is cut and ends with
-` …`; for a line redrawn with carriage returns (progress bars) only its
-last state is kept. Lines FeedVault adds itself start with `[feedvault]`.
+Lines are numbered from 1 and end at `\n` or at a lone `\r`; a line longer
+than 4 KB is cut and ends with ` …`. Progress bars redraw with `\r`, often
+without a `\n` for minutes: such a redraw is kept at most once a second, so
+the live log moves without filling up; a line ended by `\n` is always kept.
+Lines FeedVault adds itself start with `[feedvault]`.
 
 - While the job is queued or running: the last 5000 lines. Poll with
   `after` set to the previous `next`. At most 1000 lines per answer; `more`

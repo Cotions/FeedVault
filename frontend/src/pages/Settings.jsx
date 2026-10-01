@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, getJobKinds } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED } from "../lib/jobs";
@@ -256,8 +256,6 @@ function TrashCard() {
   );
 }
 
-const TOOLS = ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"];
-
 /* One tool: its last check (a tool-version job, read from the shared jobs
    poll, so it survives leaving the page) and the path to run it from. */
 function ToolRow({ tool, saved, check, onSaved }) {
@@ -323,6 +321,9 @@ function ToolRow({ tool, saved, check, onSaved }) {
 
 function ToolsCard({ saved, onSaved }) {
   const { list } = useJobs();
+  // The tools are the choices of the tool-version kind: one list, the backend's.
+  const { data: kinds, error } = useApi(getJobKinds);
+  const tools = kinds?.find(k => k.kind === "tool-version")?.params.tool.choices || [];
   // The newest check of each tool (the list is newest first).
   const checks = {};
   for (const j of list?.jobs || []) {
@@ -335,8 +336,9 @@ function ToolsCard({ saved, onSaved }) {
         The downloaders FeedVault runs, and ffmpeg for video frames. Each is looked up on your PATH;
         set a path for one installed elsewhere (a virtualenv, say). The file must be named after the tool.
       </p>
+      {!kinds && <div className="dim">{error ? `Could not load the tools: ${error.message}` : "Loading…"}</div>}
       <ul className="tool-list">
-        {TOOLS.map(t => (
+        {tools.map(t => (
           <ToolRow key={`${t}:${saved[t] || ""}`} tool={t} saved={saved[t]} check={checks[t]} onSaved={onSaved} />
         ))}
       </ul>
