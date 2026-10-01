@@ -118,9 +118,9 @@ def test_resolve_endpoint(env, client):
     assert (r["tool"], r["platform"], r["target"]) == ("gallery-dl", "twitter", "https://x.com/someone/media")
     r = get(client, "/api/sources/resolve?url=https://instagram.com/Some.Body/")
     assert (r["tool"], r["target"], r["folder"]) == ("instaloader", "some.body", str(env["media"] / "some.body"))
-    assert "routing" in get(client, "/api/sources/resolve?url=https://x.com.evil.example/a", 400)["error"]
-    get(client, "/api/sources/resolve?url=https://www.instagram.com/p/C8xYzAbCdEf/", 400)
-    get(client, "/api/sources/resolve", 400)
+    assert "routing" in get(client, "/api/sources/resolve?url=https://x.com.evil.example/a")["error"]
+    assert get(client, "/api/sources/resolve?url=https://www.instagram.com/p/C8xYzAbCdEf/")["ok"] is False
+    assert get(client, "/api/sources/resolve")["ok"] is False
 
 
 def test_create_by_link(env, client):
@@ -168,4 +168,4 @@ def test_routes_in_settings(env, client):
     assert config.load()["routes"]["tiktok.com"] == "gallery-dl"
     # A host taken out of the table: its links are refused.
     post(client, "/api/config", {"routes": {"instagram.com": "instaloader"}})
-    get(client, "/api/sources/resolve?url=https://x.com/someone", 400)
+    assert get(client, "/api/sources/resolve?url=https://x.com/someone")["ok"] is False

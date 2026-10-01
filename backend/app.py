@@ -704,7 +704,8 @@ def resolve_source():
     try:
         r = sources.resolve(request.args.get("url"), sources.routes(cfg), cfg["media_roots"])
     except sources.Refused as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+        # An answer, not a failed request: the page asks as the user types.
+        return jsonify({"ok": False, "error": str(e)})
     conn = db.connect()
     folder = sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]
     return jsonify({"ok": True, **r, "source": sources.existing(conn, r["tool"], r["target"], folder)})

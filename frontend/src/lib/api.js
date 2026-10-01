@@ -235,14 +235,7 @@ export function saveToolPaths(tools) { return post("/api/config", { tools }); }
 export function getSources() { return get("/api/sources"); }
 // What adding a pasted link would make: { ok, tool, platform, target, folder, source }
 // or { ok: false, error } (a link that is not accepted, see docs/API.md "Link routing").
-export async function resolveSource(url, opts) {
-  try {
-    return await request("GET", `/api/sources/resolve${qs({ url })}`, undefined, opts);
-  } catch (e) {
-    if (e.body && typeof e.body === "object") return e.body;
-    throw e;
-  }
-}
+export function resolveSource(url, opts) { return get(`/api/sources/resolve${qs({ url })}`, opts); }
 // { tool?, target (a profile link, or an Instagram name with tool "instaloader"), folder?, person?,
 //   account?, options? } → { ok, source }
 export function createSource(body) { return post("/api/sources", body); }
