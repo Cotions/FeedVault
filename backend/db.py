@@ -2,7 +2,7 @@
 
 Everything here is derived from the media folders and can be rebuilt by a
 rescan, except the user's own tables (review decisions, tags,
-collections, later people). Those are mirrored to JSON files by
+collections, people). Those are mirrored to JSON files by
 userdata.py so a rebuild can restore them.
 """
 import glob
@@ -266,10 +266,42 @@ def _migrate_9(conn):
         )""")
 
 
+def _migrate_10(conn):
+    """People (people.py): accounts, a platform and an author id as indexed,
+    linked into one person. people and person_accounts are user data, never
+    touched by scans and mirrored to JSON by userdata.py; an account belongs
+    to one person at most. account_aliases is derived on every scan: a
+    folder-name author id (posts rebuilt from file names) that is the same
+    account as a numeric id found in the same folder's metadata."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS people (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            notes      TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS person_accounts (
+            person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            at        INTEGER NOT NULL,
+            PRIMARY KEY (platform, author_id)
+        ) WITHOUT ROWID""")
+    conn.execute("CREATE INDEX IF NOT EXISTS person_accounts_person ON person_accounts(person_id)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS account_aliases (
+            platform  TEXT NOT NULL,
+            alias_id  TEXT NOT NULL,                -- the folder name, as filename-only posts carry it
+            author_id TEXT NOT NULL,                -- the account's id from metadata
+            PRIMARY KEY (platform, alias_id)
+        ) WITHOUT ROWID""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
-              _migrate_9]
+              _migrate_9, _migrate_10]
 
 BACKUPS_KEPT = 3
 
@@ -639,12 +671,26 @@ def _memo(conn, key, compute):
     return value
 
 
-def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False):
-    """WHERE clause and arguments for the /api/posts filters, over _FROM.
-    None when the search text can match nothing. Shared by list_posts and
-    post_summary so a count and its size can never disagree.
+# The accounts of a person (by id, three times): those linked, and their
+# aliases either way (see account_aliases), so posts rebuilt from file names
+# follow the account they belong to.
+PERSON_ACCOUNTS = """
+    SELECT platform, author_id FROM person_accounts WHERE person_id = ?
+    UNION SELECT a.platform, a.alias_id FROM account_aliases a JOIN person_accounts pa
+      ON pa.platform = a.platform AND pa.author_id = a.author_id WHERE pa.person_id = ?
+    UNION SELECT a.platform, a.author_id FROM account_aliases a JOIN person_accounts pa
+      ON pa.platform = a.platform AND pa.author_id = a.alias_id WHERE pa.person_id = ?"""
 
-    ``tags``: the post must have every one; ``tag:`` terms in ``q`` add to them."""
+
+def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
+                person=None):
+    """WHERE clause and arguments for the /api/posts filters, over _FROM.
+    None when the search text can match nothing. Shared by list_posts,
+    post_summary and storage so a count and its size can never disagree.
+
+    ``tags``: the post must have every one; ``tag:`` terms in ``q`` add to them.
+    ``author`` takes in its folder-name aliases; ``person`` (an id) every
+    account linked to that person."""
     where, args = [], []
     tags = list(tags or ())
     if q:
@@ -670,8 +716,12 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
         where.append("p.platform = ?")
         args.append(platform)
     if author:
-        where.append("p.author_id = ?")
-        args.append(author)
+        where.append("(p.author_id = ? OR (p.platform, p.author_id) IN "
+                     "(SELECT platform, alias_id FROM account_aliases WHERE author_id = ?))")
+        args += [author, author]
+    if person is not None:
+        where.append(f"(p.platform, p.author_id) IN ({PERSON_ACCOUNTS})")
+        args += [person] * 3
     if kind:
         where.append("p.kind = ?")
         args.append(kind)
@@ -683,8 +733,8 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
 
 
 def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted",
-               offset=0, limit=60, review=None, order="desc", tags=(), untagged=False):
-    f = post_filter(q, platform, author, kind, review, tags, untagged)
+               offset=0, limit=60, review=None, order="desc", tags=(), untagged=False, person=None):
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person)
     if f is None:
         return 0, []
     clause, args = f
@@ -697,9 +747,10 @@ def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted
     return total, summaries(conn, rows)
 
 
-def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False):
+def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
+                 person=None):
     """Posts, media and bytes matched by the /api/posts filters, all pages."""
-    f = post_filter(q, platform, author, kind, review, tags, untagged)
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person)
     if f is None:
         return {"posts": 0, "media": 0, "bytes": 0}
     clause, args = f
@@ -735,42 +786,135 @@ def set_decision(conn, post_ids, decision, now):
     return ids
 
 
-# Handle and name come from the most recent post, since handles change.
-_NEWEST_NAMES = """
-    (SELECT author_handle FROM posts p2 WHERE p2.platform = p.platform
-       AND p2.author_id = p.author_id ORDER BY posted_at DESC LIMIT 1) AS handle,
-    (SELECT author_name FROM posts p2 WHERE p2.platform = p.platform
-       AND p2.author_id = p.author_id ORDER BY posted_at DESC LIMIT 1) AS name"""
+# ---------------------------------------------------------------------------
+# Accounts
+#
+# An account is a platform and an author id, as indexed. Posts rebuilt from
+# file names carry their folder's name as author id; when the same folder's
+# metadata names the account's own id, the folder name is an alias of it
+# (account_aliases, see people.refresh_aliases) and both read as one account.
+# ---------------------------------------------------------------------------
+
+PROFILE_URLS = {
+    "instagram": "https://www.instagram.com/{}/",
+    "twitter": "https://x.com/{}",
+    "tiktok": "https://www.tiktok.com/@{}",
+}
+
+
+def profile_url(platform, handle):
+    return PROFILE_URLS[platform].format(handle) if handle and platform in PROFILE_URLS else None
+
+
+def _alias_map(conn):
+    """{(platform, alias id): author id}."""
+    return {(r[0], r[1]): r[2] for r in conn.execute("SELECT platform, alias_id, author_id FROM account_aliases")}
+
+
+def aliases(conn):
+    return _memo(conn, ("aliases",), _alias_map)
+
+
+def _seen(table, value, first, last):
+    if value is None:
+        return
+    span = table.setdefault(value, [first, last])
+    if first is not None and (span[0] is None or first < span[0]):
+        span[0] = first
+    if last is not None and (span[1] is None or last > span[1]):
+        span[1] = last
+
+
+def _history(conn):
+    """Per account as indexed (aliases not merged), in one pass: post count,
+    newest post time, the handle and name of the newest post (handles
+    change), and every handle and display name seen with the first and last
+    post time under it."""
+    out = {}
+    for platform, aid, handle, name, n, first, last in conn.execute("""
+            SELECT platform, author_id, author_handle, author_name, COUNT(*), MIN(posted_at), MAX(posted_at)
+            FROM posts WHERE author_id IS NOT NULL GROUP BY 1, 2, 3, 4"""):
+        a = out.setdefault((platform, aid), {"count": 0, "newest": None, "handle": None, "name": None,
+                                            "handles": {}, "names": {}, "top": None})
+        a["count"] += n
+        top = (last is not None, last or 0)
+        if a["top"] is None or top > a["top"]:
+            a["top"], a["newest"], a["handle"], a["name"] = top, last, handle, name
+        _seen(a["handles"], handle, first, last)
+        _seen(a["names"], name, first, last)
+    return out
+
+
+def _spans(table, key):
+    """[{key, first, last}], the most recent first."""
+    return [{key: v, "first": s[0], "last": s[1]}
+            for v, s in sorted(table.items(), key=lambda kv: (kv[1][1] is None, -(kv[1][1] or 0), kv[0]))]
+
+
+def _accounts(conn, sizes=True):
+    """{(platform, id): account row}, aliases merged into the account they
+    stand for. ``sizes``: add up the bytes of every account's media too."""
+    hist, alias = _history(conn), _alias_map(conn)
+    people = {(r[0], r[1]): {"id": r[2], "name": r[3]} for r in conn.execute(
+        "SELECT pa.platform, pa.author_id, p.id, p.name FROM person_accounts pa JOIN people p ON p.id = pa.person_id")}
+    size = {}
+    if sizes:
+        size = {(r[0], r[1]): r[2] for r in conn.execute("""
+            SELECT p.platform, p.author_id, SUM(m.size) FROM posts p
+            JOIN media m ON m.post_id = p.id AND m.missing = 0
+            WHERE p.author_id IS NOT NULL GROUP BY 1, 2""")}
+    out = {}
+    # Own ids first, so a merged row takes its handle from the account's own posts.
+    for key in sorted(hist, key=lambda k: k in alias):
+        h = hist[key]
+        canon = (key[0], alias[key]) if key in alias and (key[0], alias[key]) in hist else key
+        a = out.get(canon)
+        if a is None:
+            a = out[canon] = {"platform": canon[0], "id": canon[1], "handle": h["handle"], "name": h["name"],
+                              "count": 0, "bytes": 0, "newest": None, "aliases": [], "person": None,
+                              "handles": {}, "names": {}}
+        if key != canon:
+            a["aliases"].append(key[1])
+        a["count"] += h["count"]
+        a["bytes"] += size.get(key) or 0
+        if h["newest"] is not None and (a["newest"] is None or h["newest"] > a["newest"]):
+            a["newest"] = h["newest"]
+        a["person"] = a["person"] or people.get(key)
+        for table in ("handles", "names"):
+            for v, (first, last) in h[table].items():
+                _seen(a[table], v, first, last)
+    for a in out.values():
+        a["handle"] = a["handle"] or next(iter(a["handles"]), None)
+        a["url"] = profile_url(a["platform"], a["handle"])
+        a["handles"] = _spans(a["handles"], "handle")
+        a["names"] = _spans(a["names"], "name")
+        if not sizes:
+            del a["bytes"]
+    return out
+
+
+def accounts(conn):
+    """_accounts(), cached. Rows are shared: callers must not modify them."""
+    return _memo(conn, ("accounts",), _accounts)
 
 
 def authors(conn):
-    return _memo(conn, ("authors",), _authors)
-
-
-def _authors(conn):
-    rows = conn.execute(f"""
-        SELECT platform, author_id, COUNT(*) AS count, {_NEWEST_NAMES},
-               (SELECT COALESCE(SUM(m.size), 0) FROM posts p3
-                  JOIN media m ON m.post_id = p3.id AND m.missing = 0
-                  WHERE p3.platform = p.platform AND p3.author_id = p.author_id) AS bytes
-        FROM posts p WHERE author_id IS NOT NULL
-        GROUP BY platform, author_id
-        ORDER BY count DESC, handle
-    """).fetchall()
-    return [{"platform": r["platform"], "id": r["author_id"], "handle": r["handle"],
-             "name": r["name"], "count": r["count"], "bytes": r["bytes"]} for r in rows]
+    return sorted(accounts(conn).values(), key=lambda a: (-a["count"], a["handle"] or ""))
 
 
 LARGEST = 100
 
 
-def storage(conn):
-    """Disk use by creator, kind and year, and the largest files. Media
-    marked missing are left out. The trash total is added by the caller."""
-    return _memo(conn, ("storage",), _storage)
+def storage(conn, person=None):
+    """Disk use by creator, kind and year, and the largest files, of every
+    post or of one person's. Media marked missing are left out. The trash
+    total is added by the caller."""
+    return _memo(conn, ("storage", person), lambda c: _storage(c, person))
 
 
-def _storage(conn):
+def _storage(conn, person=None):
+    # The same filter as /api/posts, so a person's totals match the Feed's.
+    clause, args = post_filter(person=person)
     # One pass over the posts, grouped as finely as any table below needs and
     # rolled up here: three separate GROUP BY queries took three times as long.
     rows = conn.execute(f"""
@@ -781,8 +925,9 @@ def _storage(conn):
         {_FROM}
         LEFT JOIN (SELECT post_id, COUNT(*) AS media, SUM(size) AS bytes FROM media
                    WHERE missing = 0 GROUP BY post_id) pm ON pm.post_id = p.id
+        {clause}
         GROUP BY 1, 2, 3, 4, 5
-    """).fetchall()
+    """, args).fetchall()
 
     def bucket(table, key, **extra):
         if key not in table:
@@ -791,17 +936,17 @@ def _storage(conn):
 
     totals = {"posts": 0, "media": 0, "bytes": 0}
     by_author, by_kind, by_year = {}, {}, {}
-    # Not authors(): its byte sums would add half again to a cold load.
-    names = {(r["platform"], r["author_id"]): r for r in conn.execute(f"""
-        SELECT platform, author_id, {_NEWEST_NAMES} FROM posts p
-        WHERE author_id IS NOT NULL GROUP BY platform, author_id""")}
+    # Without byte sums: they would add half again to a cold load.
+    names, alias = _accounts(conn, sizes=False), _alias_map(conn)
     for r in rows:
         targets = [totals, bucket(by_kind, r["kind"], kind=r["kind"]),
                    bucket(by_year, r["year"], year=r["year"])]
         if r["author_id"] is not None:
-            a = names[(r["platform"], r["author_id"])]
-            row = bucket(by_author, (r["platform"], r["author_id"]),
-                         platform=r["platform"], id=r["author_id"], handle=a["handle"], name=a["name"])
+            key = (r["platform"], r["author_id"])
+            key = (key[0], alias[key]) if key in alias and (key[0], alias[key]) in names else key
+            a = names[key]
+            row = bucket(by_author, key, platform=key[0], id=key[1], handle=a["handle"], name=a["name"],
+                         aliases=a["aliases"], person=a["person"])
             row.setdefault("kept_bytes", 0)
             row.setdefault("unreviewed_bytes", 0)
             if r["decision"] == "keep":
@@ -815,12 +960,12 @@ def _storage(conn):
             t["bytes"] += r["bytes"]
 
     largest = []
-    for m in conn.execute("""
+    for m in conn.execute(f"""
             SELECT m.id, m.post_id, m.kind, m.size, m.poster_path,
                    p.platform, p.post_id AS short_id, p.author_id, p.author_handle
-            FROM media m JOIN posts p ON p.id = m.post_id
-            WHERE m.missing = 0 AND m.size IS NOT NULL
-            ORDER BY m.size DESC LIMIT ?""", (LARGEST,)):
+            FROM media m JOIN posts p ON p.id = m.post_id LEFT JOIN decisions d ON d.post_id = p.id
+            WHERE m.missing = 0 AND m.size IS NOT NULL {clause.replace("WHERE", "AND", 1)}
+            ORDER BY m.size DESC LIMIT ?""", (*args, LARGEST)):
         thumb = m["kind"] != "video" or m["poster_path"] or thumbs.have_ffmpeg()
         largest.append({
             "media_id": m["id"], "post": m["post_id"], "platform": m["platform"],

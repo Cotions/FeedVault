@@ -59,7 +59,8 @@ def test_storage_shape_and_sums(env, client):
     a = next(r for r in s["by_author"] if r["id"] == "111")
     assert a == {"platform": "instagram", "id": "111", "handle": "alice.example", "name": "Alice Example",
                  "posts": 3, "media": sum(sz[f"instagram:{p}"][0] for p in ("A1", "A2", "A3")), "bytes": alice,
-                 "kept_bytes": sz["instagram:A2"][1], "unreviewed_bytes": alice - sz["instagram:A2"][1]}
+                 "kept_bytes": sz["instagram:A2"][1], "unreviewed_bytes": alice - sz["instagram:A2"][1],
+                 "aliases": [], "person": None}
     assert [r["bytes"] for r in s["by_author"]] == sorted((r["bytes"] for r in s["by_author"]), reverse=True)
 
     kinds = {r["kind"]: r for r in s["by_kind"]}

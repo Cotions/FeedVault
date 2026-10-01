@@ -11,6 +11,7 @@ import time
 import db
 import hashing
 import parsers
+import people
 
 # Folders that never hold posts but may hold images (icons in packages).
 # (Dot-folders, including FeedVault's own .feedvault-trash, are skipped too.)
@@ -123,6 +124,7 @@ def _scan(roots):
 
     report["missing"] = _mark_missing(conn, seen_meta)
     db.save_copies(conn, copies, started, prune=True)
+    people.refresh_aliases(conn)
     conn.execute("DELETE FROM unmatched")
     conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
                      unmatched)
@@ -213,6 +215,7 @@ def index_dirs(roots, dirs):
                          unmatched)
         conn.executemany("DELETE FROM copies WHERE meta_path = ?", [(p,) for p in indexed])
         db.save_copies(conn, copies, now, prune=False)
+        people.refresh_aliases(conn)
         conn.commit()
     hashing.kick()                             # files back from the trash may need hashing again
     return report
