@@ -224,12 +224,14 @@ def test_purge_refuses_symlink_out_of_the_trash(env, client, tmp_path):
     k1 = _fake_line(env, trash_root(env) / "link.jpg", "instagram:A")
     k2 = _fake_line(env, trash_root(env) / "dir" / "a.jpg", "instagram:B")
     k3 = _fake_line(env, trash_root(env) / ".manifest.jsonl", "instagram:C")
-    r = client.post("/api/trash/purge", json={"keys": [k1, k2, k3]}, headers=H).get_json()
-    assert r["entries"] == 0 and len(r["errors"]) == 3
-    assert precious.exists() and (outside / "a.jpg").exists()
-    assert len(manifest(env)) == 3
-    for k in (k1, k2, k3):
+    for k in (k1, k2, k3):                      # never read through a link out of the trash
         assert client.get(f"/trash/{k}/thumb").status_code == 404
+    r = client.post("/api/trash/purge", json={"keys": [k1, k2, k3]}, headers=H).get_json()
+    # The link itself is in the trash: purging removes the link, not its target.
+    assert r["keys"] == [k1] and len(r["errors"]) == 2
+    assert not os.path.lexists(trash_root(env) / "link.jpg")
+    assert precious.exists() and (outside / "a.jpg").exists()
+    assert (trash_root(env) / ".manifest.jsonl").exists() and len(manifest(env)) == 2
 
 
 def test_roots_not_configured_are_never_touched(env, client, tmp_path):

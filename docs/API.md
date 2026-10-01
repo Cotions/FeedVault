@@ -197,9 +197,10 @@ with `posts`. Either `posts` or `keys` must be a non-empty list.
 
 `POST /api/trash/purge` with `{ "keys": ["…"] }` (at most 5000) permanently
 deletes the files of those entries and drops their lines from the manifest.
-Unknown keys are ignored. A file is only deleted when its real path is inside
-the trash folder of a configured media root; anything else is refused and
-reported. Lines of files already gone are dropped. Response:
+Unknown keys are ignored. A file is only deleted when its folder (symlinks
+followed) is inside the trash folder of a configured media root; anything else
+is refused and reported. A trashed symlink is removed itself, never its
+target. Lines of files already gone are dropped. Response:
 
 ```json
 { "ok": true, "entries": 2, "keys": ["…", "…"], "files": 4, "bytes": 5242880, "dropped": 1,

@@ -460,6 +460,18 @@ def _inside_trash(path, root):
     return real.startswith(base + os.sep) and real != os.path.join(base, MANIFEST)
 
 
+def _removable(path, root):
+    """Whether purge may unlink ``path``: its folder (symlinks followed) is the
+    trash folder or inside it, and it is not the manifest. The last component
+    is not followed, since os.remove on a symlink removes only the link; a
+    trashed symlink to a file outside can then still be purged on its own."""
+    base = os.path.realpath(trash_dir(root))
+    parent = os.path.realpath(os.path.dirname(path))
+    if parent != base and not parent.startswith(base + os.sep):
+        return False
+    return not (parent == base and os.path.basename(path) == MANIFEST)
+
+
 def _thumb_source(g, ffmpeg=None):
     """(media line, poster path or None) to make the entry's thumbnail from."""
     if not g["media"]:
@@ -581,9 +593,9 @@ def purge(roots, keys, data_dir, match=None):
                         report["dropped"] += 1
                         done.add(key)
                         continue
-                    if not _inside_trash(path, root):
+                    if not _removable(path, root):
                         raise TrashError("outside the trash folder")
-                    if os.path.isdir(path):
+                    if os.path.isdir(path) and not os.path.islink(path):
                         raise TrashError("not a file")
                     size = os.lstat(path).st_size
                     os.remove(path)
