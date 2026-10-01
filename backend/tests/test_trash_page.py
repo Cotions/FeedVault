@@ -319,3 +319,42 @@ def test_thumb_url_shape(env, client):
     for bad in ("..", "xyz", "A" * 20, "0" * 19, "0" * 21):
         assert client.get(f"/trash/{bad}/thumb").status_code == 404
     assert client.get(f"/trash/{'0' * 20}/thumb").status_code == 404
+
+
+# --- purge by filter ------------------------------------------------------------------
+
+def _age(env, post, at):
+    """Pretend a post's deletion happened at ``at``."""
+    lines = manifest(env)
+    for line in lines:
+        if line["post"] == post:
+            line["at"] = at
+    with open(trash_root(env) / ".manifest.jsonl", "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in lines))
+
+
+def test_purge_by_filter(env, client):
+    write_post(env["media"] / "alice", "OLD", 1717243200, ALICE, "image")
+    write_post(env["media"] / "alice", "NEW", 1717243300, ALICE, "image")
+    write_post(env["media"] / "bob", "BOLD", 1717243400, BOB, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:OLD", "instagram:NEW", "instagram:BOLD"]}, headers=H)
+    _age(env, "instagram:OLD", 1000)
+    _age(env, "instagram:BOLD", 1000)
+    listed = items(client, author="111", before=2000)
+    assert [e["post"] for e in listed["entries"]] == ["instagram:OLD"]
+    r = client.post("/api/trash/purge", json={"filter": {"author": "111", "before": 2000}}, headers=H).get_json()
+    assert r["ok"] and r["entries"] == 1 and r["keys"] == [listed["entries"][0]["key"]]
+    assert sorted(line["post"] for line in manifest(env) if line["role"] == "media") \
+        == ["instagram:BOLD", "instagram:NEW"]
+    r = client.post("/api/trash/purge", json={"filter": {"before": 2000}}, headers=H).get_json()
+    assert r["entries"] == 1
+    assert [line["post"] for line in manifest(env) if line["role"] == "media"] == ["instagram:NEW"]
+
+
+def test_purge_filter_validation(env, client):
+    for body in ({"filter": {}}, {"filter": {"since": "1"}}, {"filter": {"before": -1}},
+                 {"filter": {"author": ""}}, {"filter": {"oops": 1}}, {"filter": [1]},
+                 {"filter": {"before": True}}, {"filter": {"before": 5}, "keys": ["a"]}):
+        assert client.post("/api/trash/purge", json=body, headers=H).status_code == 400, body
+    assert client.post("/api/trash/purge", json={"filter": {"before": 5}}).status_code == 403

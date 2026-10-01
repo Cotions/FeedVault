@@ -102,8 +102,8 @@ Only **Empty trash** and **purge** (below) remove files for good.
 | POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
 | GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }` |
 | POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }` |
-| GET | `/api/trash/items?offset=&limit=&author=&since=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
-| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
+| GET | `/api/trash/items?offset=&limit=&author=&since=&before=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
+| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "author": …, "since": …, "before": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
 | GET | `/trash/<key>/thumb` | small JPEG of a trashed entry (no header needed, like `/media`) |
 
 `/api/delete` removes each listed post with all its files (media, posters,
@@ -168,7 +168,8 @@ deletion first:
 
 - Query parameters, all optional: `author` (an author id, or a handle for
   authors without one), `since` (Unix seconds: deleted at or after),
-  `offset` (default 0), `limit` (default 60, max 500).
+  `before` (deleted strictly before), `offset` (default 0), `limit`
+  (default 60, max 500).
 - `total`, `files` and `bytes` add up every entry the filters match, not just
   one page. `trash` and `authors` cover the whole trash, whatever the filters.
 - `key` is opaque. It names one entry and is what restore and purge take.
@@ -203,6 +204,13 @@ reported. Lines of files already gone are dropped. Response:
 { "ok": true, "entries": 2, "keys": ["…", "…"], "files": 4, "bytes": 5242880, "dropped": 1,
   "errors": [{ "path": "/abs/.feedvault-trash/x.jpg", "error": "outside the trash folder" }] }
 ```
+
+Instead of `keys`, `{ "filter": { … } }` purges every entry the same filters
+as `/api/trash/items` match (`author`, `since`, `before`; each optional, but
+the filter must name at least one, use `/api/trash/empty` for everything).
+The match is made under the same lock as the purge itself. The page sends the
+time it loaded the list as `before`, so nothing trashed after the user saw
+the totals is purged with them.
 
 `entries` counts the entries fully purged and `keys` names them, `dropped`
 the lines removed for files that were already missing. An entry with an error

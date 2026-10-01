@@ -13,21 +13,36 @@ import SelectionBar from "../components/SelectionBar";
 const PAGE = 60;
 const MAX_PAGE = 500;      // the backend's limit; a reload refetches what was loaded
 
-// "Deleted when" filter → the `since` parameter, in Unix seconds.
+// "Deleted when" filter → the `since` / `before` parameters, in Unix seconds.
 const WHEN = [
   { value: "",      label: "Any time" },
   { value: "today", label: "Today" },
   { value: "week",  label: "Last 7 days" },
+  { value: "older", label: "More than 7 days ago" },
 ];
 
-function sinceFor(when, now = Date.now()) {
+function rangeFor(when, now = Date.now()) {
+  const weekAgo = Math.floor(now / 1000) - 7 * 86400;
   if (when === "today") {
     const d = new Date(now);
     d.setHours(0, 0, 0, 0);
-    return Math.floor(d.getTime() / 1000);
+    return { since: Math.floor(d.getTime() / 1000) };
   }
-  if (when === "week") return Math.floor(now / 1000) - 7 * 86400;
-  return undefined;
+  if (when === "week")  return { since: weekAgo };
+  if (when === "older") return { before: weekAgo };
+  return {};
+}
+
+// "from @someone, deleted today" for the filters in effect.
+function filterText(authors, author, when) {
+  const parts = [];
+  if (author) {
+    const a = authors?.find(x => (x.id || x.handle) === author);
+    parts.push(a ? `from @${a.handle || a.id}` : "from this creator");
+  }
+  const w = WHEN.find(x => x.value === when);
+  if (when && w) parts.push(`deleted ${w.label.toLowerCase()}`);
+  return parts.join(", ");
 }
 
 const plural = (n, word, many = `${word}s`) => `${fmtInt(n)} ${n === 1 ? word : many}`;
@@ -118,30 +133,35 @@ export default function Trash() {
   const [tick,    setTick]    = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const fetchPage = useCallback((offset, limit) => {
-    const since = sinceFor(when);
-    return getTrashItems({ author, since, offset, limit });
-  }, [author, when]);
+  // The range is fixed when a filter's first page loads, so later pages and
+  // a bulk purge mean exactly what the user saw.
+  const [range, setRange] = useState(null);       // { key, since, before, asOf }
+  const rangeNow = useCallback(() => ({ key: filterKey, ...rangeFor(when), asOf: Math.floor(Date.now() / 1000) + 1 }),
+    [filterKey, when]);
+  const fetchPage = useCallback((offset, limit, r) => {
+    return getTrashItems({ author, since: r.since, before: r.before, offset, limit });
+  }, [author]);
 
   // First page on a new filter; on a reload (after restore or purge) as many
   // entries as were on screen, so the page does not jump back to the top.
   const shown = loaded === filterKey ? result?.entries.length ?? 0 : 0;
   useEffect(() => {
     let alive = true;
-    fetchPage(0, Math.min(MAX_PAGE, Math.max(PAGE, shown))).then(
-      r  => { if (alive) { setResult(r); setLoaded(filterKey); setError(null); } },
+    const r0 = rangeNow();
+    fetchPage(0, Math.min(MAX_PAGE, Math.max(PAGE, shown)), r0).then(
+      r  => { if (alive) { setResult(r); setLoaded(filterKey); setRange(r0); setError(null); } },
       e  => { if (alive) setError(e); },
     );
     return () => { alive = false; };
     // `shown` is read, not watched: loading more must not refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchPage, filterKey, refreshKey, tick]);
+  }, [fetchPage, rangeNow, filterKey, refreshKey, tick]);
   const reload = () => setTick(t => t + 1);
 
   async function loadMore() {
     setLoadingMore(true);
     try {
-      const r = await fetchPage(result.entries.length, PAGE);
+      const r = await fetchPage(result.entries.length, PAGE, range);
       setResult(prev => ({ ...r, entries: [...prev.entries, ...r.entries.filter(e => !prev.entries.some(p => p.key === e.key))] }));
     } catch (e) {
       toast(e.message, "err");
@@ -159,7 +179,11 @@ export default function Trash() {
   const [confirm,   setConfirm]   = useState(false);
   const [dlgError,  setDlgError]  = useState(null);
   const [errors,    setErrors]    = useState(null);     // { list, summary }
-  const sel = useSelection(items, { resetKey: filterKey, escapeBlocked: confirm });
+  const [bulk,      setBulk]      = useState(null);     // { total, files, bytes, filter } awaiting confirmation
+  const sel = useSelection(items, { resetKey: filterKey, escapeBlocked: confirm || !!bulk });
+  // Nothing left to select (all restored or purged): leave select mode.
+  // Adjusting state during render, not in an effect.
+  if (sel.active && current && result.trash.entries === 0) sel.exit();
   const selBytes = sel.selectedItems.reduce((n, e) => n + (e.bytes || 0), 0);
   const selFiles = sel.selectedItems.reduce((n, e) => n + (e.files || 0), 0);
 
@@ -192,15 +216,25 @@ export default function Trash() {
     }
   }
 
+  // Everything the filters match, not just what is loaded. Nothing deleted
+  // after the list was loaded goes with it: `before` is at most that moment.
+  function askBulk() {
+    const filter = { before: Math.min(range.before ?? Infinity, range.asOf) };
+    if (author) filter.author = author;
+    if (range.since != null) filter.since = range.since;
+    setDlgError(null);
+    setBulk({ total: result.total, files: result.files, bytes: result.bytes, filter });
+  }
+
   async function runPurge() {
-    const list = sel.selectedItems;
     setBusy(true);
     setDlgError(null);
     setErrors(null);
     try {
-      const r = await purgeTrash(list.map(e => e.key));
+      const r = await purgeTrash(bulk ? { filter: bulk.filter } : { keys: sel.selectedItems.map(e => e.key) });
       if (!r?.ok) { setDlgError(r?.error || "Nothing could be deleted."); return; }
       setConfirm(false);
+      setBulk(null);
       drop(r.keys || []);
       if (r.errors?.length) {
         setErrors({ list: r.errors, summary: n => `${plural(n, "file")} could not be deleted. Their entries stay in the trash.` });
@@ -315,14 +349,19 @@ export default function Trash() {
                 {plural(result.total, "entry", "entries")} · {fmtBytes(result.bytes)}
               </span>
             )}
+            {current && anyFilter && result.total > 0 && (
+              <button type="button" className="btn-danger-soft" onClick={askBulk} disabled={busy}
+                title="Permanently delete every entry these filters match, loaded or not">
+                <Icon name="trash" size={14} />Delete all {fmtInt(result.total)} forever…
+              </button>
+            )}
           </div>
 
           <div className="card">
             <DeleteErrors errors={errors?.list} summary={errors?.summary} onDismiss={() => setErrors(null)} />
             {current && entries.length === 0 ? (
               <div className="empty">
-                Nothing deleted {when === "today" ? "today" : when === "week" ? "in the last 7 days" : ""}
-                {author ? " by this creator" : ""}.{" "}
+                Nothing in the trash {filterText(authors, author, when)}.{" "}
                 <button type="button" className="btn-link" onClick={() => setParams(new URLSearchParams(), { replace: true })}>Show everything</button>
               </div>
             ) : (
@@ -365,19 +404,20 @@ export default function Trash() {
       )}
 
       <ConfirmDialog
-        open={confirm}
+        open={confirm || !!bulk}
         danger
         busy={busy}
         error={dlgError}
-        title={`Delete ${plural(sel.count, "entry", "entries")} forever?`}
-        confirmLabel={`Delete ${fmtBytes(selBytes)} forever`}
+        title={`Delete ${plural(bulk ? bulk.total : sel.count, "entry", "entries")} forever?`}
+        confirmLabel={`Delete ${fmtBytes(bulk ? bulk.bytes : selBytes)} forever`}
         onConfirm={runPurge}
-        onCancel={() => setConfirm(false)}
+        onCancel={() => { setConfirm(false); setBulk(null); }}
       >
         <p>
-          This <strong>permanently deletes {plural(selFiles, "file")} ({fmtBytes(selBytes)})</strong> of{" "}
-          {plural(sel.count, "trashed entry", "trashed entries")} from disk. They do not go to the system trash,
-          and this cannot be undone.
+          This <strong>permanently deletes {plural(bulk ? bulk.files : selFiles, "file")} ({fmtBytes(bulk ? bulk.bytes : selBytes)})</strong> of{" "}
+          {plural(bulk ? bulk.total : sel.count, "trashed entry", "trashed entries")}
+          {bulk ? `, every one the filters match (${filterText(result?.authors, author, when)})` : ""} from
+          disk. They do not go to the system trash, and this cannot be undone.
         </p>
       </ConfirmDialog>
     </div>

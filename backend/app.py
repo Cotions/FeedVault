@@ -188,24 +188,41 @@ def trash_restore():
 
 @app.get("/api/trash/items")
 def trash_items():
-    since = request.args.get("since")
     return jsonify(trash.items(
         _roots(),
         author=request.args.get("author") or None,
-        since=_int_arg("since", 0, 0, 2**53) if since else None,
+        since=_int_arg("since", 0, 0, 2**53) if request.args.get("since") else None,
+        before=_int_arg("before", 0, 0, 2**53) if request.args.get("before") else None,
         offset=_int_arg("offset", 0, 0, 10**9),
         limit=_int_arg("limit", 60, 1, 500),
     ))
 
 
+def _purge_filter(f):
+    """A purge filter, checked: {author, since, before} with at least one set."""
+    if not isinstance(f, dict) or set(f) - {"author", "since", "before"}:
+        return None
+    out = {k: f.get(k) for k in ("author", "since", "before")}
+    if out["author"] is not None and not (isinstance(out["author"], str) and out["author"]):
+        return None
+    for k in ("since", "before"):
+        if out[k] is not None and (not isinstance(out[k], int) or isinstance(out[k], bool) or out[k] < 0):
+            return None
+    return out if any(v is not None for v in out.values()) else None
+
+
 @app.post("/api/trash/purge")
 def trash_purge():
     body = request.get_json(silent=True) or {}
-    keys = body.get("keys")
-    if not _str_list(keys):
+    keys, match = body.get("keys"), body.get("filter")
+    if match is not None:
+        match = _purge_filter(match)
+        if match is None or keys is not None:
+            return jsonify({"ok": False, "error": "filter needs author, since or before (and no keys)"}), 400
+    elif not _str_list(keys):
         return jsonify({"ok": False, "error": "keys must be a non-empty list"}), 400
     cfg = config.load()
-    result = trash.purge(cfg["media_roots"], keys[:5000], cfg["data_directory"])
+    result = trash.purge(cfg["media_roots"], (keys or [])[:5000], cfg["data_directory"], match=match)
     print(f"[trash] purged {result['entries']} entries: {result['files']} files, "
           f"{result['bytes']} bytes deleted permanently")
     return jsonify(result)

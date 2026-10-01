@@ -389,16 +389,18 @@ def _measure(g):
     return size, missing
 
 
-def _matches(g, author=None, since=None):
+def _matches(g, author=None, since=None, before=None):
     p = g["public"]
     if author is not None and _author_key(p["author"]) != author:
         return False
     if since is not None and p["at"] < since:
         return False
+    if before is not None and p["at"] >= before:
+        return False
     return True
 
 
-def items(roots, author=None, since=None, offset=0, limit=60):
+def items(roots, author=None, since=None, before=None, offset=0, limit=60):
     entries = _all_entries(roots)
     out = {"total": 0, "files": 0, "bytes": 0,
            "trash": {"entries": len(entries), "files": 0, "bytes": 0}, "authors": [], "entries": []}
@@ -415,7 +417,7 @@ def items(roots, author=None, since=None, offset=0, limit=60):
                 "entries": 0, "bytes": 0})
             a["entries"] += 1
             a["bytes"] += size
-        if not _matches(g, author, since):
+        if not _matches(g, author, since, before):
             continue
         out["total"] += 1
         out["files"] += len(g["lines"])
@@ -540,11 +542,14 @@ def _prune_dirs(path, root):
         d = os.path.dirname(d)
 
 
-def purge(roots, keys, data_dir):
-    """Permanently delete the files of the given entries and drop their lines."""
+def purge(roots, keys, data_dir, match=None):
+    """Permanently delete the files of the given entries and drop their lines.
+    ``match`` (author, since, before) picks the entries instead of ``keys``."""
     report = {"ok": True, "entries": 0, "keys": [], "files": 0, "bytes": 0, "dropped": 0, "errors": []}
-    wanted = set(keys)
     with db.write_lock:
+        if match is not None:
+            keys = [g["key"] for g in _all_entries(roots) if _matches(g, **match)]
+        wanted = set(keys)
         for root in roots:
             lines = _read_manifest(root)
             if not any(_line_key(root, e) in wanted for e in lines):
