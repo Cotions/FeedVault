@@ -185,7 +185,10 @@ def suggestions(conn, roots):
     """Profile folders with instaloader posts and no source yet, offered as
     sources for the user to confirm (never created on their own): one per
     folder right under a media root, its main account, and as target the
-    account's current handle (else the folder's name)."""
+    account's current handle (else the folder's name). Only metadata names a
+    handle reliably: for an account known from file names alone (its id is
+    the folder's name, not a number), the folder's name is the target, as a
+    stray file named after someone else would set its handle."""
     def compute(conn):
         accounts = db.accounts(conn)
         taken = {r[0] for r in conn.execute("SELECT folder FROM sources")}
@@ -206,7 +209,8 @@ def suggestions(conn, roots):
             key = max(keys, key=lambda k: (keys[k], k))
             a = accounts[key]
             name = os.path.basename(folder).lower()
-            target = next((t for t in ((a["handle"] or "").lower(), name)
+            handle = (a["handle"] or "").lower() if key[1].isdigit() else ""
+            target = next((t for t in (handle, name)
                            if _HANDLE_RE.fullmatch(t) and t not in people._NOT_HANDLES), None)
             if target is None or target in taken_targets:
                 continue

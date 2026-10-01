@@ -111,6 +111,20 @@ def test_suggestions_from_existing_folders(env, client):
     assert f"{media}/carol.cooks" not in {x["folder"] for x in r["suggestions"]}
 
 
+def test_suggestion_of_a_filename_only_folder_targets_the_folder(env, client):
+    # As in the real archive: the newest file is named after someone else, so
+    # the account's handle reads as theirs. The folder's name is the profile.
+    folder = env["media"] / "motherbeef"
+    folder.mkdir()
+    for i, (name, ts) in enumerate([("motherbeef", TS), ("motherbeef", TS + 60), ("tatum.bell", TS + 120)]):
+        f = folder / f"{name} - SPACEDcode{i}.jpg"
+        f.write_bytes(b"x")
+        os.utime(f, (ts, ts))
+    scanner.scan(env["roots"])
+    [s] = get(client, "/api/sources")["suggestions"]
+    assert (s["target"], s["account"]["id"]) == ("motherbeef", "motherbeef")
+
+
 def test_suggestions_never_create_sources(env, client):
     archive(env)
     for _ in range(2):

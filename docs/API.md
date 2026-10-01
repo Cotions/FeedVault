@@ -816,8 +816,10 @@ source, one per folder right under a media root, for the user to confirm
   "handle": "somebody", "count": 812, "person": null }
 ```
 
-`target` is the account's current handle when it is a valid profile name,
-else the folder's name.
+`target` is the account's current handle when its posts have metadata and
+the handle is a valid profile name, else the folder's name (file names alone
+do not say whose profile a folder is: a stray file can be named after
+someone else).
 
 ### How a sync runs
 
