@@ -1,4 +1,5 @@
 import json
+import shutil
 import os
 import time
 
@@ -261,3 +262,49 @@ def test_promoted_copy_keeps_the_tags(env, client):
     post = client.get("/api/posts/instagram/P1", headers=H).get_json()
     assert post["source"]["meta_path"].startswith(str(env["media"] / "alicee"))
     assert post["tags"] == ["kept tag"]
+
+
+def test_emptying_forgets_only_posts_whose_trash_was_deleted(env, client):
+    """A post out of the index for another reason (its root offline, its id
+    re-derived) keeps its tags: only posts purged just now are forgotten."""
+    three_posts(env)
+    apply(client, ["instagram:P1", "instagram:P2"], add=["t"])
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    conn = db.connect()
+    with db.write_lock:
+        db.remove_post(conn, "instagram:P2")
+    client.post("/api/trash/empty", headers=H)
+    assert [r[0] for r in conn.execute("SELECT post_id FROM post_tags")] == ["instagram:P2"]
+
+
+def test_kept_repost_takes_the_tags_and_collections(env, client):
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    b = write_post(env["media"] / "bob", "R9", TS + 99, owner("bob", 222), "image")
+    shutil.copyfile(a + ".jpg", b + ".jpg")
+    scanner.scan(env["roots"])
+    hashing.run_pass(db.connect())
+    apply(client, ["instagram:P1"], add=["mine"])
+    apply(client, ["instagram:R9"], add=["recipes", "mine"])
+    cid = client.post("/api/collections", json={"name": "Faves"}, headers=H).get_json()["collection"]["id"]
+    client.post(f"/api/collections/{cid}/add", json={"posts": ["instagram:R9"]}, headers=H)
+    [g] = listing(client, "content")["groups"]
+    r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": "instagram:P1"}, headers=H).get_json()
+    assert r["ok"] and r["posts"] == ["instagram:R9"] and "carried" not in r
+    assert post_tags(client, "P1") == ["mine", "recipes"]
+    full = client.get("/api/posts/instagram/P1", headers=H).get_json()
+    assert full["collections"] == [{"id": cid, "name": "Faves"}]
+    client.post("/api/trash/empty", headers=H)
+    assert post_tags(client, "P1") == ["mine", "recipes"] and tags(client) == {"mine": 1, "recipes": 1}
+
+
+def test_odd_filters_and_applies(env, client):
+    three_posts(env)
+    assert apply(client, ["instagram:NOPE"], add=["ghost"]) == {
+        "ok": True, "posts": [], "added": 0, "removed": 0, "created": []}
+    assert "ghost" not in tags(client)                                    # no tag made for no post
+    assert ids(client, "tag=" + "x" * 70) == [] and ids(client, 'tag=a"b') == []   # not every post
+    # NOCASE folds ASCII only: é and É are two tags, and both must match
+    apply(client, ["instagram:P1", "instagram:P2"], add=["été"])
+    apply(client, ["instagram:P1"], add=["Été"])
+    assert tags(client) == {"été": 2, "Été": 1}
+    assert ids(client, "tag=%C3%A9t%C3%A9&tag=%C3%89t%C3%A9") == ["P1"]

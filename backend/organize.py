@@ -3,8 +3,8 @@
 User data, like review decisions: never touched by a rescan and mirrored to
 JSON by userdata.py. Rows are keyed by post id and outlive the post's index
 row, so a post moved to the trash and restored (or replaced by a duplicate
-copy of itself) comes back with them. Rows of a post that is gone for good
-are dropped when the trash is emptied or purged (forget_gone).
+copy of itself) comes back with them. Rows of a post are dropped when its
+trash entries are deleted for good and it is not indexed (forget_gone).
 """
 import db
 
@@ -57,6 +57,8 @@ def apply(conn, post_ids, add, remove, now):
     Missing tags in ``add`` are created."""
     ids = _existing(conn, post_ids)
     out = {"posts": ids, "added": 0, "removed": 0, "created": []}
+    if not ids:
+        return out                      # no tag made for no post
     with conn:
         for name in dict.fromkeys(add):
             tid = _tag_id(conn, name)
@@ -80,19 +82,19 @@ def apply(conn, post_ids, add, remove, now):
 def rename(conn, old, new):
     """Rename tag ``old`` to ``new``, merging into ``new`` when that is
     another tag already. None when ``old`` does not exist."""
-    src = conn.execute("SELECT id FROM tags WHERE name = ?", (old,)).fetchone()
+    src = _tag_id(conn, old)
     if src is None:
         return None
-    dst = conn.execute("SELECT id FROM tags WHERE name = ?", (new,)).fetchone()
+    dst = _tag_id(conn, new)
     with conn:
-        if dst is not None and dst[0] != src[0]:
+        if dst is not None and dst != src:
             conn.execute("INSERT OR IGNORE INTO post_tags(post_id, tag_id, at) "
-                         "SELECT post_id, ?, at FROM post_tags WHERE tag_id = ?", (dst[0], src[0]))
-            conn.execute("DELETE FROM post_tags WHERE tag_id = ?", (src[0],))
-            conn.execute("DELETE FROM tags WHERE id = ?", (src[0],))
-            name = conn.execute("SELECT name FROM tags WHERE id = ?", (dst[0],)).fetchone()[0]
+                         "SELECT post_id, ?, at FROM post_tags WHERE tag_id = ?", (dst, src))
+            conn.execute("DELETE FROM post_tags WHERE tag_id = ?", (src,))
+            conn.execute("DELETE FROM tags WHERE id = ?", (src,))
+            name = conn.execute("SELECT name FROM tags WHERE id = ?", (dst,)).fetchone()[0]
             return {"name": name, "merged": True}
-        conn.execute("UPDATE tags SET name = ? WHERE id = ?", (new, src[0]))
+        conn.execute("UPDATE tags SET name = ? WHERE id = ?", (new, src))
     return {"name": new, "merged": False}
 
 
@@ -227,27 +229,46 @@ def collection_posts(conn, cid, offset=0, limit=60):
     return total, [db.summary(conn, r) for r in rows]
 
 
+def carry_over(conn, pairs):
+    """Give each (source, target) post pair's target the source's tags and
+    collection places. Returns the user data tables that changed."""
+    changed = set()
+    with conn:
+        for src, dst in pairs:
+            before = conn.total_changes
+            conn.execute("INSERT OR IGNORE INTO post_tags(post_id, tag_id, at) "
+                         "SELECT ?, tag_id, at FROM post_tags WHERE post_id = ?", (dst, src))
+            if conn.total_changes > before:
+                changed.add("post_tags")
+            before = conn.total_changes
+            conn.execute("INSERT OR IGNORE INTO collection_posts(collection_id, post_id, position, at) "
+                         "SELECT collection_id, ?, position, at FROM collection_posts WHERE post_id = ?", (dst, src))
+            if conn.total_changes > before:
+                changed.add("collection_posts")
+    return sorted(changed)
+
+
 # ---------------------------------------------------------------------------
 # Posts gone for good
 # ---------------------------------------------------------------------------
 
-def forget_gone(conn, trashed):
-    """Drop the rows of posts that are neither in the index nor among
-    ``trashed`` (post ids still in some trash manifest). Called after the
-    trash is emptied or purged, under db.write_lock. Returns the user data
-    tables that changed."""
-    conn.execute("CREATE TEMP TABLE IF NOT EXISTS trashed_posts (id TEXT PRIMARY KEY)")
+def forget_gone(conn, post_ids):
+    """Drop the rows of the posts among ``post_ids`` (none of them left in any
+    trash manifest) that are not in the index either. Called after the trash
+    is emptied or purged, under db.write_lock. Returns the user data tables
+    that changed."""
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS gone_posts (id TEXT PRIMARY KEY)")
     with conn:
-        conn.execute("DELETE FROM temp.trashed_posts")
-        conn.executemany("INSERT OR IGNORE INTO temp.trashed_posts(id) VALUES (?)", [(p,) for p in trashed])
-        gone = "NOT IN (SELECT id FROM posts) AND {0} NOT IN (SELECT id FROM temp.trashed_posts)"
+        conn.execute("DELETE FROM temp.gone_posts")
+        conn.executemany("INSERT OR IGNORE INTO temp.gone_posts(id) VALUES (?)", [(p,) for p in post_ids])
+        conn.execute("DELETE FROM temp.gone_posts WHERE id IN (SELECT id FROM posts)")
+        gone = "IN (SELECT id FROM temp.gone_posts)"
         changed = []
-        if conn.execute(f"DELETE FROM post_tags WHERE post_id {gone.format('post_id')}").rowcount:
+        if conn.execute(f"DELETE FROM post_tags WHERE post_id {gone}").rowcount:
             changed.append("post_tags")
-        if conn.execute(f"DELETE FROM collection_posts WHERE post_id {gone.format('post_id')}").rowcount:
+        if conn.execute(f"DELETE FROM collection_posts WHERE post_id {gone}").rowcount:
             changed.append("collection_posts")
-        if conn.execute(f"UPDATE collections SET cover_post = NULL "
-                        f"WHERE cover_post {gone.format('cover_post')}").rowcount:
+        if conn.execute(f"UPDATE collections SET cover_post = NULL WHERE cover_post {gone}").rowcount:
             changed.append("collections")
-        conn.execute("DELETE FROM temp.trashed_posts")
+        conn.execute("DELETE FROM temp.gone_posts")
     return changed

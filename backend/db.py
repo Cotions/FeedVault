@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+import string
 import threading
 
 import thumbs
@@ -537,6 +538,7 @@ def fts_query(q):
 
 
 # tag:name or tag:"two words"; an unclosed quote runs to the end (still typing).
+_ASCII_FOLD = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)   # what NOCASE folds
 _TAG_TERM = re.compile(r'(?<!\S)tag:(?:"([^"]*)"?|(\S*))', re.IGNORECASE)
 
 
@@ -605,8 +607,8 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
             return None
         where.append("p.n IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)")
         args.append(match)
-    for name in {t.lower(): t for t in tags}.values():
-        # tags.name is COLLATE NOCASE, so = ignores case (ASCII letters, like UNIQUE).
+    for name in {t.translate(_ASCII_FOLD): t for t in tags}.values():
+        # tags.name is COLLATE NOCASE, so = ignores case, of ASCII letters only (like UNIQUE).
         where.append("p.id IN (SELECT pt.post_id FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
                      "WHERE t.name = ?)")
         args.append(name)

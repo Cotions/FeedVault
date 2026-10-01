@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { getCollections, createCollection, addToCollection, removeFromCollection } from "../lib/api";
 import { useApi } from "../lib/useApi";
+import { cleanName } from "../lib/tags";
 import { useToast } from "../lib/toast";
 import ConfirmDialog from "./ConfirmDialog";
 import Icon from "./Icon";
@@ -49,7 +50,7 @@ export default function CollectionDialog({ posts, member, onChanged, onClose }) 
   });
 
   const create = () => run(async () => {
-    const clean = name.split(/\s+/).filter(Boolean).join(" ");
+    const clean = cleanName(name);
     if (!clean) return;
     const r = await createCollection(clean);
     if (!r?.ok) { setMsg(r?.error || "Could not create the collection."); return; }

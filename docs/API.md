@@ -263,7 +263,8 @@ post id; after a keep, call `/api/review` with `decision: null`.
   `tag:"two words"` in it are tag filters, not words (see [Tags](#tags)), and
   mix freely with text: `tag:outfits red dress`
 - `tag`: a tag name, matched without regard to (ASCII) case. Repeat it for several:
-  a post must have all of them (`tag=a&tag=b`). Combined with any `tag:` in `q`
+  a post must have all of them (`tag=a&tag=b`). Combined with any `tag:` in `q`;
+  a value that cannot be a tag name matches nothing
 - `untagged=1`: only posts with no tag
 - `platform`: e.g. `instagram`
 - `author`: author id (from `/api/authors`)
@@ -489,13 +490,18 @@ Free-form labels, many per post. They are the user's own data: kept in the
 last change, `post_tags.json` naming tags by name, not id) so a rebuilt
 index gets them back.
 
-- Names are compared without regard to case for ASCII letters (`Outfits` and `outfits` are one
-  tag; the first spelling is kept). Spaces inside a name are collapsed, and
+- Names are compared without regard to case for ASCII letters only (`Outfits` and `outfits` are one
+  tag, the first spelling kept; `Été` and `été` are two). Spaces inside a name are collapsed, and
   a name is 1 to 64 characters with no `"` and no control characters.
 - Tags are keyed by post id. A post moved to the trash keeps its tags, so
   restoring it, or a duplicate copy taking its place (Duplicates, keep the
-  copy), brings them back. Tags of a post that is neither in the index nor in
-  any trash manifest are dropped when the trash is emptied or purged.
+  copy), brings them back. When the trash is emptied or entries purged, the
+  posts whose entries were deleted lose their tags if they are neither in the
+  index nor in another trash entry (a post out of the index for another
+  reason, such as its root being offline, keeps them).
+- Duplicates, keeping one post of a "same content" group (another post id):
+  the kept post also gets the tags and collection places of the posts
+  trashed for it.
 - Counts only cover posts in the index (not those in the trash).
 
 | Method | Path | Returns |
@@ -532,8 +538,8 @@ data like tags: tables `collections` and `collection_posts`, untouched by
 rescans, written to `<data_directory>/userdata/collections.json` and
 `collection_posts.json` (posts keyed by post id, collections by name), and
 the same trash rules: a post in the trash keeps its places, and loses them
-only when it is neither indexed nor in any trash manifest after the trash is
-emptied or purged. Names are unique without regard to (ASCII) case, 1 to 64
+when its trash entries are deleted for good (emptied or purged) and it is
+neither indexed nor in another trash entry. Names are unique without regard to (ASCII) case, 1 to 64
 characters, no `"` or control characters.
 
 A **collection**:

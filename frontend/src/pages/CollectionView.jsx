@@ -4,6 +4,7 @@ import { getCollection, renameCollection, deleteCollection, removeFromCollection
          orderCollection, setCollectionCover } from "../lib/api";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
+import { cleanName } from "../lib/tags";
 import { excerpt, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -95,7 +96,7 @@ export default function CollectionView() {
 
   const rename = e => {
     e.preventDefault();
-    const name = renaming.split(/\s+/).filter(Boolean).join(" ");
+    const name = cleanName(renaming);
     if (!name || name === collection.name) { setRenaming(null); return; }
     act(async () => {
       const r = await renameCollection(id, name);

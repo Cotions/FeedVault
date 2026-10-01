@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { cleanName, foldTag, sameTag } from "../lib/tags";
 
 const MAX_SUGGESTIONS = 8;
 
@@ -22,17 +23,17 @@ export default function TagInput({ tags = [], exclude = [], onAdd, onClose, onEm
 
   const suggestions = useMemo(() => {
     const t = text.trim().toLowerCase();
-    const skip = new Set(exclude.map(n => n.toLowerCase()));
-    const list = tags.filter(x => !skip.has(x.name.toLowerCase()) && (!t || x.name.toLowerCase().includes(t)));
+    const skip = new Set(exclude.map(foldTag));
+    const list = tags.filter(x => !skip.has(foldTag(x.name)) && (!t || x.name.toLowerCase().includes(t)));
     // Names starting with the text first, then the most used.
     if (t) list.sort((a, b) => (b.name.toLowerCase().startsWith(t) - a.name.toLowerCase().startsWith(t)) || b.count - a.count);
     return list.slice(0, MAX_SUGGESTIONS);
   }, [tags, exclude, text]);
-  const exact = suggestions.find(x => x.name.toLowerCase() === text.trim().toLowerCase());
+  const exact = suggestions.find(x => sameTag(x.name, text.trim()));
   const shown = open && suggestions.length > 0;
 
   function add(name) {
-    const clean = name.split(/\s+/).filter(Boolean).join(" ");
+    const clean = cleanName(name);
     if (!clean) return;
     onAdd(clean);
     setText("");

@@ -5,7 +5,7 @@ import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { tagFeedPath } from "../lib/fmt";
-import { sameTag } from "../lib/tags";
+import { cleanName, sameTag } from "../lib/tags";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 
@@ -48,7 +48,7 @@ export default function Tags() {
 
   function submitRename(e) {
     e.preventDefault();
-    const to = editing.text.split(/\s+/).filter(Boolean).join(" ");
+    const to = cleanName(editing.text);
     if (!to || to === editing.name) { setEditing(null); return; }
     const other = (data || []).find(t => sameTag(t.name, to) && t.name !== editing.name && !sameTag(t.name, editing.name));
     if (other) {

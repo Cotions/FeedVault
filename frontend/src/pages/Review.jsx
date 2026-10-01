@@ -298,15 +298,23 @@ function ReviewSession({ scope, scopeControls }) {
   });
 
   const curTags = cur ? tagsOf[cur.id] ?? post?.tags ?? cur.tags ?? [] : [];
-  const tagPost = ({ add = [], remove = [] }) => cur && run(async () => {
-    const r = await applyTags([cur.id], { add, remove });
-    if (!r?.ok) { toast(r?.error || "Could not change the tags.", "err"); return; }
-    if (!r.posts?.includes(cur.id)) { toast("This post is no longer in the index.", "err"); return; }
-    const known = tagsApi.data || [];
-    const names = add.map(a => known.find(t => sameTag(t.name, a))?.name || a);
-    setTagsOf(t => ({ ...t, [cur.id]: withTags(curTags, names, remove) }));
-    tagsApi.reload();
-  });
+  // Not through run(): a tag typed while a keep or trash is on its way still
+  // goes out, for the post it was typed on.
+  const tagPost = async ({ add = [], remove = [] }) => {
+    if (!cur) return;
+    const id = cur.id, base = curTags;
+    try {
+      const r = await applyTags([id], { add, remove });
+      if (!r?.ok) { toast(r?.error || "Could not change the tags.", "err"); return; }
+      if (!r.posts?.includes(id)) { toast("This post is no longer in the index.", "err"); return; }
+      const known = tagsApi.data || [];
+      const names = add.map(a => known.find(t => sameTag(t.name, a))?.name || a);
+      setTagsOf(t => ({ ...t, [id]: withTags(t[id] ?? base, names, remove) }));
+      tagsApi.reload();
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  };
 
   const stepItem = d => media.length > 1 && setItem(i => (Math.min(i, media.length - 1) + d + media.length) % media.length);
 

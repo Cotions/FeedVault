@@ -4,6 +4,7 @@ import { getCollections, createCollection } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
+import { cleanName } from "../lib/tags";
 import Icon from "../components/Icon";
 
 /* Every collection as a cover tile with its post count, and a field to start
@@ -18,7 +19,7 @@ export default function Collections() {
 
   async function create(e) {
     e.preventDefault();
-    const clean = name.split(/\s+/).filter(Boolean).join(" ");
+    const clean = cleanName(name);
     if (!clean) return;
     setBusy(true);
     try {

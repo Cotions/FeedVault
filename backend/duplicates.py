@@ -27,6 +27,7 @@ from functools import lru_cache
 
 import db
 import hashing
+import organize
 import scanner
 import thumbs
 import trash
@@ -555,7 +556,7 @@ def resolve(choices, roots, data_dir, threshold=SIMILAR_DEFAULT):
     only one at a time, never in bulk. Every group is rebuilt and checked
     under the same lock as the move (see _check); a group that fails is
     skipped whole."""
-    skipped, planned, promote = [], [], []
+    skipped, planned, promote, carry = [], [], [], []
 
     def pick(conn):
         hashes = _hashes(conn)
@@ -578,6 +579,8 @@ def resolve(choices, roots, data_dir, threshold=SIMILAR_DEFAULT):
             copies += [m["copy_id"] for m in others if m["type"] == "copy"]
             planned.append((gid, others))
             kept = next(m for m in g["members"] if m["id"] == keep)
+            carry.extend((m["post_id"], kept["post_id"]) for m in others
+                         if m["type"] == "post" and m["post_id"] != kept["post_id"])
             if kept["type"] == "copy":
                 promote.append((kept["post_id"], kept["folder"], kept["kept"]))
         return posts, copies
@@ -596,5 +599,9 @@ def resolve(choices, roots, data_dir, threshold=SIMILAR_DEFAULT):
         scanner.index_dirs(roots, [folder for _, folder, _ in moved])
         conn = db.connect()
         db.set_decision(conn, [pid for pid, _, kept in moved if kept], "keep", int(time.time()))
+    # The post kept from a content or similar group takes on the tags and collections of
+    # the posts trashed for it (theirs stay, in case they are restored).
+    carried = [(src, dst) for src, dst in carry if src in report["posts"]]
+    report["carried"] = organize.carry_over(db.connect(), carried) if carried else []
     return {**report, "ok": bool(resolved) or not (skipped or report["errors"]),
             "resolved": resolved, "skipped": skipped}

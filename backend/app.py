@@ -88,7 +88,8 @@ def _post_filters():
         author=request.args.get("author") or None,
         kind=request.args.get("kind") or None,
         review=request.args.get("review") if request.args.get("review") in ("unreviewed", "kept") else None,
-        tags=[t for t in map(organize.clean_name, request.args.getlist("tag")) if t],
+        # spaces collapsed only: a name that cannot be a tag matches nothing
+        tags=[" ".join(t.split()) for t in request.args.getlist("tag") if t.strip()],
         untagged=request.args.get("untagged") == "1",
     )
 
@@ -299,6 +300,8 @@ def duplicates_resolve():
                                 cfg["media_roots"], cfg["data_directory"], threshold=threshold)
     if report.get("posts"):
         userdata.changed("decisions")          # a trashed post takes its decision along, or hands it on
+    for name in report.pop("carried", []):
+        userdata.changed(name)
     if report.get("posts") or report.get("copies"):
         print(f"[duplicates] resolved {len(report['resolved'])} groups: {len(report['posts'])} posts, "
               f"{len(report['copies'])} copies, {report['files']} files → trash")
@@ -460,7 +463,7 @@ def change_collection(cid, action):
     conn = db.connect()
     if action not in ("rename", "delete", "add", "remove", "order", "cover"):
         abort(404)
-    if organize.collection(conn, cid) is None:
+    if conn.execute("SELECT 1 FROM collections WHERE id = ?", (cid,)).fetchone() is None:
         return jsonify({"ok": False, "error": "no such collection"}), 404
     body = request.get_json(silent=True) or {}
     if action == "rename":
