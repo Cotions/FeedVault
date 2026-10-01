@@ -90,6 +90,31 @@ def _twitter_url(post, d):
     return f"https://x.com/{post.author_handle or 'i'}/status/{post.post_id}"
 
 
+def _twitter_fixup(post, d):
+    """Retweets and quotes, as gallery-dl's twitter extractor marks them.
+
+    A retweet is saved under the retweet's own id in the retweeter's folder,
+    with ``retweet_id`` the original and ``author`` its author. It becomes the
+    original post (so it meets a direct download of it as a copy), with a note
+    of who retweeted it. A quoted tweet, saved with ``quoted=true``, carries
+    the id and handle of the tweet that quoted it.
+    """
+    rt = _int(d.get("retweet_id"))
+    if rt:
+        post.post_id = str(rt)
+        post.posted_at = _ts(d.get("date_original")) or post.posted_at
+        prefix = f"RT @{post.author_handle}: "
+        if post.text.startswith(prefix):
+            post.text = post.text[len(prefix):]
+        by = _dig(d, ("user", "name"))
+        if by and by != post.author_handle:
+            post.album = f"Retweeted by @{by}"
+    elif _int(d.get("quote_id")) and d.get("quote_by"):
+        post.album = f"Quoted by @{d['quote_by']}"
+    if not post.views:                         # 0 when the API did not say
+        post.views = None
+
+
 def _tiktok_url(post, d):
     kind = "photo" if d.get("post_type") == "image" else "video"
     return f"https://www.tiktok.com/@{post.author_handle}/{kind}/{post.post_id}"
@@ -118,6 +143,7 @@ SITES = {
         "hashtags": "hashtags",
         "url": _twitter_url,
         "posters": {"preview"},
+        "fixup": _twitter_fixup,
     },
     "tiktok": {
         "post_id": "id",

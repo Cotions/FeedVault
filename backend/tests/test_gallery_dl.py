@@ -241,3 +241,97 @@ def test_trash_one_item_keeps_the_rest(env, client):
     assert (r["added"], r["missing"], r["unmatched"]) == (0, 0, 0)
     post = client.get("/api/posts/twitter/491623932184993703", headers=H).get_json()
     assert [m["idx"] for m in post["media"]] == [2, 3, 4] and post["missing"] is False
+
+
+# --- twitter ------------------------------------------------------------------
+
+def test_twitter_single_photo_fields(tmp_path):
+    gallery_dl_case("twitter/photo", tmp_path)
+    p = parse(tmp_path).posts[0]
+    assert (p.author_id, p.author_handle, p.author_name) == ("641286", "example_user1", "Example User 1")
+    assert p.posted_at == 1352261777                       # "2012-11-07 04:16:17" UTC
+    assert p.text == "Example text"
+    assert (p.likes, p.comments, p.views) == (456265, 46841, None)   # view_count 0: not reported
+    assert p.album is None
+
+
+def test_twitter_video_with_preview_as_poster(tmp_path):
+    gallery_dl_case("twitter/video", tmp_path)
+    r = parse(tmp_path)
+    p = r.posts[0]
+    assert p.kind == "video"
+    assert [(m.idx, m.kind, os.path.basename(m.path), os.path.basename(m.poster_path)) for m in p.media] == [
+        (1, "video", "7229170821903326388_1.mp4", "7229170821903326388_2.jpg")]
+    assert p.hashtags == ["example"]
+    assert r.claimed == set(os.listdir(tmp_path))
+
+
+def test_twitter_preview_without_its_video_is_a_photo(tmp_path):
+    gallery_dl_case("twitter/video", tmp_path)
+    for n in os.listdir(tmp_path):
+        if n.startswith("7229170821903326388_1."):
+            os.remove(tmp_path / n)
+    p = parse(tmp_path).posts[0]
+    assert [(m.kind, os.path.basename(m.path)) for m in p.media] == [("image", "7229170821903326388_2.jpg")]
+
+
+def test_twitter_retweet(tmp_path):
+    gallery_dl_case("twitter/retweet", tmp_path)
+    original = fixture("twitter/multi_source")
+    p = parse(tmp_path).posts[0]
+    # The original tweet, by its author, at its own time; who retweeted is noted.
+    assert p.id == f"twitter:{original['tweet_id']}"
+    assert (p.author_handle, p.author_id) == ("example_user3", str(original["author"]["id"]))
+    assert p.posted_at == 1597898072                       # date_original, not the retweet's date
+    assert p.text == original["content"]                   # without "RT @example_user3: "
+    assert p.album == "Retweeted by @example_user2"
+    assert p.url == f"https://x.com/example_user3/status/{original['tweet_id']}"
+    assert p.kind == "carousel" and len(p.media) == 2
+
+
+def test_twitter_retweet_meets_the_original_as_a_copy(env):
+    import scanner
+    gallery_dl_case("twitter/multi_source", env["media"] / "twitter" / "example_user3")
+    gallery_dl_case("twitter/retweet", env["media"] / "twitter" / "example_user2")
+    r = scanner.scan(env["roots"])
+    assert r["added"] == 1 and r["unmatched"] == 1          # "duplicate of", listed for the Duplicates page
+    # Trashing that copy takes all of its JSONs along.
+    import db
+    import trash
+    (cid,) = [row[0] for row in db.connect().execute("SELECT id FROM copies")]
+    r = trash.delete([], [], env["roots"], str(env["tmp"] / "data"), copy_ids=[cid])
+    assert r["copies"] == [cid] and r["files"] == 4 and r["errors"] == []
+    # The retweet's folder is walked first, so the original's download is the copy.
+    assert os.listdir(env["media"] / "twitter" / "example_user3") == []
+
+
+def test_twitter_quote(tmp_path):
+    gallery_dl_case("twitter/quote", tmp_path)
+    by_id = {p.post_id: p for p in parse(tmp_path).posts}
+    quoting, quoted = by_id["565802608276047467"], by_id["491623932184993703"]
+    assert quoting.album is None and quoting.kind == "image"
+    assert quoted.album == "Quoted by @example_user1"
+    assert quoted.author_handle == "example_user2" and quoted.kind == "carousel"
+
+
+def test_twitter_text_only(tmp_path):
+    names = gallery_dl_case("twitter/text_only", tmp_path)
+    assert os.listdir(tmp_path) == names == ["22.json"]
+    r = parse(tmp_path)
+    p = r.posts[0]
+    assert (p.id, p.kind, p.media, p.text) == ("twitter:22", "text", [], "Example text")
+    assert p.meta_path == str(tmp_path / "22.json")
+    assert p.posted_at == 1142974214
+    assert r.claimed == {"22.json"}
+
+
+def test_twitter_post_json_beside_file_jsons(tmp_path):
+    # "event": "post" and per-file JSONs together: still one post, named by the first file.
+    gallery_dl_case("twitter/four_photos", tmp_path)
+    post = {k: v for k, v in fixture("twitter/four_photos").items()
+            if k not in ("num", "filename", "extension", "type", "width", "height", "description")}
+    jdump(tmp_path / "491623932184993703.json", post)
+    r = parse(tmp_path)
+    assert len(r.posts) == 1 and len(r.posts[0].media) == 4
+    assert r.posts[0].meta_path.endswith("491623932184993703_1.jpg.json")
+    assert str(tmp_path / "491623932184993703.json") in r.posts[0].side_files
