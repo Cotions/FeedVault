@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { getUnmatched } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
@@ -41,7 +42,12 @@ export default function Unmatched() {
               {rows.map((r, i) => (
                 <tr key={r.path} style={{ animationDelay: `${Math.min(i, 30) * 20}ms` }}>
                   <td className="path" title={r.path}>{r.path}</td>
-                  <td className="reason">{r.reason || "—"}</td>
+                  <td className="reason">
+                    {r.reason || "—"}
+                    {r.reason?.startsWith("duplicate of ") && (
+                      <> <Link to="/duplicates" className="text-link" title="Compare the copies and keep one">compare in Duplicates</Link></>
+                    )}
+                  </td>
                   <td className="num">{fmtBytes(r.size)}</td>
                   <td className="num" title={fmtFullDate(r.mtime)}>{fmtStamp(r.mtime)}</td>
                 </tr>

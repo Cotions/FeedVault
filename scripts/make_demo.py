@@ -85,6 +85,34 @@ def nicer_png(rng):
     return png
 
 
+def add_duplicates(media, ts):
+    """Something for the Duplicates page: a typo'd second folder holding
+    copies of a few posts (one of them missing a carousel item), and a repost
+    of one picture under another creator and post id."""
+    src = os.path.join(media, "pixel_bakery")
+    dst = os.path.join(media, "pixel_bakerry")
+    os.makedirs(dst, exist_ok=True)
+    bases = sorted({n[: -len(".json")] if n.endswith(".json") else n[: -len(".json.xz")]
+                    for n in os.listdir(src) if n.endswith((".json", ".json.xz"))})[:4]
+    dropped = False
+    for base in bases:
+        names = sorted(n for n in os.listdir(src) if n.startswith(base))
+        for n in names:
+            if not dropped and n.endswith("_2.jpg") and any(m.endswith("_3.jpg") for m in names):
+                dropped = True                  # the copy that differs
+                continue
+            shutil.copy2(os.path.join(src, n), os.path.join(dst, n))
+
+    mossy = os.path.join(media, "mossy.trails")
+    image = next(n for n in sorted(os.listdir(mossy))          # a single-image post: no .mp4 beside it
+                 if n.endswith("_UTC.jpg") and not os.path.exists(os.path.join(mossy, n[:-4] + ".mp4")))
+    handle, uid, name = CREATORS[2]
+    base = fakes.write_post(os.path.join(media, handle), "DEMOrepost01", ts + 86_400,
+                            fakes.owner(handle, uid, name), kind="image",
+                            caption="Reposting this, too good not to share 🌿 (via @mossy.trails)")
+    shutil.copyfile(os.path.join(mossy, image), base + ".jpg")
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -117,6 +145,7 @@ def main():
         )
     # A stray file so the Unmatched page has something to show.
     fakes.png(os.path.join(media, "pixel_bakery", "screenshot_from_phone.png"), (200, 60, 60))
+    add_duplicates(media, ts)
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     with open(os.path.join(root, "config.json"), "w") as f:
