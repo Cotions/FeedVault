@@ -2306,9 +2306,12 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(74, 
 }
 
 /* ── Sources ────────────────────────────────────────────── */
-.sources-panel { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
-.sync-all { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 13px; color: var(--text-dim); }
+.sources-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; }
+.sources-panel > .source-add { flex: 1 1 420px; }
+.sources-panel > .source-list { flex-basis: 100%; }
+.sync-all { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; flex: 1 1 auto; font-size: 13px; color: var(--text-dim); }
 .sync-all[role="status"] {
+  flex-basis: 100%;
   padding: 9px 12px;
   border: 1px solid rgba(91, 157, 255, 0.35); border-radius: 10px;
   background: rgba(91, 157, 255, 0.08);
@@ -2340,14 +2343,12 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(74, 
 .source-message { color: #ffb3b5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 .source-badge { flex-shrink: 0; }
 .source-sync { font-size: 12px; padding: 6px 11px; flex-shrink: 0; }
-.card-sync { display: flex; align-items: center; gap: 6px; margin-right: 10px; flex-shrink: 0; }
-.card-sync .source-status { font-size: 11px; }
-.card-sync .source-sync { padding: 0; }
+.creator-id .source-status { font-size: 11px; }
+.creator-card .source-sync { margin-right: 10px; }
 .source-suggestion .suggestion-why { gap: 3px; }
 @media (max-width: 760px) {
   .source-row { flex-wrap: wrap; }
   .source-id { flex-basis: 100%; }
-  .card-sync .source-status { display: none; }
 }
 
 /* Settings: instaloader */
@@ -2358,7 +2359,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(74, 
 .insta-mode input { margin-top: 3px; }
 .insta-mode > span { display: flex; flex-direction: column; gap: 2px; }
 .insta-mode .creator-sub { white-space: normal; font-size: 12px; }
-.insta-input { align-self: flex-start; margin-left: 26px; font-size: 12.5px; padding: 6px 10px; min-width: 200px; }
+.insta-input { flex: none; align-self: flex-start; margin-left: 26px; font-size: 12.5px; padding: 6px 10px; min-width: 200px; }
 .insta-pause { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--text); }
-.insta-pause .insta-input { margin-left: 0; min-width: 0; width: 80px; }
+.insta-pause .insta-input { flex: none; margin-left: 0; min-width: 0; width: 80px; }
 .insta-pause .dim { font-size: 12px; }

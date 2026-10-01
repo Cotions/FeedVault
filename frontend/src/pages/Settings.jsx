@@ -395,7 +395,7 @@ function InstaloaderCard({ saved, onSaved }) {
           <label className="insta-mode">
             <input type="radio" name="insta-mode" value="none" checked={mode === "none"} onChange={() => setMode("none")} />
             <span>
-              <b>No login</b> (default)
+              <span><b>No login</b> (default)</span>
               <span className="creator-sub">Public profiles only. Instagram limits anonymous requests sooner, so expect &ldquo;rate limited&rdquo; on big runs.</span>
             </span>
           </label>

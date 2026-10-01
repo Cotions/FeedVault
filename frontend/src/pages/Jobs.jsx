@@ -86,7 +86,8 @@ function StateChip({ state }) {
 }
 
 function JobTitle({ job }) {
-  const params = Object.values(job.params || {});
+  // A source sync's label names its profile; its param is only an id.
+  const params = job.params?.source ? [] : Object.values(job.params || {});
   return (
     <span className="job-title">
       <span className="dim mono">#{job.id}</span> {job.label}

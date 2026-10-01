@@ -22,31 +22,38 @@ function freeName(name, people) {
   for (let i = 2; ; i++) if (!taken.has(`${name} ${i}`.toLowerCase())) return `${name} ${i}`;
 }
 
-/* A card's sources: how the last sync went, and Sync (every source of the
-   card that is not syncing already). */
-function CardSync({ sources, jobOf, onSync }) {
+/* A card's sources: which one to show (syncing, else a failed one, else
+   the latest sync), its job, and those not syncing already. */
+function cardSync(sources, jobOf) {
   if (!sources?.length) return null;
   const jobs = sources.map(jobOf);
   const job = jobs.find(j => j?.state === "running") || jobs.find(Boolean) || null;
-  // The one to show: syncing, else a failed one, else the latest sync.
   const shown = sources[jobs.indexOf(job)]
     || sources.find(s => s.last_result?.state === "failed")
     || [...sources].sort((a, b) => (b.last_sync_at || 0) - (a.last_sync_at || 0))[0];
-  const idle = sources.filter((s, i) => !jobs[i]);
+  return { shown, job, idle: sources.filter((s, i) => !jobs[i]), sources };
+}
+
+// Under the card's name: how the last sync went.
+function CardSyncStatus({ sync }) {
+  if (!sync) return null;
+  return <SourceStatus source={sync.shown} job={sync.job} compact />;
+}
+
+// Sync every source of the card that is not syncing already.
+function CardSyncButton({ sync, onSync }) {
+  if (!sync) return null;
   return (
-    <span className="card-sync">
-      <SourceStatus source={shown} job={job} compact />
-      <SyncButton
-        source={idle[0] || sources[0]}
-        job={idle.length ? null : job}
-        small
-        onSync={() => idle.forEach(onSync)}
-      />
-    </span>
+    <SyncButton
+      source={sync.idle[0] || sync.shown}
+      job={sync.idle.length ? null : sync.job}
+      small
+      onSync={() => sync.idle.forEach(onSync)}
+    />
   );
 }
 
-function PersonCard({ person: p, index, selectMode, selected, onToggle, sync }) {
+function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync }) {
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
@@ -60,6 +67,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync }) 
             </span>
           ))}
         </span>
+        <CardSyncStatus sync={sync} />
       </span>
       <span className="person-stats">
         <span className="creator-count">{fmtInt(p.count)}</span>
@@ -79,12 +87,12 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync }) 
       ) : (
         <Link to={personPath(p.id)} className="creator-main" title={`Open ${p.name}`}>{body}</Link>
       )}
-      {!selectMode && sync}
+      {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
   );
 }
 
-function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync }) {
+function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync }) {
   const former = matchedFormer(a, query);
   const body = (
     <>
@@ -95,6 +103,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
           {a.name && a.name !== a.handle ? `${a.name} · ` : ""}{platformLabel(a.platform)}
           {former && ` · was @${former}`}
         </span>
+        <CardSyncStatus sync={sync} />
       </span>
       <span className="creator-count">{a.count}</span>
     </>
@@ -122,7 +131,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
           <Icon name="review" size={15} />
         </Link>
       )}
-      {!selectMode && sync}
+      {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
   );
 }
@@ -281,9 +290,7 @@ export default function Creators() {
   }, [sourceList]);
   const shownAccounts = useMemo(() => new Set((data || []).map(accountKey)), [data]);
   const loose = sourceList.filter(src => !src.person && !(src.account && shownAccounts.has(accountKey(src.account))));
-  const cardSync = k => (
-    <CardSync sources={cardSources.get(k)} jobOf={sources.jobOf} onSync={sources.sync} />
-  );
+  const syncOf = k => cardSync(cardSources.get(k), sources.jobOf);
 
   async function addSuggested(list) {
     setBusy(true);
@@ -400,8 +407,8 @@ export default function Creators() {
 
       {!sel.active && !filter && (
         <section className="sources-panel" aria-label="Sources">
-          <SyncAllBar count={sourceList.length} syncAll={syncAll} />
           <AddSource onAdded={sources.reload} />
+          <SyncAllBar count={sourceList.length} syncAll={syncAll} />
           {loose.length > 0 && (
             <ul className="source-list">
               {loose.map(src => (
@@ -445,7 +452,8 @@ export default function Creators() {
                     selectMode={sel.active}
                     selected={sel.isSelected(`person:${p.id}`)}
                     onToggle={shift => sel.toggle(index(`person:${p.id}`), shift)}
-                    sync={cardSync(`person:${p.id}`)}
+                    sync={syncOf(`person:${p.id}`)}
+                    onSync={sources.sync}
                   />
                 ))}
               </div>
@@ -466,7 +474,8 @@ export default function Creators() {
                     selectMode={sel.active}
                     selected={sel.isSelected(`account:${accountKey(a)}`)}
                     onToggle={shift => sel.toggle(index(`account:${accountKey(a)}`), shift)}
-                    sync={a.id != null && cardSync(`account:${accountKey(a)}`)}
+                    sync={a.id != null ? syncOf(`account:${accountKey(a)}`) : null}
+                    onSync={sources.sync}
                   />
                 ))}
               </div>
