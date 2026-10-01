@@ -915,10 +915,16 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
   not downloaded again). `--fast-update` also stops at the first file that
   exists.
 - **First sync.** When `stamps.ini` has no entry for the target yet, it is
-  seeded with the newest `posted_at` FeedVault has for the source's account
-  (and the account's numeric id, when it has one), so the first sync only
-  fetches what is newer instead of walking the whole profile again. Not
-  with `options.full_history`, nor for a source with no account.
+  seeded with the newest trustworthy `posted_at` FeedVault has for the
+  source's account (and the account's numeric id, when it has one), so the
+  first sync only fetches what is newer instead of walking the whole
+  profile again. Not with `options.full_history`, nor for a source with no
+  account. Trustworthy: a post with metadata, or a filename-only post whose
+  name carries a date, counted no later than the end of that day (UTC). A
+  name without a date (`{target} - {shortcode}`) only has the file's mtime,
+  which a copy may have made later than posts never downloaded: such posts
+  are left out, and an account with nothing else gets no seed (the job log
+  says `first sync: no reliable date, fetching full history`).
 - **Metadata on.** `--no-compress-json` writes each post's JSON beside its
   media, so new posts get captions, stats and the account's numeric id.
   The folder's name becomes an alias of that id (see [People](#people)),

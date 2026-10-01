@@ -13,7 +13,9 @@ instaloader:
   ``--fast-update`` also stops at the first file that exists.
 - the first sync of a source seeds that file with the newest post FeedVault
   already has for the account, so it never walks the whole profile again
-  (unless the source asks for its full history).
+  (unless the source asks for its full history). Only dates that can be
+  trusted count (see trusted_newest): a seed after a post never downloaded
+  would skip it for good.
 - metadata on (``--no-compress-json``), so new posts get captions and the
   account's numeric id; people.refresh_aliases links them to the folder's
   older filename-only posts.
@@ -53,7 +55,7 @@ import people
 import sources
 import userdata
 from parsers import is_media, yt_dlp
-from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SPACED_RE
+from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SPACED_RE, _day_start
 
 KIND = "instaloader-sync"
 GROUP = "instaloader"
@@ -244,6 +246,31 @@ def _write_stamps(stamps, path):
     os.replace(tmp, path)
 
 
+FILENAMES = "instaloader (filenames)"           # parsers.instaloader's tool for posts rebuilt from names
+DAY = 86400
+
+
+def trusted_newest(conn, platform, author_id):
+    """The newest post time of an account (aliases included) that can seed
+    instaloader's stamp, or None. A post with metadata has its real time; a
+    post rebuilt from a dated file name counts until the end of that day
+    (its mtime only within it); one from a name without a date (``{target} -
+    {shortcode}``) has only its mtime, which a copy that did not keep it
+    makes the copy's date, later than posts never downloaded: not counted."""
+    clause, args = db.post_filter(platform=platform, author=author_id)
+    newest = None
+    for tool, path, posted in conn.execute(
+            f"SELECT p.tool, p.meta_path, p.posted_at {db._FROM} {clause} AND p.posted_at IS NOT NULL", args):
+        if tool == FILENAMES:
+            m = _NAME_RE.fullmatch(os.path.basename(path))
+            day = _day_start(m["date"]) if m else None
+            if day is None:
+                continue
+            posted = min(posted, day + DAY - 1)
+        newest = posted if newest is None else max(newest, posted)
+    return newest
+
+
 def _start(params, note):
     """Right before instaloader starts (no other instaloader runs): seed the
     stamps file on a source's first sync."""
@@ -268,7 +295,11 @@ def _start(params, note):
     if src["author_id"] is not None:
         key = people.canonical(conn, src["platform"], src["author_id"])
         a = db.accounts(conn).get(key)
-        newest = a and a["newest"]
+        if a and a["newest"] is not None:
+            newest = trusted_newest(conn, *key)
+            if newest is None:
+                note("first sync: no reliable date, fetching full history")
+                return
     if newest is None:
         note(f"first sync of {target}: no post indexed yet, downloading everything")
         return
