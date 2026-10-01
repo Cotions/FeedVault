@@ -305,7 +305,7 @@ def test_unreachable_pypi_is_shown_and_not_retried_today(pypi, client, monkeypat
 
 
 @pytest.mark.parametrize("latest, installed, result", [
-    ("2026.08.06", "2026.01.01", True), ("2026.08.06", "2026.08.06", False),
+    ("2026.08.06", "2026.01.01", True), ("2026.08.06", "2026.08.06", False), ("2026.8.19", "2026.08.19", False),
     ("2026.08.06", "2026.08.06.232211", False), ("1.30", "1.30.0", False), ("1.31.0", "1.30.10", True),
     ("1.30.10", "1.30.9", True), ("4.15", "instaloader 4.14.2", True), ("1.0", "no digits", None),
 ])
