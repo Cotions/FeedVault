@@ -393,6 +393,82 @@ def test_no_seeding_with_full_history_or_after_the_first_sync(env, fake, client)
 
 
 # ---------------------------------------------------------------------------
+# Never again: trash adds to the archive, restore takes it out
+# ---------------------------------------------------------------------------
+
+def test_trashed_post_does_not_come_back(env, fake, client):
+    fake.put(X, x_account((1, 2), (2, 1)))
+    s = add(client, X)
+    run_sync(client, s["id"])
+    # Out of the archive (as if downloaded by hand): only the trash puts it back in.
+    archives.remove("gallery-dl", archive_entries(env, "gallery-dl"), str(env["tmp"] / "data"))
+    r = post(client, "/api/delete", {"posts": ["twitter:1800000000000000001"]})
+    assert r["ok"] and r["posts"] == ["twitter:1800000000000000001"]
+    assert archive_entries(env, "gallery-dl") == {"twitter1800000000000000001_0_1", "twitter1800000000000000001_0_2"}
+    assert archive_entries(env, "yt-dlp") == {"twitter 1800000000000000001"}
+    fake.put(X, x_account((1, 2), (2, 1), (3, 1)), )
+    post(client, f"/api/sources/{s['id']}", {"options": {"full_history": True}})
+    job = run_sync(client, s["id"])
+    assert job["message"] == "1 new post"
+    ids = sorted(p["id"] for p in get(client, "/api/posts?platform=twitter")["posts"])
+    assert ids == ["twitter:1800000000000000002", "twitter:1800000000000000003"]
+    # Restored: its entries are taken out again, the others stay.
+    r = post(client, "/api/trash/restore", {"posts": ["twitter:1800000000000000001"]})
+    assert r["ok"] and r["files"] == 4
+    assert archive_entries(env, "gallery-dl") == {"twitter1800000000000000003_0_1"}
+    assert archive_entries(env, "yt-dlp") == set()
+
+
+def test_restore_keeps_entries_the_archive_had_before(env, fake, client):
+    fake.put(TT, tt_account(1, 2))
+    s = add(client, TT)
+    run_sync(client, s["id"])
+    before = archive_entries(env, "yt-dlp")
+    post(client, "/api/delete", {"posts": ["tiktok:7300000000000000001"]})
+    assert archive_entries(env, "yt-dlp") == before            # it was there: nothing added
+    post(client, "/api/trash/restore", {"posts": ["tiktok:7300000000000000001"]})
+    assert archive_entries(env, "yt-dlp") == before            # and so nothing taken out
+    job = run_sync(client, s["id"])
+    assert job["message"] == "0 new posts"
+
+
+def test_trash_then_sync_yt_dlp(env, fake, client):
+    fake.put(TT, tt_account(1, 2))
+    s = add(client, TT)
+    run_sync(client, s["id"])
+    open(archives.path("yt-dlp", str(env["tmp"] / "data")), "w").close()      # emptied by hand
+    post(client, "/api/delete", {"posts": ["tiktok:7300000000000000002"]})
+    post(client, f"/api/sources/{s['id']}", {"options": {"full_history": True}})
+    job = run_sync(client, s["id"])
+    assert job["message"] == "0 new posts"
+    assert [p["id"] for p in get(client, "/api/posts?platform=tiktok")["posts"]] == ["tiktok:7300000000000000001"]
+
+
+def test_one_item_trashed_on_its_own(env, fake, client):
+    fake.put(X, x_account((1, 3)))
+    s = add(client, X)
+    run_sync(client, s["id"])
+    archives.remove("gallery-dl", archive_entries(env, "gallery-dl"), str(env["tmp"] / "data"))
+    media = get(client, "/api/posts/twitter/1800000000000000001")["media"]
+    post(client, "/api/delete", {"media": [media[1]["id"]]})
+    assert archive_entries(env, "gallery-dl") == {"twitter1800000000000000001_0_2"}
+    assert archive_entries(env, "yt-dlp") == set()             # the post stays
+    keys = [e["key"] for e in get(client, "/api/trash/items")["entries"]]
+    post(client, "/api/trash/restore", {"keys": keys})
+    assert archive_entries(env, "gallery-dl") == set()
+
+
+def test_instaloader_posts_add_nothing(env, fake, client):
+    from fakes import owner, write_post
+    write_post(env["media"] / "alice", "AAA111", TS, owner("alice", 1), "image")
+    scanner.scan(env["roots"])
+    post(client, "/api/delete", {"posts": ["instagram:AAA111"]})
+    assert not os.path.exists(env["tmp"] / "data" / "gallery-dl") and not os.path.exists(env["tmp"] / "data" / "yt-dlp")
+    lines = [json.loads(ln) for ln in open(env["media"] / ".feedvault-trash" / ".manifest.jsonl")]
+    assert all("archive" not in ln for ln in lines)
+
+
+# ---------------------------------------------------------------------------
 # The archive files
 # ---------------------------------------------------------------------------
 

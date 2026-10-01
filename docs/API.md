@@ -141,6 +141,20 @@ item with any file that could not be moved stays in the index, and the reason
 is in `errors`. `ok` is `false` only when nothing could be done at all (bad
 body, or a scan held the index for more than 30 s).
 
+**Never again.** Deleting a gallery-dl or yt-dlp post also adds it to the
+download archives in the data directory (see
+[gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs)), so no sync
+downloads it again: gallery-dl's entry for each of its files, and the
+yt-dlp line `<platform> <id>` (both tools download TikTok and X). A media
+item deleted on its own adds its file's gallery-dl entry. The entries a
+deletion added (not those the archive already had) are kept on its
+manifest lines (`"archive": { "gallery-dl": [...], "yt-dlp": [...] }`), and
+restoring it takes them out again. Emptying the trash or purging keeps them.
+instaloader has no archive: its `--latest-stamps` keeps a trashed post
+older than the profile's newest download from coming back, but a trashed
+post newer than the stamp (trashed before any sync passed it) can be
+downloaded again by the next sync.
+
 ### Trash contents
 
 Every file moved to the trash gets one line in its trash folder's
@@ -973,6 +987,8 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   ones are left to ChannelVault).
 - **The folder.** `-D` (gallery-dl) puts every file directly in it; the
   yt-dlp template is the folder with `%` doubled, so it stays literal.
+- **Trash.** Trashing a post adds it to the archives so no sync brings it
+  back; restoring it takes out what trashing added (see [Deleting](#deleting)).
 - **Result**: as for instaloader: the folder is indexed when the job ends,
   `result` `{ "added", "updated", "error", "line" }`, stored on the source.
   There is no pause between gallery-dl or yt-dlp jobs.

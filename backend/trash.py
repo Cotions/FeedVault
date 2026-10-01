@@ -9,6 +9,11 @@ removes files for good.
 Each move is logged in the trash folder's ``.manifest.jsonl`` (original path,
 trash path, post id, time, and what the Trash page shows about the post, which
 is gone from the index by then). Restore and purge work from those lines.
+
+Trashing a gallery-dl or yt-dlp post also adds it to those tools' download
+archives (archives.py), so no sync brings it back; the entries it added are
+kept on its manifest lines, and restoring it takes them out again.
+Emptying the trash leaves them: a post deleted for good stays gone.
 """
 import hashlib
 import json
@@ -18,6 +23,7 @@ import threading
 import time
 import uuid
 
+import archives
 import db
 import organize
 import scanner
@@ -177,7 +183,8 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
                     report["media"].append(mid)
                 continue
             files = _media_files(m)
-            if not _move_all(files, roots, post["id"], _post_info(post, len(others) + 1, True), report, data_dir):
+            info = _never_again(_post_info(post, len(others) + 1, True), archives.media_entries(post, m), data_dir)
+            if not _move_all(files, roots, post["id"], info, report, data_dir):
                 continue
             for f, _ in files:
                 thumbs.forget(data_dir, f)
@@ -193,10 +200,19 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
     return report
 
 
+def _never_again(info, entries, data_dir):
+    """Add a post's (or an item's) archive entries before its files move;
+    the manifest lines keep the ones added, for restore. Copies add none:
+    their post stays."""
+    added = archives.never_again(entries, data_dir) if entries and data_dir else {}
+    return {**info, "archive": added} if added else info
+
+
 def _delete_post(conn, post, roots, data_dir, report):
     files = _post_files(conn, post)
     items = conn.execute("SELECT COUNT(*) FROM media WHERE post_id = ?", (post["id"],)).fetchone()[0]
-    if not _move_all(files, roots, post["id"], _post_info(post, items, False), report, data_dir):
+    info = _never_again(_post_info(post, items, False), archives.post_entries(post), data_dir)
+    if not _move_all(files, roots, post["id"], info, report, data_dir):
         conn.commit()                           # keep the index in step with what did move
         return
     for f, _ in files:
@@ -575,6 +591,7 @@ def restore(post_ids, roots, data_dir=None, keys=None):
     wanted = set(post_ids or ())
     wanted_keys = set(keys or ())
     touched_dirs = set()
+    archived = {}                                # tool -> archive entries the restored lines added
     with db.write_lock:
         for root in roots:
             lines = _read_manifest(root)
@@ -603,6 +620,10 @@ def restore(post_ids, roots, data_dir=None, keys=None):
                     touched_dirs.add(os.path.dirname(dest))
                     if data_dir:
                         thumbs.move(data_dir, src, dest)
+                    if isinstance(e.get("archive"), dict):
+                        for tool, entries in e["archive"].items():
+                            if isinstance(entries, list):
+                                archived.setdefault(tool, set()).update(x for x in entries if isinstance(x, str))
                     if pid not in report["posts"]:
                         report["posts"].append(pid)
                 except (TrashError, OSError) as err:
@@ -610,6 +631,8 @@ def restore(post_ids, roots, data_dir=None, keys=None):
                     keep.append(e)
             if len(keep) != len(lines):
                 _write_manifest(root, keep)
+        if archived and data_dir:
+            archives.take_back({t: sorted(es) for t, es in archived.items()}, data_dir)
     if touched_dirs:
         scanner.index_dirs(roots, touched_dirs)
     return report

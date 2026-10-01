@@ -61,7 +61,7 @@ when their metadata has an id and a date.
 ```bash
 gallery-dl --write-metadata \
   -d ~/Media/gallery-dl \
-  --download-archive ~/.local/share/feedvault/gallery-dl.sqlite3 \
+  --download-archive ~/.local/share/feedvault/gallery-dl/archive.sqlite3 \
   https://x.com/some_account/media https://www.tiktok.com/@some_account
 ```
 
@@ -74,9 +74,9 @@ gallery-dl --write-metadata \
   if you set your own `directory`, keep the author in it
 - `--download-archive` remembers what was downloaded, so a later run skips it.
   Keep it in FeedVault's data directory (`data_directory` in the config,
-  `~/.local/share/feedvault` by default), not next to the media, so trashing a
-  post in FeedVault does not make the next run download it again (see
-  [#4](https://github.com/Cotions/FeedVault/issues/4))
+  `~/.local/share/feedvault` by default), at the path FeedVault's syncs use:
+  a post trashed in FeedVault is added to it, so the next run does not
+  download it again
 - `-o previews=true` (X) and `-o covers=true` (TikTok) also save a video's
   thumbnail, used as its poster
 - retweets (`-o retweets=true`) show under the original author with "Retweeted
@@ -142,8 +142,9 @@ routing**: instaloader for Instagram, gallery-dl for X, Reddit, Bluesky and
 pixiv, yt-dlp for YouTube and TikTok. **Sync** runs that tool as a job and
 indexes the folder, so new posts show up in the Feed without a terminal.
 gallery-dl and yt-dlp keep their download archives in FeedVault's data
-directory: a sync stops at what they already have, and a first sync skips
-what is already indexed.
+directory: a sync stops at what they already have, a first sync skips what
+is already indexed, and a post you trash is never downloaded again (until
+you restore it).
 
 For Instagram, only new posts are fetched: FeedVault keeps instaloader's `--latest-stamps` file in
 its data directory, and a first sync starts after the newest post already
