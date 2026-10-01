@@ -23,6 +23,7 @@ import jobs
 import organize
 import people
 import scanner
+import sources
 import thumbs
 import trash
 import userdata
@@ -590,6 +591,7 @@ def merge_people():
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     _people_changed(names=True)
+    userdata.changed("sources")                # the others' sources moved to the first
     return jsonify({"ok": True, "person": p})
 
 
@@ -668,6 +670,92 @@ def person_accounts(pid):
     if r["added"] or r["removed"]:
         _people_changed()
     return jsonify({"ok": True, **r})
+
+
+# ---------------------------------------------------------------------------
+# Sources (sources.py: where a person's posts are downloaded from)
+# ---------------------------------------------------------------------------
+
+def _sources_active():
+    """{source id: its queued or running sync}."""
+    return {}
+
+
+@app.get("/api/sources")
+def list_sources():
+    return jsonify(sources.listing(db.connect(), _roots(), _sources_active()))
+
+
+def _source_or_404(sid):
+    s = sources.get(db.connect(), sid, _sources_active())
+    if s is None:
+        abort(404)
+    return s
+
+
+@app.post("/api/sources")
+def create_source():
+    body = request.get_json(silent=True) or {}
+    tool = body.get("tool")
+    if tool not in sources.TOOLS:
+        return jsonify({"ok": False, "error": f"tool must be one of: {', '.join(sources.TOOLS)}"}), 400
+    target = sources.parse_target(tool, body.get("target"))
+    if target is None:
+        return jsonify({"ok": False, "error": "target must be a profile name, @name or profile URL"}), 400
+    folder, person, account = body.get("folder"), body.get("person"), body.get("account")
+    if folder is not None and not isinstance(folder, str):
+        return jsonify({"ok": False, "error": "folder must be an absolute path inside a media root"}), 400
+    if person is not None and (not isinstance(person, int) or isinstance(person, bool) or not 0 <= person < 2**53):
+        return jsonify({"ok": False, "error": "person must be a person id"}), 400
+    if account is not None:
+        account = people.clean_accounts([account])
+        if not account:
+            return jsonify({"ok": False, "error": "account must be { platform, id }"}), 400
+        account = account[0]
+    options = sources.clean_options(body.get("options"))
+    if options is None:
+        return jsonify({"ok": False, "error": "options must be { full_history, session }"}), 400
+    conn = db.connect()
+    try:
+        sid = sources.create(conn, _roots(), tool, target, folder, person, account, options, int(time.time()))
+    except sources.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    userdata.changed("sources")
+    return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
+@app.get("/api/sources/<int:sid>")
+def get_source(sid):
+    s = sources.get(db.connect(), sid, _sources_active())
+    if s is None:
+        return jsonify({"ok": False, "error": "no such source"}), 404
+    return jsonify(s)
+
+
+@app.post("/api/sources/<int:sid>")
+def update_source(sid):
+    conn = db.connect()
+    s = sources.get(conn, sid)
+    if s is None:
+        return jsonify({"ok": False, "error": "no such source"}), 404
+    body = request.get_json(silent=True) or {}
+    options = sources.clean_options(body["options"], base=s["options"]) \
+        if isinstance(body.get("options"), dict) else None
+    if options is None:
+        return jsonify({"ok": False, "error": "send options: { full_history, session }"}), 400
+    sources.update(conn, sid, options)
+    userdata.changed("sources")
+    return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
+@app.delete("/api/sources/<int:sid>")
+def delete_source(sid):
+    if sid in _sources_active():
+        return jsonify({"ok": False, "error": "its sync is queued or running; cancel it first"}), 409
+    if not sources.delete(db.connect(), sid):
+        return jsonify({"ok": False, "error": "no such source"}), 404
+    userdata.changed("sources")
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

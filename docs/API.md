@@ -94,8 +94,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" } }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 } }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools) and [instaloader settings](#instaloader-settings) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
 | POST | `/api/quit` | stops the backend |
@@ -719,6 +719,166 @@ downloaded. Nothing is ever fetched.
   group's accounts, so it survives rebuilding the index; a group that gains
   an account shows again.
 
+## Sources
+
+A **source** is where a person's posts come from: a tool and its target
+(`instaloader` and a profile name), and the folder inside a media root the
+tool writes to. Clicking **Sync** runs the tool for that source as a
+[job](#jobs) and indexes the folder when it ends, so only new posts are
+downloaded and they show up in the Feed without a terminal. This slice has
+`instaloader` only; gallery-dl and yt-dlp come later.
+
+Sources are user data: table `sources`, written to
+`<data_directory>/userdata/sources.json` (by tool and target, the person by
+name, the last sync's outcome included) 2 s after the last change, so a
+rebuilt index gets them back. One source per tool and target.
+
+A source belongs to an **account** once one is known, and is shown with the
+person that account is linked to: linking the account later moves the source
+with it. A source added to a person for a profile that has no posts yet has
+`account` `null` and keeps that person; its first sync that indexes posts
+sets `account`, and links that account to the person when the account has
+no person yet.
+
+```json
+{ "id": 4, "tool": "instaloader", "platform": "instagram", "target": "somebody",
+  "url": "https://www.instagram.com/somebody/",
+  "folder": "/archive/instaloader/somebody",
+  "account": { "platform": "instagram", "id": "somebody" },
+  "person": { "id": 3, "name": "Some Body" },
+  "options": { "full_history": false, "session": null },
+  "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
+  "last_result": { "state": "failed", "error": "rate_limited",
+                   "message": "Instagram is limiting requests: wait before syncing again",
+                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41 },
+  "job": { "id": 42, "state": "queued", "waits_until": 1727503660 } }
+```
+
+- `target`: the profile name, lowercase. `url`: its address on the site.
+- `folder`: absolute, inside a media root (it need not exist before the
+  first sync; the sync creates it).
+- `account`: the indexed account the source belongs to (an alias is
+  replaced by the id it stands for), or `null`. `person`: the account's
+  person, else the person the source was added to, else `null`.
+- `options`:
+  - `full_history`: `false` (default): the first sync starts after the
+    newest post FeedVault already has for the account, see below. `true`:
+    the first sync downloads the whole profile.
+  - `session`: `null` to use the global setting (see
+    [Settings](#instaloader-settings)), or one of the session values.
+- `last_sync_at`: when the last sync ended (any outcome), or `null`.
+- `last_result`: how it ended, or `null` before the first sync:
+  - `state`: the job's (`done`, `failed`, `cancelled`, `interrupted`)
+  - `error`: `null` when it worked, else what the output says went wrong:
+    `login_required` (Instagram wants a logged-in session),
+    `private` (a private profile the session does not follow),
+    `not_found` (no such profile: renamed or deleted),
+    `rate_limited` (HTTP 429, "Please wait a few minutes"), or `generic`
+  - `message`: one line for people; `line`: the tool's last line of output
+    behind it, or `null`
+  - `added`: new posts indexed (also after a failure: what was downloaded
+    before it stopped is indexed)
+- `job`: the source's sync while it is queued or running (`waits_until`,
+  see [Jobs](#jobs)), else `null`.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
+| POST | `/api/sources` | body `{ "tool": "instaloader", "target": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
+| GET | `/api/sources/<id>` | source, or 404 |
+| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }` |
+| DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
+| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running |
+| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1 }`: a sync per source, queued one after another; sources already queued or running are skipped |
+
+- `target`: a profile name, `@name`, or a profile URL
+  (`https://www.instagram.com/name/`, with or without `www.`, a query
+  string or a trailing slash). Anything else (a post or reel link, a name
+  with other characters) is a 400.
+- `folder`: optional. Absent: `<first media root>/<target>`. Present: an
+  absolute path that resolves inside a media root (symlinks followed);
+  anything else is a 400.
+- `person` (an id) and `account` are optional. With `account`, the source
+  belongs to that indexed account (unknown: 400); without, to the account of
+  the folder's posts when there are some.
+- A second source for the same tool and target is a 400.
+- The request never carries flags, paths to run or a command: the sync job
+  takes the source id only and builds everything from the stored source.
+
+**Suggestions.** Profile folders that already hold instaloader posts but no
+source, one per folder right under a media root, for the user to confirm
+(`POST /api/sources` with the suggestion's `tool`, `target`, `folder` and
+`account`). FeedVault never creates a source on its own.
+
+```json
+{ "tool": "instaloader", "platform": "instagram", "target": "somebody",
+  "folder": "/archive/instaloader/somebody", "account": { "platform": "instagram", "id": "somebody" },
+  "handle": "somebody", "count": 812, "person": null }
+```
+
+`target` is the account's current handle when it is a valid profile name,
+else the folder's name.
+
+### How a sync runs
+
+Job kind `instaloader-sync`, group `instaloader` (one instaloader at a
+time), params `{ "source": "<id>" }` and nothing else. The argument list
+comes from the stored source:
+
+```
+instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-update
+            --no-compress-json --dirname-pattern <folder> --filename-pattern <pattern>
+            --title-pattern {date_utc}_UTC_{typename} [session flags] -- <target>
+```
+
+- **Incremental.** `--latest-stamps` keeps, per profile, the time of the
+  newest post downloaded, in FeedVault's data directory, not next to the
+  media: instaloader stops at it whatever files exist (trashed posts are
+  not downloaded again). `--fast-update` also stops at the first file that
+  exists.
+- **First sync.** When `stamps.ini` has no entry for the target yet, it is
+  seeded with the newest `posted_at` FeedVault has for the source's account
+  (and the account's numeric id, when it has one), so the first sync only
+  fetches what is newer instead of walking the whole profile again. Not
+  with `options.full_history`, nor for a source with no account.
+- **Metadata on.** `--no-compress-json` writes each post's JSON beside its
+  media, so new posts get captions, stats and the account's numeric id.
+  The folder's name becomes an alias of that id (see [People](#people)),
+  so old filename-only posts and new ones are one account.
+- **Names like the folder's.** `--filename-pattern` is detected from the
+  folder's files when the sync is queued, so new files sit beside the old
+  ones and a post already there is recognised: `{target}-{date_utc:%Y-%m-%d}-{shortcode}`
+  (the common filename-only layout, and the default for an empty or unclear
+  folder), `{target} - {shortcode}` (the older layout), or
+  `{date_utc}_UTC` (instaloader's own default, in folders it wrote with
+  metadata). A folder path holding `{` or `}` is escaped for instaloader.
+- **Session**: none (default), or `--load-cookies <browser>`, or
+  `--login <user>`; see [instaloader settings](#instaloader-settings).
+- **Pause.** After an `instaloader-sync` job ends, the next one waits the
+  configured pause (default 60 s) before it starts, so several profiles
+  never hit Instagram back to back. A queued job that waits says until when
+  in `waits_until`.
+- **Result.** The source folder is indexed when the job ends (exit code 0
+  or not, but not when cancelled): `result` `{ "added", "updated", "error",
+  "line" }`, `message` `"3 new posts"`, or for a failure the plain-language
+  message of `error`. The outcome is stored on the source (`last_result`).
+
+### instaloader settings
+
+`GET /api/config` has `"instaloader": { "session": {…}, "pause": 60 }`;
+`POST /api/config` with `{ "instaloader": { "session": {…} } }` and/or
+`"pause"` changes them.
+
+| `session` | Flags | What it means |
+|---|---|---|
+| `{ "mode": "none" }` (default) | none | Anonymous: public profiles only, and Instagram rate-limits sooner |
+| `{ "mode": "cookies", "browser": "firefox" }` | `--load-cookies firefox` | instaloader reads that browser's Instagram cookies itself. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
+| `{ "mode": "login", "user": "name" }` | `--login name` | instaloader uses the session file it saved after a `instaloader --login name` run in a terminal. Without one, the sync fails (`login_required`); it never asks for a password |
+
+FeedVault only passes the browser's name or the user name on. It never
+stores, reads or sends cookies, passwords or session files. `pause`: whole
+seconds from 0 to 3600.
+
 ## Storage
 
 `GET /api/storage`:
@@ -806,7 +966,8 @@ A **job**:
   "exit_code": 0,
   "rescan": null,
   "result": { "version": "2024.08.06" },
-  "message": "2024.08.06"
+  "message": "2024.08.06",
+  "waits_until": null
 }
 ```
 
@@ -823,6 +984,8 @@ A **job**:
 - `message`: one line for people: `"3 new posts"`, the version, the last
   line of output of a failed job (or `"exit code 2"`), `"<tool> not found;
   set its path in Settings"`, `"cancelled"`, `"FeedVault stopped while it ran"`.
+- `waits_until`: for a queued job held by its kind's pause (see
+  [How a sync runs](#how-a-sync-runs)), when it may start; else `null`.
 
 | Method | Path | Returns |
 |---|---|---|
@@ -842,8 +1005,9 @@ Built-in kinds:
 | Kind | Params | Runs | Group |
 |---|---|---|---|
 | `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
+| `instaloader-sync` | `source`: a source id | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line" }` | `instaloader` |
 
-Download kinds come with profile sync (#4) and the userscript (#10).
+More download kinds come with #4's next slices and the userscript (#10).
 
 ### Log
 
@@ -870,6 +1034,14 @@ Cancelling sends SIGTERM to the job's process group (the tool and anything
 it started), then SIGKILL after 10 seconds. Partial files stay, for the tool
 to resume. Quitting FeedVault (Quit, Ctrl+C, SIGTERM) stops running jobs the
 same way.
+
+If FeedVault itself is killed (SIGKILL, a crash, a power cut), a job's
+process may still be running when it starts again. Each running job records
+its process id, the process's start time (field 22 of `/proc/<pid>/stat`)
+and its executable; on the next start, a job left `running` has its process
+group stopped (SIGTERM, then SIGKILL) only if that pid still exists with the
+same start time and executable. A pid reused by another program is never
+signalled. The job is then `interrupted`.
 
 Jobs are kept in the database (`jobs` table), not with the user data: they
 are not exported to `userdata/`.
