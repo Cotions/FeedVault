@@ -137,9 +137,31 @@ def _migrate_3(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS copies_post ON copies(post_id)")
 
 
+def _migrate_4(conn):
+    """Exact duplicates by content. media_hash is a cache filled by the
+    background worker in hashing.py, valid while a file's size and mtime are
+    unchanged. dismissed_duplicates is user data ("not a duplicate"), never
+    touched by scans and mirrored to JSON by userdata.py."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS media_hash (
+            path      TEXT PRIMARY KEY,
+            size      INTEGER NOT NULL,
+            mtime_ns  INTEGER NOT NULL,
+            partial   TEXT NOT NULL,                -- sha1 of the first and last MiB
+            full      TEXT,                         -- sha1 of the whole file, when needed
+            hashed_at INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dismissed_duplicates (
+            key  TEXT PRIMARY KEY,                  -- JSON list, sorted: the group's members
+            kind TEXT NOT NULL,                     -- copies | content
+            at   INTEGER NOT NULL
+        )""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
-MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3]
+MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4]
 
 BACKUPS_KEPT = 3
 

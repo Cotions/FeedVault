@@ -45,6 +45,9 @@ def register(name, table, columns, key, legacy=None, legacy_rows="rows"):
 
 register("decisions", "decisions", ("post_id", "decision", "at"), "post_id",
          legacy="decisions.json", legacy_rows="decisions")
+# "Not a duplicate": the key names the group's members (post ids, and the
+# metadata paths of extra copies), so a group that gains a member shows again.
+register("dismissed_duplicates", "dismissed_duplicates", ("key", "kind", "at"), "key")
 
 
 def path(data_dir, name):

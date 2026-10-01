@@ -8,6 +8,7 @@ import threading
 import time
 
 import db
+import hashing
 import parsers
 
 # Folders that never hold posts but may hold images (icons in packages).
@@ -45,6 +46,7 @@ def _run(roots):
         with _lock:
             _state["running"] = False
             _state["last"] = report
+        hashing.kick()                         # content hashes for the Duplicates page
 
 
 def _stat(path):
