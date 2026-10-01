@@ -11,6 +11,7 @@ import Feed            from "./pages/Feed";
 import PostPage        from "./pages/PostPage";
 import Review          from "./pages/Review";
 import Creators        from "./pages/Creators";
+import Tags            from "./pages/Tags";
 import Stats           from "./pages/Stats";
 import Storage         from "./pages/Storage";
 import Trash           from "./pages/Trash";
@@ -178,7 +179,7 @@ export default function App() {
             ref={searchRef}
             type="text"
             className="header-search"
-            placeholder="Search captions, posts, authors…"
+            placeholder="Search captions, authors, tag:name…"
             aria-label="Search posts"
             value={query}
             onChange={e => setQuery(e.target.value)}
@@ -206,6 +207,7 @@ export default function App() {
           <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
           <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
           <NavLink to="/creators" className="side-link"><Icon name="users" />Creators</NavLink>
+          <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
           <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
           <NavLink to="/storage" className="side-link"><Icon name="disk" />Storage</NavLink>
           <NavLink to="/trash" className="side-link"><Icon name="trash" />Trash</NavLink>
@@ -278,6 +280,7 @@ export default function App() {
             <Route path="/p/:platform/:postId" element={<PostPage />} />
             <Route path="/review" element={<Review />} />
             <Route path="/creators" element={<Creators />} />
+            <Route path="/tags" element={<Tags />} />
             <Route path="/stats" element={<Stats />} />
             <Route path="/storage" element={<Storage />} />
             <Route path="/trash" element={<Trash />} />

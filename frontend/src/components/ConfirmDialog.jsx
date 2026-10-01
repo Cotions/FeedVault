@@ -9,10 +9,11 @@ const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select
    disabled and Esc does nothing: the request is already on its way.
 
    Props: open, title, children (body), confirmLabel, danger, busy, error,
-          onConfirm, onCancel */
+          onConfirm, onCancel, initialFocus (a ref to focus instead of Cancel,
+          for a dialog whose body is a form), confirmDisabled */
 export default function ConfirmDialog({
   open, title, children, confirmLabel = "Confirm", cancelLabel = "Cancel",
-  danger = false, busy = false, error = null, onConfirm, onCancel,
+  danger = false, busy = false, error = null, onConfirm, onCancel, initialFocus, confirmDisabled = false,
 }) {
   const boxRef    = useRef(null);
   const cancelRef = useRef(null);
@@ -22,8 +23,10 @@ export default function ConfirmDialog({
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement;
-    cancelRef.current?.focus();
+    (initialFocus?.current || cancelRef.current)?.focus();
     return () => { if (prev && prev.focus && document.contains(prev)) prev.focus(); };
+    // Once per opening; initialFocus is a ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!open) return null;
@@ -68,7 +71,7 @@ export default function ConfirmDialog({
           <button ref={cancelRef} type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </button>
-          <button type="button" className={danger ? "btn-danger" : "btn-primary"} onClick={onConfirm} disabled={busy}>
+          <button type="button" className={danger ? "btn-danger" : "btn-primary"} onClick={onConfirm} disabled={busy || confirmDisabled}>
             {busy ? "Working…" : confirmLabel}
           </button>
         </div>

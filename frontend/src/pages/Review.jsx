@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPosts, getPost, getAuthors, deleteItems, setDecision, restorePosts } from "../lib/api";
+import { getPosts, getPost, getAuthors, getTags, applyTags, deleteItems, setDecision, restorePosts } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { KINDS, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, authorFeedPath } from "../lib/fmt";
+import { sameTag, tagsMatch, withTags } from "../lib/tags";
 import RichText from "../components/RichText";
+import TagChips from "../components/TagChips";
+import TagInput from "../components/TagInput";
 import Icon from "../components/Icon";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
@@ -15,7 +18,9 @@ import Icon from "../components/Icon";
    The server's unreviewed list is then exactly "our undecided posts, in order,
    followed by the ones not fetched yet", so the next page starts at
    offset = number of undecided posts we hold. Ids already held are filtered
-   out as a guard against a rescan shifting things. */
+   out as a guard against a rescan shifting things. Tagging can take a post
+   out of a tag scope (or the untagged one) on the server too, so those are
+   not counted either. */
 
 const PAGE = 50;
 const TOP_UP_BELOW = 10;
@@ -101,6 +106,7 @@ const SHORTCUTS = [
   ["↓ / L", "Next post (skip, no decision)"],
   ["Space", "Play / pause video"],
   ["M", "Mute on / off (remembered)"],
+  ["T", "Tag this post (Enter applies, Esc closes)"],
   ["Z / Ctrl+Z", "Undo the last decision"],
   ["F", "Fullscreen"],
   ["?", "This help"],
@@ -122,6 +128,9 @@ function ReviewSession({ scope, scopeControls }) {
   const [busy, setBusy] = useState(false);
   const [help, setHelp] = useState(false);
   const [muted, setMuted] = useState(readMuted);
+  const [tagging, setTagging] = useState(false);
+  const [tagsOf, setTagsOf] = useState({});      // id -> tags changed this session
+  const tagsApi = useApi(getTags, 0);
   const busyRef     = useRef(false);
   const fetchingRef = useRef(false);
   const requested   = useRef(new Set());
@@ -136,6 +145,7 @@ function ReviewSession({ scope, scopeControls }) {
   if ((cur?.id ?? null) !== itemFor) {
     setItemFor(cur?.id ?? null);
     setItem(0);
+    setTagging(false);
   }
   const safeItem = Math.min(item, Math.max(0, media.length - 1));
   const m = media[safeItem];
@@ -154,18 +164,21 @@ function ReviewSession({ scope, scopeControls }) {
     return n;
   }, [queue, status, pos]);
   const undecidedHeld = useMemo(() => queue.filter(p => !status[p.id]).length, [queue, status]);
+  const outOfScope = useMemo(
+    () => queue.filter(p => !status[p.id] && tagsOf[p.id] && !tagsMatch(tagsOf[p.id], scope.tag, scope.untagged)).length,
+    [queue, status, tagsOf, scope]);
 
   // Top up the queue when it runs low.
   useEffect(() => {
     if (exhausted || fetchingRef.current || undecidedAhead >= TOP_UP_BELOW) return;
     fetchingRef.current = true;
-    getPosts({ ...scope, review: "unreviewed", sort: "posted", offset: undecidedHeld, limit: PAGE })
+    getPosts({ ...scope, review: "unreviewed", sort: "posted", offset: undecidedHeld - outOfScope, limit: PAGE })
       .then(
         r => dispatch({ type: "loaded", posts: r.posts || [], total: r.total ?? 0 }),
         e => dispatch({ type: "error", error: e }),
       )
       .finally(() => { fetchingRef.current = false; });
-  }, [exhausted, undecidedAhead, undecidedHeld, scope]);
+  }, [exhausted, undecidedAhead, undecidedHeld, outOfScope, scope]);
 
   // Full posts (media lists) for the current one and the next few.
   const fetchFull = useCallback(p => {
@@ -281,6 +294,17 @@ function ReviewSession({ scope, scopeControls }) {
     toast("Undone.");
   });
 
+  const curTags = cur ? tagsOf[cur.id] ?? post?.tags ?? cur.tags ?? [] : [];
+  const tagPost = ({ add = [], remove = [] }) => cur && run(async () => {
+    const r = await applyTags([cur.id], { add, remove });
+    if (!r?.ok) { toast(r?.error || "Could not change the tags.", "err"); return; }
+    if (!r.posts?.includes(cur.id)) { toast("This post is no longer in the index.", "err"); return; }
+    const known = tagsApi.data || [];
+    const names = add.map(a => known.find(t => sameTag(t.name, a))?.name || a);
+    setTagsOf(t => ({ ...t, [cur.id]: withTags(curTags, names, remove) }));
+    tagsApi.reload();
+  });
+
   const stepItem = d => media.length > 1 && setItem(i => (Math.min(i, media.length - 1) + d + media.length) % media.length);
 
   function togglePlay() {
@@ -295,7 +319,8 @@ function ReviewSession({ scope, scopeControls }) {
   }
 
   // Latest handlers for the one window listener.
-  const keys = { keep, trashPost, trashItem, undoLast, stepItem, togglePlay, toggleFullscreen };
+  const openTags = () => cur && !post?.error && setTagging(true);
+  const keys = { keep, trashPost, trashItem, undoLast, stepItem, togglePlay, toggleFullscreen, openTags };
   const keysRef = useRef(keys);
   useEffect(() => { keysRef.current = keys; });
 
@@ -324,6 +349,7 @@ function ReviewSession({ scope, scopeControls }) {
         case "m":          setMuted(v => !v); break;
         case "z":          k.undoLast(); break;
         case "f":          k.toggleFullscreen(); break;
+        case "t":          k.openTags(); break;
         default:           handled = false;
       }
       if (handled) e.preventDefault();
@@ -450,6 +476,23 @@ function ReviewSession({ scope, scopeControls }) {
             {cur.text
               ? <div className="review-caption"><RichText text={cur.text} /></div>
               : <p className="dim review-caption">No caption.</p>}
+            <div className="review-tags">
+              <TagChips tags={curTags} onRemove={name => tagPost({ remove: [name] })} busy={busy} />
+              {tagging ? (
+                <TagInput
+                  autoFocus
+                  tags={tagsApi.data || []}
+                  exclude={curTags}
+                  placeholder="Tag this post…"
+                  onAdd={name => { setTagging(false); tagPost({ add: [name] }); }}
+                  onClose={() => setTagging(false)}
+                />
+              ) : (
+                <button type="button" className="btn-ghost review-tag-btn" onClick={e => act(e, openTags)} disabled={!!post?.error}>
+                  <Icon name="tag" size={13} />Tag<Kbd>T</Kbd>
+                </button>
+              )}
+            </div>
             <Link className="text-link review-open" to={`/p/${encodeURIComponent(cur.platform)}/${encodeURIComponent(cur.post_id)}`}>
               Open post page
             </Link>
@@ -517,10 +560,14 @@ export default function Review() {
   const author   = params.get("author") || "";
   const kind     = params.get("kind") || "";
   const order    = params.get("order") === "asc" ? "asc" : "desc";
-  const scope    = useMemo(() => ({ platform, author, kind, order }), [platform, author, kind, order]);
+  const tag      = params.get("tag") || "";
+  const untagged = !tag && params.get("untagged") === "1";
+  const scope    = useMemo(() => ({ platform, author, kind, order, tag: tag ? [tag] : [], untagged }),
+    [platform, author, kind, order, tag, untagged]);
   const scopeKey = JSON.stringify(scope);
 
   const { data: authorsData } = useApi(getAuthors, 0);
+  const { data: tagsData } = useApi(getTags, 0);
   const authors = useMemo(() => authorsData || [], [authorsData]);
   const platforms = useMemo(() => {
     const set = new Set(authors.map(a => a.platform).filter(Boolean));
@@ -560,6 +607,20 @@ export default function Review() {
         {authors.filter(a => a.id != null && (!platform || a.platform === platform)).map(a => (
           <option key={`${a.platform}:${a.id}`} value={`${a.platform}:${a.id}`}>@{a.handle || a.id} ({a.count})</option>
         ))}
+      </select>
+      <select
+        className="sort-select review-scope-tag"
+        aria-label="Tag"
+        value={untagged ? "__untagged" : tag}
+        onChange={e => {
+          const v = e.target.value;
+          setParam(v === "__untagged" ? { untagged: "1", tag: "" } : { tag: v, untagged: "" });
+        }}
+      >
+        <option value="">Any tags</option>
+        <option value="__untagged">Untagged only</option>
+        {tag && !(tagsData || []).some(t => t.name === tag) && <option value={tag}>{tag}</option>}
+        {(tagsData || []).map(t => <option key={t.name} value={t.name}>{t.name} ({t.count})</option>)}
       </select>
       <select className="sort-select" aria-label="Order" value={order} onChange={e => setParam({ order: e.target.value === "asc" ? "asc" : "" })}>
         <option value="desc">Newest first</option>

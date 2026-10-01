@@ -145,6 +145,20 @@ def add_duplicates(media, ts):
     img.resize((540, 675)).save(base + ".jpg", "JPEG", quality=60)
 
 
+def seed_tags(data, tagged):
+    """User data files the app imports on its first start (an existing demo's
+    own tags are left alone)."""
+    folder = os.path.join(data, "userdata")
+    if os.path.exists(os.path.join(folder, "post_tags.json")):
+        return
+    os.makedirs(folder, exist_ok=True)
+    names = sorted({t for _, t in tagged})
+    with open(os.path.join(folder, "tags.json"), "w") as f:
+        json.dump({"version": 1, "rows": [{"name": n, "color": None, "created_at": 1_700_000_000} for n in names]}, f)
+    with open(os.path.join(folder, "post_tags.json"), "w") as f:
+        json.dump({"version": 1, "rows": [{"post_id": p, "tag": t, "at": 1_700_000_000} for p, t in tagged]}, f)
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -160,6 +174,7 @@ def main():
         fakes.fake_video = lambda path: real_video(path, tuple(rng.randrange(40, 200) for _ in range(3)))
 
     ts = 1_700_000_000
+    tagged = []                                   # (post id, tag): a few, so the tag views have something
     for i in range(48):
         handle, uid, name = rng.choice(CREATORS)
         kind = rng.choices(["image", "carousel", "video"], weights=[5, 3, 2])[0]
@@ -175,11 +190,16 @@ def main():
             product_type="clips" if kind == "video" else None,
             location=rng.choice(LOCATIONS),
         )
+        if handle == "quiet_kiln":
+            tagged.append((f"instagram:{shortcode}", "ceramics"))
+        if rng.random() < 0.2:
+            tagged.append((f"instagram:{shortcode}", "favourites"))
     # A stray file so the Unmatched page has something to show.
     fakes.png(os.path.join(media, "pixel_bakery", "screenshot_from_phone.png"), (200, 60, 60))
     add_duplicates(media, ts)
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
+    seed_tags(os.path.join(root, "data"), tagged)
     with open(os.path.join(root, "config.json"), "w") as f:
         json.dump({"data_directory": os.path.join(root, "data"), "media_roots": [media]}, f, indent=2)
     print(f"Demo vault at {root} ({'real' if have_ffmpeg else 'placeholder'} videos)")

@@ -74,7 +74,9 @@ async function post(path, body = {}) {
 function qs(params) {
   const s = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null && v !== "") s.set(k, String(v));
+    // A list repeats the parameter (tag=a&tag=b).
+    if (Array.isArray(v)) v.forEach(x => s.append(k, String(x)));
+    else if (v !== undefined && v !== null && v !== "" && v !== false) s.set(k, String(v));
   }
   const str = s.toString();
   return str ? `?${str}` : "";
@@ -82,14 +84,15 @@ function qs(params) {
 
 /* ── Endpoints (docs/API.md) ─────────────────────────────── */
 
-// { total, posts: [summary] }. params: q, platform, author, kind, sort, offset, limit
+// { total, posts: [summary] }. params: q, platform, author, kind, review,
+// tag (a list: every one must match), untagged, sort, order, offset, limit
 export function getPosts(params = {}) { return get(`/api/posts${qs(params)}`); }
 // Full post. Throws ApiError with status 404 when it is not in the index.
 export function getPost(platform, postId) {
   return get(`/api/posts/${encodeURIComponent(platform)}/${encodeURIComponent(postId)}`);
 }
 // { posts, media, bytes } over every post the filters match. params: q,
-// platform, author, kind, review (the /api/posts filters; paging is ignored).
+// platform, author, kind, review, tag, untagged (the /api/posts filters; paging is ignored).
 export function getPostsSummary(params = {}, opts) { return get(`/api/posts/summary${qs(params)}`, opts); }
 export function getAuthors()   { return get("/api/authors"); }
 export function getStats()     { return get("/api/stats"); }
@@ -145,3 +148,16 @@ export function getDuplicatesStatus() { return get("/api/duplicates/status"); }
 export function resolveDuplicates(groups, threshold) { return post("/api/duplicates/resolve", { groups, threshold }); }
 // "Not a duplicate", stored for good → { ok }
 export function dismissDuplicate(group, threshold) { return post("/api/duplicates/dismiss", { group, threshold }); }
+
+/* ── Tags (see docs/API.md "Tags") ───────────────────────── */
+
+// [{ name, color, count }], most used first
+export function getTags() { return get("/api/tags"); }
+// → { ok, posts, added, removed, created }
+export function applyTags(posts, { add = [], remove = [] } = {}) {
+  return post("/api/tags/apply", { posts, add, remove });
+}
+// Merges into `to` when that tag exists → { ok, name, merged }
+export function renameTag(from, to) { return post("/api/tags/rename", { from, to }); }
+// → { ok, posts }
+export function deleteTag(name) { return post("/api/tags/delete", { name }); }
