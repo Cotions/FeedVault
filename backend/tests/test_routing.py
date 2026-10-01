@@ -65,7 +65,10 @@ def test_normalization():
             ("http://X.COM//someone?s=20#top", "https://x.com/someone"),
             ("https://x.com:443/someone", "https://x.com/someone"),
             ("  https://www.tiktok.com/@some.one?lang=en  ", "https://tiktok.com/@some.one"),
-            ("https://www.youtube.com/@some-one", "https://youtube.com/@some-one")]:
+            ("https://www.youtube.com/@some-one", "https://youtube.com/@some-one"),
+            ("https://m.youtube.com/@some-one", "https://youtube.com/@some-one"),
+            ("https://mobile.twitter.com/someone", "https://twitter.com/someone"),
+            ("https://old.reddit.com/user/someone", "https://old.reddit.com/user/someone")]:
         assert sources.parse_url(text, T)[0][0] == want, text
 
 

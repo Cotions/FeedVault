@@ -111,7 +111,7 @@ def route(host, table):
 def parse_url(text, table):
     """(normalized link, table host, tool) for a pasted profile link, else
     (None, error). The link becomes ``https://<host><path>``: lowercase
-    host without ``www.``, no login part, port, query or fragment, no
+    host without ``www.``, ``m.`` or ``mobile.``, no login part, port, query or fragment, no
     trailing slash. Its host must be in the routing table."""
     if not isinstance(text, str):
         return None, "paste a profile link"
@@ -132,8 +132,11 @@ def parse_url(text, table):
     if port not in (None, 80, 443):
         return None, "a link with a port is refused"
     host = (u.hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
+    # The same profile under the site's www or mobile host: one target.
+    for prefix in ("www.", "m.", "mobile."):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+            break
     if not _HOST_RE.fullmatch(host):
         return None, "not a link to a website"
     found = route(host, table)

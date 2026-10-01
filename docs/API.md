@@ -885,8 +885,9 @@ entries). The defaults:
   part (`user@`), no port other than 80 or 443, a host name (not an IP
   address), and a path of letters, digits and `. _ ~ @ % + -` between
   slashes, not empty, no `.` or `..` part, at most 500 characters.
-- Normalized to `https://<host><path>`: lowercase host without `www.`, no
-  query string or fragment, no repeated or trailing slash. That is the
+- Normalized to `https://<host><path>`: lowercase host without `www.`,
+  `m.` or `mobile.`, no query string or fragment, no repeated or trailing
+  slash. That is the
   stored target, the same however the link was pasted; the sync checks it
   again (still normalized, host still in the table) and gives it to the
   tool after `--`.
