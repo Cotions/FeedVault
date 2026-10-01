@@ -226,7 +226,7 @@ def collection_posts(conn, cid, offset=0, limit=60):
     rows = conn.execute(f"{db._SELECT} JOIN collection_posts cp ON cp.post_id = p.id "
                         "WHERE cp.collection_id = ? ORDER BY cp.position, p.id LIMIT ? OFFSET ?",
                         (cid, limit, offset)).fetchall()
-    return total, [db.summary(conn, r) for r in rows]
+    return total, db.summaries(conn, rows)
 
 
 def carry_over(conn, pairs):

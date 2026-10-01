@@ -474,7 +474,7 @@ def _cover(conn, post_id):
     return {"kind": "image", "url": f"/media/{m['id']}/thumb"}
 
 
-def summary(conn, row):
+def summary(conn, row, tags=None):
     count, size = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(CASE WHEN missing = 0 THEN size END), 0) FROM media "
         "WHERE post_id = ?", (row["id"],)).fetchone()
@@ -494,8 +494,20 @@ def summary(conn, row):
         "cover": _cover(conn, row["id"]),
         "missing": bool(row["missing"]),
         "decision": row["decision"] if "decision" in row.keys() else None,
-        "tags": post_tags(conn, row["id"]),
+        "tags": post_tags(conn, row["id"]) if tags is None else tags,
     }
+
+
+def summaries(conn, rows):
+    """summary() of each row, the tags of all of them read in one query."""
+    tags = {}
+    ids = [r["id"] for r in rows]
+    if ids:
+        for pid, name in conn.execute(
+                "SELECT pt.post_id, t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
+                f"WHERE pt.post_id IN ({', '.join('?' for _ in ids)}) ORDER BY t.name COLLATE NOCASE", ids):
+            tags.setdefault(pid, []).append(name)
+    return [summary(conn, r, tags.get(r["id"], [])) for r in rows]
 
 
 def post_tags(conn, post_id):
@@ -607,9 +619,12 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
             return None
         where.append("p.n IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)")
         args.append(match)
+    # With search text the matches drive the query and tags only filter them
+    # (+ keeps SQLite from probing the index for every tag x match pair).
+    col = "+p.id" if q else "p.id"
     for name in {t.translate(_ASCII_FOLD): t for t in tags}.values():
         # tags.name is COLLATE NOCASE, so = ignores case, of ASCII letters only (like UNIQUE).
-        where.append("p.id IN (SELECT pt.post_id FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
+        where.append(f"{col} IN (SELECT pt.post_id FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
                      "WHERE t.name = ?)")
         args.append(name)
     if untagged:
@@ -642,7 +657,7 @@ def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted
     total = conn.execute(f"SELECT COUNT(*) {_FROM} {clause}", args).fetchone()[0]
     rows = conn.execute(f"{_SELECT} {clause} ORDER BY {order_by} LIMIT ? OFFSET ?",
                         (*args, limit, offset)).fetchall()
-    return total, [summary(conn, r) for r in rows]
+    return total, summaries(conn, rows)
 
 
 def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False):
