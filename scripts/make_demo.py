@@ -351,7 +351,9 @@ def add_fake_instaloader(root, ts):
                 **extra}
     profile = {
         "id": 7100, "name": "Demo Reels", "bio": "invented: posts, reels, stories, highlights and tags",
-        "posts": [post(f"DEMOpost{i:03d}", i * 20, "video" if i % 3 == 0 else "image") for i in range(1, 9)],
+        # A carousel with a video slide, for "videos only" (its pictures stay behind).
+        "posts": [post("DEMOcarou01", 2, "carousel", slides=3, video_slides=[2])]
+        + [post(f"DEMOpost{i:03d}", i * 20, "video" if i % 3 == 0 else "image") for i in range(1, 9)],
         "reels": [post(f"DEMOreel{i:03d}", i * 25 + 3, "video") for i in range(1, 5)],
         "tagged": [post("DEMOtagd001", 12,
                         owner={"username": "mossy.trails", "id": "9001", "full_name": "Mossy Trails"})],

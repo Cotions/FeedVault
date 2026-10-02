@@ -689,9 +689,25 @@ def _folder_account(conn, platform, folder, roots):
     return key if key in accounts else None
 
 
-def update(conn, sid, options):
+def update(conn, sid, options, keys=None):
+    """Store a source's options. ``keys``: only these change, in one
+    statement over what is stored, so a sync's end (full history, last N)
+    and a schedule changed meanwhile never undo each other."""
     with conn:
-        conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps(options), sid))
+        if keys is None:
+            conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps(options), sid))
+            return
+        paths = [a for k in keys for a in (f"$.{k}", json.dumps(options[k]))]
+        conn.execute(
+            "UPDATE sources SET options = CASE WHEN json_valid(options) AND json_type(options) = 'object' "
+            f"THEN json_set(options{', ?, json(?)' * len(keys)}) ELSE ? END WHERE id = ?",
+            (*paths, json.dumps(options), sid))
+
+
+def failures(result):
+    """Failed syncs in a row in a stored last_result (any value), else 0."""
+    n = result.get("failures") if isinstance(result, dict) else None
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
 
 
 def delete(conn, sid):

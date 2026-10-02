@@ -7,7 +7,7 @@ import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import {
   FIRST_POSTS_MAX, MEDIA, SCHEDULES, firstPostsEach, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin,
-  optionsOf, optionsSummary, scheduleText, toggleKind, today,
+  optionsOf, optionsSummary, scheduleShort, scheduleText, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
@@ -71,17 +71,20 @@ export function ToolBadge({ tool }) {
 }
 
 /* A source's schedule in one line ("daily · next sync in 3 h"), or
-   nothing when it has none. */
-export function ScheduleLine({ source: s }) {
+   nothing when it has none. ``compact`` (a card): "in 3 h", "due",
+   "paused" or "skipped", the whole line in its title. */
+export function ScheduleLine({ source: s, compact = false }) {
   const text = scheduleText(s, ERRORS);
   if (!text) return null;
   const sch = s.schedule;
-  const title = sch.skipped || sch.paused ? "Settings → Sync can pause every schedule"
-    : sch.next_at ? `Next: ${fmtFullDate(sch.next_at)}${sch.failures ? ` (${sch.failures} failed in a row: it waits longer)` : ""}`
-      : "";
+  const hint = sch.paused ? "Settings → Sync → Pause all schedules is on"
+    : sch.skipped ? "Tried again every minute while it is due"
+      : sch.next_at ? `Next: ${fmtFullDate(sch.next_at)}${sch.failures ? ` (${sch.failures} failed in a row: it waits longer)` : ""}`
+        : "";
   return (
-    <span className={`source-schedule${sch.skipped || sch.failures ? " warn" : ""}`} title={title}>
-      <Icon name="clock" size={11} />{text}
+    <span className={`source-schedule${sch.skipped || sch.failures ? " warn" : ""}`}
+          title={compact ? `${text}\n${hint}` : hint}>
+      <Icon name="clock" size={11} />{compact ? scheduleShort(s) : text}
     </span>
   );
 }
@@ -132,8 +135,9 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
    content kinds, images or videos, a date floor and the first sync. Each
    with what it does in one line. ``firstSync``: the source has not synced
    yet (last N posts is for its first sync only). */
-export function SourceOptions({ tool, platform, choices, session, form, onChange, firstSync = true }) {
+export function SourceOptions({ tool, platform, target, choices, session, form, onChange, firstSync = true }) {
   const id = useId();
+  const each = firstPostsEach(tool, form.content, platform, target);
   const set = patch => onChange({ ...form, ...patch });
   const login = needsLogin(form, choices, session);
   const toggle = k => onChange(toggleKind(form, k));
@@ -198,7 +202,7 @@ export function SourceOptions({ tool, platform, choices, session, form, onChange
                    onChange={e => set({ first: "last", count: e.target.value })} />
             <b>posts</b>
             <span className="dim">
-              {firstPostsEach(tool, form.content) && `of each kind (up to ${form.content.length} × the number); `}
+              {each && `${each.trim()} (up to ${each.includes("kind") ? form.content.length : "a few"} × the number); `}
               later syncs only fetch newer ones
             </span>
           </label>
@@ -258,7 +262,7 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
       initialFocus={focus}
     >
       <div ref={focus} tabIndex={-1}>
-        <SourceOptions tool={s.tool} platform={s.platform} choices={s.choices} session={s.session} form={form}
+        <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
                        onChange={setForm} firstSync={firstSync} />
       </div>
     </ConfirmDialog>
@@ -390,7 +394,7 @@ export function AddSource({ person = null, onAdded }) {
         </div>
       )}
       {form && resolved.source == null && (
-        <SourceOptions tool={resolved.tool} platform={resolved.platform} choices={resolved.choices}
+        <SourceOptions tool={resolved.tool} platform={resolved.platform} target={resolved.target} choices={resolved.choices}
                        session={resolved.session} form={form}
                        onChange={f => { setForms(fs => ({ ...fs, [kind]: f })); setError(null); }} />
       )}

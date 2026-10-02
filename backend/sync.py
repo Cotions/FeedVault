@@ -1008,10 +1008,9 @@ def _failures(src, state):
     one, a sync that worked starts again from 0, a cancelled or interrupted
     one leaves the count."""
     try:
-        before = (json.loads(src["last_result"] or "{}") if src is not None else {}).get("failures")
-    except (ValueError, AttributeError):
-        before = None
-    before = before if isinstance(before, int) and not isinstance(before, bool) and before >= 0 else 0
+        before = sources.failures(json.loads(src["last_result"] or "{}") if src is not None else None)
+    except ValueError:
+        before = 0
     return before + 1 if state == "failed" else 0 if state == "done" else before
 
 
@@ -1045,7 +1044,8 @@ def _ended(job):
         since = max(filter(None, (floor, options["since"])), default=None)
         # Once is enough; "last N" stays for the next run when there is no floor to stop it.
         sources.update(conn, sid, {**options, "full_history": False, "since": since,
-                                   "first_posts": options["first_posts"] if floor is None else None})
+                                   "first_posts": options["first_posts"] if floor is None else None},
+                       keys=("full_history", "since", "first_posts"))
     if job["state"] in ("done", "failed"):
         roots = config.load()["media_roots"]
         adopted = sources.adopt(conn, sid, roots, job["ended_at"])

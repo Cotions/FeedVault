@@ -853,7 +853,10 @@ def update_source(sid):
     error = error or sources.login_refused(options, s["platform"], sync.session_of(s["tool"], options))
     if error:
         return jsonify({"ok": False, "error": error}), 400
-    sources.update(conn, sid, options)
+    # While it syncs only the schedule is sent: that key alone is written.
+    sources.update(conn, sid, options, keys=("schedule",) if set(sent) <= {"schedule"} else None)
+    if options["schedule"] != s["options"]["schedule"]:
+        scheduler.forget(sid)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
 
@@ -886,6 +889,7 @@ def delete_source(sid):
         return jsonify({"ok": False, "error": "its sync is queued or running; cancel it first"}), 409
     if not sources.delete(db.connect(), sid):
         return jsonify({"ok": False, "error": "no such source"}), 404
+    scheduler.forget(sid)
     userdata.changed("sources")
     return jsonify({"ok": True})
 

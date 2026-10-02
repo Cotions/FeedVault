@@ -304,3 +304,51 @@ def test_the_thread_starts_and_stops(env, monkeypatch, sched):
     thread = scheduler._thread
     scheduler.stop()
     assert not thread.is_alive() and scheduler._thread is None
+
+
+def test_a_schedule_changed_during_a_sync_stays(env, client, tools, sched):
+    # The sync's end sets full history back; the schedule sent meanwhile is kept.
+    tools["ig"].write_text(json.dumps({**ig_profile(), "delay": 0.5}))
+    s = add(client, "carol.cooks", "instaloader", full_history=True)
+    job = post(client, f"/api/sources/{s['id']}/sync", {})["job"]
+    post(client, f"/api/sources/{s['id']}", {"options": {"schedule": "weekly"}})
+    assert ended(job["id"])["state"] == "done"
+    options = client.get(f"/api/sources/{s['id']}", headers=H).get_json()["options"]
+    assert (options["full_history"], options["schedule"]) == (False, "weekly")
+
+
+def test_update_some_keys(env, client):
+    s = add(client, X, since="2024-01-01")
+    conn = db.connect()
+    sources.update(conn, s["id"], {**s["options"], "schedule": "daily", "since": None}, keys=("schedule",))
+    stored = sources.stored_options(sources.row(conn, s["id"]))
+    assert (stored["schedule"], stored["since"]) == ("daily", "2024-01-01")
+    set_stored(s["id"], [1])                           # not an object: the whole options are written
+    sources.update(conn, s["id"], {**s["options"], "schedule": "hourly"}, keys=("schedule",))
+    assert sources.stored_options(sources.row(conn, s["id"]))["schedule"] == "hourly"
+
+
+def test_a_note_goes_once_it_synced_or_changed(env, client, queued, monkeypatch):
+    s = add(client, X, schedule="weekly")
+    monkeypatch.setattr(jobs, "tool_path", lambda name: None)
+    scheduler.tick()
+    assert client.get(f"/api/sources/{s['id']}", headers=H).get_json()["schedule"]["skipped"]
+    synced(s["id"], NOW + 5)                            # Sync clicked, it worked
+    assert client.get(f"/api/sources/{s['id']}", headers=H).get_json()["schedule"]["skipped"] is None
+    scheduler.tick(NOW + 8 * 24 * HOUR)
+    assert scheduler._notes
+    post(client, f"/api/sources/{s['id']}", {"options": {"schedule": "daily"}})
+    assert not scheduler._notes
+    scheduler.tick(NOW + 9 * 24 * HOUR)
+    client.delete(f"/api/sources/{s['id']}", headers=H)
+    assert not scheduler._notes
+
+
+def test_stored_times_of_any_shape(env, client, queued):
+    s = add(client, X, schedule="daily")
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE sources SET last_sync_at = 'yesterday', last_result = '[1]' WHERE id = ?", (s["id"],))
+    got = client.get("/api/sources", headers=H).get_json()["sources"][0]["schedule"]
+    assert (got["next_at"], got["failures"]) == (0, 0)
+    assert len(scheduler.tick()) == 1

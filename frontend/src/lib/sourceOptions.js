@@ -56,10 +56,20 @@ export const SCHEDULES = [
   ["weekly", "weekly", "a week after its last sync ended"],
 ];
 
+// A YouTube channel's tabs (sync.py YOUTUBE_TABS): a link to one is not the channel's own page.
+const YOUTUBE_TABS = new Set(["videos", "shorts", "streams", "live", "podcasts", "releases", "playlists", "featured"]);
+
 // "Last N" is per kind with gallery-dl (each kind is its own extractor,
-// each with its --post-range): the first sync gets up to N of each.
-export function firstPostsEach(tool, content) {
-  return tool === "gallery-dl" && content?.length > 1 ? " of each kind" : "";
+// each with its --post-range) and per tab on a YouTube channel's own page
+// (yt-dlp's --playlist-items): the first sync gets up to N of each.
+export function firstPostsEach(tool, content, platform, target) {
+  if (tool === "gallery-dl" && content?.length > 1) return " of each kind";
+  if (tool === "yt-dlp" && platform === "youtube" && target) {
+    let parts;
+    try { parts = new URL(target).pathname.replace(/^\/+|\/+$/g, "").split("/"); } catch { return ""; }
+    if (!YOUTUBE_TABS.has(parts.at(-1).toLowerCase()) && parts[0].toLowerCase() !== "playlist") return " of each tab";
+  }
+  return "";
 }
 
 export const kindLabel = (platform, k) => KINDS[platform]?.[k]?.[0] || k;
@@ -139,7 +149,7 @@ export function optionsSummary(s) {
   if (o.content) parts.push(o.content.map(k => kindLabel(s.platform, k)).join(", "));
   if (o.media && o.media !== "all") parts.push(`${o.media} only`);
   if (o.since) parts.push(`since ${o.since}`);
-  if (o.first_posts) parts.push(`first sync: last ${o.first_posts} posts${firstPostsEach(s.tool, o.content)}`);
+  if (o.first_posts) parts.push(`first sync: last ${o.first_posts} posts${firstPostsEach(s.tool, o.content, s.platform, s.target)}`);
   else if (o.full_history) parts.push("full history");
   return parts.join(" · ");
 }
@@ -165,4 +175,12 @@ export function scheduleText(s, errors = {}, now = Date.now()) {
   const head = failed ? `${sch.every}, last failed: ${errors[r.error] || "failed"}` : sch.every;
   if (sch.next_at * 1000 <= now) return `${head} · due, starts soon`;
   return `${head} · ${failed ? "next try" : "next sync"} ${fmtUntil(sch.next_at, now)}`;
+}
+
+/* scheduleText for a card: "in 3 h", "due", "paused" or "skipped". */
+export function scheduleShort(s, now = Date.now()) {
+  const sch = s.schedule;
+  if (sch.paused) return "paused";
+  if (sch.skipped) return "skipped";
+  return sch.next_at * 1000 <= now ? "due" : fmtUntil(sch.next_at, now);
 }

@@ -38,7 +38,9 @@ the next tick:
 
 A sync refused (jobs.BadRequest: its folder is no longer inside a media
 root…) is noted too and held for one interval. Notes and holds live in
-memory: a restart tries again at once.
+memory: a restart tries again at once. A note no longer shows once the
+source has synced since (Sync clicked), and changing its schedule or
+removing it forgets both.
 """
 import json
 import os
@@ -61,7 +63,7 @@ SPREAD = 300                                   # between two scheduled syncs of 
 clock = time.time                              # tests set a fake one
 
 _lock = threading.Lock()
-_notes = {}                                    # source id -> why its schedule was skipped
+_notes = {}                                    # source id -> (why its schedule was skipped, when)
 _held = {}                                     # source id -> not before (after a refusal)
 _last = {}                                     # platform -> when the scheduler last queued one
 _thread = None
@@ -77,16 +79,15 @@ def delay(every, failures):
     return max(interval, min(interval * 2 ** min(failures, 32), BACKOFF_MAX))
 
 
-def _failures(result):
-    n = (result or {}).get("failures")
-    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
-
-
 def due_at(every, last_sync_at, result):
-    """When a source with schedule ``every`` (not off) is due: 0 when now."""
-    if last_sync_at is None or (result or {}).get("state") == "interrupted":
+    """When a source with schedule ``every`` (not off) is due: 0 when now.
+    ``last_sync_at`` and ``result`` as stored (sources.json can be edited by
+    hand: a value that is not a time or an object counts as none)."""
+    if not isinstance(result, dict):
+        result = {}
+    if not isinstance(last_sync_at, int) or isinstance(last_sync_at, bool) or result.get("state") == "interrupted":
         return 0
-    return last_sync_at + delay(every, _failures(result))
+    return last_sync_at + delay(every, sources.failures(result))
 
 
 def _result(row):
@@ -108,8 +109,17 @@ def status(s, cfg=None):
     next_at = None
     if every in INTERVALS:
         next_at = max(due_at(every, s["last_sync_at"], s["last_result"]), held)
+    synced = s["last_sync_at"] if isinstance(s["last_sync_at"], int) else None
+    shown = note is not None and every in INTERVALS and (synced is None or synced < note[1])
     return {"every": every, "next_at": next_at, "paused": cfg.get("schedules_paused") is True,
-            "skipped": note if every in INTERVALS else None, "failures": _failures(s["last_result"])}
+            "skipped": note[0] if shown else None, "failures": sources.failures(s["last_result"])}
+
+
+def forget(sid):
+    """A source's note and hold, after its schedule changed or it was removed."""
+    with _lock:
+        _notes.pop(sid, None)
+        _held.pop(sid, None)
 
 
 def _offline_root(folder, roots, conn):
@@ -123,7 +133,7 @@ def _offline_root(folder, roots, conn):
             empty = next(it, None) is None
     except OSError:
         return root
-    return root if empty and not scanner._nothing_under(conn, root) else None
+    return root if empty and not scanner.nothing_under(conn, root) else None
 
 
 def _skipped(row, roots, conn):
@@ -136,10 +146,12 @@ def _skipped(row, roots, conn):
     return None
 
 
-def _note(sid, text):
-    if _notes.get(sid) != text:
+def _note(sid, text, now):
+    with _lock:
+        before = _notes.get(sid)
+        _notes[sid] = (text, now)
+    if before is None or before[0] != text:
         print(f"[schedule] source {sid}: {text}")
-    _notes[sid] = text
 
 
 def tick(now=None):
@@ -154,38 +166,43 @@ def tick(now=None):
     busy = sync.active()
     platform = {r["id"]: r["platform"] for r in rows}
     taken = {platform.get(sid) for sid in busy}
-    due = []
     with _lock:
-        for r in rows:
-            every = sources.stored_options(r)["schedule"]
-            if every not in INTERVALS or r["id"] in busy:
-                continue
-            at = max(due_at(every, r["last_sync_at"], _result(r)), _held.get(r["id"], 0))
-            if at <= now:
-                due.append((at, r["id"], every, r))
-        queued = []
-        for at, sid, every, r in sorted(due, key=lambda d: d[:2]):
-            p = r["platform"]
-            if p in taken or now - _last.get(p, now - SPREAD) < SPREAD:
-                continue
-            why = _skipped(r, cfg["media_roots"], conn)
-            if why:
-                _note(sid, why)
-                continue
-            try:
-                job = sync.sync(sid)
-            except sync.Busy:
-                continue
-            except jobs.BadRequest as e:
-                _note(sid, f"skipped: {e}")
+        held, last = dict(_held), dict(_last)
+    due = []
+    for r in rows:
+        every = sources.stored_options(r)["schedule"]
+        if every not in INTERVALS or r["id"] in busy:
+            continue
+        at = max(due_at(every, r["last_sync_at"], _result(r)), held.get(r["id"], 0))
+        if at <= now:
+            due.append((at, r["id"], every, r))
+    queued = []
+    for at, sid, every, r in sorted(due, key=lambda d: d[:2]):
+        p = r["platform"]
+        if p in taken or now - last.get(p, now - SPREAD) < SPREAD:
+            continue
+        why = _skipped(r, cfg["media_roots"], conn)
+        if why:
+            _note(sid, why, now)
+            continue
+        if _stop is not None and _stop.is_set():
+            break                              # FeedVault is stopping: its jobs too
+        try:
+            job = sync.sync(sid)
+        except sync.Busy:
+            continue
+        except jobs.BadRequest as e:
+            _note(sid, f"skipped: {e}", now)
+            with _lock:
                 _held[sid] = now + INTERVALS[every]
-                continue
+            continue
+        with _lock:
             _notes.pop(sid, None)
             _held.pop(sid, None)
             _last[p] = now
-            taken.add(p)
-            queued.append(job)
-            print(f"[schedule] source {sid}: {every} sync queued (#{job['id']})")
+        taken.add(p)
+        queued.append(job)
+        print(f"[schedule] source {sid}: {every} sync queued (#{job['id']})")
     return queued
 
 
@@ -214,9 +231,11 @@ def start():
 def stop(timeout=10):
     """Stop the thread, waiting for a tick in progress, before jobs.shutdown:
     nothing is queued while the jobs stop."""
-    global _thread
+    global _thread, _stop
     if _thread is None:
         return
     _stop.set()
     _thread.join(timeout)
+    if not _thread.is_alive():
+        _stop = None                           # else a tick still running sees it set and queues nothing
     _thread = None

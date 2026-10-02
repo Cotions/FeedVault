@@ -129,6 +129,10 @@ def test_metadata_without_media_is_not_a_post(tmp_path):
     r = parse(tmp_path)
     assert r.posts == [] and r.errors == []
     assert r.claimed == {os.path.basename(base) + ".json", os.path.basename(base) + ".txt"}
+    # Without a post id it is still reported.
+    write_meta(base, {"__typename": "GraphImage", "owner": {"id": "111"}})
+    r = parse(tmp_path)
+    assert r.posts == [] and [e for _, e in r.errors] == ["no post id in metadata"]
 
 
 def test_parser_never_needs_network():

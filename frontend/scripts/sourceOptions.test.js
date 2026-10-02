@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  formError, formOf, mediaEffect, needsLogin, optionsOf, optionsSummary, scheduleText, today, toggleKind,
+  formError, formOf, mediaEffect, needsLogin, optionsOf, optionsSummary, scheduleShort, scheduleText, today, toggleKind,
 } from "../src/lib/sourceOptions.js";
 
 const IG = { content: ["posts", "reels", "stories", "highlights", "tagged"], content_default: ["posts"],
@@ -63,6 +63,13 @@ test("summary", () => {
                                 options: { content: ["media"], media: "all", first_posts: 30 } }),
                "media · first sync: last 30 posts");
   assert.equal(optionsSummary({ platform: "youtube", options: { media: "all", full_history: false } }), "");
+  // yt-dlp's --playlist-items is per tab on a channel's own page.
+  for (const [target, each] of [["https://youtube.com/@somechannel", " of each tab"],
+                                ["https://youtube.com/@somechannel/shorts", ""],
+                                ["https://youtube.com/playlist?list=PL1", ""]]) {
+    assert.equal(optionsSummary({ tool: "yt-dlp", platform: "youtube", target, options: { media: "all", first_posts: 5 } }),
+                 `first sync: last 5 posts${each}`, target);
+  }
 });
 
 test("media effects say what each tool does", () => {
@@ -94,4 +101,6 @@ test("schedule line", () => {
   assert.equal(scheduleText({ ...s, schedule: { ...sch, paused: true } }, {}, now), "daily · all schedules paused");
   assert.equal(scheduleText({ ...s, schedule: { ...sch, skipped: "skipped: gallery-dl was not found" } }, {}, now),
                "daily · skipped: gallery-dl was not found");
+  assert.equal(scheduleShort(s, now), "in 3 h");
+  assert.equal(scheduleShort({ schedule: { ...sch, next_at: 0 } }, now), "due");
 });

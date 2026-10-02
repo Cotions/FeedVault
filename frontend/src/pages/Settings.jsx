@@ -506,8 +506,6 @@ function DownloadersCard({ saved, onSaved }) {
 
 const BROWSERS = ["firefox", "chrome", "chromium", "brave", "edge"];
 
-/* How instaloader reaches Instagram when FeedVault syncs a source. FeedVault
-   only passes a browser's name or a user name on; instaloader does the rest. */
 /* Settings → Sync: the switch that pauses every source's schedule (a sync
    already queued goes on; Sync still works). */
 function SchedulesCard({ paused, onSaved }) {
@@ -544,6 +542,8 @@ function SchedulesCard({ paused, onSaved }) {
   );
 }
 
+/* How instaloader reaches Instagram when FeedVault syncs a source. FeedVault
+   only passes a browser's name or a user name on; instaloader does the rest. */
 function InstaloaderCard({ saved, onSaved }) {
   const [mode,    setMode]    = useState(saved.session?.mode || "none");
   const [browser, setBrowser] = useState(saved.session?.browser || "firefox");

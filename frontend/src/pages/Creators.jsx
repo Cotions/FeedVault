@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getAuthors, getPeople, getSuggestions, getNew, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -12,7 +12,7 @@ import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import SelectionBar from "../components/SelectionBar";
 import {
-  AddSource, RemoveSourceDialog, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
+  AddSource, RemoveSourceDialog, ScheduleLine, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
 } from "../components/Sources";
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
 import { optionsSummary } from "../lib/sourceOptions";
@@ -38,10 +38,17 @@ function cardSync(sources, jobOf) {
   return { shown, job, idle: sources.filter((s, i) => !jobs[i]), sources };
 }
 
-// Under the card's name: how the last sync went.
+// Under the card's name: how the last sync went, and the schedule of a
+// source that has one.
 function CardSyncStatus({ sync }) {
   if (!sync) return null;
-  return <SourceStatus source={sync.shown} job={sync.job} compact />;
+  const scheduled = sync.sources.find(s => s.schedule?.every && s.schedule.every !== "off");
+  return (
+    <>
+      <SourceStatus source={sync.shown} job={sync.job} compact />
+      {scheduled && <ScheduleLine source={scheduled} compact />}
+    </>
+  );
 }
 
 // Sync every source of the card that is not syncing already.
@@ -108,6 +115,17 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
 // to pick one, so the card's name keeps its room.
 function CardOptionsButton({ sync, onEdit }) {
   const [open, setOpen] = useState(false);
+  const wrap = useRef(null);
+  // A click elsewhere or Escape closes the menu (a clicked button is not
+  // focused in every browser, so blur alone would not).
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = e => { if (!wrap.current?.contains(e.target)) setOpen(false); };
+    const key = e => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", key); };
+  }, [open]);
   if (!sync) return null;
   const label = s => `${sourceName(s)} (${s.tool})`;
   const title = s => {
@@ -117,9 +135,8 @@ function CardOptionsButton({ sync, onEdit }) {
   };
   const one = sync.sources.length === 1 ? sync.sources[0] : null;
   return (
-    <span className="creator-opts-wrap"
-          onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}
-          onKeyDown={e => { if (e.key === "Escape") setOpen(false); }}>
+    <span className="creator-opts-wrap" ref={wrap}
+          onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
       <button type="button" className="icon-btn creator-opts"
               // Its sync's end would undo what changes now.
               disabled={one ? !sync.idle.includes(one) : !sync.idle.length}
