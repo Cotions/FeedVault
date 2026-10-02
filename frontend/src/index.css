@@ -31,6 +31,9 @@
   --display: 'Bricolage Grotesque', system-ui, sans-serif;
   --body: system-ui, -apple-system, sans-serif;
   /* fx */
+  /* The sticky header: 14px padding x2 + the 28px brand mark + 1px border.
+     The sidebar pins flush under it and card anchors land below it. */
+  --header-h: 57px;
   --ring: 0 0 0 1px rgba(var(--glow-rgb), 0.45), 0 0 22px -4px rgba(var(--glow-rgb), 0.4);
   --lift: 0 12px 30px -16px rgba(0, 0, 0, 0.85);
 }
@@ -272,7 +275,7 @@ input[type="text"].header-search:focus {
 .app-body {
   display: flex;
   align-items: stretch;
-  min-height: calc(100vh - 64px);
+  min-height: calc(100vh - var(--header-h));
   /* Full-height column divider at the sidebar's 200px edge. The sidebar is
      sticky (shrinks to content) so its own border can't span the page. */
   background: linear-gradient(90deg, transparent 199px, var(--border) 199px, var(--border) 200px, transparent 200px);
@@ -286,12 +289,14 @@ input[type="text"].header-search:focus {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  background: linear-gradient(180deg, rgba(20, 23, 31, 0.6), rgba(13, 16, 23, 0.35));
-  /* Pin below the 64px sticky header so it follows on scroll. */
+  /* Fades out toward the bottom so the backdrop shows through. */
+  background: linear-gradient(180deg, rgba(20, 23, 31, 0.6), rgba(13, 16, 23, 0.04));
+  /* Pin flush under the sticky header so it follows on scroll, and fill the
+     viewport so the fade reaches the bottom. */
   position: sticky;
-  top: 64px;
+  top: var(--header-h);
   align-self: flex-start;
-  max-height: calc(100vh - 64px);
+  height: calc(100vh - var(--header-h));
   overflow-y: auto;
 }
 
@@ -400,6 +405,7 @@ main {
     position: static;
     width: 100%;
     min-height: 0;
+    height: auto;
     flex-direction: row;
     flex-wrap: wrap;
     border-right: none;
@@ -421,8 +427,8 @@ main {
   border-radius: 12px;
   padding: 22px;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 18px 40px -30px rgba(0, 0, 0, 0.8);
-  /* A link to a card (/settings#downloaders) lands below the 64px sticky header. */
-  scroll-margin-top: 80px;
+  /* A link to a card (/settings#downloaders) lands below the sticky header. */
+  scroll-margin-top: calc(var(--header-h) + 16px);
 }
 
 .card-title {
@@ -605,6 +611,30 @@ button:disabled { opacity: 0.4; cursor: default; }
 .sort-dir:active { background: var(--surface-2); }
 
 .sort-controls { display: flex; align-items: center; gap: 8px; }
+
+/* Page header toolbars: buttons, links styled as buttons, selects, the
+   creator picker and filter boxes share one 34px height, 9px radius, 1px
+   border and var(--bg) fill, so a row reads as one set. A <Link> needs
+   inline-flex and a fixed height to match a <button>; an icon plus a label
+   needs nowrap so the icon never wraps above the text. */
+:is(.page-head, .feed-filters, .post-page-head) :is(.btn-secondary, .btn-back, .btn-danger-soft) {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+}
+:is(.page-head, .feed-filters, .post-page-head) :is(.btn-secondary, .btn-back) { background: var(--bg); color: var(--text); }
+:is(.page-head, .feed-filters, .post-page-head) .btn-secondary:not(.is-on):hover:not(:disabled) { background: var(--bg); border-color: var(--muted); }
+:is(.page-head, .feed-filters, .post-page-head) .select-toggle.is-on { color: var(--glow); }
+:is(.page-head, .feed-filters) :is(.picker-input, input[type="text"].page-filter) { height: 34px; border-radius: 9px; }
+.page-head .icon-btn { width: 34px; height: 34px; }
 
 .vp-stats {
   display: grid;
@@ -1426,7 +1456,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .settings-tabs {
   display: flex; flex-direction: column; gap: 3px;
   width: 170px; flex-shrink: 0;
-  position: sticky; top: 80px;
+  position: sticky; top: calc(var(--header-h) + 16px);
 }
 .settings-tab {
   display: flex; align-items: center; gap: 10px;
@@ -1774,7 +1804,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: 16px;
-  height: calc(100vh - 64px - 56px);
+  height: calc(100vh - var(--header-h) - 56px);
   min-height: 460px;
 }
 .review:fullscreen { height: 100vh; padding: 12px; background: var(--bg); }
@@ -1813,6 +1843,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .review-scope { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .review-scope .sort-select { width: 100%; min-width: 0; height: 30px; font-size: 11.5px; }
 .review-scope-author { grid-column: 1 / -1; }
+.review-scope-author .picker-input { max-width: none; }
 .review-progress {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
   padding: 12px 14px;
@@ -2114,13 +2145,14 @@ a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline
 }
 
 /* Anchors styled as buttons need the padding <button> gets from its base rule. */
-a.btn-primary {
+a.btn-primary, a.btn-secondary {
   padding: 9px 16px;
   border-radius: 8px;
   font-size: 13px;
   font-weight: 700;
-  color: var(--on-accent);
+  white-space: nowrap;
 }
+a.btn-primary { color: var(--on-accent); }
 .btn-ghost { display: inline-flex; align-items: center; gap: 5px; }
 .filter-clear { height: 34px; }
 
