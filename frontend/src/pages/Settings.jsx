@@ -874,9 +874,26 @@ function RoutesCard({ saved, onSaved, msg, setMsg }) {
   );
 }
 
+const TABS = [
+  { id: "library",    label: "Library",    icon: "folder" },
+  { id: "downloads",  label: "Downloads",  icon: "download" },
+  { id: "sync",       label: "Sync",       icon: "refresh" },
+  { id: "appearance", label: "Appearance", icon: "palette" },
+  { id: "about",      label: "About",      icon: "info" },
+];
+// Cards linked to from elsewhere (/settings#downloaders), and their tab.
+const ANCHORS = { downloaders: "downloads" };
+
+function tabOf(hash) {
+  const h = hash.replace(/^#/, "");
+  return TABS.some(t => t.id === h) ? h : ANCHORS[h] || "library";
+}
+
 export default function Settings() {
   const { refreshKey } = useScan();
   const { data: config, error, reload } = useApi(getConfig, refreshKey);
+  const { hash } = useLocation();
+  const tab = tabOf(hash);
   // Lives here, not in the editor: a save remounts the editor (see key below)
   // and the confirmation must survive that.
   const [msg, setMsg] = useState(null);   // { ok, text }
@@ -886,41 +903,64 @@ export default function Settings() {
   return (
     <div className="settings-page">
       <div className="page-head page-head-bare"><h2 className="page-title">Settings</h2></div>
-      {!config ? (
-        <div className="card"><div className="empty">{error ? `Could not load settings: ${error.message}` : "Loading…"}</div></div>
-      ) : (
-        <>
-          {/* Keyed on the saved list so a refresh from the backend resets the editor. */}
-          <RootsEditor
-            key={(config.media_roots || []).join("\n")}
-            saved={config.media_roots || []}
-            onSaved={reload}
-            msg={msg}
-            setMsg={setMsg}
-          />
-          <DownloadersCard saved={config.tools || {}} onSaved={reload} />
-          <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} />
-          {Object.keys(COOKIE_TOOLS).map(t => (
-            <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
-                         saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} />
+      <div className="settings-layout">
+        <nav className="settings-tabs" aria-label="Settings sections">
+          {TABS.map(t => (
+            <Link key={t.id} to={{ hash: `#${t.id}` }} replace className={`settings-tab${tab === t.id ? " active" : ""}`}
+                  aria-current={tab === t.id ? "page" : undefined}>
+              <Icon name={t.icon} size={15} />{t.label}
+            </Link>
           ))}
-          <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} />
-          <TrashCard />
-          <LastScan />
-          <AppearanceSettings />
-          <div className="card">
-            <div className="card-title">About</div>
-            <div className="kv-row">
-              <span className="kv-key">data directory</span>
-              <code className="kv-val">{config.data_directory || "—"}</code>
-            </div>
-            <div className="kv-row">
-              <span className="kv-key">version</span>
-              <code className="kv-val">{config.version || "—"}</code>
-            </div>
-          </div>
-        </>
-      )}
+        </nav>
+        <div className="settings-pane">
+          {/* Every tab but Appearance stays mounted while hidden, so unsaved
+              edits in a card survive a look at another tab. Leaving the theme
+              editor puts the saved theme back, so that one unmounts. */}
+          {tab === "appearance" && <AppearanceSettings />}
+          {!config ? (
+            tab !== "appearance" && <div className="card"><div className="empty">{error ? `Could not load settings: ${error.message}` : "Loading…"}</div></div>
+          ) : (
+            <>
+              <div className="settings-group" hidden={tab !== "library"}>
+                {/* Keyed on the saved list so a refresh from the backend resets the editor. */}
+                <RootsEditor
+                  key={(config.media_roots || []).join("\n")}
+                  saved={config.media_roots || []}
+                  onSaved={reload}
+                  msg={msg}
+                  setMsg={setMsg}
+                />
+                <TrashCard />
+                <LastScan />
+              </div>
+              <div className="settings-group" hidden={tab !== "downloads"}>
+                <DownloadersCard saved={config.tools || {}} onSaved={reload} />
+                <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} />
+              </div>
+              <div className="settings-group" hidden={tab !== "sync"}>
+                <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} />
+                {Object.keys(COOKIE_TOOLS).map(t => (
+                  <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
+                               saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} />
+                ))}
+              </div>
+              <div className="settings-group" hidden={tab !== "about"}>
+                <div className="card">
+                  <div className="card-title">About</div>
+                  <div className="kv-row">
+                    <span className="kv-key">data directory</span>
+                    <code className="kv-val">{config.data_directory || "—"}</code>
+                  </div>
+                  <div className="kv-row">
+                    <span className="kv-key">version</span>
+                    <code className="kv-val">{config.version || "—"}</code>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
