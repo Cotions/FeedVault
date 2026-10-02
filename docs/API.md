@@ -849,7 +849,9 @@ no person yet.
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait before syncing again",
                    "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false,
-                   "failures": 1 },
+                   "failures": 1, "health": "rate_limited", "ok_at": 1727420000 },
+  "health": { "state": "rate_limited", "result": "failed", "ok_at": 1727420000, "last_sync_at": 1727503600,
+              "line": "…429 Too Many Requests…", "failures": 1 },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
   "session": { "mode": "login", "user": "me" },
   "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "failures": 1 } }
@@ -941,6 +943,32 @@ no person yet.
   - `failures`: failed syncs in a row (a failure adds one, a sync that
     worked sets it to 0, a cancelled or interrupted one leaves it), for the
     scheduler's back-off
+  - `health` and `ok_at`: see `health` below (stored here, with the
+    sync's outcome, not with the options)
+  - `line` and `message` are scrubbed before they are stored: see `health.line`
+- `health`: how the source's syncs have been going (account health), read
+  from `last_result` and `last_sync_at`; every key `null` (`failures` 0)
+  before the first sync, and for a `last_result` that is missing or not
+  what it should be (sources.json edited by hand, or stored before this):
+  - `state`: what the last sync's output said: `ok` (it worked), `error`
+    (it failed and the output says nothing known: `line` is what it said),
+    or a detected state (see [Account health](#account-health)). A
+    cancelled or interrupted sync keeps the state before it. A
+    `last_result` stored before this has its `error` read instead.
+  - `result`: the last sync's job state (`done`, `failed`, `cancelled`,
+    `interrupted`)
+  - `ok_at`: when the last sync that worked ended (kept while later ones
+    fail); `last_sync_at`: when the last one ended, any outcome
+  - `line`: the output line behind a state other than `ok`, one line, at
+    most 300 characters, **scrubbed** before it is stored (in the job's
+    `result` and `message` too): escape codes and control characters are
+    removed; the values of cookies, session ids, tokens, passwords and
+    `Authorization` headers, a `Cookie:` header's whole value and any
+    opaque string of 40 characters or more become `…`; a path under a
+    browser profile or a session or cookie folder becomes
+    `<private path>`. Tool output is untrusted text: the page shows it as
+    text only.
+  - `failures`: as `last_result.failures`
 - `job`: the source's sync while it is queued or running (`waits_until`,
   see [Jobs](#jobs)), else `null`.
 - `session`: the session its sync would use (`options.session`, else the
@@ -1278,6 +1306,13 @@ stored value that is not valid counts as the default (no flag).
   stops only at 5 files in a row it has; TikTok and a YouTube channel's
   page are walked to the end).
 - The job log says when a floor or "last N" applies.
+
+### Account health
+
+A source's `health` (see [Sources](#sources)) is kept with its sync state:
+in `last_result`, written when a sync ends, so it goes into sources.json
+with the rest of the outcome and a rebuilt index gets it back. Nothing is
+fetched to know it: it is what the tool printed during the last sync.
 
 ### Schedules
 

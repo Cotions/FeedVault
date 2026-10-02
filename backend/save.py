@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 import config
 import db
+import health
 import jobs
 import people
 import scanner
@@ -341,7 +342,8 @@ def _outcome(params, code, lines, index, note=None):
     if code == 0:
         result["error"] = "generic"
         return "failed", result, "instaloader saved no post"
-    result["error"], result["line"] = sync.classify(lines, FAILURES)
+    result["error"], line = sync.classify(lines, FAILURES)
+    result["line"] = health.scrub(line)
     message = MESSAGES[result["error"]]
     if result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"

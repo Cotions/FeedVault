@@ -136,6 +136,7 @@ from urllib.parse import urlsplit
 import archives
 import config
 import db
+import health
 import info_cookies
 import jobs
 import people
@@ -902,10 +903,14 @@ TOOL_MESSAGES = {
 }
 
 
+# instaloader's heading of the errors it repeats as it ends: never the line that says what went wrong.
+CLOSING = "Errors or warnings occurred:"
+
+
 def classify(lines, failures=None):
     """(error, line): what the output of a failed run says went wrong, and
     the line that says it (else the last line of output)."""
-    texts = [t for _, t in lines if t.strip() and not t.startswith("[feedvault]")]
+    texts = [t for _, t in lines if t.strip() and not t.startswith("[feedvault]") and t.strip() != CLOSING]
     for error, words in failures or FAILURES:
         for t in reversed(texts):
             if words.search(t):
@@ -971,9 +976,9 @@ def _outcome(params, code, lines, index, note=None, tool="instaloader"):
         # Not a rate limit or a login wall: those stop every item, not one.
         if items and classify([(0, t) for t in items], GALLERY_DL_FAILURES if tool == "gallery-dl"
                               else YT_DLP_FAILURES)[0] in ("private", "not_found", "generic"):
-            result["line"] = items[-1][:500]
+            result["line"] = health.scrub(items[-1])
             skipped = f"{len(items)} item{'' if len(items) == 1 else 's'}"
-            return "done", result, f"{new}; {skipped} could not be downloaded: {items[-1][:200]}"
+            return "done", result, f"{new}; {skipped} could not be downloaded: {health.scrub(items[-1], 200)}"
     if tool == "instaloader":
         result["error"], result["line"] = classify(lines)
         message = MESSAGES[result["error"]]
@@ -981,6 +986,8 @@ def _outcome(params, code, lines, index, note=None, tool="instaloader"):
         result["error"], result["line"] = classify(
             lines, GALLERY_DL_FAILURES if tool == "gallery-dl" else YT_DLP_FAILURES)
         message = TOOL_MESSAGES.get(result["error"], f"{tool} failed")
+    # Tool output is untrusted text: no cookie, token or session path is kept (health.scrub).
+    result["line"] = health.scrub(result["line"])
     if result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"
     if added:
@@ -1001,6 +1008,26 @@ def _outdated(tool):
     except Exception as e:                     # a failed sync still ends as it went
         print(f"[sync] could not tell whether {tool} is out of date: {e}")
         return None
+
+
+def _stored_result(src):
+    """A source row's last_result as stored, or None (none, or not JSON)."""
+    try:
+        return json.loads(src["last_result"]) if src is not None and src["last_result"] else None
+    except ValueError:
+        return None
+
+
+def _health_state(job):
+    """What a sync's output said, as health.STATES: ok when it worked, the
+    error it was classified as when it failed ("generic" and a missing tool
+    are "error"), None when it never got that far (cancelled, interrupted)."""
+    if job["state"] == "done":
+        return "ok"
+    if job["state"] != "failed":
+        return None
+    error = (job["result"] or {}).get("error")
+    return error if error in health.STATES else "error"
 
 
 def _failures(src, state):
@@ -1031,10 +1058,13 @@ def _ended(job):
     src = sources.row(conn, sid)
     if src is not None and job["argv"] and src["target"] != job["argv"][-1]:
         return                                 # the id names another source now (database replaced)
-    if not sources.record(conn, sid, job["id"], job["ended_at"] or int(time.time()), {
+    ended_at = job["ended_at"] or int(time.time())
+    before = _stored_result(src)
+    if not sources.record(conn, sid, job["id"], ended_at, {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
-            "line": r.get("line"), "added": r.get("added", 0), "job": job["id"],
-            "outdated": r.get("outdated", False), "failures": _failures(src, job["state"])}):
+            "line": health.scrub(r.get("line")), "added": r.get("added", 0), "job": job["id"],
+            "outdated": r.get("outdated", False), "failures": _failures(src, job["state"]),
+            **health.record(before, _health_state(job), job["state"], ended_at)}):
         return
     changed = {"sources"}
     src = sources.row(conn, sid)

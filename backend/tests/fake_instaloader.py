@@ -9,7 +9,7 @@ profiles from the JSON file named by FAKE_INSTALOADER (default
                                "posts": [{"shortcode": "C0FAKE00001", "ts": 1717243200,
                                           "caption": "…", "kind": "image" | "video" | "carousel",
                                           "slides": 3, "video_slides": [2]}]}},
-     "fail": null | "429" | "login" | "private" | "notfound" | "crash",
+     "fail": null | "429" | "login" | "private" | "notfound" | "crash" | "leak",
      "delay": 0}
 
 A profile may also have "reels" and "tagged" (posts as above; a tagged
@@ -153,6 +153,12 @@ def fail(kind, target):
         print(f"Profile {target} does not exist.\nThe most similar profile is: {target}_.", file=sys.stderr)
     elif kind == "crash":
         raise RuntimeError("fake crash")
+    elif kind == "leak":
+        # Made-up secrets in an error line: FeedVault must never store or show them.
+        print(f"Loaded session from /home/someone/.config/instaloader/session-{target}.")
+        print(f"{target}: JSON Query to api/v1/users: 400 Bad Request - cookie sessionid=FAKE-SECRET-1; "
+              "csrftoken=FAKE-SECRET-2 [Cookie: ds_user_id=FAKE-SECRET-3] "
+              "Authorization: Bearer FAKESECRETFAKESECRET4", file=sys.stderr)
     print("\nErrors or warnings occurred:", file=sys.stderr)
     return 1
 

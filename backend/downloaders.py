@@ -54,6 +54,7 @@ import urllib.error
 import urllib.request
 
 import config
+import health
 import jobs
 import sync
 
@@ -374,6 +375,7 @@ def _test_outcome(params, code, lines, index, note=None):
     if code == 0:
         return "done", {"ok": True, "error": None, "line": None}, "Works"
     error, line = sync.classify(lines, TEST_FAILURES[params["tool"]])
+    line = health.scrub(line)
     message = TEST_MESSAGES[error]
     if error == "generic" and line:
         message = f"{message}: {line[:200]}"

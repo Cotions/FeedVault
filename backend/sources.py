@@ -24,6 +24,7 @@ from datetime import date
 from urllib.parse import urlsplit
 
 import db
+import health
 import people
 
 TOOLS = ("instaloader", "gallery-dl", "yt-dlp")
@@ -483,6 +484,10 @@ def _owner(conn, row, accounts):
 
 def _public(conn, row, accounts, active):
     key, person = _owner(conn, row, accounts)
+    try:
+        result = json.loads(row["last_result"]) if row["last_result"] else None
+    except ValueError:                         # sources.json edited by hand
+        result = None
     job = active.get(row["id"])
     return {
         "id": row["id"], "tool": row["tool"], "platform": row["platform"], "target": row["target"],
@@ -494,7 +499,8 @@ def _public(conn, row, accounts, active):
         "choices": choices(row["tool"], row["platform"], row["target"]),
         "created_at": row["created_at"], "last_sync_at": row["last_sync_at"],
         "last_job_id": row["last_job_id"],
-        "last_result": json.loads(row["last_result"]) if row["last_result"] else None,
+        "last_result": result,
+        "health": health.public(result, row["last_sync_at"], failures(result)),
         "job": job,
     }
 
