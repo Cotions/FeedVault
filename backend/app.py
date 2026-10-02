@@ -1209,9 +1209,7 @@ def main():
     atexit.register(jobs.shutdown)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     scanner.start(cfg["media_roots"])
-    # The installed gallery-dl's archive formats, for the trash's "never
-    # again" entries, which never start it themselves (archives.post_entries).
-    threading.Thread(target=archives.installed_formats, daemon=True, name="gallery-dl-formats").start()
+    archives.warm(db.connect())
     if "--no-browser" not in sys.argv and os.environ.get("FEEDVAULT_NO_BROWSER") != "1":
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     print(f"[api] FeedVault {config.__version__}")

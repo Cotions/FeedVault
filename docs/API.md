@@ -1125,8 +1125,9 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive 
   at most, output checked: plain `{field}` and `{field[key]}` formats
   only; a category gets one format for all its files only when every
   extractor of it was accepted), cached until the gallery-dl file changes
-  and read once when FeedVault starts. Trashing a gallery-dl post uses the
-  last formats read (it never starts gallery-dl itself). When that cannot be
+  and read once when FeedVault starts if a gallery-dl source exists (else
+  by the first seed). Trashing a gallery-dl post uses the last formats
+  read (it never starts gallery-dl itself), else FeedVault's table. When that cannot be
   done (no Python found beside it, a timeout, odd output), FeedVault's own
   table is used (twitter, tiktok, instagram, reddit, bluesky, pixiv) and
   the log says so. Files of a category with no known format, or whose
