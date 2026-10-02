@@ -25,6 +25,7 @@ import jobs
 import news
 import organize
 import people
+import save
 import scanner
 import sources
 import sync
@@ -189,6 +190,27 @@ def saved():
     if not isinstance(ids, list):
         return jsonify({"ok": False, "error": "ids must be a list"}), 400
     return jsonify({"saved": db.saved_ids(db.connect(), ids)})
+
+
+@app.post("/api/save")
+def save_post():
+    """The userscript's Save button: one Instagram post, by shortcode only
+    (save.py). A post FeedVault already has is answered without running anything."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) != {"platform", "shortcode"} or body["platform"] != "instagram" \
+            or not save.valid_shortcode(body["shortcode"]):
+        return jsonify({"ok": False, "error": 'send { "platform": "instagram", "shortcode": "<5 to 40 of '
+                        'A-Z a-z 0-9 _ ->" } and nothing else'}), 400
+    code = body["shortcode"]
+    post = save.have(db.connect(), code)
+    if post is not None:
+        return jsonify({"ok": True, "have": True, "post": post})
+    try:
+        job = save.submit(code)
+    except jobs.BadRequest as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    print(f"[jobs] #{job['id']} {job['kind']} queued")
+    return jsonify({"ok": True, "have": False, "job": job})
 
 
 # ---------------------------------------------------------------------------
@@ -972,6 +994,8 @@ def start_job():
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({"ok": False, "error": "send { kind, params }"}), 400
+    if body.get("kind") == save.KIND:          # its checks are POST /api/save's
+        return jsonify({"ok": False, "error": "start it with POST /api/save"}), 400
     try:
         job = jobs.submit(body.get("kind"), body.get("params"))
     except jobs.BadRequest as e:
