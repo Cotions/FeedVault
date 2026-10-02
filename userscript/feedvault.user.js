@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.2.0
+// @version      0.2.1
 // @description  Marks Instagram posts you already have in FeedVault, and saves the ones you don't
 // @author       Cotions
 // @match        https://www.instagram.com/*
@@ -219,10 +219,17 @@ function note(text, settings) {
   return n;
 }
 
+// Only a real click acts: the page's own scripts can call element.click()
+// or dispatch events on the buttons, which would queue saves or add sources.
 function button(state, text, onClick, title = "") {
   const b = el("button", { class: "fv-btn", type: "button", "data-state": state, ...(title ? { title } : {}) }, text);
-  if (onClick) b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); onClick(); });
-  else b.setAttribute("aria-disabled", "true");
+  if (onClick) {
+    b.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.isTrusted) onClick();
+    });
+  } else b.setAttribute("aria-disabled", "true");
   return b;
 }
 

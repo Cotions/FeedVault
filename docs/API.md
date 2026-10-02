@@ -1176,7 +1176,9 @@ itself never does, and is given nothing to do it with: no function on
 `unsafeWindow`, no `window.postMessage` handler, nothing read from the
 page's JavaScript objects. The shortcode comes from `location.pathname` or
 a post link's `href`, the profile name from `location.pathname`, each
-checked against a strict pattern before it is sent.
+checked against a strict pattern before it is sent. The buttons act on a
+real click only (`event.isTrusted`): the page's scripts can call
+`element.click()` or dispatch a click on them, and that does nothing.
 
 **Why a page cannot forge the request.** Every `/api` call needs the
 `X-FeedVault` header and a `Host` naming this machine (see the top of this
