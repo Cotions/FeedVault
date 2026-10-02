@@ -412,15 +412,15 @@ def _owner(params):
     """{"account", "person"} of the source, for the dashboard to link to: the
     account (that of the folder's posts for a source without one yet) and
     the person's id, or None."""
-    conn = db.connect()
     try:
+        conn = db.connect()
         src = sources.get(conn, _source_id(params))
         account = src and src["account"]
         if src and account is None:
             key = sources._folder_account(conn, src["platform"], src["folder"], config.load()["media_roots"])
             account = {"platform": key[0], "id": key[1]} if key else None
     except Exception as e:                     # only a link: the sync still ends as it went
-        print(f"[sync] source {params['source']}: no account to link to: {e}")
+        print(f"[sync] source {params.get('source')}: no account to link to: {e}")
         src = None
     if src is None:
         return {"account": None, "person": None}
