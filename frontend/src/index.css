@@ -2557,6 +2557,12 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 }
 .source-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .source-summary { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.source-schedule {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.source-schedule.warn { color: #ffd59a; }
+.source-schedule svg { flex: none; }
 .source-folder {
   font-size: 11px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;

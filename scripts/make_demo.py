@@ -375,13 +375,15 @@ def add_fake_instaloader(root, ts):
 
 def seed_sources(data, media):
     """A source with options, so the Sources page shows one: demo_skies'
-    media tab, images only, nothing before 2023-11-01."""
+    media tab, images only, nothing before 2023-11-01, synced daily (by the
+    fake gallery-dl add_fake_tools sets: the scheduler syncs it once the
+    demo starts)."""
     out = os.path.join(data, "userdata", "sources.json")
     if os.path.exists(out):
         return
     os.makedirs(os.path.dirname(out), exist_ok=True)
     options = {"full_history": False, "session": None, "content": ["media"], "media": "images",
-               "since": "2023-11-01", "first_posts": None}
+               "since": "2023-11-01", "first_posts": None, "schedule": "daily"}
     with open(out, "w") as f:
         json.dump({"version": 1, "rows": [{
             "tool": "gallery-dl", "target": "https://x.com/demo_skies", "platform": "twitter", "author_id": None,
