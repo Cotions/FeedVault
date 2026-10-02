@@ -211,9 +211,24 @@ That sync puts it straight back in the trash once its folder is indexed
 in the source's folder after it, and still in the trash), says so in its
 log (`1 trashed post came back with this sync …: back in the trash`) and
 does not count it in `added`. A sync cancelled while instaloader ran has
-its folder indexed when it ends, for the same check. The post then has
-two entries in the trash: the one it was deleted with and the one the
-sync's copy went to; restoring it brings back the latest.
+its folder indexed when it ends, for the same check. The list of trashed
+posts it checks against is kept in
+`<data_directory>/instaloader/retrash/<source id>.json` while the sync
+runs, so a sync that FeedVault stopped (Quit, or killed) gets the same
+check at the next start: its folder is indexed and the posts it brought
+back go back to the trash (the server log says so), then the file goes.
+A file whose source is gone is dropped; one whose folder is missing
+(its media root offline) waits for a later start.
+
+Such a post keeps one entry in the trash: the one it was deleted with,
+and the files it had then. The copy the sync downloaded is deleted for
+good right after it went to the trash (its entry purged), only when the
+first entry is the same post (same id, as many media items), in the same
+trash folder, whole (every file still there, none shared with the copy)
+and the copy added no archive entries; the log says so (`1 of them kept
+its first trash entry …`). Otherwise both entries stay, and restoring the
+post brings back the latest. Restore and purge work on the entry left as
+on any other.
 
 ### Trash contents
 
@@ -905,7 +920,13 @@ no person yet.
   being the link's first path part that is not a page kind (`/user/`,
   `/media`, `/en/`…), lowercase, without `@`. Present: an absolute path
   that resolves inside a media root (symlinks followed); anything else is
-  a 400.
+  a 400. Never a media root's `_saved/` or a folder inside it (where
+  [Save](#save-from-the-browser-userscript) keeps posts of accounts with no
+  folder), nor a link to it: a 400 that says to pick another folder, also
+  when it is the default (an instaloader target named `_saved`).
+  `GET /api/sources/resolve` answers `ok: false` for it, and a sync of a
+  stored source whose folder is there (sources.json edited by hand) is
+  refused with the same message.
 - `person` (an id) and `account` are optional. With `account`, the source
   belongs to that indexed account (unknown: 400); without, to the account of
   the folder's posts when there are some, else (a link) to the one account
@@ -918,7 +939,8 @@ no person yet.
   takes the source id only and builds everything from the stored source.
 
 **Suggestions.** Profile folders that already hold instaloader posts but no
-source, one per folder right under a media root, for the user to confirm
+source, one per folder right under a media root (never `_saved/`, whose
+posts are left out of them), for the user to confirm
 (`POST /api/sources` with the suggestion's `tool`, `target`, `folder` and
 `account`). FeedVault never creates a source on its own.
 
@@ -1010,9 +1032,12 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   name without a date (`{target} - {shortcode}`) only has the file's mtime,
   which a copy may have made later than posts never downloaded: such posts
   are left out, and an account with nothing else gets no seed (the job log
-  says `first sync: no reliable date, fetching full history`). Posts just
-  moved out of `_saved/`, or still in it, never seed it; when they are all
-  the account has, the stamp is set before every post (1970), so the first
+  says `first sync: no reliable date, fetching full history`). Posts saved
+  one by one never seed it: those the Save button added, whatever folder
+  they went to (listed in `saved_posts`, see
+  [Save from the browser](#save-from-the-browser-userscript)),
+  and any post in `_saved/` or just moved out of it. When they are all the
+  account has, the stamp is set before every post (1970), so the first
   sync walks the whole profile, skipping the files already there, and a
   retry does the same.
 - **Metadata on.** `--no-compress-json` writes each post's JSON beside its
@@ -1100,8 +1125,9 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive 
   at most, output checked: plain `{field}` and `{field[key]}` formats
   only; a category gets one format for all its files only when every
   extractor of it was accepted), cached until the gallery-dl file changes
-  and read once when FeedVault starts. Trashing a gallery-dl post uses the
-  last formats read (it never starts gallery-dl itself). When that cannot be
+  and read once when FeedVault starts if a gallery-dl source exists or
+  gallery-dl posts are indexed (else by the first seed). Trashing a gallery-dl post uses the last formats
+  read (it never starts gallery-dl itself), else FeedVault's table. When that cannot be
   done (no Python found beside it, a timeout, odd output), FeedVault's own
   table is used (twitter, tiktok, instagram, reddit, bluesky, pixiv) and
   the log says so. Files of a category with no known format, or whose
@@ -1268,6 +1294,15 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
   [How a sync runs](#how-a-sync-runs)), the handle in place of the target.
   A file already there is never overwritten (the copy downloaded is
   dropped). Then that folder is indexed.
+- A post this adds to the index (not one a sync got first) is listed in
+  table `saved_posts` (`post_id`, `saved_at`), user data written to
+  `<data_directory>/userdata/saved_posts.json` 2 s after the last change:
+  saved one by one, it never seeds a first sync's stamp (see
+  [How a sync runs](#how-a-sync-runs)), or a newer saved post would make
+  that sync skip the posts in between. An entry is dropped once the
+  account's stamp is later than its post (a sync has walked past it), or
+  when the post is deleted for good. Saves made before this table existed
+  are taken from the Save jobs still kept (the last 100 jobs).
 - `result`: `{ "post": "instagram:C8xYzAbCdEf" | null, "folder", "added",
   "updated", "error", "line", "account", "person" }`: `post` the post's
   FeedVault id once it is indexed; `error` as for a sync (`login_required`,
@@ -1471,7 +1506,13 @@ its process id, the process's start time (field 22 of `/proc/<pid>/stat`)
 and its executable; on the next start, a job left `running` has its process
 group stopped (SIGTERM, then SIGKILL after 10 seconds if it is still there)
 only if that pid still exists with the same start time and executable. A pid reused by another program is never
-signalled. The job is then `interrupted`.
+signalled: the process is pinned (a pidfd) when it is checked, and each
+signal goes only while that same process is alive. The server log says
+which processes were stopped (and which pids are another program's now),
+and the job's own log gets a line (`process <pid> was still running after
+FeedVault stopped: stopped at the next start`). Linux only: without
+`/proc`, nothing is looked for or signalled. The job is then
+`interrupted`.
 
 Jobs are kept in the database (`jobs` table), not with the user data: they
 are not exported to `userdata/`.

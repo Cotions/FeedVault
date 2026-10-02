@@ -374,11 +374,34 @@ def _migrate_14(conn):
     conn.execute("INSERT INTO seen_at(id, at) SELECT 1, ? WHERE EXISTS (SELECT 1 FROM posts)", (int(time.time()),))
 
 
+def _migrate_15(conn):
+    """Posts the Save button added (save.py), user data mirrored by
+    userdata.py. Saved one by one, not synced, so they never seed an
+    instaloader stamp (sync.trusted_newest), whatever folder they are in;
+    an entry goes once a stamp later than its post exists. Filled from the
+    Save jobs kept, for the saves made before."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS saved_posts (
+            post_id  TEXT PRIMARY KEY,
+            saved_at INTEGER NOT NULL
+        )""")
+    # Saves made before: the Save jobs still kept (the last 100 jobs) that added their post.
+    for result, at in conn.execute("SELECT result, COALESCE(ended_at, created_at) FROM jobs "
+                                   "WHERE kind = 'instaloader-post' AND state = 'done'").fetchall():
+        try:
+            r = json.loads(result or "null")
+        except ValueError:
+            continue
+        if isinstance(r, dict) and isinstance(r.get("post"), str) and isinstance(r.get("added"), int) \
+                and r["added"] > 0:
+            conn.execute("INSERT OR IGNORE INTO saved_posts(post_id, saved_at) VALUES (?, ?)", (r["post"], at))
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
-              _migrate_13, _migrate_14]
+              _migrate_13, _migrate_14, _migrate_15]
 
 BACKUPS_KEPT = 3
 

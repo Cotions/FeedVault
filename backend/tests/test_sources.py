@@ -300,3 +300,47 @@ def test_userdata_skips_bad_rows(env):
         ]}, f)
     assert userdata.load(db.connect(), "sources", data) == 1
     assert [r[0] for r in db.connect().execute("SELECT target FROM sources")] == ["ok"]
+
+
+# ---------------------------------------------------------------------------
+# _saved is never a source's folder (#41.4)
+# ---------------------------------------------------------------------------
+
+def test_saved_is_never_suggested(env, client):
+    write_post(env["media"] / "_saved", "S1", TS, owner("someone", 4242), "image")
+    write_post(env["media"] / "_saved" / "deeper", "S2", TS, owner("other", 4343), "image")
+    write_post(env["media"] / "someone", "S3", TS + 86400, owner("someone", 4242), "image")
+    scanner.scan(env["roots"])
+    folders = {s["folder"] for s in get(client, "/api/sources")["suggestions"]}
+    assert folders == {f"{env['media']}/someone"}
+
+
+def test_saved_folder_is_refused(env, client, tmp_path):
+    media = env["media"]
+    (media / "_saved").mkdir()
+    os.symlink(media / "_saved", media / "alias")
+    for folder in (media / "_saved", media / "_saved" / "x", media / "alias", media / "alias" / "y"):
+        r = post(client, "/api/sources", {"tool": "instaloader", "target": "someone", "folder": str(folder)}, 400)
+        assert "_saved" in r["error"] and "pick another folder" in r["error"], folder
+        r = post(client, "/api/sources", {"target": "https://x.com/someone", "folder": str(folder)}, 400)
+        assert "_saved" in r["error"]
+    # Its default folder: the target _saved itself.
+    r = post(client, "/api/sources", {"tool": "instaloader", "target": "_saved"}, 400)
+    assert "pick another folder" in r["error"]
+    assert get(client, "/api/sources/resolve?url=instagram.com/_saved")["ok"] is False
+    # Named like it elsewhere is fine.
+    post(client, "/api/sources", {"tool": "instaloader", "target": "someone", "folder": str(media / "x" / "_saved")})
+    post(client, "/api/sources", {"tool": "instaloader", "target": "_saved", "folder": str(media / "saved-account")})
+    assert get(client, "/api/sources")["sources"] and not sources.in_saved(str(media / "_savedx"), env["roots"])
+
+
+def test_sync_refuses_a_stored_source_in_saved(env, client):
+    """sources.json edited by hand: the sync is refused before anything runs."""
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "someone"})["source"]
+    g = post(client, "/api/sources", {"target": "https://x.com/someone"})["source"]
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE sources SET folder = ?", (str(env["media"] / "_saved"),))
+    for sid in (s["id"], g["id"]):
+        r = post(client, f"/api/sources/{sid}/sync", {}, 400)
+        assert "pick another folder" in r["error"]

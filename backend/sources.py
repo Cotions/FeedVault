@@ -47,6 +47,11 @@ SESSION_MODES = ("none", "cookies", "login")
 COOKIE_MODES = ("none", "cookies")             # gallery-dl and yt-dlp: a browser's cookies or nothing
 ERRORS = ("login_required", "private", "not_found", "rate_limited", "missing", "generic")
 
+# Under the first media root: posts the Save button got for accounts with no
+# folder (save.py). Never a source's folder: a sync would take them for its
+# own, and gather moves them out of it.
+SAVED = "_saved"
+
 # An Instagram username: letters, digits, dots and underscores, at most 30.
 _HANDLE_RE = re.compile(r"[A-Za-z0-9._]{1,30}")
 _URL_RE = re.compile(r"(?:https?://)?(?:www\.|m\.)?instagram\.com/([^/?#]+)/?(?:[?#].*)?", re.IGNORECASE)
@@ -194,7 +199,25 @@ def resolve(text, table, roots):
     else:
         target = url
         folder = os.path.join(roots[0], platform, folder_name(url)) if roots else None
+    if folder and in_saved(folder, roots):
+        raise Refused(SAVED_REFUSED.format(folder=folder))
     return {"tool": tool, "platform": platform, "target": target, "folder": folder}
+
+
+SAVED_REFUSED = ("{folder} is where the Save button keeps posts of accounts that have no folder "
+                 f"({SAVED}): a source cannot download into it or a folder inside it; pick another folder")
+
+
+def in_saved(folder, roots):
+    """Whether ``folder`` (symlinks followed) is a media root's ``_saved``
+    or inside one. Checked wherever a source's folder is: here when one is
+    added, and in sync.py before each run."""
+    real = os.path.realpath(folder)
+    for r in roots:
+        d = os.path.realpath(os.path.join(r, SAVED))
+        if real == d or real.startswith(d.rstrip(os.sep) + os.sep):
+            return True
+    return False
 
 
 def check_target(tool, target, table):
@@ -356,7 +379,7 @@ def _top(path, roots):
 def suggestions(conn, roots):
     """Profile folders with instaloader posts and no source yet, offered as
     sources for the user to confirm (never created on their own): one per
-    folder right under a media root, its main account, and as target the
+    folder right under a media root (never _saved), its main account, and as target the
     account's current handle (else the folder's name). Only metadata names a
     handle reliably: for an account known from file names alone (its id is
     the folder's name, not a number), the folder's name is the target, as a
@@ -366,9 +389,13 @@ def suggestions(conn, roots):
         taken = {r[0] for r in conn.execute("SELECT folder FROM sources")}
         taken_targets = {r[0] for r in conn.execute("SELECT target FROM sources WHERE tool = 'instaloader'")}
         folders = {}                           # folder -> {account key: posts}
+        # Posts in _saved left out, or they could stand for an account's folder.
+        saved = [os.path.join(r.rstrip(os.sep), SAVED) + os.sep for r in roots]
         for platform, aid, n, path in conn.execute(
                 "SELECT platform, author_id, COUNT(*), MIN(meta_path) FROM posts "
-                "WHERE tool LIKE 'instaloader%' AND platform = 'instagram' AND author_id IS NOT NULL GROUP BY 1, 2"):
+                "WHERE tool LIKE 'instaloader%' AND platform = 'instagram' AND author_id IS NOT NULL "
+                + "".join(" AND substr(meta_path, 1, ?) != ?" for _ in saved) + " GROUP BY 1, 2",
+                [x for d in saved for x in (len(d), d)]):
             top = _top(path, roots)
             if top is None or top in taken:
                 continue
@@ -420,6 +447,8 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
     real = inside_root(folder, roots)
     if real is None:
         raise Refused("the folder must be inside a media root")
+    if in_saved(real, roots):
+        raise Refused(SAVED_REFUSED.format(folder=real))
     if os.path.exists(real) and not os.path.isdir(real):
         raise Refused("the folder path is a file")
     if existing(conn, tool, target, real) is not None:

@@ -12,7 +12,9 @@ instaloader:
   media, so it stops at it whatever files exist (trashed posts stay gone).
   It keeps no list of deleted posts: a trashed post newer than the stamp
   (deleted before the sync that passed it) comes back, and goes straight
-  back to the trash after the sync (retrash), with a line in its log.
+  back to the trash after the sync (retrash), with a line in its log. The
+  list it checks is kept in ``<data_dir>/instaloader/retrash/`` while the
+  sync runs, so a sync FeedVault stopped is re-trashed at the next start.
 - ``--fast-update`` (stop at the first post whose files exist) only for a
   first sync with no stamp, where it is the only stopping point. With a
   stamp it would stop at a post saved on its own (the userscript's Save, a
@@ -248,6 +250,8 @@ def _build(params):
         raise jobs.BadRequest("the source's target is not a profile name")
     if folder is None:
         raise jobs.BadRequest("the source's folder is not inside a media root")
+    if sources.in_saved(folder, cfg["media_roots"]):
+        raise jobs.BadRequest(sources.SAVED_REFUSED.format(folder=folder))
     try:
         os.makedirs(folder, exist_ok=True)
     except OSError as e:
@@ -361,7 +365,7 @@ def _start(params, note, argv=None):
     roots = config.load()["media_roots"]
     moved = save.gather(conn, src, roots, note)
     _seed_stamp(conn, src, options, note, moved, roots)
-    _trashed_before[src["id"]] = _trashed(conn, roots)
+    _keep_trashed(src["id"], _trashed(conn, roots))
     if not argv:
         return None
     stamps = configparser.ConfigParser(interpolation=None)
@@ -370,6 +374,67 @@ def _start(params, note, argv=None):
 
 
 _trashed_before = {}                           # source id -> trashed posts not in the index when its sync starts
+
+
+def _retrash_dir():
+    return os.path.join(config.load()["data_directory"], "instaloader", "retrash")
+
+
+def _retrash_path(sid):
+    """Where a sync's _trashed_before is kept while it runs, for the next
+    start when FeedVault stops before the sync ends (see resume)."""
+    return os.path.join(_retrash_dir(), f"{int(sid)}.json")
+
+
+def _keep_trashed(sid, ids):
+    _trashed_before[sid] = ids
+    path = _retrash_path(sid)
+    if not ids:
+        try:
+            os.remove(path)                    # one a crash left, already done with
+        except FileNotFoundError:
+            pass
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "posts": sorted(ids)}, f)
+    os.replace(tmp, path)
+
+
+def _kept_trashed(sid):
+    """Whether a list is kept for the sync of source ``sid``."""
+    return bool(_trashed_before.get(sid)) or os.path.exists(_retrash_path(sid))
+
+
+def _trashed_list(sid):
+    """The list kept for the sync of source ``sid``: from memory, else from
+    its file (after a restart); None when there is none."""
+    ids = _trashed_before.get(sid)
+    if ids is not None:
+        return ids
+    path = _retrash_path(sid)
+    try:
+        with open(path, encoding="utf-8") as f:
+            posts = json.load(f)["posts"]
+        return {i for i in posts if isinstance(i, str)} if isinstance(posts, list) else None
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError, KeyError) as e:
+        print(f"[sync] source {sid}: unreadable {path}, ignored: {e}")
+        return None
+
+
+def _take_trashed(sid, keep_file=False):
+    """Forget the list kept for the sync of source ``sid``. ``keep_file``:
+    its file stays, for the next start (resume)."""
+    _trashed_before.pop(sid, None)
+    if keep_file:
+        return
+    try:
+        os.remove(_retrash_path(sid))
+    except FileNotFoundError:
+        pass
 
 
 def _in_trash(roots):
@@ -403,34 +468,68 @@ def _retrash(params, note):
         src = sources.row(db.connect(), sid)
         return retrash(sid, src["folder"] if src else None, note or print)
     except Exception as e:                     # the sync still ends as it went
-        _trashed_before.pop(sid, None)
+        if sid is not None:
+            _take_trashed(sid)
         (note or print)(f"could not put the trashed posts it brought back in the trash: {e}")
         return []
 
 
 def _retrash_cancelled(sid):
-    """A sync cancelled while instaloader ran: its folder is not indexed, so
-    a trashed post it brought back would be new at the next scan. Index the
-    folder (what the next scan would do) and put those back in the trash."""
+    """A sync cancelled while instaloader ran, or that FeedVault stopped (at
+    the next start, resume): its folder is not indexed, so a trashed post it
+    brought back would be new at the next scan. Index the folder (what the
+    next scan would do) and put those back in the trash. True when its
+    folder is missing: the list is kept for a later start."""
     def note(text):
         print(f"[sync] source {sid}: {text}")
     try:
         src = sources.row(db.connect(), sid)
-        if src is None or src["tool"] != "instaloader" or not os.path.isdir(src["folder"]):
-            return
+        if src is None or src["tool"] != "instaloader":
+            _take_trashed(sid)
+            return False
+        if not os.path.isdir(src["folder"]):
+            note("its folder is missing (media root offline?): checked at a later start")
+            return True
         scanner.index_dirs(config.load()["media_roots"], [src["folder"]], new=True)
         retrash(sid, src["folder"], note)
     except Exception as e:                     # the next scan indexes them, as before
+        _take_trashed(sid)
         note(f"could not put the trashed posts it brought back in the trash: {e}")
+    return False
+
+
+def resume():
+    """At startup, after jobs.recover: the syncs FeedVault stopped (quit or
+    killed) while instaloader ran left their lists (_keep_trashed). Each is
+    done as for a cancelled sync, then forgotten."""
+    try:
+        names = sorted(os.listdir(_retrash_dir()))
+    except FileNotFoundError:
+        return
+    except OSError as e:                       # never stops the start
+        print(f"[sync] cannot read {_retrash_dir()}: {e}")
+        return
+    for name in names:
+        sid = name[:-len(".json")]
+        if name.endswith(".json") and sid.isascii() and sid.isdigit() and len(sid) < 16:
+            print(f"[sync] source {sid}: its sync was interrupted, checking for trashed posts it brought back")
+            _retrash_cancelled(int(sid))
 
 
 def retrash(sid, folder, note):
     """Put back in the trash the posts the sync of source ``sid`` brought
     back: in the trash and not in the index when it started, in its folder
     now, and still in the trash (not restored meanwhile). Returns their ids."""
-    before = _trashed_before.pop(sid, None)
+    before = _trashed_list(sid)
     if not before or not folder:
+        _take_trashed(sid)
         return []
+    gone = _put_back(sid, before, folder, note)
+    _take_trashed(sid)                         # only once done: stopped before, the next start does it
+    return gone
+
+
+def _put_back(sid, before, folder, note):
     cfg = config.load()
     base = os.path.join(os.path.realpath(folder), "")
     now = _indexed(db.connect(), before)
@@ -443,6 +542,16 @@ def retrash(sid, folder, note):
     if gone:
         note(f"{len(gone)} trashed post{'' if len(gone) == 1 else 's'} came back with this sync "
              f"(instaloader keeps no list of deleted posts): back in the trash")
+        try:
+            merged = trash.merge_again(cfg["media_roots"], gone, cfg["data_directory"])
+        except Exception as e:                 # two entries, as before
+            merged = []
+            note(f"could not merge their trash entries: {e}")
+        if merged:
+            n = len(merged)
+            note(f"{n} of them kept {'its' if n == 1 else 'their'} first trash entry, with the files "
+                 f"{'it was' if n == 1 else 'they were'} deleted with; the cop{'y' if n == 1 else 'ies'} "
+                 f"this sync downloaded {'was' if n == 1 else 'were'} deleted")
     if len(gone) < len(back):
         left = len(back) - len(gone)
         why = report.get("error") or "; ".join(e["error"] for e in report["errors"][:1]) or "unknown error"
@@ -456,9 +565,10 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _seed_stamp(conn, src, options, note, moved=(), roots=()):
-    """Seed the stamps file on a first sync (no stamp yet). Posts just moved
-    out of _saved (``moved``) were saved one by one, not synced: they never
-    seed it, nor those still in _saved (left there by gather). When they
+    """Seed the stamps file on a first sync (no stamp yet). Posts saved one
+    by one, not synced, never seed it: those Save added (saved_posts,
+    whatever folder they went to), those just moved out of _saved
+    (``moved``) and those still in it (left there by gather). When they
     are all there is, the stamp goes before every post (EPOCH), so the walk
     passes them and goes on to the older posts; it is in the file before
     instaloader runs, so a retry does the same."""
@@ -477,11 +587,12 @@ def _seed_stamp(conn, src, options, note, moved=(), roots=()):
         return
     newest, held = None, []
     saved = {os.path.normpath(os.path.join(r, save.SAVED)) for r in roots}
+    skip = set(moved) | save.saved_posts(conn)
     if src["author_id"] is not None:
         key = people.canonical(conn, src["platform"], src["author_id"])
         a = db.accounts(conn).get(key)
         if a and a["newest"] is not None:
-            newest = trusted_newest(conn, *key, skip=set(moved), saved=saved, held=held)
+            newest = trusted_newest(conn, *key, skip=skip, saved=saved, held=held)
             if newest is None and not held and not moved:
                 note("first sync: no reliable date, fetching full history")
                 return
@@ -491,7 +602,7 @@ def _seed_stamp(conn, src, options, note, moved=(), roots=()):
         # --fast-update would stop. The stamp goes before every post instead.
         key = sources._handle_account(conn, src["platform"], target)
         if key is not None:
-            trusted_newest(conn, *key, skip=set(moved), saved=saved, held=held)
+            trusted_newest(conn, *key, skip=skip, saved=saved, held=held)
     if newest is None and (held or moved):
         if not stamps.has_section(target):
             stamps.add_section(target)
@@ -501,7 +612,7 @@ def _seed_stamp(conn, src, options, note, moved=(), roots=()):
         note(f"first sync of {target}: downloading everything but the "
              f"{len(moved)} post{'' if len(moved) == 1 else 's'} saved already" if moved else
              f"first sync of {target}: downloading everything (the {n} post{'' if n == 1 else 's'} "
-             f"saved one by one, still in _saved, give no starting point)")
+             f"saved one by one give{'s' if n == 1 else ''} no starting point)")
         return
     if newest is None:
         note(f"first sync of {target}: no post indexed yet, downloading everything")
@@ -666,11 +777,10 @@ def _ended(job):
     if job["started_at"] is None:
         return                                 # cancelled while queued: it never ran
     sid = _source_id(job["params"])
-    if job["state"] == "cancelled" and _trashed_before.get(sid):
-        _retrash_cancelled(sid)
-    # Left when the run ended before its outcome or after hook (cancelled,
-    # or the tool could not start).
-    _trashed_before.pop(sid, None)
+    waits = job["state"] == "cancelled" and _kept_trashed(sid) and _retrash_cancelled(sid)
+    # Left when the run ended before its outcome or after hook (the tool
+    # could not start). FeedVault stopped it: the file stays, for resume().
+    _take_trashed(sid, keep_file=job["state"] == "interrupted" or waits)
     _info_before.pop(sid, None)
     r = job["result"] or {}
     conn = db.connect()
@@ -698,8 +808,29 @@ def _ended(job):
                 save.gather(conn, sources.row(conn, sid), roots, lambda text: print(f"[sync] source {sid}: {text}"))
             except Exception as e:             # they join it before its next sync instead
                 print(f"[sync] source {sid}: could not move its saved posts: {e}")
+        if src["tool"] == "instaloader":
+            try:
+                _forget_saved(conn, sources.row(conn, sid))
+            except Exception as e:             # they only seed nothing a while longer
+                print(f"[sync] source {sid}: could not update its saved posts: {e}")
     for name in sorted(changed):
         userdata.changed(name)
+
+
+def _forget_saved(conn, src):
+    """The saved posts (saved_posts) of the source's account that its stamp
+    is now later than: the walk has passed them, so they can no longer
+    seed one, and their entries go."""
+    import save                                # it imports this module
+    if src is None or src["author_id"] is None:
+        return
+    stamps = configparser.ConfigParser(interpolation=None)
+    stamps.read(stamps_path(), encoding="utf-8")
+    try:
+        stamp = datetime.strptime(stamps.get(src["target"], "post-timestamp"), STAMP_FORMAT).timestamp()
+    except (configparser.Error, ValueError):
+        return
+    save.forget_synced(conn, *people.canonical(conn, src["platform"], src["author_id"]), stamp)
 
 
 jobs.register(KIND, label="Sync from Instagram", params={"source": {"type": "text", "max": 15}},
@@ -729,6 +860,8 @@ def _archive_source(params, tool):
     folder = sources.inside_root(src["folder"], cfg["media_roots"])
     if folder is None:
         raise jobs.BadRequest("the source's folder is not inside a media root")
+    if sources.in_saved(folder, cfg["media_roots"]):
+        raise jobs.BadRequest(sources.SAVED_REFUSED.format(folder=folder))
     # Both tools expand $NAME in the folder they are given (os.path.expandvars).
     if "$" in folder:
         raise jobs.BadRequest("the source's folder holds a $, which the tool would expand")

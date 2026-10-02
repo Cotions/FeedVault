@@ -17,6 +17,7 @@ import jobs
 import scanner
 import sources
 import sync
+import trash
 
 TS = 1717243200                                     # 2024-06-01 12:00 UTC
 DAY = 86400
@@ -63,6 +64,7 @@ def fake(env, monkeypatch):
     monkeypatch.setattr(jobs, "_active", collections.OrderedDict())
     monkeypatch.setattr(jobs, "_closing", False)
     monkeypatch.setattr(jobs, "_cool", {})
+    monkeypatch.setattr(jobs, "_wake", None)
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     monkeypatch.setattr(sync, "_batch", None)
     bin_dir = env["tmp"] / "bin"
@@ -444,6 +446,7 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     """#31: instaloader keeps no list of deleted posts. B, saved then trashed
     before the sync that passed it, comes back with it and goes straight back."""
     s, folder = _trashed_between(env, client, fake)
+    [first] = [e for e in get(client, "/api/trash/items")["entries"] if e["post"] == "instagram:CPOSTB00001"]
     job = sync_now(client, s["id"])
     assert job["state"] == "done" and job["result"]["added"] == 1 and job["message"] == "1 new post"
     assert db.saved_ids(db.connect(), ["instagram:CPOSTA00001", "instagram:CPOSTB00001"]) == ["instagram:CPOSTA00001"]
@@ -451,6 +454,11 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     log = [ln["text"] for ln in get(client, f"/api/jobs/{job['id']}/log")["lines"]]
     assert "[feedvault] 1 trashed post came back with this sync (instaloader keeps no list of deleted posts): " \
            "back in the trash" in log
+    # #41.3: one trash entry, the one it was deleted with.
+    assert "[feedvault] 1 of them kept its first trash entry, with the files it was deleted with; " \
+           "the copy this sync downloaded was deleted" in log
+    [entry] = [e for e in get(client, "/api/trash/items")["entries"] if e["post"] == "instagram:CPOSTB00001"]
+    assert entry["at"] == first["at"] and entry["key"] == first["key"] and not entry["missing"]
     # It can still be restored: its latest deletion comes back.
     r = post(client, "/api/trash/restore", {"posts": ["instagram:CPOSTB00001"]})
     assert r["posts"] == ["instagram:CPOSTB00001"]
@@ -459,7 +467,41 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     job = sync_now(client, s["id"])
     assert job["result"]["added"] == 0
     assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
-    assert sync._trashed_before == {}
+    assert sync._trashed_before == {} and not os.listdir(sync._retrash_dir())
+
+
+def _entries(client, pid="instagram:CPOSTB00001"):
+    return [e for e in get(client, "/api/trash/items")["entries"] if e["post"] == pid]
+
+
+def test_trashed_post_brought_back_can_be_purged_as_one_entry(env, client, fake):
+    s, folder = _trashed_between(env, client, fake)
+    sync_now(client, s["id"])
+    [entry] = _entries(client)
+    trash_dir = env["media"] / ".feedvault-trash"
+    assert any("CPOSTB00001" in n for _, _, names in os.walk(trash_dir) for n in names)
+    r = post(client, "/api/trash/purge", {"keys": [entry["key"]]})
+    assert r["entries"] == 1 and r["errors"] == []
+    assert _entries(client) == []
+    assert not any("CPOSTB00001" in n for _, _, names in os.walk(trash_dir) for n in names)
+    assert not any("CPOSTB00001" in n for n in os.listdir(folder))
+
+
+def test_trashed_post_whose_first_entry_lost_a_file_keeps_both(env, client, fake):
+    """The first entry is not whole (a file taken out of the trash by hand):
+    the sync's copy is all there is of that file, so it stays."""
+    s, folder = _trashed_between(env, client, fake)
+    trash_dir = env["media"] / ".feedvault-trash"
+    [jpg] = [os.path.join(d, n) for d, _, names in os.walk(trash_dir) for n in names
+             if "CPOSTB00001" in n and n.endswith(".jpg")]
+    os.remove(jpg)
+    job = sync_now(client, s["id"])
+    assert job["result"]["added"] == 1
+    assert len(_entries(client)) == 2
+    assert not any("kept its first trash entry" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+    # Restore brings back the latest, whole copy.
+    assert post(client, "/api/trash/restore", {"posts": ["instagram:CPOSTB00001"]})["errors"] == []
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
 
 
 def test_trashed_post_brought_back_by_a_cancelled_sync_goes_back_too(env, client, fake):
@@ -473,6 +515,96 @@ def test_trashed_post_brought_back_by_a_cancelled_sync_goes_back_too(env, client
     scanner.scan(env["roots"])
     assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
     assert sync._trashed_before == {}
+
+
+def _brought_back(env, folder):
+    """B is back in the trash and nowhere else, and no list is left."""
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
+    assert not any("CPOSTB00001" in n for n in os.listdir(folder))
+    assert "instagram:CPOSTB00001" in sync._in_trash(env["roots"])
+    assert len([g for g in trash._all_entries(env["roots"])
+                if g["public"]["post"] == "instagram:CPOSTB00001"]) == 1
+    scanner.scan(env["roots"])
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
+    assert sync._trashed_before == {} and not os.listdir(sync._retrash_dir())
+
+
+def test_trashed_post_brought_back_before_quitting_goes_back_at_the_next_start(env, client, fake, monkeypatch):
+    s, folder = _trashed_between(env, client, fake, delay=0.4)
+    job = post(client, f"/api/sources/{s['id']}/sync")["job"]
+    wait_for(lambda: any("CPOSTB00001" in n for n in os.listdir(folder)))
+    jobs.shutdown()                                        # Quit: no indexing on the way out
+    for t in threading.enumerate():
+        if t.name == f"job-{job['id']}":
+            t.join(10)
+    assert jobs.get(job["id"])["state"] == "interrupted"
+    assert os.listdir(sync._retrash_dir()) == [f"{s['id']}.json"]
+    # The next start.
+    monkeypatch.setattr(jobs, "_closing", False)
+    sync._trashed_before.clear()
+    jobs.recover()
+    sync.resume()
+    _brought_back(env, folder)
+
+
+# A FeedVault that starts a sync, then dies once instaloader has brought B back.
+CRASHER = """
+import os, signal, sys
+sys.path[:0] = [{backend!r}, {tests!r}]
+import config, db, jobs, save, sync
+db.init(config.db_path(config.load()))
+job = sync.sync({sid})
+while not any("CPOSTB00001" in n for n in os.listdir({folder!r})):
+    pass
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+def test_trashed_post_brought_back_before_a_crash_goes_back_at_the_next_start(env, client, fake):
+    import subprocess
+    s, folder = _trashed_between(env, client, fake, delay=0.5)
+    backend = os.path.dirname(TESTS)
+    crasher = subprocess.run([sys.executable, "-c", CRASHER.format(
+        backend=backend, tests=TESTS, sid=s["id"], folder=str(folder))], timeout=30)
+    assert crasher.returncode == -9
+    [row] = db.connect().execute("SELECT id, state, pid FROM jobs WHERE state = 'running'").fetchall()
+    try:
+        assert os.listdir(sync._retrash_dir()) == [f"{s['id']}.json"]
+        jobs.recover()                                     # the next start: the orphan instaloader is stopped,
+        sync.resume()                                      # then B goes back
+        assert jobs.get(row["id"])["state"] == "interrupted"
+        _brought_back(env, folder)
+    finally:
+        try:
+            os.killpg(row["pid"], 9)
+        except ProcessLookupError:
+            pass
+
+
+def test_resume_waits_for_an_offline_folder_and_drops_a_gone_source(env, client, fake):
+    s, folder = _trashed_between(env, client, fake)
+    sync._keep_trashed(s["id"], {"instagram:CPOSTB00001"})
+    sync._keep_trashed(999, {"instagram:CPOSTB00001"})
+    sync._trashed_before.clear()
+    os.rename(folder, str(folder) + ".away")
+    sync.resume()
+    assert os.listdir(sync._retrash_dir()) == [f"{s['id']}.json"]   # 999 is no source
+    os.rename(str(folder) + ".away", folder)
+    sync.resume()
+    assert not os.listdir(sync._retrash_dir())
+
+
+def test_cancelled_sync_with_its_folder_offline_keeps_its_list(env, client, fake):
+    s, folder = _trashed_between(env, client, fake)
+    sync._keep_trashed(s["id"], {"instagram:CPOSTB00001"})
+    os.rename(folder, str(folder) + ".away")
+    sync._ended({"id": 1, "kind": sync.KIND, "state": "cancelled", "started_at": 1, "ended_at": 2,
+                 "params": {"source": str(s["id"])}, "argv": ["instaloader", "--", "carol.cooks"],
+                 "result": None, "message": "cancelled", "label": "Sync @carol.cooks"})
+    assert os.listdir(sync._retrash_dir()) == [f"{s['id']}.json"] and sync._trashed_before == {}
+    os.rename(str(folder) + ".away", folder)
+    sync.resume()
+    assert not os.listdir(sync._retrash_dir())
 
 
 def test_detect_pattern(env, tmp_path):

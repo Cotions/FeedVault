@@ -13,7 +13,8 @@ That folder is then indexed.
 
 A post whose owner had no folder goes to ``<first root>/_saved``; once the
 owner gets an instaloader source, its next sync first moves it into the
-source's folder (gather).
+source's folder (gather). Wherever it went, the post is noted in
+``saved_posts`` (remember), so it never seeds a sync's stamp.
 
 Same lock group and pause as instaloader syncs: one instaloader at a time.
 """
@@ -22,6 +23,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from datetime import datetime, timezone
 
 import config
@@ -31,11 +33,12 @@ import people
 import scanner
 import sources
 import sync
+import userdata
 from parsers import instaloader as parser
 
 KIND = "instaloader-post"
 SHORTCODE_RE = re.compile(r"[A-Za-z0-9_-]{5,40}", re.ASCII)
-SAVED = "_saved"                               # under the first media root: posts of owners with no folder
+SAVED = sources.SAVED                          # under the first media root: posts of owners with no folder
 QUEUE_MAX_DEFAULT = 20                         # Save jobs queued or running at once (config save_queue_max)
 QUEUE_MAX_LIMIT = 500
 
@@ -165,6 +168,33 @@ def _place(code, stage, roots, note):
     return folder, key
 
 
+def remember(conn, pid):
+    """Note a post Save added (table saved_posts, user data): saved one by
+    one, not synced, it must never seed a sync's stamp, whichever folder it
+    went to (sync.trusted_newest)."""
+    with conn:
+        conn.execute("INSERT OR IGNORE INTO saved_posts(post_id, saved_at) VALUES (?, ?)", (pid, int(time.time())))
+    userdata.changed("saved_posts")
+
+
+def saved_posts(conn):
+    """Ids of the posts Save added that may still seed a stamp."""
+    return {r[0] for r in conn.execute("SELECT post_id FROM saved_posts")}
+
+
+def forget_synced(conn, platform, author_id, stamp):
+    """Drop the saved_posts entries of an account's posts not newer than
+    ``stamp`` (its instaloader stamp, a time): a sync has walked past them,
+    so they can no longer seed one. Returns how many."""
+    clause, args = db.post_filter(platform=platform, author=author_id)
+    with conn:
+        n = conn.execute(f"DELETE FROM saved_posts WHERE post_id IN (SELECT p.id {db._FROM} {clause} "
+                         f"AND p.posted_at <= ?)", [*args, stamp]).rowcount
+    if n:
+        userdata.changed("saved_posts")
+    return n
+
+
 # ---------------------------------------------------------------------------
 # Out of _saved, once the owner has a source
 # ---------------------------------------------------------------------------
@@ -208,7 +238,7 @@ def gather(conn, src, roots, note):
     else:
         key = sources._handle_account(conn, src["platform"], src["target"])
     saved = {os.path.normpath(os.path.join(r, SAVED)) for r in roots}
-    if folder is None or key is None or any(folder == d or folder.startswith(d + os.sep) for d in saved):
+    if folder is None or key is None or sources.in_saved(folder, roots):
         return []
     clause, args = db.post_filter(platform=key[0], author=key[1])
     rows = [r for r in conn.execute(f"SELECT p.id, p.post_id, p.posted_at, p.meta_path, p.side_files, p.missing "
@@ -281,6 +311,8 @@ def _outcome(params, code, lines, index, note=None):
     result = {"post": None, "folder": None, "added": 0, "updated": 0, "error": None, "line": None,
               "account": None, "person": None}
     notes = []
+    pid = f"instagram:{shortcode}"
+    had = bool(db.saved_ids(db.connect(), [pid]))      # before its files move in: a scan may index them
     try:
         folder, key = _place(shortcode, stage, roots, notes.append) if roots else (None, None)
     except OSError as e:                       # a folder that cannot be made or written
@@ -294,8 +326,10 @@ def _outcome(params, code, lines, index, note=None):
         report = scanner.index_dirs(roots, [folder], new=True)
         result.update(folder=folder, added=report["added"], updated=report["updated"])
         conn = db.connect()
-        if db.saved_ids(conn, [f"instagram:{shortcode}"]):
-            result["post"] = f"instagram:{shortcode}"
+        if db.saved_ids(conn, [pid]):
+            result["post"] = pid
+            if not had:                        # not one a sync got in the meantime
+                remember(conn, pid)
         if key:
             result["account"] = {"platform": key[0], "id": key[1]}
             a = db.accounts(conn).get(key)

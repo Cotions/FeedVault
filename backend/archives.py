@@ -213,6 +213,21 @@ def installed_formats(run=True):
         return formats, error
 
 
+def warm(conn):
+    """At startup: read the installed gallery-dl's formats in the
+    background, for the trash's "never again" entries (which never start
+    it, post_entries), but only when there is a gallery-dl source or a
+    gallery-dl post to trash: without either, gallery-dl may not even be
+    installed, and the first seed reads them. Returns the thread started,
+    or None."""
+    if not conn.execute("SELECT 1 FROM sources WHERE tool = 'gallery-dl' LIMIT 1").fetchone() \
+            and not conn.execute("SELECT 1 FROM posts WHERE tool = 'gallery-dl' LIMIT 1").fetchone():
+        return None
+    t = threading.Thread(target=installed_formats, daemon=True, name="gallery-dl-formats")
+    t.start()
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Entries
 # ---------------------------------------------------------------------------

@@ -87,6 +87,7 @@ def fake(env, monkeypatch):
     monkeypatch.setattr(jobs, "_active", collections.OrderedDict())
     monkeypatch.setattr(jobs, "_closing", False)
     monkeypatch.setattr(jobs, "_cool", {})
+    monkeypatch.setattr(jobs, "_wake", None)
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     bin_dir = env["tmp"] / "bin"
     bin_dir.mkdir()
@@ -1019,3 +1020,27 @@ def test_settings_action_goes_on_past_a_bad_file_or_folder(env, client):
 def test_settings_action_waits_for_a_running_yt_dlp_sync(env, client, monkeypatch):
     monkeypatch.setattr(jobs, "active", lambda: [{"kind": "yt-dlp-sync", "state": "running"}])
     assert post(client, "/api/yt-dlp/info-json-cookies", {}, 409)["ok"] is False
+
+
+def test_formats_read_at_startup_only_with_a_gallery_dl_source(env, client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(archives, "installed_formats", lambda run=True: calls.append(run) or (None, "x"))
+    conn = db.connect()
+    assert archives.warm(conn) is None
+    for target in ("someone", "https://youtube.com/@someone"):
+        client.post("/api/sources", json={"target": target, **({"tool": "instaloader"} if "/" not in target else {})},
+                    headers=H)
+    assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 2
+    assert archives.warm(conn) is None and calls == []
+    assert client.post("/api/sources", json={"target": "https://x.com/someone"}, headers=H).status_code == 200
+    archives.warm(conn).join(5)
+    assert calls == [True]
+
+
+def test_formats_read_at_startup_with_gallery_dl_posts_to_trash(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(archives, "installed_formats", lambda run=True: calls.append(run) or (None, "x"))
+    gallery_dl_case("twitter/four_photos", env["media"] / "twitter" / "someone")
+    scanner.scan(env["roots"])
+    archives.warm(db.connect()).join(5)
+    assert calls == [True]
