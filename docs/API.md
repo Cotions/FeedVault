@@ -85,9 +85,11 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&person=&kind=&tag=&untagged=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&person=&kind=&tag=&untagged=&new=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&person=&kind=&review=&tag=&untagged=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/posts/summary?q=&platform=&author=&person=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
+| POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`, see [New posts](#new-posts) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
 | GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
@@ -104,6 +106,46 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
+
+## New posts
+
+A post is **new** when the index first had it after the user last marked
+everything seen. Each post keeps when that was (`first_seen`, set when it is
+first indexed and never changed by a rescan); the user has one high-water
+mark, `seen_at`. `posted_at` plays no part: an old post downloaded today is
+new.
+
+- What a download adds (a sync job's rescan) and what a full scan finds that
+  the index did not have are new. A scan that builds the index from nothing
+  (first run, deleted or replaced database), files back from the trash and
+  files moved by Duplicates are not: they were there before.
+- `seen_at` is user data: table `seen_at`, one row, written to
+  `<data_directory>/userdata/seen_at.json` (`{"version": 1, "rows": [{"id":
+  1, "at": 1727500000}]}`) like the others and read back into a database
+  that has none. A database upgraded to this version starts with it at the
+  time of the upgrade, and a new one with nothing to restore at its first
+  start, so an existing archive is never all new.
+- Strictly after: a post indexed in the same second as the mark is not new.
+
+`GET /api/new`:
+
+```json
+{ "count": 12, "since": 1727500000,
+  "by_person": [{ "id": 3, "name": "Some Body", "count": 9 }],
+  "by_account": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "person": 3, "count": 9 },
+                 { "platform": "tiktok", "id": "6900000000000000777", "handle": "demo.clips", "person": null, "count": 3 }] }
+```
+
+- `count`: every new post, those without an author included; `since`: the
+  mark (`null` only before the first start has set it).
+- `by_account`: accounts as on the Creators page (folder-name aliases count
+  for the id they stand for), `person` the id of the person linked, else
+  `null`; `by_person`: the same added up per person. Most new posts first.
+
+`POST /api/new/seen` marks everything seen: `at` (Unix seconds, optional,
+default now) becomes the mark, unless the mark is already later: it never
+moves backwards, nor past now. `{ "ok": true, "since": <the mark> }`; a
+body that is not `{}`, `{ "at": <whole seconds> }` or empty is a 400.
 
 ## Deleting
 
@@ -284,11 +326,14 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `q`: full-text search over post text, author handle, author name and album (SQLite
   FTS5; plain words, prefix match on the last word). `tag:name` and
   `tag:"two words"` in it are tag filters, not words (see [Tags](#tags)), and
-  mix freely with text: `tag:outfits red dress`
+  mix freely with text: `tag:outfits red dress`. `is:new` in it is the same
+  as `new=1`
 - `tag`: a tag name, matched without regard to (ASCII) case. Repeat it for several:
   a post must have all of them (`tag=a&tag=b`). Combined with any `tag:` in `q`;
   a value that cannot be a tag name matches nothing
 - `untagged=1`: only posts with no tag
+- `new=1`: only posts new since the last "Mark all seen" (see
+  [New posts](#new-posts))
 - `platform`: `instagram`, `twitter` (X, x.com included), `tiktok`, or another
   gallery-dl category name for sites without their own mapping (`reddit`, `bluesky`, …)
 - `author`: author id (from `/api/authors`) or one of its folder-name aliases;
@@ -302,7 +347,7 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `offset` (default 0), `limit` (default 60, max 200)
 
 `/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
-`platform`, `author`, `person`, `kind`, `review`, `tag`, `untagged`; `sort`, `order`, `offset` and `limit`
+`platform`, `author`, `person`, `kind`, `review`, `tag`, `untagged`, `new`; `sort`, `order`, `offset` and `limit`
 are ignored) and totals everything they match, not just one page: `posts` is
 always equal to the `total` that `/api/posts` returns for the same filters,
 `media` and `bytes` count the media items of those posts that are not missing.

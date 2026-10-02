@@ -1,7 +1,8 @@
 """The user's own data, mirrored to JSON.
 
 The index is derived from the media folders and rebuilds from a rescan. A few
-tables are not: review decisions, tags, collections, people, sources. Each one is
+tables are not: review decisions, tags, collections, people, sources, the
+"new posts" mark. Each one is
 registered here once, and gets the same treatment:
 
 - written to ``<data_dir>/userdata/<name>.json`` shortly after it changes
@@ -104,6 +105,8 @@ register("sources", "sources", ("tool", "target", "platform", "author_id", "pers
                  ":folder, COALESCE(:options, '{}'), COALESCE(:created_at, 0), :last_sync_at, :last_result "
                  "WHERE :platform IS NOT NULL AND :folder IS NOT NULL",))
 
+# "Mark all seen" (news.py): one row, the time before which posts are not new.
+register("seen_at", "seen_at", ("id", "at"), "id")
 
 def path(data_dir, name):
     return os.path.join(data_dir, "userdata", f"{name}.json")

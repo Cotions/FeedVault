@@ -570,6 +570,23 @@ def test_interrupted_sync_is_recorded_on_restart(env, client, fake):
     assert s["last_result"]["state"] == "interrupted" and s["last_sync_at"] is not None
 
 
+def test_synced_posts_are_new_until_marked_seen(env, client, fake):
+    import news
+    carol_archive(env)
+    conn = db.connect()
+    news.ensure(conn)
+    with conn:
+        conn.execute("UPDATE seen_at SET at = ?", (int(time.time()) - 10,))
+    fake.set(carol_profile(new=2))
+    job = sync_now(client, add_source(client)["id"])
+    assert job["result"]["added"] == 2
+    r = get(client, "/api/new")
+    assert r["count"] == 2 and [a["count"] for a in r["by_account"]] == [2]
+    assert get(client, "/api/posts?new=1")["total"] == 2
+    post(client, "/api/new/seen")
+    assert get(client, "/api/new")["count"] == 0
+
+
 def test_queued_syncs_whose_source_is_gone_end_cancelled(env, client, fake, monkeypatch):
     """#32: syncs queued by "Sync all" for sources a replaced database no
     longer has end cancelled, and nothing reports them as active."""

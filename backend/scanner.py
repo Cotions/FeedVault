@@ -2,6 +2,11 @@
 
 A rescan never deletes a post. A post whose metadata file is gone is marked
 missing and kept, because keeping what disappears is the point of the app.
+
+A post the index did not have is new (posts.first_seen, see news.py),
+except when a scan builds the index from nothing (a first run, a deleted or
+replaced database) or files come back from the trash or a duplicate move:
+those were there before.
 """
 import json
 import os
@@ -94,6 +99,8 @@ def _scan(roots):
     started = int(time.time())
     report = {"started_at": started, "finished_at": None,
               "added": 0, "updated": 0, "missing": 0, "unmatched": 0, "errors": []}
+    # Building the index from nothing: what it finds is not new.
+    first_seen = 0 if conn.execute("SELECT 1 FROM posts LIMIT 1").fetchone() is None else started
     seen_meta = set()
     unmatched = []                             # (path, size, mtime, reason)
     copies = []                                # (parsed post, meta mtime), see db.save_copies
@@ -119,7 +126,7 @@ def _scan(roots):
             for path, reason in result.skipped:
                 unmatched.append((path, *_size_mtime(path), reason))
             for post in result.posts:
-                _index_post(conn, post, started, report, seen_meta, unmatched, copies)
+                _index_post(conn, post, started, report, seen_meta, unmatched, copies, first_seen)
             for n in names:
                 if n not in result.claimed and parsers.is_media(n):
                     path = os.path.join(dirpath, n)
@@ -144,7 +151,7 @@ def _size_mtime(path):
     return size, mtime
 
 
-def _index_post(conn, post, now, report, seen_meta, unmatched, copies):
+def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_seen):
     mtime, size = _stat(post.meta_path)
     existing = conn.execute("SELECT meta_path, meta_mtime, meta_size, missing, side_files FROM posts WHERE id = ?",
                             (post.id,)).fetchone()
@@ -172,7 +179,7 @@ def _index_post(conn, post, now, report, seen_meta, unmatched, copies):
                                            (post.id,))}
         if have == {m.path for m in post.media}:
             return                             # nothing changed
-    outcome = db.upsert_post(conn, post, mtime, size, now)
+    outcome = db.upsert_post(conn, post, mtime, size, now, first_seen)
     report[outcome] += 1
 
 
@@ -191,12 +198,14 @@ def _mark_missing(conn, seen_meta):
     return newly
 
 
-def index_dirs(roots, dirs):
+def index_dirs(roots, dirs, new=False):
     """Re-index just these folders, right away: used after a restore from the
-    trash, where a full rescan would be far too slow for an undo key."""
+    trash, where a full rescan would be far too slow for an undo key, and
+    after a download (``new``: the posts it adds are new)."""
     with db.write_lock:
         conn = db.connect()
         now = int(time.time())
+        first_seen = now if new else 0
         report = {"added": 0, "updated": 0}
         unmatched, copies, indexed, profiles = [], [], [], []
         for d in sorted(set(dirs)):
@@ -211,7 +220,7 @@ def index_dirs(roots, dirs):
             profiles.extend(result.profiles)
             seen = set()
             for post in result.posts:
-                _index_post(conn, post, now, report, seen, unmatched, copies)
+                _index_post(conn, post, now, report, seen, unmatched, copies, first_seen)
             indexed.extend(seen)
             conn.execute(f"DELETE FROM unmatched WHERE path IN ({', '.join('?' for _ in result.claimed) or 'NULL'})",
                          [os.path.join(d, n) for n in result.claimed])

@@ -415,7 +415,7 @@ def _index(job):
     if job.full_scan:
         report = scanner.run(roots)            # every root: a scan of one would mark the others missing
     else:
-        report = scanner.index_dirs(roots, list(scanner.folders(job.rescan)))
+        report = scanner.index_dirs(roots, list(scanner.folders(job.rescan)), new=True)
     return {"added": report["added"], "updated": report["updated"]}
 
 
