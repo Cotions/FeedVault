@@ -887,7 +887,9 @@ no person yet.
     instaloader cannot stop after a number of a profile's posts), not with
     `full_history` (a 400: one or the other), and once a source has synced
     (`last_sync_at` set) it can only be cleared. Set back to `null` once a
-    sync succeeds, like `full_history`.
+    sync succeeds, like `full_history`, and `since` set to the day of the
+    oldest post that sync added (see
+    [What a source downloads](#what-a-source-downloads)).
   - Any other key, or a value outside the above, is a 400 naming the
     option; a stored value that is not valid (sources.json edited by hand)
     counts as the defaults.
@@ -1247,7 +1249,11 @@ stored value that is not valid counts as the default (no flag).
   posts already indexed are skipped within those N. yt-dlp applies it at
   each level: a YouTube channel's own page gets N per tab; TikTok's pinned
   videos (listed first) count among them. `first_posts` is set back to
-  `null` once a sync succeeds.
+  `null` once a sync succeeds, and `since` becomes the day (UTC) of the
+  oldest post that sync added, unless it is later already: the archive
+  alone would not keep the next sync from going on to older posts
+  (gallery-dl stops only at 5 files in a row it has; TikTok and a YouTube
+  channel's page are walked to the end).
 - The job log says when a floor or "last N" applies.
 
 ### gallery-dl and yt-dlp settings

@@ -29,11 +29,21 @@ the flags FeedVault passes, newest post first:
 - gallery-dl: ``--write-metadata`` (``<file>.<ext>.json`` beside each file,
   shaped like the fixtures), ``--download-archive`` (its SQLite table, one
   ``<category><archive_fmt>`` entry per file), ``-o skip=abort:N`` (stops
-  after N files in a row already in the archive or on disk), ``-D``.
+  after N files in a row already in the archive or on disk), ``-D``,
+  ``-o include=a,b`` (one child per kind, each with its own abort count: a
+  post lists the kinds it is in as ``"in": [...]``; without include, the
+  posts with no ``in`` or the account's ``"default"`` kind in it),
+  ``--filter`` (evaluated as gallery-dl does: the file's metadata as names,
+  ``date`` a datetime, a missing one None, ``datetime``, ``exts_image`` and
+  ``exts_video`` defined), ``--date-after`` (stops at the first post at or
+  before it) and ``--post-range 1-N`` (stops after the Nth post).
 - yt-dlp: ``--write-info-json --write-thumbnail``, ``--download-archive``
   (``<extractor> <id>`` lines), ``--break-on-existing`` (exit 101 at the first
   archived video), ``-o`` (``%(uploader_id)s``, ``%(upload_date)s``,
-  ``%(id)s``, ``%(ext)s``, ``%%``), ``--match-filters "duration <= N"``. A
+  ``%(id)s``, ``%(ext)s``, ``%%``), ``--match-filters "duration <= N"``,
+  ``--dateafter YYYYMMDD`` (skips older videos), ``--break-match-filters
+  "upload_date >=? YYYYMMDD"`` (exit 101 at the first older one) and
+  ``--playlist-items 1:N`` (the first N listed). A
   YouTube channel also gets its playlist info JSON. ``pinned`` videos are
   listed first, as TikTok lists a profile's pinned videos. With
   ``--cookies-from-browser`` (or ``config_cookies``: cookies from the
@@ -45,6 +55,7 @@ Every run appends {"tool", "argv", "at"} as one JSON line to
 FAKE_DOWNLOADS_LOG, when set.
 """
 import argparse
+import collections
 import json
 import os
 import re
@@ -132,6 +143,33 @@ def _gallery_dl_key(d):
     return f"tiktok{d['id']}_{d['num']}_{d['file_id']}"
 
 
+GALLERY_DL_GLOBALS = {"datetime": datetime,
+                      "exts_image": {"jpg", "jpeg", "png", "gif", "bmp", "svg", "psd", "ico", "webp", "avif", "heic",
+                                     "heif"},
+                      "exts_video": {"mp4", "m4v", "mov", "webm", "mkv", "ogv", "flv", "avi", "wmv"}}
+
+
+def _gallery_dl_filter(text):
+    if text is None:
+        return lambda d: True
+    code = compile(text, "<file filter>", "eval")
+
+    def keep(d):
+        names = collections.defaultdict(lambda: None, {**GALLERY_DL_GLOBALS, **d})   # missing names: None
+        names["date"] = datetime.strptime(d["date"], "%Y-%m-%d %H:%M:%S")
+        return bool(eval(code, GALLERY_DL_GLOBALS, names))
+    return keep
+
+
+def _children(account, include):
+    """(kind, posts) per child extractor, newest first."""
+    posts = sorted(account["posts"], key=lambda p: -p["ts"])
+    if not include:
+        default = account.get("default", "timeline")
+        return [(None, [p for p in posts if "in" not in p or default in p["in"]])]
+    return [(kind, [p for p in posts if "in" not in p or kind in p["in"]]) for kind in include.split(",")]
+
+
 def gallery_dl_main(argv):
     if argv == ["--version"]:
         print("1.32.14")
@@ -145,10 +183,16 @@ def gallery_dl_main(argv):
     ap.add_argument("-o", action="append", default=[])
     ap.add_argument("-D")
     ap.add_argument("--cookies-from-browser")
+    ap.add_argument("--filter")
+    ap.add_argument("--date-after")
+    ap.add_argument("--post-range")
     ap.add_argument("urls", nargs="*")
     args = ap.parse_args(argv)
     options = dict(o.split("=", 1) for o in args.o)
     abort = int(options["skip"].split(":")[1]) if options.get("skip", "").startswith("abort:") else None
+    keep = _gallery_dl_filter(args.filter)
+    after = datetime.fromisoformat(args.date_after).replace(tzinfo=timezone.utc) if args.date_after else None
+    last = int(re.fullmatch(r"1-(\d+)", args.post_range).group(1)) if args.post_range else None
     data = _data()
     status = 0
     for url in args.urls:
@@ -169,34 +213,43 @@ def gallery_dl_main(argv):
             os.makedirs(os.path.dirname(args.download_archive), exist_ok=True)
             archive = sqlite3.connect(args.download_archive)
             archive.execute("CREATE TABLE IF NOT EXISTS archive (entry TEXT PRIMARY KEY) WITHOUT ROWID")
-        skipped = 0
         try:
-            for post in sorted(account["posts"], key=lambda p: -p["ts"]):
-                for name, d in _gallery_dl_files(account, post):
-                    path = os.path.join(folder, name)
-                    key = _gallery_dl_key(d)
-                    if (archive and archive.execute("SELECT 1 FROM archive WHERE entry = ?", (key,)).fetchone()) \
-                            or os.path.exists(path):
-                        print(f"# {path}")
-                        skipped += 1
-                        if abort is not None and skipped >= abort:
-                            raise StopIteration
-                        continue
-                    skipped = 0
-                    (mp4 if d["extension"] == "mp4" else lambda p: png(p, colour(name)))(path)
-                    if args.write_metadata:
-                        with open(path + ".json", "w", encoding="utf-8") as f:
-                            json.dump(d, f, indent=4)
-                    if archive:
-                        archive.execute("INSERT OR IGNORE INTO archive(entry) VALUES (?)", (key,))
-                        archive.commit()
-                    print(path)
-        except StopIteration:
-            pass
+            for _, posts in _children(account, options.get("include")):
+                _gallery_dl_child(posts, account, folder, archive, args, abort, keep, after, last)
         finally:
             if archive:
                 archive.close()
     return status
+
+
+def _gallery_dl_child(posts, account, folder, archive, args, abort, keep, after, last):
+    skipped = 0
+    for index, post in enumerate(posts, start=1):
+        if after is not None and datetime.fromtimestamp(post["ts"], timezone.utc) <= after:
+            return                                  # --date-after: stop at the first older post
+        if last is not None and index > last:
+            return                                  # --post-range 1-N
+        for name, d in _gallery_dl_files(account, post):
+            if not keep(d):
+                continue
+            path = os.path.join(folder, name)
+            key = _gallery_dl_key(d)
+            if (archive and archive.execute("SELECT 1 FROM archive WHERE entry = ?", (key,)).fetchone()) \
+                    or os.path.exists(path):
+                print(f"# {path}")
+                skipped += 1
+                if abort is not None and skipped >= abort:
+                    return
+                continue
+            skipped = 0
+            (mp4 if d["extension"] == "mp4" else lambda p: png(p, colour(name)))(path)
+            if args.write_metadata:
+                with open(path + ".json", "w", encoding="utf-8") as f:
+                    json.dump(d, f, indent=4)
+            if archive:
+                archive.execute("INSERT OR IGNORE INTO archive(entry) VALUES (?)", (key,))
+                archive.commit()
+            print(path)
 
 
 # --- yt-dlp ---------------------------------------------------------------------
@@ -249,9 +302,15 @@ def yt_dlp_main(argv):
     ap.add_argument("--download-archive")
     ap.add_argument("-o", default="%(title)s [%(id)s].%(ext)s")
     ap.add_argument("--match-filters")
+    ap.add_argument("--break-match-filters")
+    ap.add_argument("--dateafter")
+    ap.add_argument("--playlist-items")
     ap.add_argument("--cookies-from-browser")
     ap.add_argument("urls", nargs="*")
     args = ap.parse_args(argv)
+    floor = re.fullmatch(r"upload_date >=\? (\d{8})", args.break_match_filters).group(1) \
+        if args.break_match_filters else None
+    first = int(re.fullmatch(r"1:(\d+)", args.playlist_items).group(1)) if args.playlist_items else None
     longest = None
     if args.match_filters:
         m = re.fullmatch(r"duration <= (\d+)", args.match_filters)
@@ -288,7 +347,8 @@ def yt_dlp_main(argv):
                            "extractor_key": "YoutubeTab", "webpage_url": url, "title": f"{account['uploader']} - Videos",
                            **base_fields}, f, indent=1)
         pinned = account.get("pinned") or []
-        for v in sorted(account["videos"], key=lambda v: (v["id"] not in pinned, -v["ts"])):
+        listed = sorted(account["videos"], key=lambda v: (v["id"] not in pinned, -v["ts"]))
+        for v in listed[:first]:
             line = f"{ie.lower()} {v['id']}"
             if line in have:
                 print(f"[download] {v['id']}: has already been recorded in the archive")
@@ -297,10 +357,17 @@ def yt_dlp_main(argv):
                           "--break-on-existing")
                     return 101
                 continue
+            day = datetime.fromtimestamp(v["ts"], timezone.utc).strftime("%Y%m%d")
+            if floor is not None and day < floor:
+                print(f"[download] {v.get('title')} does not pass filter (upload_date >=? {floor}), stopping ..")
+                print("[info] Encountered a video that did not match filter, stopping due to --break-match-filter")
+                return 101
             if longest is not None and v.get("duration", 0) > longest:
                 print(f"[download] {v.get('title')} does not pass filter (duration <= {longest}), skipping ..")
                 continue
-            day = datetime.fromtimestamp(v["ts"], timezone.utc).strftime("%Y%m%d")
+            if args.dateafter and day < args.dateafter:
+                print(f"[download] {day} upload date is not in range {args.dateafter} to 99991231")
+                continue
             fields = {**base_fields, "id": v["id"], "upload_date": day, "ext": "mp4"}
             path = _fill(args.o, fields)
             base = path[:-len(".mp4")]

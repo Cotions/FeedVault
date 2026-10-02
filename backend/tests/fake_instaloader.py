@@ -12,18 +12,33 @@ profiles from the JSON file named by FAKE_INSTALOADER (default
      "fail": null | "429" | "login" | "private" | "notfound" | "crash",
      "delay": 0}
 
-and behaves like instaloader 4.15 for one profile target (or one post,
+A profile may also have "reels" and "tagged" (posts as above; a tagged
+post has its own "owner": {"username", "id", "full_name"?}), "stories" ([{"id", "ts",
+"video": bool}]) and "highlights" ([{"title", "items": [story items]}]).
+
+It behaves like instaloader 4.15 for one profile target (or one post,
 ``-<shortcode>``) with the flags
-FeedVault passes: it honours --latest-stamps (the post-timestamp of the
-target's section, written back as instaloader does), --fast-update (stops at
-the first file that exists), --dirname-pattern and --filename-pattern
-(str.format with target, profile, shortcode, date_utc), --no-compress-json
-(metadata JSON beside the media, plus the profile's JSON and a caption .txt).
+FeedVault passes: it honours --latest-stamps (post-timestamp,
+reels-timestamp, tagged-timestamp and story-timestamp of the target's
+section, written back as instaloader does; highlights have none),
+--fast-update (stops at the first file that exists), --dirname-pattern and
+--filename-pattern (str.format with target, profile, shortcode, date_utc;
+a tagged post's target is ``<profile>/:tagged``, a highlight's
+``<profile>/<title>``, as instaloader's), --no-compress-json (metadata
+JSON beside the media, plus the profile's JSON and a caption .txt),
+--no-posts, --reels, --tagged, --stories and --highlights (the last two
+fail with "Login required." without --login or --load-cookies), in
+instaloader's order (tagged, reels, highlights, posts, stories),
+--no-videos and --no-video-thumbnails, and --post-filter and
+--storyitem-filter, evaluated as instaloader does (each name must be an
+attribute of the item: ``is_video``, ``date_utc`` (naive UTC), ``typename``;
+``datetime`` is the class).
 Every run appends {"argv", "at"} as one JSON line to FAKE_INSTALOADER_LOG,
 when set.
 "delay" sleeps that many seconds before each post (for cancelling).
 """
 import argparse
+import ast
 import configparser
 import json
 import os
@@ -71,15 +86,16 @@ def node(p, profile, target):
     return n
 
 
-def write(base, p, profile, owner):
+def write(base, p, profile, owner, videos=True, thumbnails=True):
     """A post's files, named after ``base``, as instaloader writes them."""
     kind = p.get("kind", "image")
     slides = p.get("slides", 2) if kind == "carousel" else 1
     colour = tuple((sum(map(ord, p["shortcode"])) * k) % 256 for k in (3, 7, 11))
     for s in range(1, slides + 1):
         name = f"{base}_{s}" if slides > 1 else base
-        png(name + ".jpg", tuple((c + 40 * s) % 256 for c in colour))
-        if kind == "video":
+        if kind != "video" or thumbnails or not videos:
+            png(name + ".jpg", tuple((c + 40 * s) % 256 for c in colour))
+        if kind == "video" and videos:
             mp4(name + ".mp4")
     with open(base + ".json", "w") as f:
         json.dump({"node": node(p, profile, owner),
@@ -133,6 +149,118 @@ def fail(kind, target):
     return 1
 
 
+class Item:
+    """What a filter sees of a post or story item (Post's and StoryItem's attributes it reads)."""
+
+    def __init__(self, p, story=False):
+        self.is_video = p.get("video", False) if story else p.get("kind", "image") == "video"
+        self.date_utc = datetime.fromtimestamp(p["ts"], timezone.utc).replace(tzinfo=None)
+        self.typename = ("GraphStoryVideo" if self.is_video else "GraphStoryImage") if story else \
+            {"image": "GraphImage", "video": "GraphVideo", "carousel": "GraphSidecar"}[p.get("kind", "image")]
+
+
+def item_filter(text):
+    """--post-filter / --storyitem-filter as instaloader's filterstr_to_filterfunc builds it."""
+    if text is None:
+        return None
+
+    class Names(ast.NodeTransformer):
+        def visit_Name(self, n):
+            if not isinstance(n.ctx, ast.Load):
+                raise ValueError(f"Invalid filter: Modifying variables ({n.id}) not allowed.")
+            if n.id == "datetime":
+                return n
+            if n.id not in ("is_video", "date_utc", "typename"):
+                raise ValueError(f"Invalid filter: {n.id} not a Post attribute.")
+            return ast.copy_location(ast.Attribute(ast.copy_location(ast.Name("item", ast.Load()), n), n.id,
+                                                   ast.Load()), n)
+    code = compile(ast.fix_missing_locations(Names().visit(ast.parse(text, mode="eval"))), "<filter>", "eval")
+    return lambda item: bool(eval(code, {"item": item, "datetime": datetime}))
+
+
+def read_stamp(stamps, target, key):
+    if stamps.has_option(target, key):
+        return datetime.strptime(stamps.get(target, key), STAMP_FORMAT)
+    return None
+
+
+def set_stamp(stamps, target, key, when):
+    if not stamps.has_section(target):
+        stamps.add_section(target)
+    stamps.set(target, key, when.astimezone().strftime(STAMP_FORMAT))
+
+
+def walk(posts, target, owner_target, profile, args, folder, stamps, key, keep):
+    """Posts newest first (``pinned`` ones first) down to the stamp
+    ``key``, filtered; their stamp written back. ``owner_target``: {target}
+    in the file names."""
+    last = read_stamp(stamps, target, key) if args.latest_stamps else None
+    ordered = sorted(posts, key=lambda p: (not p.get("pinned"), -p["ts"]))
+    for i, p in enumerate(ordered, start=1):
+        date = Stamp.fromtimestamp(p["ts"], timezone.utc)
+        if last is not None and not date > last:
+            if p.get("pinned"):
+                continue
+            break
+        time.sleep(keep["delay"])
+        if keep["post"] and not keep["post"](Item(p)):
+            print(f"[{i:2d}/{len(ordered):2d}] {p['shortcode']} skipped")
+            continue
+        base = os.path.join(folder, (args.filename_pattern or "{date_utc}_UTC").format(
+            target=owner_target, profile=owner_target, shortcode=p["shortcode"], date_utc=date.replace(tzinfo=None),
+            date=date.replace(tzinfo=None)))
+        os.makedirs(os.path.dirname(base), exist_ok=True)
+        kind = p.get("kind", "image")
+        slides = p.get("slides", 2) if kind == "carousel" else 1
+        first = base + ("_1" if slides > 1 else "") + ".jpg"
+        if os.path.exists(first) or os.path.exists(base + ".mp4"):
+            print(f"[{i:2d}/{len(ordered):2d}] {base}.jpg exists")
+            if args.fast_update and not p.get("pinned"):
+                break
+            continue
+        owner = p.get("owner") or {}
+        # A tagged post is its owner's: their id and name (full_name, else the user name).
+        mine = {"id": owner["id"], "name": owner.get("full_name", owner["username"])} if owner else {}
+        write(base, p, {**profile, **mine}, owner.get("username", target),
+              videos=not args.no_videos, thumbnails=not args.no_video_thumbnails)
+        print(f"[{i:2d}/{len(ordered):2d}] {base}.jpg json ")
+    if args.latest_stamps and ordered:
+        newest = max(ordered, key=lambda p: p["ts"])
+        set_stamp(stamps, target, key, datetime.fromtimestamp(newest["ts"], timezone.utc))
+
+
+def story_items(items, target, owner_target, profile, args, folder, keep, last=None):
+    """Story items newest first down to ``last``, filtered (--storyitem-filter)."""
+    for it in sorted(items, key=lambda it: -it["ts"]):
+        date = Stamp.fromtimestamp(it["ts"], timezone.utc)
+        if last is not None and not date > last:
+            break
+        if keep["story"] and not keep["story"](Item(it, story=True)):
+            print(f"<story {it['id']} skipped>")
+            continue
+        base = os.path.join(folder, (args.filename_pattern or "{date_utc}_UTC").format(
+            target=owner_target, profile=target, shortcode=str(it["id"]), date_utc=date.replace(tzinfo=None),
+            date=date.replace(tzinfo=None)))
+        os.makedirs(os.path.dirname(base), exist_ok=True)
+        video = it.get("video", False)
+        if os.path.exists(base + (".mp4" if video and not args.no_videos else ".jpg")):
+            print(f"{base}.jpg exists")
+            if args.fast_update:
+                break
+            continue
+        if video and not args.no_videos:
+            mp4(base + ".mp4")
+        if not video or not args.no_video_thumbnails or args.no_videos:
+            png(base + ".jpg", (90, 120, 200))
+        with open(base + ".json", "w") as f:
+            json.dump({"node": {"__typename": "GraphStoryVideo" if video else "GraphStoryImage", "id": str(it["id"]),
+                                "taken_at_timestamp": it["ts"], "is_video": video,
+                                "owner": {"id": str(profile["id"]), "username": target,
+                                          "full_name": profile.get("name", target)}},
+                       "instaloader": {"version": "4.15.1", "node_type": "StoryItem"}}, f, indent=4)
+        print(f"{base}.jpg json ")
+
+
 def main(argv):
     if argv == ["--version"]:
         print("4.15.1")
@@ -142,9 +270,10 @@ def main(argv):
             f.write(json.dumps({"argv": argv, "at": time.time()}) + "\n")
     ap = argparse.ArgumentParser(add_help=False)
     for flag in ("--latest-stamps", "--dirname-pattern", "--filename-pattern", "--title-pattern",
-                 "--load-cookies", "--login"):
+                 "--load-cookies", "--login", "--post-filter", "--storyitem-filter"):
         ap.add_argument(flag)
-    for flag in ("--fast-update", "--no-compress-json"):
+    for flag in ("--fast-update", "--no-compress-json", "--no-posts", "--reels", "--tagged", "--stories",
+                 "--highlights", "--no-videos", "--no-video-thumbnails"):
         ap.add_argument(flag, action="store_true")
     ap.add_argument("targets", nargs="*")
     args = ap.parse_args(argv)
@@ -156,6 +285,13 @@ def main(argv):
         print("Session file does not exist yet - Logging in.", file=sys.stderr)
         print("Login error: no password to log in with.", file=sys.stderr)
         return 3
+    try:
+        keep = {"post": item_filter(args.post_filter), "story": item_filter(args.storyitem_filter),
+                "delay": data.get("delay", 0)}
+    except (SyntaxError, ValueError) as e:
+        print(f"Fatal error: {e}", file=sys.stderr)
+        return 2
+    logged_in = bool(args.login or args.load_cookies)
     if args.latest_stamps:
         print(f"Using latest stamps from {args.latest_stamps}.")
     status = 0
@@ -186,38 +322,42 @@ def main(argv):
         stamps = configparser.ConfigParser()
         if args.latest_stamps:
             stamps.read(args.latest_stamps)
-        last = None
-        if stamps.has_option(target, "post-timestamp"):
-            last = datetime.strptime(stamps.get(target, "post-timestamp"), STAMP_FORMAT)
-        posts = sorted(profile["posts"], key=lambda p: -p["ts"])
-        print(f"Retrieving posts from profile {target}.")
-        for i, p in enumerate(posts, start=1):
-            date = Stamp.fromtimestamp(p["ts"], timezone.utc)
-            if last is not None and not date > last:
-                break
-            time.sleep(data.get("delay", 0))
-            base = os.path.join(folder, (args.filename_pattern or "{date_utc}_UTC").format(
-                target=target, profile=target, shortcode=p["shortcode"], date_utc=date.replace(tzinfo=None),
-                date=date.replace(tzinfo=None)))
-            kind = p.get("kind", "image")
-            slides = p.get("slides", 2) if kind == "carousel" else 1
-            first = base + ("_1" if slides > 1 else "") + ".jpg"
-            if os.path.exists(first):
-                print(f"[{i:2d}/{len(posts):2d}] {base}.jpg exists")
-                if args.fast_update:
-                    break
-                continue
-            write(base, p, profile, target)
-            print(f"[{i:2d}/{len(posts):2d}] {base}.jpg json ")
-        if args.latest_stamps and posts:
-            if not stamps.has_section(target):
-                stamps.add_section(target)
-            stamps.set(target, "profile-id", str(profile["id"]))
-            stamps.set(target, "post-timestamp",
-                       datetime.fromtimestamp(posts[0]["ts"]).astimezone().strftime(STAMP_FORMAT))
+        if args.tagged:
+            print(f"Retrieving tagged posts for profile {target}.")
+            walk(profile.get("tagged", []), target, f"{target}/:tagged", profile, args, folder, stamps,
+                 "tagged-timestamp", keep)
+        if args.reels:
+            print(f"Retrieving reels videos for profile {target}.")
+            walk(profile.get("reels", []), target, target, profile, args, folder, stamps, "reels-timestamp", keep)
+        if args.highlights:
+            if not logged_in:
+                print(f"Download highlights of {target}: Login required.", file=sys.stderr)
+                status = 1
+            else:
+                for h in profile.get("highlights", []):
+                    print(f'Retrieving highlights "{h["title"]}" from profile {target}')
+                    story_items(h["items"], target, f"{target}/{h['title']}", profile, args, folder, keep)
+        if not args.no_posts:
+            print(f"Retrieving posts from profile {target}.")
+            walk(profile["posts"], target, target, profile, args, folder, stamps, "post-timestamp", keep)
+        if args.stories:
+            if not logged_in:
+                print("Download stories: Login required.", file=sys.stderr)
+                status = 1
+            else:
+                last = read_stamp(stamps, target, "story-timestamp") if args.latest_stamps else None
+                print(f"[1/1] Retrieving stories from profile {target}.")
+                story_items(profile.get("stories", []), target, target, profile, args, folder, keep, last)
+                if args.latest_stamps:
+                    set_stamp(stamps, target, "story-timestamp", datetime.now(timezone.utc))
+        if args.latest_stamps:
+            if stamps.has_section(target):
+                stamps.set(target, "profile-id", str(profile["id"]))
             os.makedirs(os.path.dirname(args.latest_stamps), exist_ok=True)
             with open(args.latest_stamps, "w") as f:
                 stamps.write(f)
+        if status:
+            print("\nErrors or warnings occurred:", file=sys.stderr)
     return status
 
 

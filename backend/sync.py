@@ -96,7 +96,11 @@ How they meet the stopping points:
 - "last N" is for the first sync only: set back to null once a sync
   succeeds (like full history), and the API refuses setting it on a
   source that has synced. gallery-dl and yt-dlp still seed their archive
-  first, so posts already indexed are skipped within those N.
+  first, so posts already indexed are skipped within those N. The day of
+  the oldest post it added becomes the source's floor (unless it has a
+  later one): the archive alone would not keep the next sync from going on
+  to the older posts (gallery-dl stops at 5 files in a row it has, fewer
+  than N may be; TikTok and a YouTube channel's page never stop early).
 - stories, highlights and tagged posts need a logged-in session (Instagram
   shows them to logged-in viewers only): refused when the source is saved
   without one, and again at sync time (the setting can change since).
@@ -940,7 +944,10 @@ def _ended(job):
     src = sources.row(conn, sid)
     options = _options(src)
     if job["state"] == "done" and (options["full_history"] or options["first_posts"]):
-        sources.update(conn, sid, {**options, "full_history": False, "first_posts": None})     # once is enough
+        since = _first_posts_floor(conn, src, job) if options["first_posts"] else None
+        since = max(filter(None, (since, options["since"])), default=None)
+        sources.update(conn, sid, {**options, "full_history": False, "first_posts": None,     # once is enough
+                                   "since": since})
     if job["state"] in ("done", "failed"):
         roots = config.load()["media_roots"]
         adopted = sources.adopt(conn, sid, roots, job["ended_at"])
@@ -959,6 +966,18 @@ def _ended(job):
                 print(f"[sync] source {sid}: could not update its saved posts: {e}")
     for name in sorted(changed):
         userdata.changed(name)
+
+
+def _first_posts_floor(conn, src, job):
+    """After a "last N" first sync that worked: the day (UTC) of the oldest
+    post it added, else None. It becomes the source's floor: the archive
+    only stops a sync at 5 files in a row it has (gallery-dl), or not at
+    all (TikTok, a YouTube channel's page), so the next sync would go on
+    past those N to the older posts."""
+    prefix = os.path.join(src["folder"], "")
+    oldest = conn.execute("SELECT MIN(posted_at) FROM posts WHERE first_seen >= ? AND posted_at IS NOT NULL "
+                          "AND substr(meta_path, 1, ?) = ?", (job["started_at"], len(prefix), prefix)).fetchone()[0]
+    return datetime.fromtimestamp(oldest, timezone.utc).strftime("%Y-%m-%d") if oldest is not None else None
 
 
 def _forget_saved(conn, src):
