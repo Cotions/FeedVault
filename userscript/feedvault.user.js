@@ -30,6 +30,12 @@ const POST_PATH_RE = /^\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/;
 // A post page or dialog the Save button shows on: the whole path, and a
 // shortcode as POST /api/save accepts it.
 const SAVE_PATH_RE = /^\/(?:[A-Za-z0-9._]{1,30}\/)?(?:p|reel)\/([A-Za-z0-9_-]{5,40})\/?$/;
+// A profile page (or one of its tabs) the Sync profile button shows on.
+const PROFILE_PATH_RE = /^\/([A-Za-z0-9._]{1,30})\/(?:(?:reels|tagged)\/)?$/;
+// First path parts that are Instagram's own pages, not profiles.
+const NOT_PROFILES = new Set(["p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about",
+  "developer", "legal", "web", "emails", "challenge", "session", "graphql", "api", "privacy", "terms",
+  "lite", "your_activity", "notifications", "nametag", "settings", "login", "signup", "_n", "_u"]);
 const JOB_POLL_MS = 1500;
 const SETTINGS_ERRORS = new Set(["missing", "login_required"]);   // fixed in Settings → Downloaders
 
@@ -67,6 +73,7 @@ GM_addStyle(`
     font-weight: 400; overflow-wrap: anywhere;
   }
   .fv-note a { color: #93c5fd; }
+  .fv-row { display: flex; gap: 6px; }
 `);
 
 // id -> { saved: bool, at: ms }
@@ -317,9 +324,148 @@ async function pollJob(code, jobId) {
   applyJob(code, r.body);
 }
 
+// ---------------------------------------------------------------------------
+// Sync profile button: adds the profile's instaloader source (after asking,
+// in the button itself) unless there is one, then syncs it
+// ---------------------------------------------------------------------------
+
+// name -> { state: "checking" | "idle" | "confirm" | "sending" | "queued" | "running" | "done"
+//                  | "failed" | "offline", source, folder, job, message, error }
+const profiles = new Map();
+
+function profileName() {
+  const m = location.pathname.match(PROFILE_PATH_RE);
+  if (!m || NOT_PROFILES.has(m[1].toLowerCase()) || !m[1].replace(/\./g, "")) return null;
+  return m[1].toLowerCase();
+}
+
+function setProfile(name, value) {
+  profiles.set(name, { ...profiles.get(name), ...value });
+  paint();
+}
+
+// Where FeedVault shows the profile: its person, else its account's posts.
+function sourceLink(src) {
+  if (src?.person) return link(`${API_BASE}/people/${encodeURIComponent(src.person.id)}`, `${src.person.name} in FeedVault`);
+  if (src?.account) {
+    const q = new URLSearchParams({ platform: src.account.platform, author: src.account.id });
+    return link(`${API_BASE}/?${q}`, "Posts in FeedVault");
+  }
+  return null;
+}
+
+function paintProfile() {
+  const name = profileName();
+  if (!name) { dropPanel("profile:"); return; }
+  if (!profiles.has(name)) {
+    profiles.set(name, { state: "checking" });
+    checkProfile(name);
+  }
+  const s = profiles.get(name);
+  const p = panel(`profile:${name}`);
+  render(p, `${s.state}|${s.source?.id || ""}|${s.job?.id || ""}|${s.message || ""}`, () => {
+    const out = [];
+    const sync = s.source ? "Sync profile" : "Add & sync profile";
+    if (s.state === "checking" || s.state === "sending") out.push(button("busy", "…", null));
+    else if (s.state === "confirm") {
+      const row = el("div", { class: "fv-row" });
+      row.append(button("confirm", `Add @${name}`, () => addAndSync(name)),
+                 button("idle", "Cancel", () => setProfile(name, { state: "idle" })));
+      out.push(row, note(`New instaloader source for @${name}, downloading into ${s.folder || "your first media root"}.`));
+    } else if (s.state === "queued") out.push(button("busy", "Sync queued", null, `Job #${s.job.id}`));
+    else if (s.state === "running") out.push(button("busy", "Syncing…", null, `Job #${s.job.id}`));
+    else if (s.state === "offline") out.push(button("offline", "FeedVault is not running — retry", () => clickProfile(name)));
+    else if (s.state === "failed") {
+      out.push(button("failed", `${sync} — retry`, () => clickProfile(name), s.message || ""),
+               note(s.message || "Sync failed", SETTINGS_ERRORS.has(s.error)));
+    } else {
+      out.push(button(s.state === "done" ? "done" : "idle", sync, () => clickProfile(name)));
+      if (s.state === "done") out.push(note(s.message || "Synced"));
+    }
+    const to = sourceLink(s.source);
+    if (to) {
+      const n = el("div", { class: "fv-note" });
+      n.append(to);
+      out.push(n);
+    }
+    return out;
+  });
+}
+
+// Is there a source for it already? (Asked once per profile visited.)
+async function checkProfile(name) {
+  const r = await api("GET", `/api/sources/resolve?${new URLSearchParams({ url: `https://www.instagram.com/${name}/` })}`);
+  if (r === null) { setProfile(name, { state: "offline" }); return; }
+  const b = r.body || {};
+  if (!b.ok) { setProfile(name, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
+  if (typeof b.source !== "number") { setProfile(name, { state: "idle", folder: b.folder, source: null }); return; }
+  const got = await api("GET", `/api/sources/${encodeURIComponent(b.source)}`);
+  const src = got?.status === 200 ? got.body : null;
+  setProfile(name, { state: "idle", source: src });
+  if (src?.job) followSync(name, src.job.id);   // already syncing: show it
+}
+
+function clickProfile(name) {
+  const s = profiles.get(name);
+  if (s?.source) { syncSource(name, s.source.id); return; }
+  if (s?.state === "offline" || (s?.state === "failed" && !s.folder)) { profiles.delete(name); paint(); return; }
+  setProfile(name, { state: "confirm" });
+}
+
+async function addAndSync(name) {
+  setProfile(name, { state: "sending", message: null });
+  const r = await api("POST", "/api/sources", { tool: "instaloader", target: name });
+  if (r === null) { setProfile(name, { state: "offline" }); return; }
+  const b = r.body || {};
+  if (!b.ok) { setProfile(name, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
+  setProfile(name, { source: b.source });
+  syncSource(name, b.source.id);
+}
+
+async function syncSource(name, sid) {
+  setProfile(name, { state: "sending", message: null, error: null });
+  const r = await api("POST", `/api/sources/${encodeURIComponent(sid)}/sync`);
+  if (r === null) { setProfile(name, { state: "offline" }); return; }
+  const b = r.body || {};
+  if (r.status === 409) {                      // already queued or running: follow that one
+    const got = await api("GET", `/api/sources/${encodeURIComponent(sid)}`);
+    if (got?.body?.job) { followSync(name, got.body.job.id); return; }
+  }
+  if (!b.ok) { setProfile(name, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
+  followSync(name, b.job.id);
+}
+
+async function followSync(name, jobId) {
+  setProfile(name, { job: { id: jobId } });
+  for (;;) {
+    if (profiles.get(name)?.job?.id !== jobId) return;
+    const r = await api("GET", `/api/jobs/${jobId}`);
+    if (r === null) { await sleep(JOB_POLL_MS * 4); continue; }
+    if (r.status !== 200 || !r.body) { setProfile(name, { state: "failed", message: "the job is gone (FeedVault restarted?)" }); return; }
+    const job = r.body;
+    if (!ENDED.has(job.state)) {
+      setProfile(name, { state: job.state === "running" ? "running" : "queued", job });
+      await sleep(JOB_POLL_MS);
+      continue;
+    }
+    // The source after it: its account and person may be known only now.
+    const sid = profiles.get(name)?.source?.id;
+    const got = sid === undefined ? null : await api("GET", `/api/sources/${encodeURIComponent(sid)}`);
+    const source = got?.status === 200 ? got.body : profiles.get(name)?.source;
+    if (job.state === "done") setProfile(name, { state: "done", job, source, message: `Synced: ${job.message}` });
+    else setProfile(name, { state: "failed", job, source, message: job.message || job.state, error: job.result?.error || null });
+    return;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function paint() {
   paintTiles();
   paintPage();
+  paintProfile();
   if (pending.size) schedule();
 }
 

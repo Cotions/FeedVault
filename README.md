@@ -128,7 +128,9 @@ A post FeedVault does not have gets a **Save to FeedVault** button instead (on
 the post page and in the dialog a grid opens): it downloads that one post with
 instaloader, into its owner's folder (or `_saved/` in your first media root),
 and turns into the link once it is indexed. It shows Queued, Saving… and, when
-it fails, why.
+it fails, why. A profile page gets a **Sync profile** button: it syncs the
+profile's source, or first adds one (it asks, in the button itself), and
+links to the person or account in FeedVault.
 
 ## Jobs and tools
 
