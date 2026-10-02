@@ -93,6 +93,8 @@ import json, sys
 out, live, data = sys.argv[1:]
 c = json.load(open(live))
 c["data_directory"] = data
+# A copy of your sources never syncs on its own (Settings → Sync can undo it).
+c["schedules_paused"] = True
 json.dump(c, open(out, "w"), indent=2)
 PY
 

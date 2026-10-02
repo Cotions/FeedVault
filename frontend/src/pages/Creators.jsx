@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getAuthors, getPeople, getSuggestions, getNew, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -12,7 +12,7 @@ import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import SelectionBar from "../components/SelectionBar";
 import {
-  AddSource, RemoveSourceDialog, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
+  AddSource, RemoveSourceDialog, ScheduleLine, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
 } from "../components/Sources";
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
 import { optionsSummary } from "../lib/sourceOptions";
@@ -38,10 +38,17 @@ function cardSync(sources, jobOf) {
   return { shown, job, idle: sources.filter((s, i) => !jobs[i]), sources };
 }
 
-// Under the card's name: how the last sync went.
+// Under the card's name: how the last sync went, and the schedule of a
+// source that has one.
 function CardSyncStatus({ sync }) {
   if (!sync) return null;
-  return <SourceStatus source={sync.shown} job={sync.job} compact />;
+  const scheduled = sync.sources.find(s => s.schedule?.every && s.schedule.every !== "off");
+  return (
+    <>
+      <SourceStatus source={sync.shown} job={sync.job} compact />
+      {scheduled && <ScheduleLine source={scheduled} compact />}
+    </>
+  );
 }
 
 // Sync every source of the card that is not syncing already.
@@ -103,21 +110,54 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
   );
 }
 
-// An account card's sources have no row of their own: Options per source here.
-function CardOptionsButtons({ sync, onEdit }) {
+// An account card's sources have no row of their own: one Options icon
+// here, which opens the source's options, or with several sources a menu
+// to pick one, so the card's name keeps its room.
+function CardOptionsButton({ sync, onEdit }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef(null);
+  // A click elsewhere or Escape closes the menu (a clicked button is not
+  // focused in every browser, so blur alone would not).
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = e => { if (!wrap.current?.contains(e.target)) setOpen(false); };
+    const key = e => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", key); };
+  }, [open]);
   if (!sync) return null;
-  return sync.sources.map(s => {
+  const label = s => `${sourceName(s)} (${s.tool})`;
+  const title = s => {
+    if (!sync.idle.includes(s)) return `${label(s)}: its sync is queued or running`;
     const summary = optionsSummary(s);
-    const busy = !sync.idle.includes(s);         // its sync's end would undo what changes now
-    return (
-      <button key={s.id} type="button" className="icon-btn creator-opts" disabled={busy} onClick={() => onEdit(s)}
-              title={busy ? "Its sync is queued or running"
-                : `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}`}
-              aria-label={`Options of ${sourceName(s)} (${s.tool})`}>
+    return `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}`;
+  };
+  const one = sync.sources.length === 1 ? sync.sources[0] : null;
+  return (
+    <span className="creator-opts-wrap" ref={wrap}
+          onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
+      <button type="button" className="icon-btn creator-opts"
+              // Its sync's end would undo what changes now.
+              disabled={one ? !sync.idle.includes(one) : !sync.idle.length}
+              onClick={() => (one ? onEdit(one) : setOpen(o => !o))}
+              title={one ? title(one) : `Options of its ${sync.sources.length} sources`}
+              aria-label={one ? `Options of ${label(one)}` : "Options of its sources"}
+              aria-haspopup={one ? undefined : "menu"} aria-expanded={one ? undefined : open}>
         <Icon name="settings" size={15} />
       </button>
-    );
-  });
+      {open && (
+        <span className="creator-opts-menu" role="menu">
+          {sync.sources.map(s => (
+            <button key={s.id} type="button" role="menuitem" className="btn-ghost" disabled={!sync.idle.includes(s)}
+                    title={title(s)} onClick={() => { setOpen(false); onEdit(s); }}>
+              {label(s)}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
+  );
 }
 
 function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh }) {
@@ -163,7 +203,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
           >
             <Icon name="review" size={15} />
           </Link>
-          <CardOptionsButtons sync={sync} onEdit={onEdit} />
+          <CardOptionsButton sync={sync} onEdit={onEdit} />
         </span>
       )}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}

@@ -32,6 +32,9 @@ instaloader:
   older filename-only posts.
 - ``--filename-pattern`` as the folder's files are already named, so new
   files sit beside the old ones and a post already there is recognised.
+- ``--sanitize-paths`` when the folder is on exFAT, FAT or NTFS (statfs,
+  see windows_names): tagged posts and highlights have a ``:`` in their
+  names otherwise, which those refuse.
 
 gallery-dl and yt-dlp (archives.py):
 
@@ -58,12 +61,15 @@ What a source downloads (its options, sources.parse_options):
   ``--no-posts`` without posts; gallery-dl ``-o include=…`` (a profile's
   own page only: its user extractor dispatches to one per kind). yt-dlp
   has none: the link picks (a YouTube tab).
-- media: instaloader ``--post-filter`` (and ``--storyitem-filter``)
-  ``is_video`` / ``not is_video``, plus ``--no-videos
-  --no-video-thumbnails`` for images (a carousel's videos). Post by post:
-  a carousel is not a video post, so "videos" leaves carousels out.
-  gallery-dl, file by file: ``--filter "extension in exts_video"`` /
-  ``exts_image``.
+- media: instaloader images: ``--post-filter`` (and ``--storyitem-filter``)
+  ``not is_video``, plus ``--no-videos --no-video-thumbnails`` (a
+  carousel's videos). Videos: ``--no-pictures``, file by file, so a
+  carousel keeps its videos; it leaves an image post its metadata only,
+  which the parser does not index (no media). Story items ignore
+  --no-pictures: ``--storyitem-filter is_video`` for them. --no-pictures
+  cannot go with --fast-update (instaloader refuses): fast_update() is
+  False with it. gallery-dl, file by file: ``--filter "extension in
+  exts_video"`` / ``exts_image``.
 - since (a floor): instaloader ``date_utc >= datetime(Y, M, D)`` in the
   same filters; gallery-dl ``--date-after`` (it stops at the first older
   post) where a profile lists newest first with nothing pinned in front
@@ -103,10 +109,13 @@ How they meet the stopping points:
   is queued or running, as its end sets these two back. gallery-dl and
   yt-dlp still seed their archive
   first, so posts already indexed are skipped within those N. The day of
-  the oldest post it added (today at the latest) becomes the source's
-  floor (unless it has a later one): the archive alone would not keep the next sync from going on
-  to the older posts (gallery-dl stops at 5 files in a row it has, fewer
-  than N may be; TikTok and a YouTube channel's page never stop early).
+  the oldest post it added or its archive skipped (today at the latest)
+  becomes the source's floor (unless it has a later one): the archive
+  alone would not keep the next sync from going on to the older posts
+  (gallery-dl stops at 5 files in a row it has, fewer than N may be;
+  TikTok and a YouTube channel's page never stop early). A sync that
+  neither added nor listed a post FeedVault knows keeps "last N" for the
+  next run instead.
 - stories, highlights and tagged posts need a logged-in session (Instagram
   shows them to logged-in viewers only): refused when the source is saved
   without one, and again at sync time (the setting can change since).
@@ -282,6 +291,64 @@ def detect_pattern(folder):
     return best, counts[best] >= CLEAN_SHARE * len(names)
 
 
+# Filesystems that refuse ":" and the other characters Windows does in a
+# name, by statfs f_type: instaloader names tagged posts ``<profile>/:tagged``
+# and highlights after their title, so a sync there fails without
+# --sanitize-paths. FUSE (ntfs-3g, exfat-fuse) only says "fuse": its mount
+# type in /proc/self/mounts tells (fuseblk: a block device, NTFS or exFAT).
+WINDOWS_NAMES = {0x2011BAB0: "exfat", 0x4D44: "vfat", 0x5346544E: "ntfs", 0x7366746E: "ntfs3"}
+FUSE_MAGIC = 0x65735546
+FUSE_WINDOWS = {"fuseblk", "fuse.exfat", "fuse.exfat-fuse", "fuse.ntfs-3g"}
+MOUNTS = "/proc/self/mounts"
+
+
+def fs_magic(path):
+    """statfs(2) f_type of the filesystem ``path`` is on, or None (not
+    Linux, or the call failed)."""
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        buf = ctypes.create_string_buffer(512)             # struct statfs, f_type first
+        if libc.statfs(os.fsencode(path), buf) != 0:
+            return None
+    except (OSError, AttributeError):
+        return None
+    return ctypes.c_long.from_buffer(buf).value & 0xFFFFFFFF
+
+
+def mount_type(path):
+    """The type /proc/self/mounts gives the mount ``path`` is on, or None."""
+    real, best = os.path.realpath(path), (None, None)
+    try:
+        with open(MOUNTS, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                # Spaces and the like are octal escapes there (\040).
+                point = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), parts[1])
+                inside = real == point or real.startswith(point.rstrip("/") + "/")
+                if inside and (best[0] is None or len(point) >= len(best[0])):
+                    best = (point, parts[2])
+    except OSError:
+        return None
+    return best[1]
+
+
+def windows_names(folder):
+    """Whether ``folder`` is on a filesystem that refuses Windows' reserved
+    characters (exFAT, FAT, NTFS): instaloader then gets --sanitize-paths,
+    which makes its names valid there (the ``:`` of ``:tagged`` and of a
+    highlight's title becomes a full-width colon, U+FF1A). It changes nothing FeedVault reads: the parser
+    reads a synced post from its metadata, whatever its file's name, and
+    detect_pattern only looks at the files right in the folder (tagged
+    posts and highlights go in a subfolder named after the profile)."""
+    magic = fs_magic(folder)
+    if magic in WINDOWS_NAMES:
+        return True
+    return magic == FUSE_MAGIC and mount_type(folder) in FUSE_WINDOWS
+
+
 def _escape(path):
     """A folder for --dirname-pattern, which instaloader runs through str.format."""
     return path.replace("{", "{{").replace("}", "}}")
@@ -335,6 +402,7 @@ def _build(params):
         "--dirname-pattern", _escape(folder),
         "--filename-pattern", pattern,
         "--title-pattern", TITLE,
+        *(["--sanitize-paths"] if windows_names(folder) else []),
         *content_flags(options),
         *session_flags(session),
         "--", target,
@@ -350,10 +418,11 @@ def fast_update(stamps, target, options):
     stamp yet (a first sync) and walks only what is new (no full history,
     which goes past the posts already there too), for posts, and not with
     reels: those walked first would stop the posts at the first reel of
-    the grid, its file just written."""
+    the grid, its file just written. Never with videos only: instaloader
+    refuses --fast-update with --no-pictures."""
     content = _content(options)
     return not options["full_history"] and "posts" in content and "reels" not in content \
-        and not stamps.has_option(target, "post-timestamp")
+        and options["media"] != "videos" and not stamps.has_option(target, "post-timestamp")
 
 
 # instaloader flags per content kind (posts are on unless --no-posts).
@@ -368,12 +437,14 @@ def _floor(options):
     return day.year, day.month, day.day
 
 
-def item_filter(options):
-    """The expression for --post-filter and --storyitem-filter (both
-    instaloader.Post and StoryItem have is_video and date_utc), or None.
-    instaloader evaluates it as Python: it is made of fixed text and the
-    three numbers of a checked date only, never of anything a user typed."""
-    terms = {"images": ["not is_video"], "videos": ["is_video"]}.get(options["media"], [])
+def item_filter(options, story=False):
+    """The expression for --post-filter, or with ``story`` for
+    --storyitem-filter (both instaloader.Post and StoryItem have is_video
+    and date_utc), or None. Videos only is --no-pictures for posts, a
+    filter for story items only (they ignore it). instaloader evaluates it
+    as Python: it is made of fixed text and the three numbers of a checked
+    date only, never of anything a user typed."""
+    terms = {"images": ["not is_video"], "videos": ["is_video"] if story else []}.get(options["media"], [])
     floor = _floor(options)
     if floor is not None:
         terms.append("date_utc >= datetime(%d, %d, %d)" % floor)
@@ -383,14 +454,16 @@ def item_filter(options):
 def content_flags(options):
     """What an instaloader sync fetches (sources.CONTENT), which media and since when."""
     content = _content(options)
-    expr = item_filter(options)
+    expr, story = item_filter(options), item_filter(options, story=True)
     return [
         *(["--no-posts"] if "posts" not in content else []),
         *[CONTENT_FLAGS[k] for k in sources.CONTENT[("instaloader", "instagram")] if k in content and k != "posts"],
         # Images only: video posts are filtered out, a carousel's videos and their thumbnails are not fetched.
         *(["--no-videos", "--no-video-thumbnails"] if options["media"] == "images" else []),
+        # Videos only: no picture is fetched, a carousel's videos are.
+        *(["--no-pictures"] if options["media"] == "videos" else []),
         *(["--post-filter", expr] if expr else []),
-        *(["--storyitem-filter", expr] if expr and {"stories", "highlights"} & set(content) else []),
+        *(["--storyitem-filter", story] if story and {"stories", "highlights"} & set(content) else []),
     ]
 
 
@@ -882,6 +955,8 @@ def _owner(params):
 
 
 def _outcome(params, code, lines, index, note=None, tool="instaloader"):
+    if tool != "instaloader":
+        _note_listed(params, tool, lines)
     added = index["added"] if index else 0
     if tool == "instaloader" and index:
         added = max(0, added - len(_retrash(params, note)))
@@ -928,6 +1003,17 @@ def _outdated(tool):
         return None
 
 
+def _failures(src, state):
+    """Failed syncs in a row, for the scheduler's back-off: a failure adds
+    one, a sync that worked starts again from 0, a cancelled or interrupted
+    one leaves the count."""
+    try:
+        before = sources.failures(json.loads(src["last_result"] or "{}") if src is not None else None)
+    except ValueError:
+        before = 0
+    return before + 1 if state == "failed" else 0 if state == "done" else before
+
+
 def _ended(job):
     """Store how it went on the source, and let a new source adopt its account."""
     _tally(job)
@@ -939,6 +1025,7 @@ def _ended(job):
     # could not start). FeedVault stopped it: the file stays, for resume().
     _take_trashed(sid, keep_file=job["state"] == "interrupted" or waits)
     _info_before.pop(sid, None)
+    listed = _listed.pop(sid, None)
     r = job["result"] or {}
     conn = db.connect()
     src = sources.row(conn, sid)
@@ -947,16 +1034,18 @@ def _ended(job):
     if not sources.record(conn, sid, job["id"], job["ended_at"] or int(time.time()), {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
             "line": r.get("line"), "added": r.get("added", 0), "job": job["id"],
-            "outdated": r.get("outdated", False)}):
+            "outdated": r.get("outdated", False), "failures": _failures(src, job["state"])}):
         return
     changed = {"sources"}
     src = sources.row(conn, sid)
     options = _options(src)
     if job["state"] == "done" and (options["full_history"] or options["first_posts"]):
-        since = _first_posts_floor(conn, src, job) if options["first_posts"] else None
-        since = max(filter(None, (since, options["since"])), default=None)
-        sources.update(conn, sid, {**options, "full_history": False, "first_posts": None,     # once is enough
-                                   "since": since})
+        floor = _first_posts_floor(conn, src, job, listed) if options["first_posts"] else None
+        since = max(filter(None, (floor, options["since"])), default=None)
+        # Once is enough; "last N" stays for the next run when there is no floor to stop it.
+        sources.update(conn, sid, {**options, "full_history": False, "since": since,
+                                   "first_posts": options["first_posts"] if floor is None else None},
+                       keys=("full_history", "since", "first_posts"))
     if job["state"] in ("done", "failed"):
         roots = config.load()["media_roots"]
         adopted = sources.adopt(conn, sid, roots, job["ended_at"])
@@ -977,19 +1066,59 @@ def _ended(job):
         userdata.changed(name)
 
 
-def _first_posts_floor(conn, src, job):
+def _first_posts_floor(conn, src, job, listed=None):
     """After a "last N" first sync that worked: the day (UTC) of the oldest
-    post it added, else None. It becomes the source's floor: the archive
-    only stops a sync at 5 files in a row it has (gallery-dl), or not at
-    all (TikTok, a YouTube channel's page), so the next sync would go on
-    past those N to the older posts."""
+    post it added or listed (``listed``: the oldest posted_at of the posts
+    its archive skipped, see _note_listed), else None (it listed nothing
+    FeedVault knows). It becomes the source's floor: the archive only stops
+    a sync at 5 files in a row it has (gallery-dl), or not at all (TikTok,
+    a YouTube channel's page), so the next sync would go on past those N to
+    the older posts, also when the N were all there already (a seeded
+    archive: nothing added)."""
     prefix = os.path.join(src["folder"], "")
-    oldest = conn.execute("SELECT MIN(posted_at) FROM posts WHERE first_seen >= ? AND posted_at IS NOT NULL "
-                          "AND substr(meta_path, 1, ?) = ?", (job["started_at"], len(prefix), prefix)).fetchone()[0]
+    added = conn.execute("SELECT MIN(posted_at) FROM posts WHERE first_seen >= ? AND posted_at IS NOT NULL "
+                         "AND substr(meta_path, 1, ?) = ?", (job["started_at"], len(prefix), prefix)).fetchone()[0]
+    oldest = min(filter(None, (added, listed)), default=None)
     if oldest is None:
         return None
     # Not after today: a floor is a day up to today's, in local time.
     return min(datetime.fromtimestamp(oldest, timezone.utc).date(), date.today()).isoformat()
+
+
+# What the archive skipped, as each tool says it: gallery-dl prints a file it
+# has as "# <path>", yt-dlp "[download] <id>: has already been recorded in the archive".
+_GALLERY_DL_SKIPPED = re.compile(r"# (/.+)")
+_YT_DLP_SKIPPED = re.compile(r"\[download\] (\S+): has already been recorded in the archive")
+_listed = {}                                   # source id -> oldest posted_at its "last N" sync's archive skipped
+
+
+def _note_listed(params, tool, lines):
+    """For a "last N" sync: the oldest post among those its archive skipped
+    (indexed already, so the sync added nothing for them), kept for _ended
+    (see _first_posts_floor). A failure here only loses that fallback."""
+    try:
+        conn = db.connect()
+        src = sources.row(conn, _source_id(params))
+        if src is None or not _options(src)["first_posts"]:
+            return
+        pattern = _GALLERY_DL_SKIPPED if tool == "gallery-dl" else _YT_DLP_SKIPPED
+        found = sorted({m.group(1) for _, t in lines for m in [pattern.fullmatch(t.strip())] if m})
+        oldest = None
+        for i in range(0, len(found), 500):
+            part = found[i:i + 500]
+            marks = ",".join("?" * len(part))
+            if tool == "gallery-dl":
+                q = (f"SELECT MIN(p.posted_at) FROM media m JOIN posts p ON p.id = m.post_id "
+                     f"WHERE m.path IN ({marks})", part)
+            else:
+                q = (f"SELECT MIN(posted_at) FROM posts WHERE platform = ? AND post_id IN ({marks})",
+                     [src["platform"], *part])
+            v = conn.execute(*q).fetchone()[0]
+            oldest = v if oldest is None or (v is not None and v < oldest) else oldest
+        if oldest is not None:
+            _listed[src["id"]] = oldest
+    except Exception as e:                     # the sync still ends as it went
+        print(f"[sync] source {params.get('source')}: could not read the posts it listed: {e}")
 
 
 def _forget_saved(conn, src):
@@ -1159,7 +1288,10 @@ def _start_archive(tool):
         if options["full_history"]:
             note("full history: every post not in the archive yet")
         if options["first_posts"]:
-            note(f"first sync: only the newest {options['first_posts']} posts")
+            # gallery-dl's --post-range applies to each kind's extractor, yt-dlp's to each tab of a channel.
+            each = (" of each kind" if tool == "gallery-dl" and len(options["content"] or ()) > 1
+                    else " of each tab" if src["platform"] == "youtube" and _youtube_root(src["target"]) else "")
+            note(f"first sync: only the newest {options['first_posts']} posts{each}")
         if options["since"]:
             note(f"nothing before {options['since']}")
         if src["last_sync_at"] is not None:

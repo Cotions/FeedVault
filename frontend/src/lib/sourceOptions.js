@@ -37,16 +37,40 @@ export const MEDIA = [
   ["videos", "videos only"],
 ];
 
-// What a media choice does: gallery-dl picks file by file; instaloader post
-// by post (a carousel is not a video post, so "videos" leaves it out).
+// What a media choice does: both tools pick file by file (instaloader's
+// "videos" is --no-pictures: a carousel keeps its videos).
 export function mediaEffect(tool, media) {
   const insta = tool === "instaloader";
   if (media === "images") return insta ? "videos are skipped, carousels keep their images" : "videos are skipped";
-  if (media === "videos") return insta ? "video posts and reels; carousels are skipped" : "images are skipped";
+  if (media === "videos") return insta ? "images are skipped, carousels keep their videos" : "images are skipped";
   return "everything the posts have";
 }
 
 export const FIRST_POSTS_MAX = 10000;
+
+// How often the scheduler syncs a source (docs/API.md "Schedules"): [value, label, effect].
+export const SCHEDULES = [
+  ["off", "off", "only when you click Sync"],
+  ["hourly", "hourly", "an hour after its last sync ended"],
+  ["daily", "daily", "a day after its last sync ended"],
+  ["weekly", "weekly", "a week after its last sync ended"],
+];
+
+// A YouTube channel's tabs (sync.py YOUTUBE_TABS): a link to one is not the channel's own page.
+const YOUTUBE_TABS = new Set(["videos", "shorts", "streams", "live", "podcasts", "releases", "playlists", "featured"]);
+
+// "Last N" is per kind with gallery-dl (each kind is its own extractor,
+// each with its --post-range) and per tab on a YouTube channel's own page
+// (yt-dlp's --playlist-items): the first sync gets up to N of each.
+export function firstPostsEach(tool, content, platform, target) {
+  if (tool === "gallery-dl" && content?.length > 1) return " of each kind";
+  if (tool === "yt-dlp" && platform === "youtube" && target) {
+    let parts;
+    try { parts = new URL(target).pathname.replace(/^\/+|\/+$/g, "").split("/"); } catch { return ""; }
+    if (!YOUTUBE_TABS.has(parts.at(-1).toLowerCase()) && parts[0].toLowerCase() !== "playlist") return " of each tab";
+  }
+  return "";
+}
 
 export const kindLabel = (platform, k) => KINDS[platform]?.[k]?.[0] || k;
 export const kindEffect = (platform, k) => KINDS[platform]?.[k]?.[1] || "";
@@ -58,7 +82,7 @@ export function today(now = new Date()) {
 }
 
 /* The form's state from a source's stored options (or the defaults):
-   { content: [kinds], media, since: "" | date, first: "new" | "full" | "last", count: "" | text } */
+   { content: [kinds], media, since: "" | date, first: "new" | "full" | "last", count: "" | text, schedule } */
 export function formOf(options, choices) {
   const o = options || {};
   return {
@@ -67,6 +91,7 @@ export function formOf(options, choices) {
     since: o.since || "",
     first: o.first_posts ? "last" : o.full_history ? "full" : "new",
     count: o.first_posts ? String(o.first_posts) : "",
+    schedule: o.schedule || "off",
   };
 }
 
@@ -93,11 +118,20 @@ export function formError(form, choices, now = new Date()) {
    form formError passed. ``firstSync``: the first-sync choice is sent
    (only last_posts is refused once a source has synced). */
 export function optionsOf(form, choices, firstSync = true) {
-  const out = { media: choices?.media ? form.media : "all", since: form.since || null };
+  const out = { media: choices?.media ? form.media : "all", since: form.since || null, schedule: form.schedule };
   if (choices?.content?.length) out.content = choices.content.filter(k => form.content.includes(k));
   out.full_history = form.first === "full";
   if (firstSync) out.first_posts = form.first === "last" ? Number(form.count) : null;
   return out;
+}
+
+/* The form after a content box was clicked. Stories last 24 h: turning
+   them on makes an off schedule daily, as the backend does; the user can
+   change it after. */
+export function toggleKind(form, k) {
+  const on = !form.content.includes(k);
+  const content = on ? [...form.content, k] : form.content.filter(x => x !== k);
+  return { ...form, content, ...(on && k === "stories" && form.schedule === "off" ? { schedule: "daily" } : {}) };
 }
 
 /* The kinds picked that need a logged-in session, when the session is
@@ -115,7 +149,38 @@ export function optionsSummary(s) {
   if (o.content) parts.push(o.content.map(k => kindLabel(s.platform, k)).join(", "));
   if (o.media && o.media !== "all") parts.push(`${o.media} only`);
   if (o.since) parts.push(`since ${o.since}`);
-  if (o.first_posts) parts.push(`first sync: last ${o.first_posts} posts`);
+  if (o.first_posts) parts.push(`first sync: last ${o.first_posts} posts${firstPostsEach(s.tool, o.content, s.platform, s.target)}`);
   else if (o.full_history) parts.push("full history");
   return parts.join(" · ");
+}
+
+// "in 40 min", "in 3 h", "in 2 d"
+export function fmtUntil(ts, now = Date.now()) {
+  const s = Math.max(0, Math.round(ts - now / 1000));
+  if (s < 3600) return `in ${Math.max(1, Math.round(s / 60))} min`;
+  if (s < 86400) return `in ${Math.round(s / 3600)} h`;
+  return `in ${Math.round(s / 86400)} d`;
+}
+
+/* One line on a source's schedule, or "" when it has none: "daily · next
+   sync in 3 h", "hourly, last failed: rate limited · next try in 2 h".
+   ``errors``: last_result.error → its short name. */
+export function scheduleText(s, errors = {}, now = Date.now()) {
+  const sch = s.schedule;
+  if (!sch || sch.every === "off" || sch.next_at == null) return "";
+  if (sch.paused) return `${sch.every} · all schedules paused`;
+  if (sch.skipped) return `${sch.every} · ${sch.skipped}`;
+  const r = s.last_result;
+  const failed = r?.state === "failed" && sch.failures > 0;
+  const head = failed ? `${sch.every}, last failed: ${errors[r.error] || "failed"}` : sch.every;
+  if (sch.next_at * 1000 <= now) return `${head} · due, starts soon`;
+  return `${head} · ${failed ? "next try" : "next sync"} ${fmtUntil(sch.next_at, now)}`;
+}
+
+/* scheduleText for a card: "in 3 h", "due", "paused" or "skipped". */
+export function scheduleShort(s, now = Date.now()) {
+  const sch = s.schedule;
+  if (sch.paused) return "paused";
+  if (sch.skipped) return "skipped";
+  return sch.next_at * 1000 <= now ? "due" : fmtUntil(sch.next_at, now);
 }

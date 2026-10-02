@@ -11,7 +11,8 @@ import userdata
 
 ALICE = owner("alice.example", 111, "Alice Example")
 TS = 1717243200                                     # 2024-06-01 12:00 UTC
-OPTS = {"full_history": False, "session": None, "content": None, "media": "all", "since": None, "first_posts": None}
+OPTS = {"full_history": False, "session": None, "content": None, "media": "all", "since": None, "first_posts": None,
+        "schedule": "off"}
 
 
 def get(client, url, status=200):
@@ -261,7 +262,7 @@ def test_options_api(env, client, monkeypatch):
     s = post(client, "/api/sources", {**body, "options": {
         "content": ["stories", "posts"], "session": {"mode": "login", "user": "me"}, "since": "2024-01-01"}})["source"]
     assert s["options"] == {**OPTS, "content": ["posts", "stories"], "session": {"mode": "login", "user": "me"},
-                            "since": "2024-01-01"}
+                            "since": "2024-01-01", "schedule": "daily"}       # stories: daily
     assert s["choices"]["login"] == ["stories", "highlights", "tagged"]
     url = f"/api/sources/{s['id']}"
     assert "logged-in" in post(client, url, {"options": {"session": {"mode": "none"}}}, 400)["error"]
@@ -270,7 +271,7 @@ def test_options_api(env, client, monkeypatch):
     config.save(cfg)
     r = post(client, url, {"options": {"session": None, "content": ["posts", "reels", "highlights"], "media": "images"}})
     assert r["source"]["options"] == {**OPTS, "content": ["posts", "reels", "highlights"], "media": "images",
-                                      "since": "2024-01-01"}
+                                      "since": "2024-01-01", "schedule": "daily"}
     for bad in [{"media": "all", "x": 1}, {"since": "tomorrow"}, {"content": ["posts; rm -rf ~"]}]:
         post(client, url, {"options": bad}, 400)
     assert get(client, url)["options"]["media"] == "images"

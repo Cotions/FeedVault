@@ -183,6 +183,15 @@ sync that fetches only the last N posts. Stories, highlights and tagged posts
 need an Instagram login (**Settings → Sync**). The source shows a summary
 such as "posts, reels · since 2024-01-01".
 
+A source can also sync on its own: its **Schedule** option is off (default),
+hourly, daily or weekly (daily as soon as you turn its stories on, since they
+last 24 hours). The next sync counts from the end of the last one, so a
+FeedVault that was off catches up once at startup; a source that failed waits
+twice as long each time, up to a day; sources of one site start a few minutes
+apart; and a source whose tool is missing or whose media root is offline is
+skipped, with a note. The source shows "daily · next sync in 3 h".
+**Settings → Sync → Pause all schedules** stops them all.
+
 When a sync adds posts, a notice says so ("12 new posts from @name") and
 links to them. Posts indexed since you last pressed **Mark all seen** are
 **new**: the sidebar counts them next to Feed, Creators shows how many each

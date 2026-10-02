@@ -8,7 +8,7 @@ profiles from the JSON file named by FAKE_INSTALOADER (default
     {"profiles": {"somebody": {"id": 555, "name": "Some Body", "bio": "…",
                                "posts": [{"shortcode": "C0FAKE00001", "ts": 1717243200,
                                           "caption": "…", "kind": "image" | "video" | "carousel",
-                                          "slides": 3}]}},
+                                          "slides": 3, "video_slides": [2]}]}},
      "fail": null | "429" | "login" | "private" | "notfound" | "crash",
      "delay": 0}
 
@@ -24,17 +24,23 @@ section, written back as instaloader does; highlights have none),
 --fast-update (stops at the first file that exists), --dirname-pattern and
 --filename-pattern (str.format with target, profile, shortcode, date_utc;
 a tagged post's target is ``<profile>/:tagged``, a highlight's
-``<profile>/<title>``, as instaloader's), --no-compress-json (metadata
+``<profile>/<title>``, as instaloader's; with --sanitize-paths the ``:``
+and Windows' other reserved characters in those become their full-width
+look-alikes, as instaloader's sanitize_path does), --no-compress-json (metadata
 JSON beside the media, plus the profile's JSON and a caption .txt),
 --no-posts, --reels, --tagged, --stories and --highlights (the last two
 fail with "Login required." without --login or --load-cookies), in
 instaloader's order (tagged, reels, highlights, posts, stories),
---no-videos and --no-video-thumbnails, and --post-filter and
+--no-videos, --no-video-thumbnails and --no-pictures (no picture of a post
+or carousel slide, nor a video's thumbnail: an image post gets its JSON and
+caption only; story items ignore it, as instaloader's do; refused with
+--fast-update), and --post-filter and
 --storyitem-filter, evaluated as instaloader does (each name must be an
 attribute of the item: ``is_video``, ``date_utc`` (naive UTC), ``typename``;
 ``datetime`` is the class).
 Every run appends {"argv", "at"} as one JSON line to FAKE_INSTALOADER_LOG,
-when set.
+when set. With FAKE_INSTALOADER_WINDOWS_NAMES set it writes as on exFAT or
+NTFS: a name with a reserved character (``:``) fails with errno 22.
 "delay" sleeps that many seconds before each post (for cancelling).
 """
 import argparse
@@ -82,20 +88,22 @@ def node(p, profile, target):
          "edge_media_to_caption": {"edges": [{"node": {"text": p["caption"]}}] if p.get("caption") else []},
          "edge_media_preview_like": {"count": p.get("likes", 12)}, "edge_media_to_comment": {"count": 3}}
     if kind == "carousel":
-        n["edge_sidecar_to_children"] = {"edges": [{"node": {"is_video": False}}] * p.get("slides", 2)}
+        n["edge_sidecar_to_children"] = {"edges": [{"node": {"is_video": s in p.get("video_slides", ())}}
+                                                   for s in range(1, p.get("slides", 2) + 1)]}
     return n
 
 
-def write(base, p, profile, owner, videos=True, thumbnails=True):
+def write(base, p, profile, owner, videos=True, thumbnails=True, pictures=True):
     """A post's files, named after ``base``, as instaloader writes them."""
     kind = p.get("kind", "image")
     slides = p.get("slides", 2) if kind == "carousel" else 1
     colour = tuple((sum(map(ord, p["shortcode"])) * k) % 256 for k in (3, 7, 11))
     for s in range(1, slides + 1):
         name = f"{base}_{s}" if slides > 1 else base
-        if kind != "video" or thumbnails or not videos:
+        video = kind == "video" or (kind == "carousel" and s in p.get("video_slides", ()))
+        if pictures and (not video or thumbnails or not videos):
             png(name + ".jpg", tuple((c + 40 * s) % 256 for c in colour))
-        if kind == "video" and videos:
+        if video and videos:
             mp4(name + ".mp4")
     with open(base + ".json", "w") as f:
         json.dump({"node": node(p, profile, owner),
@@ -190,6 +198,27 @@ def set_stamp(stamps, target, key, when):
     stamps.set(target, key, when.astimezone().strftime(STAMP_FORMAT))
 
 
+RESERVED = {":": "\uff1a", "<": "\ufe64", ">": "\ufe65", '"': "\uff02", "\\": "\ufe68", "|": "\uff5c",
+            "?": "\ufe16", "*": "\uff0a"}
+
+
+def sanitize(name, windows):
+    """instaloader's _PostPathFormatter.sanitize_path, with --sanitize-paths as ``windows``."""
+    name = name.replace("/", "\u2215")
+    if name.startswith("."):
+        name = name.replace(".", "\u2024", 1)
+    return "".join(RESERVED.get(c, c) for c in name) if windows else name
+
+
+class Refused(OSError):
+    """A name the filesystem refuses (FAKE_INSTALOADER_WINDOWS_NAMES)."""
+
+
+def check_name(base, folder):
+    if os.environ.get("FAKE_INSTALOADER_WINDOWS_NAMES") and any(c in RESERVED for c in os.path.relpath(base, folder)):
+        raise Refused(22, "Invalid argument", base)
+
+
 def walk(posts, target, owner_target, profile, args, folder, stamps, key, keep):
     """Posts newest first (``pinned`` ones first) down to the stamp
     ``key``, filtered; their stamp written back. ``owner_target``: {target}
@@ -209,11 +238,12 @@ def walk(posts, target, owner_target, profile, args, folder, stamps, key, keep):
         base = os.path.join(folder, (args.filename_pattern or "{date_utc}_UTC").format(
             target=owner_target, profile=owner_target, shortcode=p["shortcode"], date_utc=date.replace(tzinfo=None),
             date=date.replace(tzinfo=None)))
+        check_name(base, folder)
         os.makedirs(os.path.dirname(base), exist_ok=True)
         kind = p.get("kind", "image")
         slides = p.get("slides", 2) if kind == "carousel" else 1
-        first = base + ("_1" if slides > 1 else "") + ".jpg"
-        if os.path.exists(first) or os.path.exists(base + ".mp4"):
+        first = base + ("_1" if slides > 1 else "")
+        if any(os.path.exists(first + ext) for ext in (".jpg", ".mp4")):
             print(f"[{i:2d}/{len(ordered):2d}] {base}.jpg exists")
             if args.fast_update and not p.get("pinned"):
                 break
@@ -222,7 +252,7 @@ def walk(posts, target, owner_target, profile, args, folder, stamps, key, keep):
         # A tagged post is its owner's: their id and name (full_name, else the user name).
         mine = {"id": owner["id"], "name": owner.get("full_name", owner["username"])} if owner else {}
         write(base, p, {**profile, **mine}, owner.get("username", target),
-              videos=not args.no_videos, thumbnails=not args.no_video_thumbnails)
+              videos=not args.no_videos, thumbnails=not args.no_video_thumbnails, pictures=not args.no_pictures)
         print(f"[{i:2d}/{len(ordered):2d}] {base}.jpg json ")
     if args.latest_stamps and ordered:
         newest = max(ordered, key=lambda p: p["ts"])
@@ -241,6 +271,7 @@ def story_items(items, target, owner_target, profile, args, folder, keep, last=N
         base = os.path.join(folder, (args.filename_pattern or "{date_utc}_UTC").format(
             target=owner_target, profile=target, shortcode=str(it["id"]), date_utc=date.replace(tzinfo=None),
             date=date.replace(tzinfo=None)))
+        check_name(base, folder)
         os.makedirs(os.path.dirname(base), exist_ok=True)
         video = it.get("video", False)
         if os.path.exists(base + (".mp4" if video and not args.no_videos else ".jpg")):
@@ -262,6 +293,15 @@ def story_items(items, target, owner_target, profile, args, folder, keep, last=N
 
 
 def main(argv):
+    try:
+        return run(argv)
+    except Refused as e:                       # as instaloader dies on an OSError it does not catch
+        print(f"{e}", file=sys.stderr)
+        print("\nErrors or warnings occurred:", file=sys.stderr)
+        return 1
+
+
+def run(argv):
     if argv == ["--version"]:
         print("4.15.1")
         return 0
@@ -273,7 +313,7 @@ def main(argv):
                  "--load-cookies", "--login", "--post-filter", "--storyitem-filter"):
         ap.add_argument(flag)
     for flag in ("--fast-update", "--no-compress-json", "--no-posts", "--reels", "--tagged", "--stories",
-                 "--highlights", "--no-videos", "--no-video-thumbnails"):
+                 "--highlights", "--no-videos", "--no-video-thumbnails", "--no-pictures", "--sanitize-paths"):
         ap.add_argument(flag, action="store_true")
     ap.add_argument("targets", nargs="*")
     args = ap.parse_args(argv)
@@ -281,6 +321,9 @@ def main(argv):
                                                                    "fake_instaloader.json")
     with open(data_file) as f:
         data = json.load(f)
+    if args.no_pictures and args.fast_update:
+        print("Fatal error: --no-pictures and --fast-update cannot be used together.", file=sys.stderr)
+        return 2
     if args.login and not os.environ.get("FAKE_INSTALOADER_SESSION"):
         print("Session file does not exist yet - Logging in.", file=sys.stderr)
         print("Login error: no password to log in with.", file=sys.stderr)
@@ -324,7 +367,8 @@ def main(argv):
             stamps.read(args.latest_stamps)
         if args.tagged:
             print(f"Retrieving tagged posts for profile {target}.")
-            walk(profile.get("tagged", []), target, f"{target}/:tagged", profile, args, folder, stamps,
+            walk(profile.get("tagged", []), target, f"{target}/{sanitize(':tagged', args.sanitize_paths)}", profile,
+                 args, folder, stamps,
                  "tagged-timestamp", keep)
         if args.reels:
             print(f"Retrieving reels videos for profile {target}.")
@@ -336,7 +380,8 @@ def main(argv):
             else:
                 for h in profile.get("highlights", []):
                     print(f'Retrieving highlights "{h["title"]}" from profile {target}')
-                    story_items(h["items"], target, f"{target}/{h['title']}", profile, args, folder, keep)
+                    story_items(h["items"], target, f"{target}/{sanitize(h['title'], args.sanitize_paths)}", profile,
+                                args, folder, keep)
         if not args.no_posts:
             print(f"Retrieving posts from profile {target}.")
             walk(profile["posts"], target, target, profile, args, folder, stamps, "post-timestamp", keep)

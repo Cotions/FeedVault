@@ -96,8 +96,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
@@ -842,15 +842,17 @@ no person yet.
   "account": { "platform": "instagram", "id": "somebody" },
   "person": { "id": 3, "name": "Some Body" },
   "options": { "full_history": false, "session": null, "content": ["posts", "reels"], "media": "all",
-               "since": "2024-01-01", "first_posts": null },
+               "since": "2024-01-01", "first_posts": null, "schedule": "daily" },
   "choices": { "content": ["posts", "reels", "stories", "highlights", "tagged"], "content_default": ["posts"],
                "login": ["stories", "highlights", "tagged"], "media": true, "since": true, "first_posts": false },
   "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait before syncing again",
-                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false },
+                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false,
+                   "failures": 1 },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
-  "session": { "mode": "login", "user": "me" } }
+  "session": { "mode": "login", "user": "me" },
+  "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "failures": 1 } }
 ```
 
 - `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
@@ -890,8 +892,14 @@ no person yet.
     (`last_sync_at` set) without it, or after it worked, it cannot be set
     (while a first sync with it has only failed, it can still change). Set
     back to `null` once a sync succeeds, like `full_history`, and `since`
-    set to the day of the oldest post that sync added (see
+    set to the day of the oldest post that sync added or listed (see
     [What a source downloads](#what-a-source-downloads)).
+  - `schedule`: `"off"` (default), `"hourly"`, `"daily"` or `"weekly"`: how
+    often the scheduler syncs the source (see [Schedules](#schedules)).
+    Stories last 24 hours: options whose `content` turns `stories` on (it
+    was off) make an `"off"` schedule `"daily"`, unless they send a
+    `schedule` too. A source stored without one (sources.json from before)
+    has `"off"`.
   - Any other key, or a value outside the above, is a 400 naming the
     option; a stored value that is not valid (sources.json edited by hand)
     counts as its default, the other options as stored.
@@ -930,10 +938,18 @@ no person yet.
     Settings → Downloaders`, and `outdated` is `true` (else `false`)
   - `added`: new posts indexed (also after a failure: what was downloaded
     before it stopped is indexed)
+  - `failures`: failed syncs in a row (a failure adds one, a sync that
+    worked sets it to 0, a cancelled or interrupted one leaves it), for the
+    scheduler's back-off
 - `job`: the source's sync while it is queued or running (`waits_until`,
   see [Jobs](#jobs)), else `null`.
 - `session`: the session its sync would use (`options.session`, else the
   tool's setting), for the form's login hint.
+- `schedule`: its schedule, see [Schedules](#schedules): `every` (as
+  `options.schedule`), `next_at` (UTC seconds; in the past, or `0`, when it
+  is due; `null` when `every` is `"off"`), `paused` (`schedules_paused` is
+  on), `skipped` (why the scheduler did not queue it when it was due, or
+  `null`), `failures` (as `last_result.failures`, `0` when none).
 
 | Method | Path | Returns |
 |---|---|---|
@@ -941,7 +957,7 @@ no person yet.
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
 | POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back) |
+| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |
@@ -1222,13 +1238,13 @@ the number of posts):
 |---|---|---|---|
 | `content` | `--reels`, `--stories`, `--highlights`, `--tagged`; `--no-posts` without `posts` | `-o include=<kinds>` (`with_replies` is `with-replies`), only when not the default | — |
 | `media: images` | `--no-videos --no-video-thumbnails --post-filter "not is_video"` | `--filter "extension in exts_image"` | — |
-| `media: videos` | `--post-filter "is_video"` (post by post: a carousel is not a video post, so it is left out, videos and all) | `--filter "extension in exts_video"` (file by file) | — |
+| `media: videos` | `--no-pictures` (file by file: a carousel keeps its videos; an image post leaves only its metadata, which is not indexed), and `--storyitem-filter "is_video"` with stories or highlights (story items ignore `--no-pictures`). Never with `--fast-update`, which instaloader refuses with it | `--filter "extension in exts_video"` (file by file) | — |
 | `since` | `--post-filter "date_utc >= datetime(2024, 1, 1)"`, and the stamps (below) | X: `--date-after 2023-12-31T23:59:59` (stops at the first older post); others: `--filter "(not date or date >= datetime(2024, 1, 1))"` | `--dateafter 20240101`, plus `--break-match-filters "upload_date >=? 20240101"` where the sync may stop (as `--break-on-existing`) |
 | `first_posts` | — | `--post-range 1-N` (N per kind of `content`: each is its own extractor) | `--playlist-items 1:N` |
 
 instaloader's filter terms are joined with `and` into one `--post-filter`,
 also given as `--storyitem-filter` with stories or highlights (both have
-`is_video` and `date_utc`); gallery-dl's into one `--filter`. Both tools
+`is_video` and `date_utc`; `is_video` is a story-item term only); gallery-dl's into one `--filter`. Both tools
 evaluate those as Python: they are built from fixed text and the three
 numbers of a date checked as above, never from text a request sent, and a
 stored value that is not valid counts as the default (no flag).
@@ -1254,12 +1270,43 @@ stored value that is not valid counts as the default (no flag).
   each level: a YouTube channel's own page gets N per tab; TikTok's pinned
   videos (listed first) count among them. gallery-dl applies it per kind
   of `content`. `first_posts` is set back to `null` once a sync succeeds,
-  and `since` becomes the day (UTC) of the oldest post that sync added
-  (today at the latest), unless it is later already: the archive alone
+  and `since` becomes the day (UTC) of the oldest post that sync added or
+  its archive skipped as already there (the N newest may all be indexed
+  already: nothing added), today at the latest, unless it is later already.
+  A sync that did neither keeps `first_posts` for the next run: the archive alone
   would not keep the next sync from going on to older posts (gallery-dl
   stops only at 5 files in a row it has; TikTok and a YouTube channel's
   page are walked to the end).
 - The job log says when a floor or "last N" applies.
+
+### Schedules
+
+A source whose `options.schedule` is `"hourly"`, `"daily"` or `"weekly"`
+is synced on its own by the scheduler, a thread of the backend that looks
+every minute (the first time 20 s after startup). A scheduled sync is an
+ordinary sync job (the tool's pause applies; a source already queued or
+running is never queued again).
+
+- When it is due (UTC): never synced, or its last sync was interrupted
+  (FeedVault stopped): now. Else `last_sync_at` (the end of its last sync,
+  whatever the outcome) plus the interval (1 h, 24 h, 7 days); after n
+  failed syncs in a row (`last_result.failures`) the interval × 2^n, at most
+  24 h and never less than the interval: a failing hourly source waits
+  2 h, 4 h, 8 h, 16 h, then once a day, until a sync works.
+- A time missed while FeedVault was off is only due: one sync at startup,
+  not one per missed slot.
+- At most one source per platform is queued at a time, the most overdue
+  first, and only when no sync of that platform is queued or running and
+  the scheduler queued the last one 5 minutes ago or more.
+- A due source is skipped, with `schedule.skipped` saying why, while its
+  tool is not found (as [Downloaders](#downloaders) looks for it) or the
+  media root holding its folder is offline (missing, or empty while posts
+  are indexed under it); it is tried again a minute later. A sync refused
+  (its folder no longer inside a media root) is noted the same way and
+  tried again one interval later.
+- `GET /api/config` has `"schedules_paused": false`; `POST /api/config`
+  with `{ "schedules_paused": true }` (a boolean, else an error) pauses
+  every schedule (Settings → Sync), the syncs already queued go on.
 
 ### gallery-dl and yt-dlp settings
 

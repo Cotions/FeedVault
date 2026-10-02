@@ -352,6 +352,11 @@ def parse_dir(root, dirpath, names):
         if post is None:
             result.errors.append((path, "no post id in metadata"))
             continue
+        if not media:
+            # Metadata alone: instaloader fetched none of its files (a sync
+            # of videos only, --no-pictures, leaves an image post so).
+            result.claimed |= {base + s for s in _SIDE_SUFFIXES if base + s in names_set}
+            continue
         result.posts.append(post)
         result.claimed |= claimed
         result.claimed |= {base + s for s in _SIDE_SUFFIXES if base + s in names_set}

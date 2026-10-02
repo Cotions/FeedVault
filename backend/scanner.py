@@ -102,7 +102,7 @@ def _scan(roots):
               "added": 0, "updated": 0, "missing": 0, "unmatched": 0, "errors": []}
     # Building the index, or a root's part of it, from nothing: what it
     # finds is not new.
-    fresh = {root: _nothing_under(conn, root) for root in roots}
+    fresh = {root: nothing_under(conn, root) for root in roots}
     seen_meta = set()
     unmatched = []                             # (path, size, mtime, reason)
     copies = []                                # (parsed post, meta mtime), see db.save_copies
@@ -151,7 +151,7 @@ def _scan(roots):
     return report
 
 
-def _nothing_under(conn, root):
+def nothing_under(conn, root):
     """Whether no post, missing ones included, is indexed under ``root``
     (meta paths are stored under the root as configured)."""
     prefix = root.rstrip(os.sep) + os.sep

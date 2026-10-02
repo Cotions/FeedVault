@@ -506,6 +506,42 @@ function DownloadersCard({ saved, onSaved }) {
 
 const BROWSERS = ["firefox", "chrome", "chromium", "brave", "edge"];
 
+/* Settings → Sync: the switch that pauses every source's schedule (a sync
+   already queued goes on; Sync still works). */
+function SchedulesCard({ paused, onSaved }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  async function set(value) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await saveSettings({ schedules_paused: value });
+      if (r?.ok === false) setMsg(r.error || "Save failed.");
+      else onSaved();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">Schedules</div>
+      <p className="page-lede">
+        A source can sync on its own, hourly, daily or weekly (its Options). The next time counts from the end of its
+        last sync; one that failed waits longer each time, up to a day. Sources of one site start a few minutes apart.
+      </p>
+      <label className="dl-toggle">
+        <input type="checkbox" checked={paused} disabled={busy} onChange={e => set(e.target.checked)} />
+        <span>Pause all schedules <span className="dim">(syncs already queued go on; Sync still works)</span></span>
+      </label>
+      {msg && <div className="msg err" role="alert">{msg}</div>}
+    </div>
+  );
+}
+
 /* How instaloader reaches Instagram when FeedVault syncs a source. FeedVault
    only passes a browser's name or a user name on; instaloader does the rest. */
 function InstaloaderCard({ saved, onSaved }) {
@@ -938,6 +974,7 @@ export default function Settings() {
                 <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} />
               </div>
               <div className="settings-group" hidden={tab !== "sync"}>
+                <SchedulesCard paused={config.schedules_paused === true} onSaved={reload} />
                 <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} />
                 {Object.keys(COOKIE_TOOLS).map(t => (
                   <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}

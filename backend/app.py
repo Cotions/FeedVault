@@ -28,6 +28,7 @@ import organize
 import people
 import save
 import scanner
+import scheduler
 import sources
 import sync
 import thumbs
@@ -736,8 +737,8 @@ def _sources_active():
 
 def _with_session(s, cfg=None):
     """A source with the session its sync would use (its own, else its
-    tool's), for the form's login hint."""
-    return {**s, "session": sync.session_of(s["tool"], s["options"], cfg)}
+    tool's), for the form's login hint, and its schedule."""
+    return {**s, "session": sync.session_of(s["tool"], s["options"], cfg), "schedule": scheduler.status(s, cfg)}
 
 
 @app.get("/api/sources")
@@ -838,8 +839,9 @@ def update_source(sid):
     body = request.get_json(silent=True) or {}
     if not isinstance(body.get("options"), dict):
         return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
-    if sid in _sources_active():
-        # The sync's end clears full history and last N: it would clear the new ones.
+    if sid in _sources_active() and set(body["options"]) - {"schedule"}:
+        # The sync's end clears full history and last N: it would clear the new
+        # ones. It reads the options again at the end, so a schedule can change.
         return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
     sent = body["options"]
     options, error = sources.parse_options(sent, base=s["options"], tool=s["tool"], platform=s["platform"],
@@ -851,7 +853,10 @@ def update_source(sid):
     error = error or sources.login_refused(options, s["platform"], sync.session_of(s["tool"], options))
     if error:
         return jsonify({"ok": False, "error": error}), 400
-    sources.update(conn, sid, options)
+    # While it syncs only the schedule is sent: that key alone is written.
+    sources.update(conn, sid, options, keys=("schedule",) if set(sent) <= {"schedule"} else None)
+    if options["schedule"] != s["options"]["schedule"]:
+        scheduler.forget(sid)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
 
@@ -884,6 +889,7 @@ def delete_source(sid):
         return jsonify({"ok": False, "error": "its sync is queued or running; cancel it first"}), 409
     if not sources.delete(db.connect(), sid):
         return jsonify({"ok": False, "error": "no such source"}), 404
+    scheduler.forget(sid)
     userdata.changed("sources")
     return jsonify({"ok": True})
 
@@ -913,7 +919,8 @@ def _public_config(cfg):
             "instaloader": sync.settings(cfg), "routes": sources.routes(cfg),
             "gallery-dl": sync.tool_settings("gallery-dl", cfg), "yt-dlp": sync.tool_settings("yt-dlp", cfg),
             "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg),
-            "check_updates": cfg.get("check_updates") is True}
+            "check_updates": cfg.get("check_updates") is True,
+            "schedules_paused": cfg.get("schedules_paused") is True}
 
 
 @app.get("/api/config")
@@ -945,6 +952,10 @@ def set_config():
         if not isinstance(body["check_updates"], bool):
             return jsonify({"ok": False, "error": "check_updates must be true or false"})
         changes["check_updates"] = body["check_updates"]
+    if "schedules_paused" in body:
+        if not isinstance(body["schedules_paused"], bool):
+            return jsonify({"ok": False, "error": "schedules_paused must be true or false"})
+        changes["schedules_paused"] = body["schedules_paused"]
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
         if error:
@@ -1083,7 +1094,8 @@ def browse():
 @app.post("/api/quit")
 def quit_app():
     def stop():
-        jobs.shutdown()                        # os._exit skips atexit
+        scheduler.stop()                       # os._exit skips atexit
+        jobs.shutdown()
         userdata.flush()
         os._exit(0)
 
@@ -1230,10 +1242,13 @@ def main():
     news.ensure(db.connect())
     jobs.recover()
     sync.resume()
+    scheduler.start()
     # Ctrl+C and SIGTERM still write the last few seconds of user data, after
-    # stopping running jobs (atexit runs the last registered first).
+    # stopping the scheduler, then running jobs (atexit runs the last
+    # registered first).
     atexit.register(userdata.flush)
     atexit.register(jobs.shutdown)
+    atexit.register(scheduler.stop)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     scanner.start(cfg["media_roots"])
     archives.warm(db.connect())

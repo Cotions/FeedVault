@@ -6,8 +6,8 @@ import { useJobs } from "../lib/jobs";
 import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import {
-  FIRST_POSTS_MAX, MEDIA, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin, optionsOf, optionsSummary,
-  today,
+  FIRST_POSTS_MAX, MEDIA, SCHEDULES, firstPostsEach, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin,
+  optionsOf, optionsSummary, scheduleShort, scheduleText, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
@@ -70,8 +70,27 @@ export function ToolBadge({ tool }) {
   return <span className={`chip tool-chip tool-chip-${tool}`} title={`Synced with ${tool}`}>{tool}</span>;
 }
 
-/* One source: its profile, what it downloads, tool, folder, last sync,
-   Options, Sync and Remove. ``onSaved``: after its options changed. */
+/* A source's schedule in one line ("daily · next sync in 3 h"), or
+   nothing when it has none. ``compact`` (a card): "in 3 h", "due",
+   "paused" or "skipped", the whole line in its title. */
+export function ScheduleLine({ source: s, compact = false }) {
+  const text = scheduleText(s, ERRORS);
+  if (!text) return null;
+  const sch = s.schedule;
+  const hint = sch.paused ? "Settings → Sync → Pause all schedules is on"
+    : sch.skipped ? "Tried again every minute while it is due"
+      : sch.next_at ? `Next: ${fmtFullDate(sch.next_at)}${sch.failures ? ` (${sch.failures} failed in a row: it waits longer)` : ""}`
+        : "";
+  return (
+    <span className={`source-schedule${sch.skipped || sch.failures ? " warn" : ""}`}
+          title={compact ? `${text}\n${hint}` : hint}>
+      <Icon name="clock" size={11} />{compact ? scheduleShort(s) : text}
+    </span>
+  );
+}
+
+/* One source: its profile, what it downloads, tool, folder, schedule, last
+   sync, Options, Sync and Remove. ``onSaved``: after its options changed. */
 export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
   const [editing, setEditing] = useState(false);
   const url = safeUrl(s.url);
@@ -85,6 +104,7 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
           {s.person && !s.account && <span className="creator-sub"> · first sync not done yet</span>}
         </span>
         {summary && <span className="source-summary" title="What it downloads">{summary}</span>}
+        <ScheduleLine source={s} />
         <code className="source-folder" title={s.folder}>{s.folder}</code>
       </span>
       <ToolBadge tool={s.tool} />
@@ -115,11 +135,12 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
    content kinds, images or videos, a date floor and the first sync. Each
    with what it does in one line. ``firstSync``: the source has not synced
    yet (last N posts is for its first sync only). */
-export function SourceOptions({ tool, platform, choices, session, form, onChange, firstSync = true }) {
+export function SourceOptions({ tool, platform, target, choices, session, form, onChange, firstSync = true }) {
   const id = useId();
+  const each = firstPostsEach(tool, form.content, platform, target);
   const set = patch => onChange({ ...form, ...patch });
   const login = needsLogin(form, choices, session);
-  const toggle = k => set({ content: form.content.includes(k) ? form.content.filter(x => x !== k) : [...form.content, k] });
+  const toggle = k => onChange(toggleKind(form, k));
   return (
     <div className="source-options">
       {choices.content.length > 0 && (
@@ -181,10 +202,20 @@ export function SourceOptions({ tool, platform, choices, session, form, onChange
                    onChange={e => set({ first: "last", count: e.target.value })} />
             <b>posts</b>
             <span className="dim">
-              {form.content.length > 1 && "of each kind; "}later syncs only fetch newer ones
+              {each && `${each.trim()} (up to ${each.includes("kind") ? form.content.length : "a few"} × the number); `}
+              later syncs only fetch newer ones
             </span>
           </label>
         )}
+      </fieldset>
+      <fieldset className="source-opt">
+        <legend>Schedule</legend>
+        {SCHEDULES.map(([v, label, effect]) => (
+          <label key={v} className="source-opt-line">
+            <input type="radio" name={`${id}-schedule`} checked={form.schedule === v} onChange={() => set({ schedule: v })} />
+            <b>{label}</b><span className="dim">{effect}</span>
+          </label>
+        ))}
       </fieldset>
     </div>
   );
@@ -231,7 +262,7 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
       initialFocus={focus}
     >
       <div ref={focus} tabIndex={-1}>
-        <SourceOptions tool={s.tool} platform={s.platform} choices={s.choices} session={s.session} form={form}
+        <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
                        onChange={setForm} firstSync={firstSync} />
       </div>
     </ConfirmDialog>
@@ -363,7 +394,7 @@ export function AddSource({ person = null, onAdded }) {
         </div>
       )}
       {form && resolved.source == null && (
-        <SourceOptions tool={resolved.tool} platform={resolved.platform} choices={resolved.choices}
+        <SourceOptions tool={resolved.tool} platform={resolved.platform} target={resolved.target} choices={resolved.choices}
                        session={resolved.session} form={form}
                        onChange={f => { setForms(fs => ({ ...fs, [kind]: f })); setError(null); }} />
       )}

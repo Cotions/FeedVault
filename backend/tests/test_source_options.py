@@ -76,10 +76,15 @@ def test_instaloader_flags(env, client):
             since="2024-02-29")
     args = build(s)
     assert args[args.index("{date_utc}_UTC_{typename}") + 1:] == [
-        "--no-posts", "--stories",
-        "--post-filter", "is_video and date_utc >= datetime(2024, 2, 29)",
+        "--no-posts", "--stories", "--no-pictures",
+        "--post-filter", "date_utc >= datetime(2024, 2, 29)",
         "--storyitem-filter", "is_video and date_utc >= datetime(2024, 2, 29)",
         "--login", "me", "--", "dave.draws"]
+    # Videos only, posts: --no-pictures, which instaloader refuses with --fast-update.
+    s = add(client, "fay.films", "instaloader", media="videos")
+    args = build(s)
+    assert args[args.index("{date_utc}_UTC_{typename}") + 1:] == ["--no-pictures", "--", "fay.films"]
+    assert "--fast-update" not in args
     s = add(client, "erin.paints", "instaloader", media="images")
     args = build(s)
     assert args[args.index("{date_utc}_UTC_{typename}") + 1:] == [
@@ -183,7 +188,8 @@ def test_filters_are_fixed_text_and_a_date():
     for since in ["1970-01-01", "2024-02-29", "2026-10-02"]:
         y, m, d = (int(p) for p in since.split("-"))
         options = sources.clean_options({"since": since, "media": "videos"})
-        assert sync.item_filter(options) == f"is_video and date_utc >= datetime({y}, {m}, {d})"
+        assert sync.item_filter(options) == f"date_utc >= datetime({y}, {m}, {d})"
+        assert sync.item_filter(options, story=True) == f"is_video and date_utc >= datetime({y}, {m}, {d})"
 
 
 # ---------------------------------------------------------------------------
@@ -341,8 +347,8 @@ def test_instaloader_sync_fetches_what_the_options_say(env, client, tools):
                                                           "media": "videos"}})
     job = sync_now(client, s["id"])
     assert job["state"] == "done" and "--tagged" in job["argv"]
-    assert after(job["argv"], "--post-filter") == f"is_video and {expr}"
-    assert shortcodes(client, "888") == []                     # the tagged post is an image: filtered
+    assert "--no-pictures" in job["argv"] and after(job["argv"], "--post-filter") == expr
+    assert shortcodes(client, "888") == []                     # the tagged post is an image: no file, not a post
     post(client, f"/api/sources/{s['id']}", {"options": {"media": "all"}})
     c = stamps()
     c.remove_option("carol.cooks", "tagged-timestamp")          # the filtered run walked past it
@@ -366,6 +372,73 @@ def test_images_only(env, client, tools):
     assert job["state"] == "done"
     assert shortcodes(client, "777") == ["COLDPOST001", "CPOSTIMG001", "CPOSTIMG002"]
     assert not any(n.endswith(".mp4") for n in os.listdir(env["media"] / "carol.cooks"))
+
+
+def test_videos_only_keeps_a_carousels_videos(env, client, tools):
+    data = ig_profile()
+    data["profiles"]["carol.cooks"]["posts"] += [ig_post("CCAROMIX001", 4, "carousel", slides=3, video_slides=[2]),
+                                                 ig_post("CCAROIMG001", 5, "carousel", slides=2)]
+    tools["ig"].write_text(json.dumps(data))
+    s = add(client, "carol.cooks", "instaloader", media="videos")
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done", job["message"]
+    assert "--no-pictures" in job["argv"] and "--post-filter" not in job["argv"] and "--fast-update" not in job["argv"]
+    # The video post, and the mixed carousel with its one video; image posts and the image carousel are not posts.
+    assert shortcodes(client, "777") == ["CCAROMIX001", "CPOSTVID001"]
+    names = sorted(os.listdir(env["media"] / "carol.cooks"))
+    mixed = [n for n in names if "CCAROMIX001" in n and not n.endswith((".json", ".txt"))]
+    assert mixed == ["carol.cooks-2024-06-05-CCAROMIX001_2.mp4"]
+    assert not any(n.endswith(".jpg") for n in names)
+    r = client.get("/api/posts?author=777&limit=100", headers=H).get_json()
+    carousel = next(p for p in r["posts"] if p["post_id"] == "CCAROMIX001")
+    assert carousel["kind"] == "carousel"
+
+
+def test_windows_names_by_statfs(env, monkeypatch, tmp_path):
+    assert isinstance(sync.fs_magic(str(tmp_path)), int)          # Linux: a real statfs
+    for magic, mount, want in [(0x2011BAB0, None, True), (0x4D44, None, True), (0x5346544E, None, True),
+                               (0xEF53, None, False), (sync.FUSE_MAGIC, "fuseblk", True),
+                               (sync.FUSE_MAGIC, "fuse.sshfs", False), (None, None, False)]:
+        monkeypatch.setattr(sync, "fs_magic", lambda path: magic)
+        monkeypatch.setattr(sync, "mount_type", lambda path: mount)
+        assert sync.windows_names(str(tmp_path)) is want, (magic, mount)
+
+
+def test_mount_type_takes_the_longest_mount(env, monkeypatch, tmp_path):
+    mounts = tmp_path / "mounts"
+    mounts.write_text("/dev/sda1 / ext4 rw 0 0\n/dev/sde1 /mnt/my\\040disk fuseblk rw 0 0\n"
+                      "/dev/sdf1 /mnt/my\\040disk/inner vfat rw 0 0\n")
+    monkeypatch.setattr(sync, "MOUNTS", str(mounts))
+    assert sync.mount_type("/mnt/my disk/instaloader/x") == "fuseblk"
+    assert sync.mount_type("/mnt/my disk/inner") == "vfat"
+    assert sync.mount_type("/mnt/my diskette") == "ext4"
+    monkeypatch.setattr(sync, "MOUNTS", str(tmp_path / "none"))
+    assert sync.mount_type("/") is None
+
+
+def test_tagged_and_highlights_on_exfat(env, client, tools, monkeypatch):
+    data = ig_profile()
+    data["profiles"]["carol.cooks"]["highlights"][0]["title"] = "Trips: 2024"
+    tools["ig"].write_text(json.dumps(data))
+    monkeypatch.setenv("FAKE_INSTALOADER_WINDOWS_NAMES", "1")     # the fake writes as exFAT would
+    s = add(client, "carol.cooks", "instaloader", content=["posts", "tagged", "highlights"], session=LOGIN)
+    # Without --sanitize-paths, ":tagged" cannot be created there.
+    monkeypatch.setattr(sync, "windows_names", lambda folder: False)
+    job = sync_now(client, s["id"])
+    assert job["state"] == "failed" and "--sanitize-paths" not in job["argv"]
+    assert any("Invalid argument" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+    monkeypatch.setattr(sync, "windows_names", lambda folder: True)
+    post(client, f"/api/sources/{s['id']}", {"options": {"full_history": True}})
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done", job["message"]
+    assert job["argv"].index("--sanitize-paths") == job["argv"].index(sync.TITLE) + 1
+    assert shortcodes(client, "888") == ["CTAGGED0001"]          # the tagged post, read from its metadata
+    sub = env["media"] / "carol.cooks" / "carol.cooks"
+    assert any(n.startswith("\uff1atagged-") for n in os.listdir(sub))
+    assert any(n.startswith("Trips\uff1a 2024-") for n in os.listdir(sub))
+    assert shortcodes(client, "777") == ["3200000000000000001", "COLDPOST001", "CPOSTIMG001", "CPOSTIMG002",
+                                         "CPOSTVID001"]
+    assert sync.detect_pattern(str(env["media"] / "carol.cooks")) == (sync.DATED, True)
 
 
 def x_account():
@@ -417,6 +490,50 @@ def test_last_n_is_for_the_first_sync_and_the_next_stops_there(env, client, tool
     job = sync_now(client, s["id"])
     assert "--post-range" not in job["argv"] and after(job["argv"], "--date-after") == "2024-06-02T23:59:59"
     assert tweet_ids(client) == ["3", "4", "5"]                  # the older two never come
+
+
+def yt_account(url, videos):
+    if "tiktok" in url:
+        return {"extractor_key": "TikTok", "uploader_id": "6800000000000000009", "uploader": "someone",
+                "channel": "Some One", "uploader_url": "https://www.tiktok.com/@someone", "videos": videos}
+    return {"extractor_key": "Youtube", "uploader_id": "@somechannel", "uploader": "somechannel",
+            "channel": "somechannel", "channel_id": "UCexampleChannelAAAAAAA1",
+            "uploader_url": "https://www.youtube.com/@somechannel", "videos": videos}
+
+
+@pytest.mark.parametrize("url", [TIKTOK, YOUTUBE])
+def test_last_n_over_a_seeded_archive_still_sets_a_floor(env, client, tools, url):
+    import fake_downloaders
+    import scanner
+    videos = [{"id": f"VIDEO{i + 10:06d}", "ts": TS + i * DAY, "title": f"video {i}", "duration": 30}
+              for i in range(-5, 1)]
+    # The 3 newest were downloaded before, into the folder the source uses.
+    folder = os.path.join(env["roots"][0], "tiktok" if "tiktok" in url else "youtube",
+                          "someone" if "tiktok" in url else "somechannel")
+    tools["dl"].write_text(json.dumps({"accounts": {url: yt_account(url, videos[3:])}, "fail": None}))
+    assert fake_downloaders.yt_dlp_main(["--write-info-json", "-o", os.path.join(folder, sync.YT_DLP_NAME), url]) == 0
+    scanner.run(env["roots"])
+    tools["dl"].write_text(json.dumps({"accounts": {url: yt_account(url, videos)}, "fail": None}))
+    s = add(client, url, first_posts=3)
+    assert s["folder"] == folder and s["account"] is not None
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done" and job["result"]["added"] == 0, job["message"]
+    s = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    # Nothing added, but the N it listed were indexed: the oldest of them is the floor.
+    assert (s["options"]["first_posts"], s["options"]["since"]) == (None, "2024-05-30")
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done" and job["result"]["added"] == 0
+    assert after(job["argv"], "--dateafter") == "20240530" and "--playlist-items" not in job["argv"]
+    r = client.get(f"/api/posts?platform={s['platform']}&limit=100", headers=H).get_json()
+    assert sorted(p["post_id"] for p in r["posts"]) == [v["id"] for v in videos[3:]]     # nothing older
+
+
+def test_last_n_that_lists_nothing_known_keeps_it(env, client, tools):
+    tools["dl"].write_text(json.dumps({"accounts": {TIKTOK: yt_account(TIKTOK, [])}, "fail": None}))
+    s = add(client, TIKTOK, first_posts=3)
+    assert sync_now(client, s["id"])["state"] == "done"
+    s = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert (s["options"]["first_posts"], s["options"]["since"]) == (3, None)
 
 
 def test_last_n_failed_first_sync_keeps_it(env, client, tools):
