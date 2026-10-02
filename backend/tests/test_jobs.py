@@ -736,3 +736,21 @@ def test_a_process_that_exits_between_check_and_signal_is_not_signalled(runner, 
         assert jobs._signal_group(fd, proc.pid, recorded, signal.SIGTERM) is False and sent == []
     finally:
         jobs._close(fd)
+
+
+def test_leftover_is_stopped_without_pidfds(runner, monkeypatch):
+    """No pidfds (an old kernel, a seccomp filter): the identity is checked
+    again right before each signal instead."""
+    import errno
+
+    def no_pidfd(pid):
+        raise OSError(errno.ENOSYS, "Function not implemented")
+    monkeypatch.setattr(jobs.os, "pidfd_open", no_pidfd)
+    proc = sleeper()
+    try:
+        left_running(proc)
+        jobs.recover()
+        assert proc.wait(5) == -signal.SIGTERM
+    finally:
+        proc.kill()
+        proc.wait()

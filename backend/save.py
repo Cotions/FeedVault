@@ -238,7 +238,7 @@ def gather(conn, src, roots, note):
     else:
         key = sources._handle_account(conn, src["platform"], src["target"])
     saved = {os.path.normpath(os.path.join(r, SAVED)) for r in roots}
-    if folder is None or key is None or any(folder == d or folder.startswith(d + os.sep) for d in saved):
+    if folder is None or key is None or sources.in_saved(folder, roots):
         return []
     clause, args = db.post_filter(platform=key[0], author=key[1])
     rows = [r for r in conn.execute(f"SELECT p.id, p.post_id, p.posted_at, p.meta_path, p.side_files, p.missing "
@@ -311,6 +311,8 @@ def _outcome(params, code, lines, index, note=None):
     result = {"post": None, "folder": None, "added": 0, "updated": 0, "error": None, "line": None,
               "account": None, "person": None}
     notes = []
+    pid = f"instagram:{shortcode}"
+    had = bool(db.saved_ids(db.connect(), [pid]))      # before its files move in: a scan may index them
     try:
         folder, key = _place(shortcode, stage, roots, notes.append) if roots else (None, None)
     except OSError as e:                       # a folder that cannot be made or written
@@ -321,8 +323,6 @@ def _outcome(params, code, lines, index, note=None):
         print(f"[save] {shortcode}: {text}")
     _clear(stage)
     if folder:
-        pid = f"instagram:{shortcode}"
-        had = bool(db.saved_ids(db.connect(), [pid]))
         report = scanner.index_dirs(roots, [folder], new=True)
         result.update(folder=folder, added=report["added"], updated=report["updated"])
         conn = db.connect()

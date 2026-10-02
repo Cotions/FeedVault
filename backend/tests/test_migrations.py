@@ -195,3 +195,28 @@ def test_v4_upgraded_to_tags_and_collections(tmp_path, monkeypatch):
     assert version(path)[0] >= 5 and version(path + ".bak-v4")[0] == 4
     assert {"tags", "post_tags", "collections", "collection_posts"} <= tables(path)
     assert "tags" not in tables(path + ".bak-v4")
+
+
+def test_saved_posts_filled_from_the_save_jobs_kept(tmp_path, monkeypatch):
+    """Migration 15: saves made before it are known from the Save jobs still kept."""
+    import json
+    path = str(tmp_path / "feedvault.db")
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:14])
+    db.migrate(path)
+    conn = sqlite3.connect(path)
+    for kind, state, result in [
+            ("instaloader-post", "done", {"post": "instagram:SAVED1", "added": 1}),
+            ("instaloader-post", "done", {"post": "instagram:SYNCED", "added": 0}),     # a sync had it
+            ("instaloader-post", "failed", {"post": None, "added": 0}),
+            ("instaloader-sync", "done", {"post": "instagram:NOT", "added": 3}),
+            ("instaloader-post", "done", "not json")]:
+        conn.execute("INSERT INTO jobs(kind, params, argv, cwd, lock_group, state, created_at, ended_at, result) "
+                     "VALUES (?, '{}', '[]', '/', 'g', ?, 1, 5, ?)",
+                     (kind, state, result if isinstance(result, str) else json.dumps(result)))
+    conn.commit()
+    conn.close()
+    monkeypatch.undo()
+    db.migrate(path)
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT post_id, saved_at FROM saved_posts").fetchall() == [("instagram:SAVED1", 5)]
+    conn.close()

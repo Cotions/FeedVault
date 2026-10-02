@@ -1125,8 +1125,8 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive 
   at most, output checked: plain `{field}` and `{field[key]}` formats
   only; a category gets one format for all its files only when every
   extractor of it was accepted), cached until the gallery-dl file changes
-  and read once when FeedVault starts if a gallery-dl source exists (else
-  by the first seed). Trashing a gallery-dl post uses the last formats
+  and read once when FeedVault starts if a gallery-dl source exists or
+  gallery-dl posts are indexed (else by the first seed). Trashing a gallery-dl post uses the last formats
   read (it never starts gallery-dl itself), else FeedVault's table. When that cannot be
   done (no Python found beside it, a timeout, odd output), FeedVault's own
   table is used (twitter, tiktok, instagram, reddit, bluesky, pixiv) and
@@ -1301,7 +1301,8 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
   [How a sync runs](#how-a-sync-runs)), or a newer saved post would make
   that sync skip the posts in between. An entry is dropped once the
   account's stamp is later than its post (a sync has walked past it), or
-  when the post is deleted for good.
+  when the post is deleted for good. Saves made before this table existed
+  are taken from the Save jobs still kept (the last 100 jobs).
 - `result`: `{ "post": "instagram:C8xYzAbCdEf" | null, "folder", "added",
   "updated", "error", "line", "account", "person" }`: `post` the post's
   FeedVault id once it is indexed; `error` as for a sync (`login_required`,

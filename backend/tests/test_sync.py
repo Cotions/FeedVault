@@ -594,6 +594,19 @@ def test_resume_waits_for_an_offline_folder_and_drops_a_gone_source(env, client,
     assert not os.listdir(sync._retrash_dir())
 
 
+def test_cancelled_sync_with_its_folder_offline_keeps_its_list(env, client, fake):
+    s, folder = _trashed_between(env, client, fake)
+    sync._keep_trashed(s["id"], {"instagram:CPOSTB00001"})
+    os.rename(folder, str(folder) + ".away")
+    sync._ended({"id": 1, "kind": sync.KIND, "state": "cancelled", "started_at": 1, "ended_at": 2,
+                 "params": {"source": str(s["id"])}, "argv": ["instaloader", "--", "carol.cooks"],
+                 "result": None, "message": "cancelled", "label": "Sync @carol.cooks"})
+    assert os.listdir(sync._retrash_dir()) == [f"{s['id']}.json"] and sync._trashed_before == {}
+    os.rename(str(folder) + ".away", folder)
+    sync.resume()
+    assert not os.listdir(sync._retrash_dir())
+
+
 def test_detect_pattern(env, tmp_path):
     d = tmp_path / "dated"
     write_filename_post(d, "carol.cooks", "B_QcFdCp9iM", TS, slides=3)

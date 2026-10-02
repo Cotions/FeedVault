@@ -679,15 +679,17 @@ LEFT_RUNNING = "process {pid} was still running after FeedVault stopped: stopped
 
 def _pin(pid, recorded):
     """A pidfd of ``pid`` when it is still the process recorded (start time
-    and executable), else None; -1 when the system has no pidfds (the check
-    then only holds until the signal). While the pidfd's process lives, its
+    and executable), else None; -1 when pidfds cannot be had (the check is
+    then made again right before each signal). While the pidfd's process lives, its
     pid cannot be given to another."""
     try:
         fd = os.pidfd_open(pid)
     except AttributeError:
         fd = -1
+    except ProcessLookupError:
+        return None                            # gone
     except OSError:
-        return None                            # gone (or pidfds unsupported: ENOSYS)
+        fd = -1                                # pidfds unsupported or not allowed (ENOSYS, EPERM)
     if identity(pid) != recorded:
         if fd >= 0:
             os.close(fd)

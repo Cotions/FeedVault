@@ -1035,3 +1035,12 @@ def test_formats_read_at_startup_only_with_a_gallery_dl_source(env, client, monk
     assert client.post("/api/sources", json={"target": "https://x.com/someone"}, headers=H).status_code == 200
     archives.warm(conn).join(5)
     assert calls == [True]
+
+
+def test_formats_read_at_startup_with_gallery_dl_posts_to_trash(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(archives, "installed_formats", lambda run=True: calls.append(run) or (None, "x"))
+    gallery_dl_case("twitter/four_photos", env["media"] / "twitter" / "someone")
+    scanner.scan(env["roots"])
+    archives.warm(db.connect()).join(5)
+    assert calls == [True]

@@ -397,7 +397,7 @@ def suggestions(conn, roots):
                 + "".join(" AND substr(meta_path, 1, ?) != ?" for _ in saved) + " GROUP BY 1, 2",
                 [x for d in saved for x in (len(d), d)]):
             top = _top(path, roots)
-            if top is None or top in taken or in_saved(top, roots):
+            if top is None or top in taken:
                 continue
             key = people.canonical(conn, platform, aid)
             if key in accounts:
