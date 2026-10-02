@@ -27,6 +27,9 @@ export function useJobs() {
 
 export const ENDED = new Set(["done", "failed", "cancelled", "interrupted"]);
 
+// The userscript's Save button (POST /api/save): one Instagram post.
+export const SAVE_KIND = "instaloader-post";
+
 // "1 s", "2 min 5 s", "1 h 4 min"; null while it has not started
 export function jobDuration(job, now = Date.now() / 1000) {
   if (!job.started_at || (ENDED.has(job.state) && !job.ended_at)) return null;   // ended when FeedVault crashed: unknown

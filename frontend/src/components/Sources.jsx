@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { createSource, cancelJob, resolveSource } from "../lib/api";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
-import { ERRORS, sourceName } from "../lib/sources";
+import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
@@ -13,9 +13,6 @@ function fmtIn(ts) {
   const s = Math.max(0, Math.round(ts - Date.now() / 1000));
   return s < 60 ? `in ${s} s` : `in ${Math.ceil(s / 60)} min`;
 }
-
-// Failures the Downloaders card in Settings can fix: install, log in, update.
-const SETUP_ERRORS = new Set(["missing", "login_required"]);
 
 /* Where a source stands: its sync now (queued, waiting out the pause,
    running), else how its last one went. */

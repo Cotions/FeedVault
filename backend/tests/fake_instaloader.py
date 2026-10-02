@@ -12,7 +12,8 @@ profiles from the JSON file named by FAKE_INSTALOADER (default
      "fail": null | "429" | "login" | "private" | "notfound" | "crash",
      "delay": 0}
 
-and behaves like instaloader 4.15 for one profile target with the flags
+and behaves like instaloader 4.15 for one profile target (or one post,
+``-<shortcode>``) with the flags
 FeedVault passes: it honours --latest-stamps (the post-timestamp of the
 target's section, written back as instaloader does), --fast-update (stops at
 the first file that exists), --dirname-pattern and --filename-pattern
@@ -70,6 +71,50 @@ def node(p, profile, target):
     return n
 
 
+def write(base, p, profile, owner):
+    """A post's files, named after ``base``, as instaloader writes them."""
+    kind = p.get("kind", "image")
+    slides = p.get("slides", 2) if kind == "carousel" else 1
+    colour = tuple((sum(map(ord, p["shortcode"])) * k) % 256 for k in (3, 7, 11))
+    for s in range(1, slides + 1):
+        name = f"{base}_{s}" if slides > 1 else base
+        png(name + ".jpg", tuple((c + 40 * s) % 256 for c in colour))
+        if kind == "video":
+            mp4(name + ".mp4")
+    with open(base + ".json", "w") as f:
+        json.dump({"node": node(p, profile, owner),
+                   "instaloader": {"version": "4.15.1", "node_type": "Post"}}, f, indent=4)
+    if p.get("caption"):
+        with open(base + ".txt", "w") as f:
+            f.write(p["caption"])
+    folder = os.path.dirname(base) or "."
+    for n in os.listdir(folder):
+        if n.startswith(os.path.basename(base)):
+            os.utime(os.path.join(folder, n), (p["ts"], p["ts"]))
+
+
+def one_post(data, args, target):
+    """``-<shortcode>``: that post alone, its owner as {profile}, the target
+    as given as {target} (as instaloader's download_post)."""
+    code = target[1:]
+    found = next(((name, profile, p) for name, profile in data["profiles"].items()
+                  for p in profile["posts"] if p["shortcode"] == code), None)
+    if found is None:
+        print(f"{target}: Fetching Post metadata failed.", file=sys.stderr)
+        print("\nErrors or warnings occurred:", file=sys.stderr)
+        return 1
+    owner, profile, p = found
+    time.sleep(data.get("delay", 0))
+    date = Stamp.fromtimestamp(p["ts"], timezone.utc).replace(tzinfo=None)
+    folder = (args.dirname_pattern or "{target}").format(target=target, profile=owner)
+    os.makedirs(folder, exist_ok=True)
+    base = os.path.join(folder, (args.filename_pattern or "{date_utc}_UTC").format(
+        target=target, profile=owner, shortcode=code, date_utc=date, date=date))
+    write(base, p, profile, owner)
+    print(f"{base}.jpg json ")
+    return 0
+
+
 def fail(kind, target):
     if kind == "429":
         print("JSON Query to graphql/query: 429 Too Many Requests [retrying; skip with ^C]", file=sys.stderr)
@@ -118,6 +163,12 @@ def main(argv):
         if data.get("fail"):
             status = fail(data["fail"], target)
             continue
+        if target.startswith("-"):
+            if not args.no_compress_json:
+                print("fake instaloader: only --no-compress-json is supported", file=sys.stderr)
+                return 2
+            status = one_post(data, args, target) or status
+            continue
         profile = data["profiles"].get(target)
         if profile is None:
             status = fail("notfound", target)
@@ -156,21 +207,7 @@ def main(argv):
                 if args.fast_update:
                     break
                 continue
-            colour = tuple((sum(map(ord, p["shortcode"])) * k) % 256 for k in (3, 7, 11))
-            for s in range(1, slides + 1):
-                name = f"{base}_{s}" if slides > 1 else base
-                png(name + ".jpg", tuple((c + 40 * s) % 256 for c in colour))
-                if kind == "video":
-                    mp4(name + ".mp4")
-            with open(base + ".json", "w") as f:
-                json.dump({"node": node(p, profile, target),
-                           "instaloader": {"version": "4.15.1", "node_type": "Post"}}, f, indent=4)
-            if p.get("caption"):
-                with open(base + ".txt", "w") as f:
-                    f.write(p["caption"])
-            for n in os.listdir(folder):
-                if n.startswith(os.path.basename(base)):
-                    os.utime(os.path.join(folder, n), (p["ts"], p["ts"]))
+            write(base, p, profile, target)
             print(f"[{i:2d}/{len(posts):2d}] {base}.jpg json ")
         if args.latest_stamps and posts:
             if not stamps.has_section(target):

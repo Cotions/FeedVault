@@ -101,6 +101,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
+| POST | `/api/save` | body `{ "platform": "instagram", "shortcode": "…" }`: download one post (used by the userscript), see [Save from the browser](#save-from-the-browser-userscript) |
 | POST | `/api/quit` | stops the backend |
 | GET | `/media/<id>` | the media file bytes (Range supported, for video) |
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
@@ -1142,6 +1143,87 @@ or folder that could not be read, a file that could not be rewritten),
 check is under way. Settings counts first (`apply` false), then asks to
 confirm.
 
+## Save from the browser (userscript)
+
+The userscript adds a **Save** button to an Instagram post and a **Sync
+profile** button to a profile page. What they can ask for is as narrow as
+it can be: a kind and a checked id, never a link, a path, a flag or a
+command.
+
+**Who talks to FeedVault.** Only the userscript, through
+`GM_xmlhttpRequest` (`@connect localhost`, `@connect 127.0.0.1`). The page
+itself never does, and is given nothing to do it with: no function on
+`unsafeWindow`, no `window.postMessage` handler, nothing read from the
+page's JavaScript objects. The shortcode comes from `location.pathname` or
+a post link's `href`, the profile name from `location.pathname`, each
+checked against a strict pattern before it is sent.
+
+**Why a page cannot forge the request.** Every `/api` call needs the
+`X-FeedVault` header and a `Host` naming this machine (see the top of this
+file). A script on instagram.com (or any site) that calls
+`http://localhost:3380/api/save` with that header makes the browser send a
+CORS preflight first (`OPTIONS`, a custom header is not "simple"), and
+FeedVault never answers one with `Access-Control-Allow-*`, so the browser
+never sends the real request. Without the header, the request is a 403. A
+DNS-rebinding page has the wrong `Host`: a 403. `GM_xmlhttpRequest` runs
+in the extension, outside the page's origin, so CORS does not apply to it:
+that is what lets the userscript, and only it, send the header.
+
+| Method | Path | Returns |
+|---|---|---|
+| POST | `/api/save` | body `{ "platform": "instagram", "shortcode": "C8xYzAbCdEf" }` → `{ "ok": true, "have": true, "post": { "id": "instagram:C8xYzAbCdEf", "path": "/p/instagram/C8xYzAbCdEf" } }` when FeedVault already has the post (nothing runs), else `{ "ok": true, "have": false, "job": {…}, "existing": false }` |
+
+- `platform` must be `"instagram"`; `shortcode` must match
+  `^[A-Za-z0-9_-]{5,40}$` (ASCII only, the whole string). Any other key,
+  value or type is a 400. Nothing else is read from the request.
+- `existing`: `true` when a Save job for that shortcode was already queued
+  or running: that job is returned and no other is queued (a second click
+  is not a second download).
+- At most `save_queue_max` Save jobs (config, default 20, 1 to 500) are
+  queued or running at once; one more is a 429 `{ "ok": false, "error":
+  "20 posts are already waiting to be saved; try again once some are done" }`.
+- `POST /api/jobs` refuses kind `instaloader-post`: it is only started
+  here, with the checks above.
+- The **Sync profile** button uses the source endpoints as they are:
+  `GET /api/sources` (is there an instaloader source with that target
+  already?), `POST /api/sources` with `{ "tool":
+  "instaloader", "target": "<name>" }` (the name checked by the same rules
+  as a pasted one) after the user confirms, then
+  `POST /api/sources/<id>/sync`. Its state is read from
+  `GET /api/jobs/<id>`.
+
+### How a save runs
+
+Job kind `instaloader-post`, params `{ "shortcode": "…" }`, group
+`instaloader` (never beside a sync), with the same pause as syncs. The
+owner of a post is only known once instaloader has fetched it, so it
+downloads into a folder of its own in the data directory first:
+
+```
+instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/saving/<shortcode>
+            --filename-pattern {shortcode} [session flags] -- -<shortcode>
+```
+
+- `-<shortcode>` is instaloader's target for one post; it comes after `--`,
+  so it is never read as an option whatever it holds. The session flags
+  are those of [instaloader settings](#instaloader-settings).
+- Once it exits (not when cancelled), the post's JSON names its owner, and
+  the files move to the owner's folder: the folder of the owner's
+  instaloader source, else the folder right under a media root holding most
+  of the owner's posts, else `<first media root>/<handle>` when that folder
+  exists, else `<first media root>/_saved`. They are named as that
+  folder's files are, the layout a sync would detect (see
+  [How a sync runs](#how-a-sync-runs)), the handle in place of the target.
+  A file already there is never overwritten (the copy downloaded is
+  dropped). Then that folder is indexed.
+- `result`: `{ "post": "instagram:C8xYzAbCdEf" | null, "folder", "added",
+  "updated", "error", "line", "account", "person" }`: `post` the post's
+  FeedVault id once it is indexed; `error` as for a sync (`login_required`,
+  `private`, `not_found`, `rate_limited`, `generic`; `missing` when
+  instaloader is not found), with a message for people. The userscript
+  says "see Settings → Downloaders" for `missing` and `login_required`.
+- The saving folder is emptied before each run and removed after.
+
 ## Storage
 
 `GET /api/storage`:
@@ -1274,8 +1356,7 @@ Built-in kinds:
 | `tool-test` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | the tool once on a fixed public item, see [Downloaders](#downloaders); `result` `{ "ok", "error", "line" }` | the tool's name |
 | `tool-update` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | pip or pipx, picked from how the tool is installed, see [Downloaders](#downloaders) | the tool's name |
 | `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
-
-More download kinds come with the userscript (#10).
+| `instaloader-post` | `shortcode` | instaloader for one post, see [How a save runs](#how-a-save-runs); started by `POST /api/save` only | `instaloader` |
 
 ### Sync all
 
