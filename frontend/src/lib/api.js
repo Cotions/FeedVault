@@ -76,6 +76,8 @@ function qs(params) {
   for (const [k, v] of Object.entries(params)) {
     // A list repeats the parameter (tag=a&tag=b).
     if (Array.isArray(v)) v.forEach(x => s.append(k, String(x)));
+    // A flag (untagged, new) is on as 1, which the server reads; off is left out.
+    else if (v === true) s.set(k, "1");
     else if (v !== undefined && v !== null && v !== "" && v !== false) s.set(k, String(v));
   }
   const str = s.toString();
