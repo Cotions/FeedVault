@@ -118,8 +118,11 @@ new.
 
 - What a download adds (a sync job's rescan) and what a full scan finds that
   the index did not have are new. A scan that builds the index from nothing
-  (first run, deleted or replaced database), files back from the trash and
-  files moved by Duplicates are not: they were there before.
+  (first run, deleted or replaced database), the first scan of a media root
+  with nothing indexed under it yet (a root just added: its part of the
+  index is built from nothing), files back from the trash and files moved
+  by Duplicates are not: they were there before. Files put by hand into a
+  root that never had a post count as that root's first scan too.
 - `seen_at` is user data: table `seen_at`, one row, written to
   `<data_directory>/userdata/seen_at.json` (`{"version": 1, "rows": [{"id":
   1, "at": 1727500000}]}`) like the others and read back into a database

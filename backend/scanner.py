@@ -5,8 +5,9 @@ missing and kept, because keeping what disappears is the point of the app.
 
 A post the index did not have is new (posts.first_seen, see news.py),
 except when a scan builds the index from nothing (a first run, a deleted or
-replaced database) or files come back from the trash or a duplicate move:
-those were there before.
+replaced database), or builds a media root's part of it from nothing (a root
+just added, with nothing indexed under it yet), or files come back from the
+trash or a duplicate move: those were there before.
 """
 import json
 import os
@@ -99,8 +100,9 @@ def _scan(roots):
     started = int(time.time())
     report = {"started_at": started, "finished_at": None,
               "added": 0, "updated": 0, "missing": 0, "unmatched": 0, "errors": []}
-    # Building the index from nothing: what it finds is not new.
-    fresh = conn.execute("SELECT 1 FROM posts LIMIT 1").fetchone() is None
+    # Building the index, or a root's part of it, from nothing: what it
+    # finds is not new.
+    fresh = {root: _nothing_under(conn, root) for root in roots}
     seen_meta = set()
     unmatched = []                             # (path, size, mtime, reason)
     copies = []                                # (parsed post, meta mtime), see db.save_copies
@@ -127,7 +129,7 @@ def _scan(roots):
                 unmatched.append((path, *_size_mtime(path), reason))
             # Stamped per folder, right before its commit: a "Mark all seen"
             # while the scan runs leaves the folders committed after it new.
-            first_seen = 0 if fresh else int(time.time())
+            first_seen = 0 if fresh[root] else int(time.time())
             for post in result.posts:
                 _index_post(conn, post, started, report, seen_meta, unmatched, copies, first_seen)
             for n in names:
@@ -147,6 +149,15 @@ def _scan(roots):
     report["unmatched"] = len(unmatched)
     report["finished_at"] = int(time.time())
     return report
+
+
+def _nothing_under(conn, root):
+    """Whether no post, missing ones included, is indexed under ``root``
+    (meta paths are stored under the root as configured)."""
+    prefix = root.rstrip(os.sep) + os.sep
+    # A range on the unique meta_path index: every path starting with the prefix.
+    return conn.execute("SELECT 1 FROM posts WHERE meta_path >= ? AND meta_path < ? LIMIT 1",
+                        (prefix, prefix[:-1] + chr(ord(os.sep) + 1))).fetchone() is None
 
 
 def _size_mtime(path):
