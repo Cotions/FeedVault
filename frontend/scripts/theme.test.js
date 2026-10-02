@@ -3,6 +3,7 @@
 // Run with `npm test` (node's own test runner, no extra dependency).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   PRESETS, PHOSPHOR, DEFAULT_THEME_ID, contrast, palette, getCustomThemes, getActiveTheme, saveCustomThemes,
 } from "../src/lib/theme.js";
@@ -69,6 +70,26 @@ test("pinned roles win, invalid pins and bases are ignored", () => {
   const q = palette({ base: "#60a5fa", fill: "red", glow: "url(x)", buttonText: "#12345" });
   assert.deepEqual(q, palette({ base: "#60a5fa" }));
   assert.deepEqual(palette({ base: "javascript:1" }), palette(PRESETS[0]));
+});
+
+test("PHOSPHOR matches index.css's :root, so Phosphor previews and copies paint what the page does", () => {
+  const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+  const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
+  for (const [k, v] of Object.entries(PHOSPHOR)) {
+    const m = root.match(new RegExp(`\\s${k}:\\s*([^;]+);`));
+    assert.ok(m, `${k} missing from :root`);
+    assert.equal(m[1].trim(), v, k);
+  }
+});
+
+test("a pinned fill or glow carries its own hue into the shades and ink derived from it", () => {
+  const hue = hex => {
+    const [r, g, b] = hexRgb(hex).map(v => v / 255), max = Math.max(r, g, b), d = max - Math.min(r, g, b);
+    return d === 0 ? 0 : (max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4) * 60;
+  };
+  const p = palette({ base: "#4ade80", fill: "#3b82f6", glow: "#f87171" });
+  assert.ok(Math.abs(hue(p["--accent-light"]) - hue("#3b82f6")) < 6, p["--accent-light"]);
+  assert.ok(Math.abs(hue(p["--on-glow"]) - hue("#f87171")) < 6 || p["--on-glow"] === "#f5f7fb", p["--on-glow"]);
 });
 
 test("malformed localStorage falls back to Phosphor", () => {

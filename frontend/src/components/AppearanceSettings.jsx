@@ -13,18 +13,18 @@ const ROLE_VAR = {
 
 function ThemeCard({ theme, active, onPick, onCopy, onEdit, onDelete }) {
   const c = themeColors(theme);
+  // The whole card picks the theme on click; the art is the button keyboards
+  // and screen readers use, so the action buttons are not nested inside it.
   return (
-    <div className={`theme-card${active ? " active" : ""}`} onClick={onPick} role="button" tabIndex={0}
-         aria-pressed={active} aria-label={`${theme.name} theme`}
-         onKeyDown={e => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onPick())}>
-      <div className="theme-card-art">
+    <div className={`theme-card${active ? " active" : ""}`} onClick={onPick}>
+      <button type="button" className="theme-card-art" aria-pressed={active} aria-label={`Use the ${theme.name} theme`}>
         <span className="theme-orb" style={{ "--orb-a": c["--glow"], "--orb-b": c["--accent"] }} />
         <span className="theme-sample" style={{ background: `linear-gradient(180deg, ${c["--accent-hover"]}, ${c["--accent"]})`, color: c["--on-accent"] }}>Aa</span>
         <span className="theme-sample-text" style={{ color: c["--accent-text"] }}>42</span>
-      </div>
+      </button>
       <div className="theme-card-foot">
         <span className="theme-card-name">{theme.name}</span>
-        <span className="theme-card-actions" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+        <span className="theme-card-actions" onClick={e => e.stopPropagation()}>
           {onEdit && (
             <button type="button" className="icon-btn-sm" onClick={onEdit} title="Edit theme" aria-label={`Edit ${theme.name}`}>
               <Icon name="pencil" size={13} />
@@ -130,9 +130,10 @@ export default function AppearanceSettings() {
   const [custom,   setCustom]   = useState(getCustomThemes);
   const [activeId, setActiveId] = useState(getActiveId);
   const [editing,  setEditing]  = useState(null);
+  const [error,    setError]    = useState(null);
 
   function pick(theme) {
-    setActiveTheme(theme);
+    setError(setActiveTheme(theme) ? null : "This browser did not let FeedVault save the theme; it lasts until the page reloads.");
     setActiveId(theme.id);
   }
 
@@ -143,19 +144,24 @@ export default function AppearanceSettings() {
     setEditing({ ...rest, ...pins, name: `${theme.name} copy`.slice(0, 32) });
   }
 
+  // Both start from what is stored now, not from this page's copy, so a
+  // theme saved from another tab is not written over.
   function save(theme) {
     const t = theme.id ? theme : { ...theme, id: `c-${Date.now().toString(36)}` };
-    const list = custom.some(c => c.id === t.id) ? custom.map(c => (c.id === t.id ? t : c)) : [...custom, t];
-    saveCustomThemes(list);
-    setCustom(list);
+    const stored = getCustomThemes();
+    const list = stored.some(c => c.id === t.id) ? stored.map(c => (c.id === t.id ? t : c)) : [...stored, t];
+    if (!saveCustomThemes(list)) {
+      setError("This browser did not let FeedVault save the theme (storage full or blocked).");
+      return;
+    }
+    setCustom(getCustomThemes());
     setEditing(null);
     pick(t);
   }
 
   function remove(theme) {
-    const list = custom.filter(c => c.id !== theme.id);
-    saveCustomThemes(list);
-    setCustom(list);
+    saveCustomThemes(getCustomThemes().filter(c => c.id !== theme.id));
+    setCustom(getCustomThemes());
     if (activeId === theme.id) pick(PRESETS[0]);
   }
 
@@ -170,6 +176,7 @@ export default function AppearanceSettings() {
         )}
       </div>
 
+      {error && <div className="msg err" role="alert">{error}</div>}
       {editing ? (
         <ThemeEditor key={editing.id || "new"} initial={editing} onSave={save} onCancel={() => setEditing(null)} />
       ) : (

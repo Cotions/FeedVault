@@ -30,9 +30,6 @@ export const ROLES = [
   { key: "highlight",  label: "Highlight text", hint: "Badges, counts, labels" },
 ];
 
-const VARS = ["--accent", "--accent-hover", "--accent-bright", "--accent-light",
-  "--accent-text", "--on-accent", "--on-glow", "--glow", "--accent-rgb", "--glow-rgb"];
-
 const HEX = /^#[0-9a-f]{6}$/i;
 export const isHex = v => typeof v === "string" && HEX.test(v);
 
@@ -92,6 +89,8 @@ export function palette(theme) {
   const pinned = key => isHex(theme[key]) ? hexToRgb(theme[key]) : null;
 
   const glow = pinned("glow") || at(69, 58);
+  // A pinned glow is read on its own hue: ink on it is tinted the same.
+  const gh = pinned("glow") ? rgbToHsl(glow)[0] : h;
   const fill = pinned("fill");
   const accent = fill || at(54, 40);
   // A pinned fill keeps its own hue for the hover/bright shades.
@@ -105,10 +104,10 @@ export function palette(theme) {
     "--accent": rgbHex(accent),
     "--accent-hover": rgbHex(hover),
     "--accent-bright": rgbHex(hslToRgb(fh, fs, Math.min(fl + 19, 94))),
-    "--accent-light": rgbHex(at(40, 14)),
+    "--accent-light": rgbHex(fill ? hslToRgb(fh, Math.min(fs, 40), 14) : at(40, 14)),
     "--accent-text": rgbHex(highlight),
     "--on-accent": rgbHex(pinned("buttonText") || inkFor(mid, fh)),
-    "--on-glow": rgbHex(pinned("glowText") || inkFor(glow, h)),
+    "--on-glow": rgbHex(pinned("glowText") || inkFor(glow, gh)),
     "--glow": rgbHex(glow),
     "--accent-rgb": accent.join(", "),
     "--glow-rgb": glow.join(", "),
@@ -121,6 +120,9 @@ export const PHOSPHOR = {
   "--accent-light": "#16331f", "--accent-text": "#a5f0bf", "--on-accent": "#04130a",
   "--on-glow": "#04130a", "--glow": "#4ade80", "--accent-rgb": "47, 158, 79", "--glow-rgb": "74, 222, 128",
 };
+
+// Every variable a theme sets, so Phosphor can drop them all again.
+const VARS = Object.keys(PHOSPHOR);
 
 // Copying Phosphor pins its exact roles: its look comes from index.css, not
 // from the derivation.
@@ -137,8 +139,9 @@ export function themeColors(theme) {
 function readJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 }
+// False when the browser refuses (private mode, quota).
 function write(key, value) {
-  try { localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value)); } catch { /* private mode, quota */ }
+  try { localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value)); return true; } catch { return false; }
 }
 
 // A stored theme as the app can use it, or null: whatever is in localStorage
@@ -158,20 +161,17 @@ export function getCustomThemes() {
   return list.map(clean).filter(t => t && !seen.has(t.id) && seen.add(t.id));
 }
 
-export function saveCustomThemes(list) { write(CUSTOM_KEY, list.map(clean).filter(Boolean)); }
+export function saveCustomThemes(list) { return write(CUSTOM_KEY, list.map(clean).filter(Boolean)); }
 
 export function allThemes() { return [...PRESETS, ...getCustomThemes()]; }
 
-export function getActiveId() {
+export function getActiveTheme() {
   let id = DEFAULT_THEME_ID;
   try { id = localStorage.getItem(ACTIVE_KEY) || id; } catch { /* storage blocked */ }
-  return allThemes().some(t => t.id === id) ? id : DEFAULT_THEME_ID;
+  return allThemes().find(t => t.id === id) || PRESETS[0];
 }
 
-export function getActiveTheme() {
-  const id = getActiveId();
-  return allThemes().find(t => t.id === id);
-}
+export const getActiveId = () => getActiveTheme().id;
 
 export function applyTheme(theme) {
   const style = document.documentElement.style;
@@ -184,6 +184,6 @@ export function applyTheme(theme) {
 }
 
 export function setActiveTheme(theme) {
-  write(ACTIVE_KEY, theme.id);
   applyTheme(theme);
+  return write(ACTIVE_KEY, theme.id);
 }
