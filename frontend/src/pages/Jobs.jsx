@@ -11,7 +11,7 @@ const LOG_KEPT    = 5000;          // lines kept on screen, as many as the backe
 /* One job's output: polled every second while the job is queued or running
    and the tab is visible, read once when it has ended. Mounted with
    key={job.id}, so a new job starts from an empty log. */
-function JobLog({ jobId }) {
+export function JobLog({ jobId }) {
   const [lines, setLines] = useState([]);
   const [gap,   setGap]   = useState(false);   // the backend dropped lines we never read
   const [error, setError] = useState(null);

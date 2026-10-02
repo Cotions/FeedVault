@@ -229,6 +229,10 @@ export function cancelJob(id) { return post(`/api/jobs/${id}/cancel`); }
 // { tool: "/abs/path" or "" for PATH } → { ok, config } or { ok: false, error }
 export function saveToolPaths(tools) { return post("/api/config", { tools }); }
 
+// Downloaders (docs/API.md "Downloaders"): found, version, latest, login, update.
+export function getDownloaders()   { return get("/api/downloaders"); }
+export function checkDownloaders() { return post("/api/downloaders/check"); }
+
 /* ── Sources (see docs/API.md "Sources") ─────────────────── */
 
 // { sources: [source], suggestions: [suggestion] }

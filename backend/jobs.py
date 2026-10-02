@@ -88,7 +88,7 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
                failed counts too)
     ended:     optional, public job dict -> None, once the job has ended in
                any way, recover() included
-    pause:     optional, () -> seconds: once a job of this kind has run,
+    pause:     optional, params -> seconds: once a job of this kind has run,
                the next one of this kind in its group waits that long
     describe:  optional, (params, argv) -> label shown instead of ``label``
     """
@@ -133,11 +133,16 @@ def tool_path(name):
     return shutil.which(name)
 
 
+def version_line(texts):
+    """A tool's version from what ``--version`` printed: the first line
+    (ffmpeg's runs on into its copyright notice). Also downloaders.py's."""
+    line = next((t.strip() for t in texts if t.strip()), "")
+    return line.split(" Copyright")[0][:200]
+
+
 def _first_line(lines):
-    """tool-version: the version is the first line (ffmpeg's runs on into
-    its copyright notice)."""
-    line = next((t.strip() for _, t in lines if t.strip()), "")
-    version = line.split(" Copyright")[0][:200]
+    """tool-version: the version is the first line."""
+    version = version_line(t for _, t in lines)
     return {"version": version}, version or "no version printed"
 
 
@@ -302,7 +307,7 @@ def _run(job):
     try:
         exe = tool_path(job.tool)
         if exe is None:
-            _finish(job, "failed", message=f"{job.tool} not found; set its path in Settings")
+            _finish(job, "failed", result={"error": "missing"}, message=f"{job.tool} not found; set its path in Settings")
             return
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")
@@ -466,7 +471,7 @@ def _finish(job, state, result=None, message=None):
     pause = 0
     if kind and kind.pause and job.proc is not None:         # it ran, so it reached the site
         try:
-            pause = max(0, kind.pause())
+            pause = max(0, kind.pause(job.params))
         except Exception as e:                 # reads config.json: never left holding the queue
             print(f"[jobs] #{job.id}: no pause: {e}")
     with _lock:

@@ -128,10 +128,19 @@ get a green "saved" badge in grids, and a post page shows an "in FeedVault" link
 ## Jobs and tools
 
 The **Jobs** page shows what FeedVault is running for you: the queue, a live
-log, and the last 100 jobs. **Settings → Tools** checks that instaloader,
-gallery-dl, yt-dlp and ffmpeg are installed (and lets you point at one
-installed in a virtualenv). Quitting FeedVault stops running jobs; a job
+log, and the last 100 jobs. Quitting FeedVault stops running jobs; a job
 left running by a crash is stopped on the next start.
+
+**Settings → Downloaders** shows, for instaloader, gallery-dl, yt-dlp and
+ffmpeg, whether each is installed, where, which version, and how (pipx, a
+virtualenv, or the system), with the command to install a missing one.
+**Test** runs a tool once on a public item with its sync's login and says
+whether it works (or needs a login, or is rate limited). **Update** upgrades
+a tool installed with pipx or in a virtualenv (`pipx upgrade`, or pip in
+that virtualenv) as a job, never during a sync of that tool; for a system
+install it shows the command to run instead. Tick **Check PyPI for new
+versions** to see when an update is out (off by default). A sync that fails
+because its tool is missing, needs a login, or is out of date links there.
 
 ## Syncing profiles
 
@@ -178,5 +187,8 @@ The server binds to `127.0.0.1` only. Every `/api` call needs an `X-FeedVault`
 header and a local `Host`, and no CORS is ever granted, so other websites in
 your browser cannot read or change your library. Jobs are started by kind,
 with parameters each kind checks; the API never takes a command, and tools run
-without a shell. API reference:
+without a shell. The server itself contacts the network for one thing only,
+and only if you turn it on (**Settings → Downloaders → check for updates**):
+PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
+to say when an update is out. API reference:
 [docs/API.md](docs/API.md).

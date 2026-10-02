@@ -94,8 +94,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30 }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30 }, "youtube_max_seconds": 180, "routes": {…} }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30 }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30 }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
@@ -768,7 +768,7 @@ no person yet.
   "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait before syncing again",
-                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41 },
+                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 } }
 ```
 
@@ -806,9 +806,15 @@ no person yet.
     missing. gallery-dl and yt-dlp failures are classified from their
     error lines the same way (gallery-dl's `AuthRequired`, `NotFoundError`,
     "Tweets are protected"; yt-dlp's "Sign in to confirm", "Private video",
-    "Video unavailable")
+    "Video unavailable"). `missing`: the tool was not found (no output);
+    the dashboard links `missing` and `login_required` to Settings →
+    Downloaders
   - `message`: one line for people; `line`: the tool's last line of output
-    behind it, or `null`
+    behind it, or `null`. When the latest-version check is on (see
+    [Downloaders](#downloaders)) and the tool is older than PyPI's latest
+    release, a failed sync's message ends with
+    `. yt-dlp 2026.01.01 is out of date (2026.08.06 is out): update it in
+    Settings → Downloaders`, and `outdated` is `true` (else `false`)
   - `added`: new posts indexed (also after a failure: what was downloaded
     before it stopped is indexed)
 - `job`: the source's sync while it is queued or running (`waits_until`,
@@ -1184,6 +1190,7 @@ A **job**:
   that folder (with its subfolders) is indexed and `result` is
   `{ "added": 3, "updated": 0 }`.
 - `result`: what the job produced, by kind, or `null` (failed, cancelled).
+  A job whose tool was not found has `{ "error": "missing" }`.
 - `message`: one line for people: `"3 new posts"`, the version, the last
   line of output of a failed job (or `"exit code 2"`), `"<tool> not found;
   set its path in Settings"`, `"cancelled"`, `"FeedVault stopped while it ran"`.
@@ -1210,6 +1217,8 @@ Built-in kinds:
 | `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
 | `instaloader-sync` | `source`: a source id | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line" }` | `instaloader` |
 | `gallery-dl-sync` | `source`: a source id | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
+| `tool-test` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | the tool once on a fixed public item, see [Downloaders](#downloaders); `result` `{ "ok", "error", "line" }` | the tool's name |
+| `tool-update` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | pip or pipx, picked from how the tool is installed, see [Downloaders](#downloaders) | the tool's name |
 | `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 
 More download kinds come with the userscript (#10).
@@ -1261,3 +1270,132 @@ other tools are left as they are. A path must be absolute, an executable
 file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); anything else is
 refused. A set path that stops working makes jobs fail with "not found"
 rather than fall back to `PATH`.
+
+### Downloaders
+
+What FeedVault knows of each tool, for the Downloaders card in Settings.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/downloaders` | `{ "checked_at": 1727500000, "check_updates": false, "tools": [tool, …] }`, one per tool, in the order `instaloader`, `gallery-dl`, `yt-dlp`, `ffmpeg` |
+| POST | `/api/downloaders/check` | the same with `"ok": true`, every tool found again (Check again) |
+
+A tool:
+
+```json
+{
+  "tool": "yt-dlp",
+  "found": true,
+  "path": "/home/me/.local/bin/yt-dlp",
+  "real_path": "/home/me/.local/share/pipx/venvs/yt-dlp/bin/yt-dlp",
+  "configured": null,
+  "install": "pipx",
+  "venv": "/home/me/.local/share/pipx/venvs/yt-dlp",
+  "version": "2026.08.06",
+  "version_error": null,
+  "latest": { "version": "2026.09.20", "error": null, "checked_at": 1727500000 },
+  "outdated": true,
+  "login": { "mode": "cookies", "browser": "firefox" },
+  "update": { "possible": true, "command": "pipx upgrade yt-dlp", "reason": null },
+  "install_hint": null
+}
+```
+
+- `path`: the executable a job would run (the path set in Settings, else the
+  first on `PATH`); `null` when there is none, or the path set no longer
+  works. `real_path`: where it really is when `path` is a symlink, else `null`.
+- `configured`: the path set in Settings, or `null`.
+- `install`, read from `real_path`: `venv` (in the `bin/` folder of a
+  virtualenv: `pyvenv.cfg` beside that folder), `pipx` (the same, the
+  virtualenv inside pipx's `venvs` folder: `$PIPX_HOME/venvs`, else
+  `~/.local/share/pipx/venvs` or `~/.local/pipx/venvs`), `system` (anything
+  else: `/usr/bin`, `pip install --user`, a standalone binary) or `missing`.
+  `venv`: the virtualenv's folder for `venv` and `pipx`, else `null`.
+- `version`: the first line `<path> --version` prints (`ffmpeg -version`, up
+  to its copyright notice), run without a shell and stopped after 10
+  seconds; else `null` and `version_error` says why.
+
+- `latest`: PyPI's latest release, when `check_updates` is on (see below),
+  else `null`; always `null` for ffmpeg. `version` is `null` and `error`
+  says why when PyPI could not be asked or answered something unexpected.
+- `outdated`: `true` when `latest.version` is newer than `version`
+  (comparing their release numbers, `1.30.0` = `1.30`; a nightly yt-dlp
+  `2026.08.06.232211` is not older than `2026.08.06`), `false` when not,
+  `null` when either is unknown.
+
+The tools are found once and kept in memory; they are found again when the
+tools set in Settings (or `PATH`) change, and on `POST /api/downloaders/check`.
+
+- `login`: the session a sync of the tool uses, from its settings (see
+  [instaloader settings](#instaloader-settings) and [gallery-dl and yt-dlp
+  settings](#gallery-dl-and-yt-dlp-settings)): `{ "mode": "none" }`,
+  `{ "mode": "cookies", "browser": "firefox" }`, or for instaloader
+  `{ "mode": "login", "user": "name", "session_file": true }`, where
+  `session_file` says whether instaloader's session file for that user
+  exists (`$XDG_CONFIG_HOME/instaloader/session-<user>`, else
+  `~/.config/…`, or its legacy place in the temp folder; the user name
+  lowercased, as instaloader does). FeedVault only checks that the file is
+  there; it never opens it, nor any cookie. `null` for ffmpeg.
+
+- `update`: whether the Update button can run (`possible`), the command it
+  runs or, when it cannot, the command to run yourself (`command`, shown
+  with a copy button), and why it cannot (`reason`, else `null`); see
+  **Update** below.
+- `install_hint`: for a missing tool, the command that installs it
+  (`pipx install <name>`, `sudo apt install ffmpeg`), shown with a copy
+  button and never run; else `null`.
+
+**Latest versions.** Off by default: `POST /api/config` with
+`{ "check_updates": true }` turns it on. This is the only request the
+server itself makes to the network. For instaloader, gallery-dl and yt-dlp
+it fetches `https://pypi.org/pypi/<name>/json` (fixed URLs, `<name>` one of
+the three, never from a request), without following redirects, within 10
+seconds and at most 8 MB, and keeps `info.version` if it looks like a
+version (a digit, then at most 63 of `0-9A-Za-z.+!_-`). Each package is
+asked at most once a day, a failed ask included; the answers are kept in
+`<data_directory>/downloaders/pypi.json`, so a restart does not ask again.
+They are asked when `GET /api/downloaders` finds them due; Check again
+does not ask sooner.
+
+**Test.** Job kind `tool-test`, params `{ "tool": "instaloader" |
+"gallery-dl" | "yt-dlp" }` and nothing else, group: the tool's name (the
+same as its syncs, so it never runs beside one), with the same pause as its
+syncs: a test right after a sync waits it out (`waits_until`), and so does
+a sync right after a test. It runs the tool once on a
+fixed public item with the session flags its syncs use, in
+`<data_directory>/downloaders/test`:
+
+```
+instaloader --no-posts --no-profile-pic --no-metadata-json --dirname-pattern <data_directory>/downloaders/test
+            [--load-cookies <browser> | --login <user>] -- instagram
+gallery-dl --simulate [--cookies-from-browser <browser>] -- https://x.com/jack/status/20
+yt-dlp --simulate --no-playlist [--cookies-from-browser <browser>] -- https://www.youtube.com/watch?v=jNQXAC9IVRw
+```
+
+instaloader fetches the profile's metadata and nothing else; gallery-dl
+and yt-dlp download nothing (`--simulate`). `state` `done`, `result`
+`{ "ok": true, "error": null, "line": null }`, `message` `"Works"`; or
+`failed`, `result` `{ "ok": false, "error", "line" }` with `error` read from
+the output as for a sync (`login_required`, `rate_limited`, `private`,
+`not_found`, `generic`) and `message` saying what it means.
+
+**Update.** Job kind `tool-update`, params `{ "tool": "instaloader" |
+"gallery-dl" | "yt-dlp" }` and nothing else, group: the tool's name, so an
+update never runs during a sync of that tool, nor a sync during its update.
+When it is queued, the tool is found again (not from the cache) and the
+command picked from how it is installed:
+
+| `install` | Runs |
+|---|---|
+| `venv` | `<venv>/bin/python -m pip install --no-input --disable-pip-version-check -U <name>` |
+| `pipx` | `pipx upgrade <name>` (pipx found on `PATH`) |
+| `system`, `missing` | nothing: 400, the error says the command to run instead |
+
+`<name>` is the tool's PyPI name, fixed in code. Refused the same way: a
+virtualenv without its `bin/python`, or without pip in its
+`lib/python*/site-packages` (one made by uv; no command is offered then),
+a pipx virtualenv named otherwise than the package (`pipx install
+--suffix`: the command shown upgrades it by its own name), or a pipx
+install with no `pipx` on `PATH`. ffmpeg is not a choice: it comes from the system's packages. Once
+the job has ended, the tool is found again, so `GET /api/downloaders` shows
+its new version.

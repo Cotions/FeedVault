@@ -429,7 +429,22 @@ def _outcome(params, code, lines, index, tool="instaloader"):
         message = f"{message}: {result['line'][:200]}"
     if added:
         message += f" ({added} new post{'' if added == 1 else 's'} before it stopped)"
+    old = _outdated(tool)
+    if old:
+        result["outdated"] = True
+        message += f". {tool} {old[0]} is out of date ({old[1]} is out): update it in Settings → Downloaders"
     return "failed", result, message
+
+
+def _outdated(tool):
+    """(installed, latest) when the latest-version check is on and the tool
+    is older than PyPI's latest, else None (and when that cannot be told)."""
+    import downloaders                         # it imports this module
+    try:
+        return downloaders.outdated(tool)
+    except Exception as e:                     # a failed sync still ends as it went
+        print(f"[sync] could not tell whether {tool} is out of date: {e}")
+        return None
 
 
 def _ended(job):
@@ -441,7 +456,8 @@ def _ended(job):
     conn = db.connect()
     if not sources.record(conn, sid, job["id"], job["ended_at"] or int(time.time()), {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
-            "line": r.get("line"), "added": r.get("added", 0), "job": job["id"]}):
+            "line": r.get("line"), "added": r.get("added", 0), "job": job["id"],
+            "outdated": r.get("outdated", False)}):
         return
     changed = {"sources"}
     src = sources.row(conn, sid)
@@ -456,7 +472,7 @@ def _ended(job):
 
 jobs.register(KIND, label="Sync from Instagram", params={"source": {"type": "text", "max": 15}},
               build=_build, group=GROUP, start=_start, outcome=_outcome, ended=_ended,
-              pause=lambda: settings()["pause"],
+              pause=lambda params: settings()["pause"],
               describe=lambda params, argv: f"Sync @{argv[-1]}" if argv else "Sync from Instagram")
 
 
@@ -605,12 +621,12 @@ def _describe(label):
 jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source": {"type": "text", "max": 15}},
               build=_build_gallery_dl, group="gallery-dl", start=_start_archive("gallery-dl"),
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "gallery-dl"),
-              ended=_ended, pause=lambda: tool_settings("gallery-dl")["pause"],
+              ended=_ended, pause=lambda params: tool_settings("gallery-dl")["pause"],
               describe=_describe("Sync with gallery-dl"))
 jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
               build=_build_yt_dlp, group="yt-dlp", start=_start_yt_dlp, after=_strip_cookies,
               outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "yt-dlp"),
-              ended=_ended, pause=lambda: tool_settings("yt-dlp")["pause"],
+              ended=_ended, pause=lambda params: tool_settings("yt-dlp")["pause"],
               describe=_describe("Sync with yt-dlp"))
 
 
