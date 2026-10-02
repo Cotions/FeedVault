@@ -11,7 +11,7 @@ FeedVault does not download anything itself. It reads what
 
 The **Review** page is for sorting: one post at a time, keep or trash it from
 the keyboard. Deleting moves files to `.feedvault-trash/` inside the media
-folder; only **Empty trash** in Settings removes them for good.
+folder; only **Empty trash** in Settings → Library removes them for good.
 
 Status: early. Instagram via instaloader, X/Twitter and TikTok via
 gallery-dl, and TikTok and YouTube Shorts via yt-dlp work end to end; see
@@ -27,8 +27,9 @@ gallery-dl, and TikTok and YouTube Shorts via yt-dlp work end to end; see
 ./testapp.sh        # throwaway instance on :3389 on a copy of your database
 ```
 
-Then open **Settings**, add the folder your downloader writes into, and the scan
-starts on its own.
+Then open **Settings** (Library tab), add the folder your downloader writes into, and the scan
+starts on its own. **Settings → Appearance** changes the accent colour: one of
+eight presets, or a theme of your own, saved in that browser.
 
 ## Downloading with instaloader
 
@@ -96,7 +97,7 @@ single public tweets and TikTok usually do not.
 
 FeedVault's own syncs read your gallery-dl and yt-dlp config files too. If
 something there changes where or how files are saved, turn on "Ignore my
-<tool> config" in that tool's card in Settings → Downloaders.
+<tool> config" in that tool's card in Settings → Sync.
 
 ## Downloading with yt-dlp
 
@@ -143,7 +144,7 @@ The **Jobs** page shows what FeedVault is running for you: the queue, a live
 log, and the last 100 jobs. Quitting FeedVault stops running jobs; a job
 left running by a crash is stopped on the next start.
 
-**Settings → Downloaders** shows, for instaloader, gallery-dl, yt-dlp and
+**Settings → Downloads → Downloaders** shows, for instaloader, gallery-dl, yt-dlp and
 ffmpeg, whether each is installed, where, which version, and how (pipx, a
 virtualenv, or the system), with the command to install a missing one.
 **Test** runs a tool once on a public item with its sync's login and says
@@ -158,7 +159,7 @@ because its tool is missing, needs a login, or is out of date links there.
 
 A person (or an account) can have **sources**: a profile link and the folder
 its posts go to. Paste the link (Instagram, X, TikTok, YouTube, Reddit,
-Bluesky, pixiv) and FeedVault picks the tool from **Settings → Link
+Bluesky, pixiv) and FeedVault picks the tool from **Settings → Downloads → Link
 routing**: instaloader for Instagram, gallery-dl for X, Reddit, Bluesky and
 pixiv, yt-dlp for YouTube and TikTok. **Sync** runs that tool as a job and
 indexes the folder, so new posts show up in the Feed without a terminal.
@@ -180,16 +181,16 @@ person and account has, the Feed's "New since last visit" chip (or `is:new`
 in the search box) shows only those, and Review can go through just them.
 What was already in the archive is never new, whenever it was posted.
 
-By default syncs run without a login (public profiles only). **Settings →
+By default syncs run without a login (public profiles only). **Settings → Sync →
 Instagram sync** can make instaloader use your browser's Instagram cookies
 (`--load-cookies`) or a session it saved after `instaloader --login` in a
 terminal. FeedVault only passes the browser or user name on; it never reads
 or stores cookies, passwords or session files.
 
 gallery-dl and yt-dlp can use a browser's cookies the same way
-(`--cookies-from-browser`, **Settings → gallery-dl / yt-dlp sync**).
+(`--cookies-from-browser`, **Settings → Sync → gallery-dl / yt-dlp sync**).
 yt-dlp copies the cookies it used into each video's `.info.json`; FeedVault
-rewrites the files of each sync without them, and **Settings → YouTube
+rewrites the files of each sync without them, and **Settings → Sync → YouTube
 and TikTok sync** can do the same for info JSONs written before.
 
 ## Where things live
@@ -207,7 +208,7 @@ header and a local `Host`, and no CORS is ever granted, so other websites in
 your browser cannot read or change your library. Jobs are started by kind,
 with parameters each kind checks; the API never takes a command, and tools run
 without a shell. The server itself contacts the network for one thing only,
-and only if you turn it on (**Settings → Downloaders → check for updates**):
+and only if you turn it on (**Settings → Downloads → Downloaders → check for updates**):
 PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
 to say when an update is out. API reference:
 [docs/API.md](docs/API.md).

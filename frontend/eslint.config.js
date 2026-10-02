@@ -45,4 +45,9 @@ export default [
       ],
     },
   },
+  {
+    // Node checks run by `npm test` (node --test), outside the browser bundle.
+    files: ['scripts/**/*.js'],
+    languageOptions: { globals: globals.node },
+  },
 ]
