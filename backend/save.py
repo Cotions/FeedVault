@@ -11,8 +11,13 @@ and the files move to the owner's folder (owner_folder), named the way that
 folder's files are (sync.detect_pattern), never over a file already there.
 That folder is then indexed.
 
+A post whose owner had no folder goes to ``<first root>/_saved``; once the
+owner gets an instaloader source, its next sync first moves it into the
+source's folder (gather).
+
 Same lock group and pause as instaloader syncs: one instaloader at a time.
 """
+import json
 import os
 import re
 import shutil
@@ -161,6 +166,97 @@ def _place(code, stage, roots, note):
 
 
 # ---------------------------------------------------------------------------
+# Out of _saved, once the owner has a source
+# ---------------------------------------------------------------------------
+
+def _files(conn, post, base):
+    """Every file of an indexed post that exists: its metadata, side files
+    (those indexed, and instaloader's caption, location and comments beside
+    the metadata: ``base`` + suffix) and media."""
+    out = [post["meta_path"], *json.loads(post["side_files"] or "[]"),
+           *(os.path.join(os.path.dirname(post["meta_path"]), base + s) for s in parser._SIDE_SUFFIXES)]
+    for path, poster in conn.execute("SELECT path, poster_path FROM media WHERE post_id = ?", (post["id"],)):
+        out += [p for p in (path, poster) if p]
+    return [p for p in dict.fromkeys(out) if os.path.lexists(p)]
+
+
+def _old_base(meta_path):
+    name = os.path.basename(meta_path)
+    for suffix in (".json.xz", ".json"):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return None
+
+
+def gather(conn, src, roots, note):
+    """Move the posts of an instaloader source's account out of
+    ``<root>/_saved`` into the source's folder, renamed as that folder's
+    files are (base_name, with the source's target, as its sync names them)
+    so the sync finds them and does not download them again. A post moves
+    whole or not at all: never over a file already there (it stays in
+    _saved), and back where it was when a move fails. Both folders are then
+    indexed: the posts keep their ids, so their first_seen and user data
+    (tags, decisions, collections) stay with them. Returns the ids moved.
+
+    The account: the source's, else the one indexed account whose handle
+    (any it had) is the target."""
+    if src["tool"] != "instaloader":
+        return []
+    folder = sources.inside_root(src["folder"], roots)
+    if src["author_id"] is not None:
+        key = people.canonical(conn, src["platform"], src["author_id"])
+    else:
+        key = sources._handle_account(conn, src["platform"], src["target"])
+    saved = {os.path.normpath(os.path.join(r, SAVED)) for r in roots}
+    if folder is None or key is None or any(folder == d or folder.startswith(d + os.sep) for d in saved):
+        return []
+    clause, args = db.post_filter(platform=key[0], author=key[1])
+    rows = [r for r in conn.execute(f"SELECT p.id, p.post_id, p.posted_at, p.meta_path, p.side_files, p.missing "
+                                    f"{db._FROM} {clause}", args)
+            if os.path.dirname(r["meta_path"]) in saved and not r["missing"]]
+    if not rows:
+        return []
+    os.makedirs(folder, exist_ok=True)
+    pattern, _ = sync.detect_pattern(folder)
+    moved, kept, touched = [], 0, set()
+    for r in rows:
+        here, old = os.path.dirname(r["meta_path"]), _old_base(r["meta_path"])
+        files = _files(conn, r, old) if old else []
+        if old is None or any(os.path.dirname(f) != here or not os.path.basename(f).startswith(old) for f in files):
+            note(f"{r['id']} left in {here}: its files are not named after its metadata file")
+            continue
+        new = base_name(pattern, src["target"], r["post_id"], r["posted_at"])
+        plan = [(f, os.path.join(folder, new + os.path.basename(f)[len(old):])) for f in files]
+        if any(os.path.lexists(dst) for _, dst in plan):
+            kept += 1                          # never over a file already there
+            continue
+        done = []
+        try:
+            for f, dst in plan:
+                if os.path.lexists(dst):
+                    raise FileExistsError(dst)
+                shutil.move(f, dst)
+                done.append((f, dst))
+        except OSError as e:
+            for f, dst in reversed(done):      # the post whole, or where it was
+                try:
+                    shutil.move(dst, f)
+                except OSError as back:
+                    note(f"could not move {dst} back to {f}: {back.strerror or back}")
+            note(f"{r['id']} left in {here}: {e.strerror or e}")
+            continue
+        moved.append(r["id"])
+        touched.add(here)
+    if moved:
+        scanner.index_dirs(roots, [*touched, folder])
+        note(f"{len(moved)} saved post{'' if len(moved) == 1 else 's'} moved from {SAVED} into {folder}")
+    if kept:
+        note(f"{kept} saved post{'' if kept == 1 else 's'} left in {SAVED}: "
+             f"{'its' if kept == 1 else 'their'} files are already in {folder}")
+    return moved
+
+
+# ---------------------------------------------------------------------------
 # How it went
 # ---------------------------------------------------------------------------
 
@@ -177,7 +273,7 @@ MESSAGES = {
 }
 
 
-def _outcome(params, code, lines, index):
+def _outcome(params, code, lines, index, note=None):
     shortcode = _shortcode(params)
     stage = staging(shortcode)
     cfg = config.load()

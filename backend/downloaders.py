@@ -365,12 +365,12 @@ def _build_test(params):
         args = ["--no-posts", "--no-profile-pic", "--no-metadata-json", "--dirname-pattern", sync._escape(folder),
                 *sync.session_flags(sync.settings(cfg)["session"])]
     else:
-        args = ["--simulate", *(["--no-playlist"] if tool == "yt-dlp" else []),
+        args = [*sync.config_flags(tool, cfg), "--simulate", *(["--no-playlist"] if tool == "yt-dlp" else []),
                 *sync.cookie_flags(sync.tool_settings(tool, cfg)["session"])]
     return {"tool": tool, "cwd": folder, "args": [*args, "--", TEST_TARGETS[tool]]}
 
 
-def _test_outcome(params, code, lines, index):
+def _test_outcome(params, code, lines, index, note=None):
     if code == 0:
         return "done", {"ok": True, "error": None, "line": None}, "Works"
     error, line = sync.classify(lines, TEST_FAILURES[params["tool"]])

@@ -414,6 +414,8 @@ main {
   border-radius: 12px;
   padding: 22px;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 18px 40px -30px rgba(0, 0, 0, 0.8);
+  /* A link to a card (/settings#downloaders) lands below the 64px sticky header. */
+  scroll-margin-top: 80px;
 }
 
 .card-title {

@@ -602,6 +602,7 @@ const COOKIE_TOOLS = {
   "yt-dlp": { title: "YouTube and TikTok sync (yt-dlp)", sites: "YouTube or TikTok" },
 };
 const TOOL_PAUSE = 30;
+const IGNORE_FLAG = { "gallery-dl": "--config-ignore", "yt-dlp": "--ignore-config" };
 const PAUSE_TEXT = {
   "gallery-dl": "seconds, so X and the others do not see profiles fetched back to back",
   "yt-dlp": "seconds, so TikTok and YouTube do not see profiles fetched back to back",
@@ -617,12 +618,14 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
   const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
   const [longest, setLongest] = useState(String(maxSeconds ?? 180));
   const [pause,   setPause]   = useState(String(saved.pause ?? TOOL_PAUSE));
+  const [ignore,  setIgnore]  = useState(!!saved.ignore_config);
   const [saving,  setSaving]  = useState(false);
 
   const session = mode === "cookies" ? { mode, browser } : { mode };
   const youtube = tool === "yt-dlp";
   const dirty = JSON.stringify(session) !== JSON.stringify(saved.session || { mode: "none" })
     || pause.trim() !== String(saved.pause ?? TOOL_PAUSE)
+    || ignore !== !!saved.ignore_config
     || (youtube && longest.trim() !== String(maxSeconds ?? 180));
 
   async function save(e) {
@@ -631,7 +634,7 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
       setMsg({ ok: false, text: "The pause is whole seconds, from 0 to 3600." });
       return;
     }
-    const changes = { [tool]: { session, pause: Number(pause) } };
+    const changes = { [tool]: { session, pause: Number(pause), ignore_config: ignore } };
     if (youtube) {
       const seconds = Number(longest);
       if (!/^\d+$/.test(longest.trim()) || seconds < 1 || seconds > 86400) {
@@ -693,6 +696,17 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
           <input type="text" inputMode="numeric" className="insta-input" aria-label={`${tool} pause in seconds`} value={pause}
                  onChange={e => { setPause(e.target.value); setMsg(null); }} />
           <span className="dim">{PAUSE_TEXT[tool]}</span>
+        </label>
+        <label className="insta-mode">
+          <input type="checkbox" checked={ignore} onChange={e => { setIgnore(e.target.checked); setMsg(null); }} />
+          <span>
+            <b>Ignore my {tool} config</b>
+            <span className="creator-sub">
+              Syncs skip your own {tool} config files (<code>{IGNORE_FLAG[tool]}</code>). A config can change where files
+              go or how they are named, turn off the metadata FeedVault reads, or run commands after each download. Off by
+              default: logins and cookies kept there are skipped too.
+            </span>
+          </span>
         </label>
         {youtube && (
           <label className="insta-pause">

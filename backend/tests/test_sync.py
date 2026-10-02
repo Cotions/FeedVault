@@ -145,7 +145,9 @@ def test_argv_is_built_from_the_source(env, client, fake):
         "--title-pattern", "{date_utc}_UTC_{typename}", "--", "carol.cooks"]
     assert (job["params"], job["group"], job["rescan"], job["label"]) == \
         ({"source": str(s["id"])}, "instaloader", folder, "Sync @carol.cooks")
-    ended(job["id"])
+    # Seeded right before it starts: it has a stamp now, so no --fast-update (#38).
+    job = ended(job["id"])
+    assert "--fast-update" not in job["argv"] and fake.runs()[0]["argv"] == job["argv"][1:]
 
 
 def test_session_flags(env, client, fake):
@@ -352,6 +354,57 @@ def test_new_profile_downloads_everything_and_joins_its_person(env, client, fake
     assert get(client, f"/api/posts?person={p['id']}")["total"] == 3
 
 
+def _saved_between(client, fake, old=None):
+    """#38: carol.cooks synced, then posts A and B newer than the stamp, B
+    saved on its own (the userscript's Save) into the source's folder.
+    ``old``: a monkeypatch, for --fast-update with a stamp as before.
+    Returns the next sync."""
+    fake.set(carol_profile(new=0))
+    s = add_source(client)
+    sync_now(client, s["id"])
+    profile = carol_profile(new=0)
+    profile["carol.cooks"]["posts"] += [
+        {"shortcode": "CPOSTA00001", "ts": TS + 3 * DAY, "caption": "A"},
+        {"shortcode": "CPOSTB00001", "ts": TS + 4 * DAY, "caption": "B"}]
+    fake.set(profile)
+    saved = ended(post(client, "/api/save", {"platform": "instagram", "shortcode": "CPOSTB00001"})["job"]["id"])
+    assert saved["state"] == "done" and saved["result"]["post"] == "instagram:CPOSTB00001"
+    if old:
+        old.setattr(sync, "fast_update", lambda stamps, target, options: not options["full_history"])
+    return sync_now(client, s["id"])
+
+
+def test_a_saved_post_does_not_stop_the_next_sync(env, client, fake):
+    folder = carol_archive(env)
+    job = _saved_between(client, fake)
+    assert job["state"] == "done" and "--fast-update" not in job["argv"]
+    assert job["result"]["added"] == 1                         # A; B was indexed by the save
+    assert (folder / "carol.cooks-2024-06-04-CPOSTA00001.jpg").is_file()
+    have = db.saved_ids(db.connect(), ["instagram:CPOSTA00001", "instagram:CPOSTB00001"])
+    assert set(have) == {"instagram:CPOSTA00001", "instagram:CPOSTB00001"}
+    # instaloader skipped B's files and wrote A's: one run each.
+    assert [r["argv"][-1] for r in fake.runs()] == ["carol.cooks", "-CPOSTB00001", "carol.cooks"]
+
+
+def test_a_saved_post_stopped_the_next_sync_with_fast_update(env, client, fake, monkeypatch):
+    """The behaviour fixed above: --fast-update with a stamp stops at B, and A is never fetched."""
+    folder = carol_archive(env)
+    job = _saved_between(client, fake, old=monkeypatch)
+    assert "--fast-update" in job["argv"] and job["result"]["added"] == 0
+    assert not any("CPOSTA00001" in n for n in os.listdir(folder))
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTA00001"]) == []
+
+
+def test_fast_update_only_without_a_stamp(env, client, fake):
+    """A profile with nothing indexed and no stamp: --fast-update is its only stopping point."""
+    fake.set({"newbie": {"id": 4040, "posts": [{"shortcode": "CNEWBIE0001", "ts": TS}]}})
+    s = add_source(client, target="newbie")
+    job = sync_now(client, s["id"])
+    assert "--fast-update" in job["argv"] and job["result"]["added"] == 1
+    job = sync_now(client, s["id"])
+    assert "--fast-update" not in job["argv"] and job["result"]["added"] == 0
+
+
 def test_trashed_posts_are_not_downloaded_again(env, client, fake):
     carol_archive(env)
     fake.set(carol_profile(new=2))
@@ -368,6 +421,59 @@ def test_trashed_posts_are_not_downloaded_again(env, client, fake):
 # ---------------------------------------------------------------------------
 # File names
 # ---------------------------------------------------------------------------
+
+def _trashed_between(env, client, fake, delay=0):
+    """carol.cooks synced, then A and B newer than the stamp, B saved on its
+    own then trashed. Returns (source, folder)."""
+    folder = carol_archive(env)
+    fake.set(carol_profile(new=0))
+    s = add_source(client)
+    sync_now(client, s["id"])
+    profile = carol_profile(new=0)
+    profile["carol.cooks"]["posts"] += [
+        {"shortcode": "CPOSTA00001", "ts": TS + 3 * DAY, "caption": "A"},
+        {"shortcode": "CPOSTB00001", "ts": TS + 4 * DAY, "caption": "B"}]
+    fake.set(profile)
+    ended(post(client, "/api/save", {"platform": "instagram", "shortcode": "CPOSTB00001"})["job"]["id"])
+    assert post(client, "/api/delete", {"posts": ["instagram:CPOSTB00001"]})["posts"] == ["instagram:CPOSTB00001"]
+    fake.set(profile, delay=delay)
+    return s, folder
+
+
+def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fake):
+    """#31: instaloader keeps no list of deleted posts. B, saved then trashed
+    before the sync that passed it, comes back with it and goes straight back."""
+    s, folder = _trashed_between(env, client, fake)
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done" and job["result"]["added"] == 1 and job["message"] == "1 new post"
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTA00001", "instagram:CPOSTB00001"]) == ["instagram:CPOSTA00001"]
+    assert not any("CPOSTB00001" in n for n in os.listdir(folder))
+    log = [ln["text"] for ln in get(client, f"/api/jobs/{job['id']}/log")["lines"]]
+    assert "[feedvault] 1 trashed post came back with this sync (instaloader keeps no list of deleted posts): " \
+           "back in the trash" in log
+    # It can still be restored: its latest deletion comes back.
+    r = post(client, "/api/trash/restore", {"posts": ["instagram:CPOSTB00001"]})
+    assert r["posts"] == ["instagram:CPOSTB00001"]
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
+    # Restored, it is in the index when the next sync starts: that sync leaves it.
+    job = sync_now(client, s["id"])
+    assert job["result"]["added"] == 0
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
+    assert sync._trashed_before == {}
+
+
+def test_trashed_post_brought_back_by_a_cancelled_sync_goes_back_too(env, client, fake):
+    s, folder = _trashed_between(env, client, fake, delay=0.4)
+    job = post(client, f"/api/sources/{s['id']}/sync")["job"]
+    wait_for(lambda: any("CPOSTB00001" in n for n in os.listdir(folder)))      # B first: newest first
+    post(client, f"/api/jobs/{job['id']}/cancel")
+    assert ended(job["id"])["state"] == "cancelled"
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
+    assert not any("CPOSTB00001" in n for n in os.listdir(folder))
+    scanner.scan(env["roots"])
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
+    assert sync._trashed_before == {}
+
 
 def test_detect_pattern(env, tmp_path):
     d = tmp_path / "dated"
@@ -472,7 +578,7 @@ def test_what_came_before_a_failure_is_indexed(env, client, fake, monkeypatch):
     s = add_source(client)
     # instaloader exits 1 after a non-fatal error late in the run.
     real = sync._outcome
-    monkeypatch.setattr(sync, "_outcome", lambda p, code, lines, index: real(p, 1, lines + [(999, "x: boom")], index))
+    monkeypatch.setattr(sync, "_outcome", lambda p, code, lines, index, note: real(p, 1, lines + [(999, "x: boom")], index, note))
     jobs._kinds[sync.KIND].outcome = sync._outcome
     try:
         job = sync_now(client, s["id"])
@@ -703,7 +809,7 @@ def test_full_history_is_once_and_fills_older_gaps(env, client, fake):
     # Done once: the option is off again and the next sync is incremental.
     assert get(client, f"/api/sources/{s['id']}")["options"]["full_history"] is False
     job = sync_now(client, s["id"])
-    assert "--fast-update" in job["argv"] and job["message"] == "0 new posts"
+    assert "--fast-update" not in job["argv"] and job["message"] == "0 new posts"     # it has a stamp
 
 
 def test_full_history_stays_on_after_a_failure(env, client, fake):

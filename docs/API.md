@@ -96,7 +96,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30 }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30 }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false }` |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false }` |
 | POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
@@ -118,8 +118,11 @@ new.
 
 - What a download adds (a sync job's rescan) and what a full scan finds that
   the index did not have are new. A scan that builds the index from nothing
-  (first run, deleted or replaced database), files back from the trash and
-  files moved by Duplicates are not: they were there before.
+  (first run, deleted or replaced database), the first scan of a media root
+  with nothing indexed under it yet (a root just added: its part of the
+  index is built from nothing), files back from the trash and files moved
+  by Duplicates are not: they were there before. Files put by hand into a
+  root that never had a post count as that root's first scan too.
 - `seen_at` is user data: table `seen_at`, one row, written to
   `<data_directory>/userdata/seen_at.json` (`{"version": 1, "rows": [{"id":
   1, "at": 1727500000}]}`) like the others and read back into a database
@@ -201,8 +204,16 @@ manifest lines (`"archive": { "gallery-dl": [...], "yt-dlp": [...] }`), and
 restoring it takes them out again. Emptying the trash or purging keeps them.
 instaloader has no archive: its `--latest-stamps` keeps a trashed post
 older than the profile's newest download from coming back, but a trashed
-post newer than the stamp (trashed before any sync passed it) can be
-downloaded again by the next sync.
+post newer than the stamp (trashed before any sync passed it, such as a
+post saved on its own then deleted) is downloaded again by the next sync.
+That sync puts it straight back in the trash once its folder is indexed
+(a post in the trash as a whole, not in the index when the sync started,
+in the source's folder after it, and still in the trash), says so in its
+log (`1 trashed post came back with this sync …: back in the trash`) and
+does not count it in `added`. A sync cancelled while instaloader ran has
+its folder indexed when it ends, for the same check. The post then has
+two entries in the trash: the one it was deleted with and the one the
+sync's copy went to; restoring it brings back the latest.
 
 ### Trash contents
 
@@ -962,7 +973,7 @@ time), params `{ "source": "<id>" }` and nothing else. The argument list
 comes from the stored source:
 
 ```
-instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-update
+instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-update]
             --no-compress-json --dirname-pattern <folder> --filename-pattern <pattern>
             --title-pattern {date_utc}_UTC_{typename} [session flags] -- <target>
 ```
@@ -970,8 +981,25 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
 - **Incremental.** `--latest-stamps` keeps, per profile, the time of the
   newest post downloaded, in FeedVault's data directory, not next to the
   media: instaloader stops at it whatever files exist (trashed posts are
-  not downloaded again). `--fast-update` also stops at the first file that
-  exists.
+  not downloaded again), and skips the files that already exist one by one.
+- **`--fast-update` only without a stamp.** It stops at the first post
+  whose files exist, so with a stamp it would stop at a post saved on its
+  own (the userscript's Save) newer than the stamp, and the posts between
+  them would never be fetched. It is passed only when `stamps.ini` has no
+  entry for the target (a first sync that could not be seeded, and not
+  with `full_history`); decided from that file when the job is queued and
+  again right before it starts, after seeding (the job's `argv` shows what
+  ran).
+- **Saved posts join the folder.** Right before each sync, the posts of
+  the source's account (its account, else the one account whose handle,
+  any it had, is the target) that the Save button put in `_saved/` move
+  into the source's folder, renamed as the sync names its files, so the
+  sync finds them and does not download them again. A post moves whole or
+  not at all, never over a file already there (it then stays in `_saved/`).
+  Both folders are indexed again: the posts keep their ids, so their
+  `first_seen`, tags, decisions and collections stay with them. A source
+  whose account is found only by its first sync (adopted) gets them after
+  that sync. The job log says how many moved.
 - **First sync.** When `stamps.ini` has no entry for the target yet, it is
   seeded with the newest trustworthy `posted_at` FeedVault has for the
   source's account (and the account's numeric id, when it has one), so the
@@ -982,7 +1010,11 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
   name without a date (`{target} - {shortcode}`) only has the file's mtime,
   which a copy may have made later than posts never downloaded: such posts
   are left out, and an account with nothing else gets no seed (the job log
-  says `first sync: no reliable date, fetching full history`).
+  says `first sync: no reliable date, fetching full history`). Posts just
+  moved out of `_saved/`, or still in it, never seed it; when they are all
+  the account has, the stamp is set before every post (1970), so the first
+  sync walks the whole profile, skipping the files already there, and a
+  retry does the same.
 - **Metadata on.** `--no-compress-json` writes each post's JSON beside its
   media, so new posts get captions, stats and the account's numeric id.
   The folder's name becomes an alias of that id (see [People](#people)),
@@ -1035,10 +1067,10 @@ later routes the host to another one) and so is its folder
 (inside a media root; for yt-dlp, without `$`, which yt-dlp would expand):
 
 ```
-gallery-dl --write-metadata --download-archive <data_directory>/gallery-dl/archive.sqlite3
+gallery-dl [--config-ignore] --write-metadata --download-archive <data_directory>/gallery-dl/archive.sqlite3
            -o skip=abort:5 -D <folder> [--cookies-from-browser <browser>] -- <link>
 
-yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
+yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
        [--break-on-existing] -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
        [--match-filters "duration <= <youtube_max_seconds>"] [--cookies-from-browser <browser>] -- <link>
 ```
@@ -1061,9 +1093,20 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   first with what FeedVault already indexed for its account (aliases
   included): gallery-dl gets the entry of every file of the account's
   gallery-dl posts (from their metadata JSONs: `<category>` and the
-  extractor's archive format, for twitter, tiktok, instagram, reddit,
-  bluesky and pixiv), yt-dlp a line `<platform> <id>` for every post. The
-  job log says how many. With `options.full_history` too (the profile is
+  extractor's archive format), yt-dlp a line `<platform> <id>` for every
+  post. The job log says how many. The archive formats are read from the
+  installed gallery-dl: its own Python runs a short script listing each
+  extractor's `archive_fmt` (argv only, no shell, in an empty folder, 20 s
+  at most, output checked: plain `{field}` and `{field[key]}` formats
+  only; a category gets one format for all its files only when every
+  extractor of it was accepted), cached until the gallery-dl file changes
+  and read once when FeedVault starts. Trashing a gallery-dl post uses the
+  last formats read (it never starts gallery-dl itself). When that cannot be
+  done (no Python found beside it, a timeout, odd output), FeedVault's own
+  table is used (twitter, tiktok, instagram, reddit, bluesky, pixiv) and
+  the log says so. Files of a category with no known format, or whose
+  metadata lacks a key the format needs, are not seeded, and the log says
+  how many and that this sync may download them again. With `options.full_history` too (the profile is
   walked, what is indexed is still not fetched again); not for a source
   with no account yet.
 - **YouTube.** A youtube.com source only downloads videos up to
@@ -1086,9 +1129,10 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
 
 ### gallery-dl and yt-dlp settings
 
-`GET /api/config` has `"gallery-dl": { "session": {…}, "pause": 30 }` and
-`"yt-dlp": { "session": {…}, "pause": 30 }`; `POST /api/config` with
-either (`session` and/or `pause`) changes it.
+`GET /api/config` has `"gallery-dl": { "session": {…}, "pause": 30,
+"ignore_config": false }` and `"yt-dlp": { "session": {…}, "pause": 30,
+"ignore_config": false }`; `POST /api/config` with either (`session`,
+`pause` and/or `ignore_config`) changes it.
 
 | `session` | Flags | What it means |
 |---|---|---|
@@ -1102,6 +1146,12 @@ sends cookies.
 after a `gallery-dl-sync` job ends the next one waits that long before it
 starts (`waits_until`), and the same for `yt-dlp-sync`; one tool's pause
 never holds the other's syncs.
+
+`ignore_config`: `true` or `false` (default `false`). With `true`, the
+tool's syncs and its Test skip the user's own config files
+(`--config-ignore` for gallery-dl, `--ignore-config` for yt-dlp), so
+options set there (another output folder, a different archive, cookies)
+do not change what FeedVault runs.
 
 `youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
 
@@ -1156,7 +1206,9 @@ itself never does, and is given nothing to do it with: no function on
 `unsafeWindow`, no `window.postMessage` handler, nothing read from the
 page's JavaScript objects. The shortcode comes from `location.pathname` or
 a post link's `href`, the profile name from `location.pathname`, each
-checked against a strict pattern before it is sent.
+checked against a strict pattern before it is sent. The buttons act on a
+real click only (`event.isTrusted`): the page's scripts can call
+`element.click()` or dispatch a click on them, and that does nothing.
 
 **Why a page cannot forge the request.** Every `/api` call needs the
 `X-FeedVault` header and a `Host` naming this machine (see the top of this
@@ -1532,8 +1584,8 @@ fixed public item with the session flags its syncs use, in
 ```
 instaloader --no-posts --no-profile-pic --no-metadata-json --dirname-pattern <data_directory>/downloaders/test
             [--load-cookies <browser> | --login <user>] -- instagram
-gallery-dl --simulate [--cookies-from-browser <browser>] -- https://x.com/jack/status/20
-yt-dlp --simulate --no-playlist [--cookies-from-browser <browser>] -- https://www.youtube.com/watch?v=jNQXAC9IVRw
+gallery-dl [--config-ignore] --simulate [--cookies-from-browser <browser>] -- https://x.com/jack/status/20
+yt-dlp [--ignore-config] --simulate --no-playlist [--cookies-from-browser <browser>] -- https://www.youtube.com/watch?v=jNQXAC9IVRw
 ```
 
 instaloader fetches the profile's metadata and nothing else; gallery-dl

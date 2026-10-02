@@ -3,6 +3,7 @@ import collections
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -286,6 +287,22 @@ def test_yt_dlp_sync_then_nothing_new(env, fake, client):
     assert sum("already been recorded in the archive" in ln["text"] for ln in jobs.log(job["id"])["lines"]) == 2
 
 
+def test_yt_dlp_that_cannot_start_leaves_nothing_behind(env, fake, client, monkeypatch):
+    """#31: the after hook never runs then; the folder listing taken by the start goes too."""
+    fake.put(TT, tt_account(1))
+    s = add(client, TT)
+    real = subprocess.Popen
+
+    def popen(argv, *a, **kw):
+        if os.path.basename(argv[0]) == "yt-dlp":
+            raise PermissionError(13, "Permission denied")
+        return real(argv, *a, **kw)
+    monkeypatch.setattr(jobs.subprocess, "Popen", popen)
+    job = run_sync(client, s["id"])
+    assert job["state"] == "failed" and job["message"] == "yt-dlp could not start: Permission denied"
+    assert sync._info_before == {}
+
+
 def test_yt_dlp_break_on_existing(env, fake, client):
     shorts = "https://youtube.com/@somechannel/shorts"
     fake.put(shorts, yt_account((1, 30), (2, 30)))
@@ -307,6 +324,21 @@ def test_pinned_tiktok_video_does_not_stop_the_sync(env, fake, client):
     assert {"tiktok 7300000000000000003", "tiktok 7300000000000000004"} <= archive_entries(env, "yt-dlp")
     # With --break-on-existing, as before, the pinned video would have stopped it.
     assert "--break-on-existing" not in fake.runs("yt-dlp")[-1]["argv"]
+
+
+@pytest.mark.parametrize("fail, state, message", [
+    (None, "done", "Works"),
+    ("login", "failed", "Login required: the site refused it without a session; set one in its sync settings"),
+    ("429", "failed", "Rate limited: the site is limiting requests, try again later")])
+@pytest.mark.parametrize("tool", ["gallery-dl", "yt-dlp"])
+def test_the_fakes_answer_the_downloaders_test(env, fake, tool, fail, state, message):
+    """#35: the demo's fake tools take the Test's --simulate (and --no-playlist)."""
+    import downloaders                         # registers tool-test
+    fake.put(TT, tt_account(1), fail=fail)
+    job = ended(jobs.submit("tool-test", {"tool": tool})["id"])
+    assert "--simulate" in job["argv"] and (job["state"], job["message"]) == (state, message)
+    assert not (env["tmp"] / "data" / "downloaders" / "test").exists() \
+        or not os.listdir(env["tmp"] / "data" / "downloaders" / "test")
 
 
 def test_youtube_long_videos_are_not_downloaded(env, fake, client):
@@ -344,7 +376,7 @@ def test_one_item_failing_is_not_the_profile_failing():
                                                          "you've been granted access to this video"]),
             ("yt-dlp", ["ERROR: [TikTok] 7300000000000000001: Video unavailable"]),
             ("gallery-dl", ["/a/1.jpg", "[download][error] Failed to download 2.jpg"])]:
-        state, result, message = sync._outcome({}, 1, list(enumerate(lines)), index, tool)
+        state, result, message = sync._outcome({}, 1, list(enumerate(lines)), index, None, tool)
         assert state == "done" and result["error"] is None, lines
         assert message.startswith("3 new posts; 1 item could not be downloaded: "), message
     for tool, lines, error in [
@@ -355,7 +387,7 @@ def test_one_item_failing_is_not_the_profile_failing():
             ("yt-dlp", ["ERROR: [youtube] A: HTTP Error 429: Too Many Requests"], "rate_limited"),
             ("gallery-dl", ["[twitter][error] NotFoundError: Requested user could not be found"], "not_found"),
             ("gallery-dl", ["something broke"], "generic")]:
-        state, result, _ = sync._outcome({}, 1, list(enumerate(lines)), index, tool)
+        state, result, _ = sync._outcome({}, 1, list(enumerate(lines)), index, None, tool)
         assert (state, result["error"]) == ("failed", error), lines
 
 
@@ -422,6 +454,131 @@ def test_gallery_dl_entries_match_the_fixtures(tmp_path):
     assert entries == ["tiktok3914719032600086255_0_", "tiktok3914719032600086255_0_a2810"]
     assert archives.gallery_dl_entry({"category": "twitter", "tweet_id": 1}) is None         # post-level JSON
     assert archives.gallery_dl_entry({"category": "unknown", "filename": "a", "extension": "jpg"}) is None
+
+
+def fake_gallery_dl_package(tmp, formats, monkeypatch):
+    """A gallery-dl install whose Python has a ``gallery_dl`` package with
+    these extractor classes ([category, subcategory, archive_fmt]); every
+    listing is counted in ``runs``. Set as the tool in Settings."""
+    pkg = tmp / "gdl-site" / "gallery_dl"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    runs = tmp / "gdl-runs"
+    classes = "".join(f"    type('E{i}', (), {{'category': {c!r}, 'subcategory': {sub!r}, 'archive_fmt': {fmt!r}}}),\n"
+                      for i, (c, sub, fmt) in enumerate(formats))
+    (pkg / "extractor.py").write_text(f"open({str(runs)!r}, 'a').write('x')\n"
+                                      f"def extractors():\n    return [\n{classes}    ]\n")
+    python = tmp / "gdl-bin" / "python3"
+    python.parent.mkdir()
+    python.write_text(f"#!/bin/sh\nPYTHONPATH={tmp / 'gdl-site'} exec {sys.executable} \"$@\"\n")
+    python.chmod(0o755)
+    exe = tmp / "gdl-bin" / "gallery-dl"
+    exe.write_text(f"#!{python}\nimport sys\nsys.path.insert(0, {TESTS!r})\n"
+                   "import fake_downloaders\nsys.exit(fake_downloaders.gallery_dl_main(sys.argv[1:]))\n")
+    exe.chmod(0o755)
+    set_config(tools={"gallery-dl": str(exe)})
+    monkeypatch.setattr(archives, "_formats", {"key": None, "formats": None, "error": None, "last": None})
+    return runs
+
+
+def test_safe_formats():
+    for ok in ["{id}", "{tweet_id}_{retweet_id}_{num}", "{id}{suffix}.{extension}", "{asset[id]}",
+               "a_{album[id]}_{asset[id]}", "{num:>02}", "{num:02}"]:
+        assert archives._safe_format(ok), ok
+    for bad in ["", "{id|slug}", "{x.__class__}", "{a!r}", "{date:%Y%m%d}", "{num:>99999999}", "{path:J/}",
+                "{gallery_id:? / /}", "{", "{0}", "x" * 201, None, 5]:
+        assert not archives._safe_format(bad), bad
+
+
+def test_archive_formats_from_the_installed_gallery_dl(env, fake, client, monkeypatch):
+    runs = fake_gallery_dl_package(env["tmp"], [
+        ["twitter", "media", "{tweet_id}_{retweet_id}_{num}"], ["twitter", "tweet", "{tweet_id}_{retweet_id}_{num}"],
+        ["newsite", "user", "{post[id]}_{num}"], ["newsite", "post", "p{post[id]}_{num}"],
+        ["odd", "user", "{id|slug}"], ["evil", "user", "{x.__class__}"],
+        ["mixed", "user", "{id}"], ["mixed", "post", "{id|slug}"]], monkeypatch)
+    formats, error = archives.installed_formats()
+    assert error is None
+    assert formats == {("twitter", "media"): "{tweet_id}_{retweet_id}_{num}",
+                       ("twitter", "tweet"): "{tweet_id}_{retweet_id}_{num}",
+                       ("twitter", None): "{tweet_id}_{retweet_id}_{num}",
+                       ("newsite", "user"): "{post[id]}_{num}", ("newsite", "post"): "p{post[id]}_{num}",
+                       ("mixed", "user"): "{id}"}     # not ("mixed", None): its "post" files are not "{id}"
+    # Read once, kept: not run again, not for the trash either.
+    assert archives.installed_formats() == (formats, None) and archives.installed_formats(run=False)[0] == formats
+    assert runs.read_text() == "x"
+    d = {"category": "newsite", "subcategory": "post", "post": {"id": 12}, "num": 1, "filename": "a",
+         "extension": "jpg"}
+    assert archives.gallery_dl_entry(d, formats) == "newsitep12_1"
+    assert archives.gallery_dl_entry({**d, "subcategory": "user"}, formats) == "newsite12_1"
+    assert archives.gallery_dl_entry({**d, "subcategory": "other"}, formats) is None       # no one format for it
+    assert archives.gallery_dl_entry(d) is None                                             # not in the table
+    # A new version of the file: read again by the next seed; the trash
+    # uses the last formats read until then.
+    exe = config.load()["tools"]["gallery-dl"]
+    os.utime(exe, (TS, TS))
+    assert archives.installed_formats(run=False) == (formats, None)
+    archives.installed_formats()
+    assert runs.read_text() == "xx"
+
+
+@pytest.mark.parametrize("line, argv", [
+    ("#!/usr/bin/python3", ["/usr/bin/python3"]),
+    ("#!/usr/bin/python3 -sP", ["/usr/bin/python3", "-sP"]),
+    ("#!/usr/bin/env python3.12", ["/usr/bin/env", "python3.12"]),
+    ("#!/usr/bin/env -S python3", None),
+    ("#!/bin/sh -c", None),
+    ("#!python3", None),
+    ("#!/usr/bin/python3 -c 'import os'", None)])
+def test_python_of_a_shebang(tmp_path, line, argv):
+    exe = tmp_path / "gallery-dl"
+    exe.write_text(line + "\nprint()\n")
+    assert archives._python_of(str(exe)) == argv
+
+
+def test_first_sync_seeds_with_installed_formats_and_logs_the_rest(env, fake, client, monkeypatch):
+    fake_gallery_dl_package(env["tmp"], [["twitter", "media", "T{tweet_id}-{num}"]], monkeypatch)
+    old = env["media"] / "gallery-dl" / "twitter" / "someone"
+    old.mkdir(parents=True)
+    from fake_downloaders import _gallery_dl_files
+    for p in x_account((1, 1))["posts"]:
+        for name, d in _gallery_dl_files(x_account(), p):
+            (old / name).write_bytes(b"\xff\xd8\xff")
+            (old / (name + ".json")).write_text(json.dumps(d))
+    (old / "elsewhere_1.jpg").write_bytes(b"\xff\xd8\xff")
+    (old / "elsewhere_1.jpg.json").write_text(json.dumps({
+        "category": "twitter", "subcategory": "unknownsub", "tweet_id": 1800000000000000009, "num": 1,
+        "date": "2024-06-01 12:00:00", "author": USER, "user": USER, "content": "", "filename": "e",
+        "extension": "jpg"}))
+    scanner.scan(env["roots"])
+    s = add(client, X, account={"platform": "twitter", "id": "900"})
+    fake.put(X, x_account((1, 1)))
+    job = run_sync(client, s["id"])
+    assert "twitterT1800000000000000001-1" in archive_entries(env, "gallery-dl")
+    # The one extractor known has this format: twitter's table entry is not used for the other.
+    assert "twitter1800000000000000009_0_1" not in archive_entries(env, "gallery-dl")
+    log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert not any("could not be read" in t for t in log)
+
+
+def test_first_sync_says_when_formats_are_from_the_table(env, fake, client):
+    """The fake gallery-dl's Python has no gallery_dl package: the table, said in the log."""
+    s = add(client, X)
+    old = env["media"] / "gallery-dl" / "twitter" / "someone"
+    old.mkdir(parents=True)
+    (old / "a_1.jpg").write_bytes(b"\xff\xd8\xff")
+    (old / "a_1.jpg.json").write_text(json.dumps({
+        "category": "nosuchsite", "subcategory": "user", "id": 5, "date": "2024-06-01 12:00:00",
+        "author": USER, "user": USER, "filename": "a", "extension": "jpg"}))
+    scanner.scan(env["roots"])
+    fake.put(X, x_account((1, 1)))
+    conn = db.connect()
+    assert [tuple(r) for r in conn.execute("SELECT platform, author_id FROM posts")] == [("nosuchsite", "900")]
+    conn.execute("UPDATE sources SET author_id = '900', platform = 'nosuchsite' WHERE id = ?", (s["id"],))
+    conn.commit()
+    log = [ln["text"] for ln in jobs.log(run_sync(client, s["id"])["id"])["lines"]]
+    assert any("gallery-dl's own archive formats could not be read" in t and "twitter" in t for t in log)
+    assert "[feedvault] 1 nosuchsite file not seeded (no archive format known for nosuchsite, or its metadata " \
+        "lacks a key the format needs), so this sync may download it again" in log
 
 
 def test_first_yt_dlp_sync_skips_what_any_tool_indexed(env, fake, client):
@@ -594,7 +751,7 @@ def test_archive_file_kept_intact_by_concurrent_appends(env):
 def test_tool_settings_in_config(env, client):
     cfg = get(client, "/api/config")
     for tool in ("gallery-dl", "yt-dlp"):
-        assert cfg[tool] == {"session": {"mode": "none"}, "pause": 30}
+        assert cfg[tool] == {"session": {"mode": "none"}, "pause": 30, "ignore_config": False}
     assert cfg["youtube_max_seconds"] == 180
     r = post(client, "/api/config", {"gallery-dl": {"session": {"mode": "cookies", "browser": "firefox"}},
                                       "youtube_max_seconds": 600})
@@ -608,13 +765,40 @@ def test_tool_settings_in_config(env, client):
     assert config.load()["youtube_max_seconds"] == 600
     # The pause, each tool its own, as instaloader's.
     r = post(client, "/api/config", {"yt-dlp": {"pause": 0}, "gallery-dl": {"pause": 3600}})
-    assert r["config"]["yt-dlp"] == {"session": {"mode": "none"}, "pause": 0}
-    assert r["config"]["gallery-dl"] == {"session": {"mode": "cookies", "browser": "firefox"}, "pause": 3600}
+    assert r["config"]["yt-dlp"] == {"session": {"mode": "none"}, "pause": 0, "ignore_config": False}
+    assert r["config"]["gallery-dl"] == {"session": {"mode": "cookies", "browser": "firefox"}, "pause": 3600,
+                                         "ignore_config": False}
     for bad in [-1, 3601, "5", True, None, 1.5]:
         assert post(client, "/api/config", {"yt-dlp": {"pause": bad}})["ok"] is False, bad
     assert config.load()["yt-dlp"]["pause"] == 0
     set_config(**{"gallery-dl": {"pause": "x"}})                    # edited by hand: the default
     assert get(client, "/api/config")["gallery-dl"]["pause"] == 30
+
+
+def test_ignore_my_config(env, fake, client):
+    """Off by default; on, each tool gets its own flag, first, in syncs and in Test."""
+    import downloaders
+    x, t = add(client, X), add(client, TT)
+    for tool, build in (("gallery-dl", sync._build_gallery_dl), ("yt-dlp", sync._build_yt_dlp)):
+        flag = sync.IGNORE_CONFIG[tool]
+        sid = str((x if tool == "gallery-dl" else t)["id"])
+        assert flag not in build({"source": sid})["args"]
+        assert flag not in downloaders._build_test({"tool": tool})["args"]
+        r = post(client, "/api/config", {tool: {"ignore_config": True}})
+        assert r["config"][tool]["ignore_config"] is True and r["config"][tool]["pause"] == 0
+        assert build({"source": sid})["args"][0] == flag
+        assert downloaders._build_test({"tool": tool})["args"][0] == flag
+    assert sync.IGNORE_CONFIG == {"gallery-dl": "--config-ignore", "yt-dlp": "--ignore-config"}
+    for bad in [1, "true", None, []]:
+        assert post(client, "/api/config", {"yt-dlp": {"ignore_config": bad}})["ok"] is False, bad
+    assert config.load()["yt-dlp"]["ignore_config"] is True
+    set_config(**{"gallery-dl": {"ignore_config": "yes"}})               # edited by hand: off
+    assert get(client, "/api/config")["gallery-dl"]["ignore_config"] is False
+    # The fakes take the flags: a sync with it on runs as before.
+    fake.put(X, x_account((1, 1)))
+    set_config(**{"gallery-dl": {"ignore_config": True, "pause": 0}})
+    job = run_sync(client, x["id"])
+    assert job["state"] == "done" and job["argv"][1] == "--config-ignore"
 
 
 def test_pause_between_two_syncs_of_one_tool(env, fake, client):

@@ -148,6 +148,33 @@ def test_rescan_of_existing_files_is_never_new(env, client):
     assert ids(client, new="1") == []
 
 
+def test_a_media_root_just_added_is_not_new(env, client):
+    """#13: its first scan builds its part of the index from nothing. A post
+    that arrived meanwhile in a root already indexed is still new."""
+    folder = archive(env)
+    scanner.scan(env["roots"])
+    conn = db.connect()
+    news.ensure(conn)
+    set_seen(conn, int(time.time()) - 10)
+    other = env["tmp"] / "media2"              # shares the first root's name as a prefix
+    for i in range(3):
+        write_post(other / "dana.draws", f"OLDDANA{i:04d}", TS + i, owner("dana.draws", 888))
+    write_post(folder, "NEWCAROL0001", TS + 100, owner("carol.cooks", 777))
+    r = client.post("/api/config", json={"media_roots": [*env["roots"], str(other)]}, headers=H).get_json()
+    assert r["ok"]
+    deadline = time.monotonic() + 10
+    while scanner.status()["running"] or scanner.status()["last"] is None:
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+    assert scanner.status()["last"]["added"] == 4
+    assert ids(client, new="1") == ["instagram:NEWCAROL0001"]
+    assert db.connect().execute("SELECT COUNT(*) FROM posts WHERE first_seen = 0").fetchone()[0] == 5
+    # Later posts in the new root are new as usual.
+    write_post(other / "dana.draws", "NEWDANA0001", TS + 100, owner("dana.draws", 888))
+    scanner.scan([*env["roots"], str(other)])
+    assert ids(client, new="1") == ["instagram:NEWCAROL0001", "instagram:NEWDANA0001"]
+
+
 def test_posts_indexed_after_the_mark_are_new(env, client):
     archive(env)
     archive(env, 1, "dana.draws", 888)

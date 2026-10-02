@@ -21,6 +21,11 @@ this script), keyed by the profile link FeedVault passes:
 and behave like gallery-dl 1.32 and yt-dlp 2026.08 for one profile link with
 the flags FeedVault passes, newest post first:
 
+- both: the flag that skips the user's config (``--config-ignore``,
+  ``--ignore-config``), with no effect: there is no config to skip.
+- both: ``--simulate`` (and yt-dlp's ``--no-playlist``), as Settings →
+  Downloaders → Test runs them on one public item: one line and exit 0,
+  or the ``fail`` setting's output and exit code; writes nothing.
 - gallery-dl: ``--write-metadata`` (``<file>.<ext>.json`` beside each file,
   shaped like the fixtures), ``--download-archive`` (its SQLite table, one
   ``<category><archive_fmt>`` entry per file), ``-o skip=abort:N`` (stops
@@ -134,6 +139,8 @@ def gallery_dl_main(argv):
     _log("gallery-dl", argv)
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--write-metadata", action="store_true")
+    ap.add_argument("--config-ignore", action="store_true")
+    ap.add_argument("-s", "--simulate", action="store_true")
     ap.add_argument("--download-archive")
     ap.add_argument("-o", action="append", default=[])
     ap.add_argument("-D")
@@ -146,6 +153,9 @@ def gallery_dl_main(argv):
     status = 0
     for url in args.urls:
         account = data["accounts"].get(url)
+        if args.simulate and not data.get("fail"):
+            print(f"# {url.rsplit('/', 1)[-1]}_1.jpg")      # the test item: nothing written
+            continue
         if data.get("fail") or account is None:
             exc, msg, code = GALLERY_DL_FAIL[data.get("fail") or "notfound"]
             name = (account or {}).get("user", {}).get("name", "someone")
@@ -233,7 +243,8 @@ def yt_dlp_main(argv):
         return 0
     _log("yt-dlp", argv)
     ap = argparse.ArgumentParser(add_help=False)
-    for flag in ("--write-info-json", "--write-thumbnail", "--break-on-existing"):
+    for flag in ("--write-info-json", "--write-thumbnail", "--break-on-existing", "--ignore-config",
+                 "--simulate", "--no-playlist"):
         ap.add_argument(flag, action="store_true")
     ap.add_argument("--download-archive")
     ap.add_argument("-o", default="%(title)s [%(id)s].%(ext)s")
@@ -249,6 +260,11 @@ def yt_dlp_main(argv):
     status = 0
     for url in args.urls:
         account = data["accounts"].get(url)
+        if args.simulate and not data.get("fail"):
+            vid = url.rsplit("=", 1)[-1]
+            print(f"[youtube] Extracting URL: {url}\n[youtube] {vid}: Downloading webpage\n"
+                  f"[info] {vid}: Downloading 1 format(s): 18")
+            continue
         if data.get("fail") or account is None:
             # A profile's errors come from its list extractor, as yt-dlp's do.
             ie = {"TikTok": "tiktok:user", "Youtube": "youtube:tab"}.get(
