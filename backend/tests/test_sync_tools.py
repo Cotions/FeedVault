@@ -326,6 +326,21 @@ def test_pinned_tiktok_video_does_not_stop_the_sync(env, fake, client):
     assert "--break-on-existing" not in fake.runs("yt-dlp")[-1]["argv"]
 
 
+@pytest.mark.parametrize("fail, state, message", [
+    (None, "done", "Works"),
+    ("login", "failed", "Login required: the site refused it without a session; set one in its sync settings"),
+    ("429", "failed", "Rate limited: the site is limiting requests, try again later")])
+@pytest.mark.parametrize("tool", ["gallery-dl", "yt-dlp"])
+def test_the_fakes_answer_the_downloaders_test(env, fake, tool, fail, state, message):
+    """#35: the demo's fake tools take the Test's --simulate (and --no-playlist)."""
+    import downloaders                         # registers tool-test
+    fake.put(TT, tt_account(1), fail=fail)
+    job = ended(jobs.submit("tool-test", {"tool": tool})["id"])
+    assert "--simulate" in job["argv"] and (job["state"], job["message"]) == (state, message)
+    assert not (env["tmp"] / "data" / "downloaders" / "test").exists() \
+        or not os.listdir(env["tmp"] / "data" / "downloaders" / "test")
+
+
 def test_youtube_long_videos_are_not_downloaded(env, fake, client):
     fake.put(YT, yt_account((1, 30), (2, 3600), (3, 170)))
     s = add(client, YT)
