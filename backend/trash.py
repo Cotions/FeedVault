@@ -10,6 +10,10 @@ Each move is logged in the trash folder's ``.manifest.jsonl`` (original path,
 trash path, post id, time, and what the Trash page shows about the post, which
 is gone from the index by then). Restore and purge work from those lines.
 
+A post trashed again (an instaloader sync brought back a copy of a trashed
+post, which goes straight back) keeps one entry: the copy's is purged when
+the entry it was deleted with is still whole (merge_again).
+
 Trashing a gallery-dl or yt-dlp post also adds it to those tools' download
 archives (archives.py), so no sync brings it back; the entries it added are
 kept on its manifest lines, and restoring it takes them out again.
@@ -665,47 +669,102 @@ def _prune_dirs(path, root):
 def purge(roots, keys, data_dir, match=None):
     """Permanently delete the files of the given entries and drop their lines.
     ``match`` (_matches arguments) picks the entries instead of ``keys``."""
-    report = {"ok": True, "entries": 0, "keys": [], "files": 0, "bytes": 0, "dropped": 0, "errors": []}
     with db.write_lock:
         if match is not None:
             keys = [g["key"] for g in _all_entries(roots) if _matches(g, **match)]
-        wanted = set(keys)
-        gone = set()
-        for root in roots:
-            lines = _read_manifest(root)
-            if not any(_line_key(root, e) in wanted for e in lines):
+        return _purge(roots, keys, data_dir)
+
+
+def _purge(roots, keys, data_dir):
+    """purge, under db.write_lock."""
+    report = {"ok": True, "entries": 0, "keys": [], "files": 0, "bytes": 0, "dropped": 0, "errors": []}
+    wanted = set(keys)
+    gone = set()
+    for root in roots:
+        lines = _read_manifest(root)
+        if not any(_line_key(root, e) in wanted for e in lines):
+            continue
+        keep, failed, done, posts = [], set(), set(), {}
+        for e in lines:
+            key = _line_key(root, e)
+            if key not in wanted:
+                keep.append(e)
                 continue
-            keep, failed, done, posts = [], set(), set(), {}
-            for e in lines:
-                key = _line_key(root, e)
-                if key not in wanted:
-                    keep.append(e)
-                    continue
-                posts[key] = e.get("post")
-                path = e["to"]
-                try:
-                    if not os.path.lexists(path):
-                        report["dropped"] += 1
-                        done.add(key)
-                        continue
-                    if not _removable(path, root):
-                        raise TrashError("outside the trash folder")
-                    if os.path.isdir(path) and not os.path.islink(path):
-                        raise TrashError("not a file")
-                    size = os.lstat(path).st_size
-                    os.remove(path)
-                    report["files"] += 1
-                    report["bytes"] += size
+            posts[key] = e.get("post")
+            path = e["to"]
+            try:
+                if not os.path.lexists(path):
+                    report["dropped"] += 1
                     done.add(key)
-                    thumbs.forget(data_dir, path)
-                    _prune_dirs(path, root)
-                except (TrashError, OSError) as err:
-                    report["errors"].append({"path": path, "error": str(err)})
-                    failed.add(key)
-                    keep.append(e)
-            gone.update(posts[k] for k in done - failed)
-            report["keys"].extend(sorted(done - failed))
-            report["entries"] += len(done - failed)
-            _write_manifest(root, keep)
-        report["forgotten"] = _forget_gone(roots, gone) if gone else []
+                    continue
+                if not _removable(path, root):
+                    raise TrashError("outside the trash folder")
+                if os.path.isdir(path) and not os.path.islink(path):
+                    raise TrashError("not a file")
+                size = os.lstat(path).st_size
+                os.remove(path)
+                report["files"] += 1
+                report["bytes"] += size
+                done.add(key)
+                thumbs.forget(data_dir, path)
+                _prune_dirs(path, root)
+            except (TrashError, OSError) as err:
+                report["errors"].append({"path": path, "error": str(err)})
+                failed.add(key)
+                keep.append(e)
+        gone.update(posts[k] for k in done - failed)
+        report["keys"].extend(sorted(done - failed))
+        report["entries"] += len(done - failed)
+        _write_manifest(root, keep)
+    report["forgotten"] = _forget_gone(roots, gone) if gone else []
     return report
+
+
+# ---------------------------------------------------------------------------
+# A post trashed again
+# ---------------------------------------------------------------------------
+
+def _whole(g):
+    """Whether an entry is a whole post (not one item, not an extra copy)
+    with every file it lists still in the trash, inside the trash folder."""
+    p = g["public"]
+    return not p["partial"] and not p["copy"] and all(
+        os.path.lexists(line["to"]) and _inside_trash(line["to"], g["root"]) for line in g["lines"])
+
+
+def merge_again(roots, post_ids, data_dir):
+    """One trash entry for a post trashed again: a sync (sync.retrash)
+    brought back a copy of a post that was in the trash, and that copy was
+    just trashed too. Its entry (the post's newest) is purged when an older
+    entry of the same post, in the same trash folder, is whole (every file
+    still there) and has as many media items: the post keeps the entry it
+    was deleted with, and the files it had then. Otherwise both stay. Only
+    a copy that added no archive entries (instaloader's) is dropped.
+    Returns the post ids merged."""
+    wanted, merged = set(post_ids), []
+    with db.write_lock:
+        drop = []
+        for root in roots:
+            by_post = {}
+            for g in _load(root)[1]:
+                if g["public"]["post"] in wanted and not g["public"]["copy"]:
+                    by_post.setdefault(g["public"]["post"], []).append(g)
+            for pid, gs in sorted(by_post.items()):
+                if len(gs) < 2:
+                    continue
+                gs.sort(key=lambda g: (g["at"], g["seq"]))
+                new = gs[-1]
+                if not _whole(new) or any(isinstance(line.get("archive"), dict) for line in new["lines"]):
+                    continue
+                # Not sharing a file: one taken out of the trash by hand frees
+                # its trash path for the copy's file of the same name.
+                files = {line["to"] for line in new["lines"]}
+                if any(_whole(g) and g["public"]["items"] == new["public"]["items"]
+                       and not files & {line["to"] for line in g["lines"]} for g in gs[:-1]):
+                    drop.append(new["key"])
+                    merged.append(pid)
+        report = _purge(roots, drop, data_dir) if drop else None
+    if report and report["errors"]:
+        left = {g["public"]["post"] for g in _all_entries(roots) if g["key"] in set(drop) - set(report["keys"])}
+        merged = [pid for pid in merged if pid not in left]
+    return merged

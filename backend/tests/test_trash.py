@@ -171,3 +171,53 @@ def test_restore_only_latest_deletion(env, client):
     client.post("/api/trash/restore", json={"posts": ["instagram:C1"]}, headers=H)
     left = client.get("/api/posts/instagram/C1", headers=H).get_json()["media"]
     assert [m["idx"] for m in left] == [2, 3]                  # the second delete undone, not the first
+
+
+def _trash_twice(env, client, slides):
+    """P1 (two images) trashed, then a copy with ``slides`` trashed too."""
+    write_post(env["media"] / "alice", "P1", 1717243200, ALICE, "carousel", slides=[False, False])
+    scan(env)
+    assert client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H).get_json()["posts"]
+    write_post(env["media"] / "alice", "P1", 1717243200, ALICE, "carousel", slides=slides)
+    scan(env)
+    assert client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H).get_json()["posts"]
+
+
+def entries(client):
+    return client.get("/api/trash/items", headers=H).get_json()["entries"]
+
+
+def test_trashed_again_is_one_entry(env, client):
+    import config
+    import trash
+    _trash_twice(env, client, [False, False])
+    first, _ = reversed(entries(client))                       # listed newest first
+    assert trash.merge_again(env["roots"], ["instagram:P1"], config.load()["data_directory"]) == ["instagram:P1"]
+    [left] = entries(client)
+    assert left["key"] == first["key"] and left["items"] == 2 and not left["missing"]
+    # Only the first entry's files are left in the trash, and they come back.
+    names = sorted(n for n in os.listdir(trash_root(env) / "alice"))
+    assert names == ["2024-06-01_12-00-00_UTC.json", "2024-06-01_12-00-00_UTC_1.jpg", "2024-06-01_12-00-00_UTC_2.jpg"]
+    r = client.post("/api/trash/restore", json={"posts": ["instagram:P1"]}, headers=H).get_json()
+    assert r["posts"] == ["instagram:P1"] and r["errors"] == [] and r["files"] == 3
+    assert entries(client) == []
+    assert client.get("/api/posts/instagram/P1", headers=H).status_code == 200
+
+
+def test_trashed_again_with_other_items_keeps_both(env, client):
+    import config
+    import trash
+    _trash_twice(env, client, [False, False, False])
+    assert trash.merge_again(env["roots"], ["instagram:P1"], config.load()["data_directory"]) == []
+    assert len(entries(client)) == 2
+
+
+def test_merge_again_leaves_other_posts_and_single_entries(env, client):
+    import config
+    import trash
+    write_post(env["media"] / "alice", "P2", 1717243300, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P2"]}, headers=H)
+    _trash_twice(env, client, [False, False])
+    assert trash.merge_again(env["roots"], ["instagram:P2"], config.load()["data_directory"]) == []
+    assert len(entries(client)) == 3

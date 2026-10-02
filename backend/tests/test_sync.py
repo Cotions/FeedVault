@@ -17,6 +17,7 @@ import jobs
 import scanner
 import sources
 import sync
+import trash
 
 TS = 1717243200                                     # 2024-06-01 12:00 UTC
 DAY = 86400
@@ -445,6 +446,7 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     """#31: instaloader keeps no list of deleted posts. B, saved then trashed
     before the sync that passed it, comes back with it and goes straight back."""
     s, folder = _trashed_between(env, client, fake)
+    [first] = [e for e in get(client, "/api/trash/items")["entries"] if e["post"] == "instagram:CPOSTB00001"]
     job = sync_now(client, s["id"])
     assert job["state"] == "done" and job["result"]["added"] == 1 and job["message"] == "1 new post"
     assert db.saved_ids(db.connect(), ["instagram:CPOSTA00001", "instagram:CPOSTB00001"]) == ["instagram:CPOSTA00001"]
@@ -452,6 +454,11 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     log = [ln["text"] for ln in get(client, f"/api/jobs/{job['id']}/log")["lines"]]
     assert "[feedvault] 1 trashed post came back with this sync (instaloader keeps no list of deleted posts): " \
            "back in the trash" in log
+    # #41.3: one trash entry, the one it was deleted with.
+    assert "[feedvault] 1 of them kept its first trash entry, with the files it was deleted with; " \
+           "the copy this sync downloaded was deleted" in log
+    [entry] = [e for e in get(client, "/api/trash/items")["entries"] if e["post"] == "instagram:CPOSTB00001"]
+    assert entry["at"] == first["at"] and entry["key"] == first["key"] and not entry["missing"]
     # It can still be restored: its latest deletion comes back.
     r = post(client, "/api/trash/restore", {"posts": ["instagram:CPOSTB00001"]})
     assert r["posts"] == ["instagram:CPOSTB00001"]
@@ -461,6 +468,40 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     assert job["result"]["added"] == 0
     assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
     assert sync._trashed_before == {} and not os.listdir(sync._retrash_dir())
+
+
+def _entries(client, pid="instagram:CPOSTB00001"):
+    return [e for e in get(client, "/api/trash/items")["entries"] if e["post"] == pid]
+
+
+def test_trashed_post_brought_back_can_be_purged_as_one_entry(env, client, fake):
+    s, folder = _trashed_between(env, client, fake)
+    sync_now(client, s["id"])
+    [entry] = _entries(client)
+    trash_dir = env["media"] / ".feedvault-trash"
+    assert any("CPOSTB00001" in n for _, _, names in os.walk(trash_dir) for n in names)
+    r = post(client, "/api/trash/purge", {"keys": [entry["key"]]})
+    assert r["entries"] == 1 and r["errors"] == []
+    assert _entries(client) == []
+    assert not any("CPOSTB00001" in n for _, _, names in os.walk(trash_dir) for n in names)
+    assert not any("CPOSTB00001" in n for n in os.listdir(folder))
+
+
+def test_trashed_post_whose_first_entry_lost_a_file_keeps_both(env, client, fake):
+    """The first entry is not whole (a file taken out of the trash by hand):
+    the sync's copy is all there is of that file, so it stays."""
+    s, folder = _trashed_between(env, client, fake)
+    trash_dir = env["media"] / ".feedvault-trash"
+    [jpg] = [os.path.join(d, n) for d, _, names in os.walk(trash_dir) for n in names
+             if "CPOSTB00001" in n and n.endswith(".jpg")]
+    os.remove(jpg)
+    job = sync_now(client, s["id"])
+    assert job["result"]["added"] == 1
+    assert len(_entries(client)) == 2
+    assert not any("kept its first trash entry" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+    # Restore brings back the latest, whole copy.
+    assert post(client, "/api/trash/restore", {"posts": ["instagram:CPOSTB00001"]})["errors"] == []
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
 
 
 def test_trashed_post_brought_back_by_a_cancelled_sync_goes_back_too(env, client, fake):
@@ -481,6 +522,8 @@ def _brought_back(env, folder):
     assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
     assert not any("CPOSTB00001" in n for n in os.listdir(folder))
     assert "instagram:CPOSTB00001" in sync._in_trash(env["roots"])
+    assert len([g for g in trash._all_entries(env["roots"])
+                if g["public"]["post"] == "instagram:CPOSTB00001"]) == 1
     scanner.scan(env["roots"])
     assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
     assert sync._trashed_before == {} and not os.listdir(sync._retrash_dir())

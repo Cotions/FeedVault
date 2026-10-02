@@ -520,6 +520,16 @@ def retrash(sid, folder, note):
     if gone:
         note(f"{len(gone)} trashed post{'' if len(gone) == 1 else 's'} came back with this sync "
              f"(instaloader keeps no list of deleted posts): back in the trash")
+        try:
+            merged = trash.merge_again(cfg["media_roots"], gone, cfg["data_directory"])
+        except Exception as e:                 # two entries, as before
+            merged = []
+            note(f"could not merge their trash entries: {e}")
+        if merged:
+            n = len(merged)
+            note(f"{n} of them kept {'its' if n == 1 else 'their'} first trash entry, with the files "
+                 f"{'it was' if n == 1 else 'they were'} deleted with; the cop{'y' if n == 1 else 'ies'} "
+                 f"this sync downloaded {'was' if n == 1 else 'were'} deleted")
     if len(gone) < len(back):
         left = len(back) - len(gone)
         why = report.get("error") or "; ".join(e["error"] for e in report["errors"][:1]) or "unknown error"

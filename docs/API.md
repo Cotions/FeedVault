@@ -218,9 +218,17 @@ runs, so a sync that FeedVault stopped (Quit, or killed) gets the same
 check at the next start: its folder is indexed and the posts it brought
 back go back to the trash (the server log says so), then the file goes.
 A file whose source is gone is dropped; one whose folder is missing
-(its media root offline) waits for a later start. The post then has
-two entries in the trash: the one it was deleted with and the one the
-sync's copy went to; restoring it brings back the latest.
+(its media root offline) waits for a later start.
+
+Such a post keeps one entry in the trash: the one it was deleted with,
+and the files it had then. The copy the sync downloaded is deleted for
+good right after it went to the trash (its entry purged), only when the
+first entry is the same post (same id, as many media items), in the same
+trash folder, whole (every file still there, none shared with the copy)
+and the copy added no archive entries; the log says so (`1 of them kept
+its first trash entry …`). Otherwise both entries stay, and restoring the
+post brings back the latest. Restore and purge work on the entry left as
+on any other.
 
 ### Trash contents
 
