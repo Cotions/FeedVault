@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { createSource, cancelJob, resolveSource, updateSource } from "../lib/api";
+import { acceptRename, createSource, cancelJob, dismissRename, resolveSource, updateSource } from "../lib/api";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
 import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
+import { healthBadge, lastGood, loginText } from "../lib/health";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import {
   FIRST_POSTS_MAX, MEDIA, SCHEDULES, firstPostsEach, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin,
@@ -34,9 +35,11 @@ export function SourceStatus({ source: s, job, compact = false }) {
   if (!r) return <span className="source-status dim">never synced</span>;
   const failed = r.state === "failed";
   const title = [r.message, r.line, s.last_sync_at && fmtFullDate(s.last_sync_at)].filter(Boolean).join("\n");
+  // The account's state (health), else (an old result) the error's badge.
+  const badge = healthBadge(s.health) || (failed ? { label: ERRORS[r.error] || "failed", tone: "failed" } : null);
   return (
     <span className="source-status" title={title}>
-      {failed && <span className="chip job-state-failed source-badge">{ERRORS[r.error] || "failed"}</span>}
+      {badge && <span className={`chip job-state-${badge.tone} source-badge`}>{badge.label}</span>}
       {(r.state === "cancelled" || r.state === "interrupted") && <span className="chip job-state-interrupted source-badge">{r.state}</span>}
       {!compact && r.state === "done" && <span>{r.message}</span>}
       {!compact && failed && <span className="source-message">{r.message}</span>}
@@ -77,14 +80,65 @@ export function ScheduleLine({ source: s, compact = false }) {
   const text = scheduleText(s, ERRORS);
   if (!text) return null;
   const sch = s.schedule;
-  const hint = sch.paused ? "Settings → Sync → Pause all schedules is on"
+  const hint = sch.stopped ? "Syncing again on its own would not help: Sync it once it is fixed, or change its schedule"
+    : sch.paused ? "Settings → Sync → Pause all schedules is on"
     : sch.skipped ? "Tried again every minute while it is due"
       : sch.next_at ? `Next: ${fmtFullDate(sch.next_at)}${sch.failures ? ` (${sch.failures} failed in a row: it waits longer)` : ""}`
         : "";
   return (
-    <span className={`source-schedule${sch.skipped || sch.failures ? " warn" : ""}`}
+    <span className={`source-schedule${sch.skipped || sch.stopped || sch.failures ? " warn" : ""}`}
           title={compact ? `${text}\n${hint}` : hint}>
       <Icon name="clock" size={11} />{compact ? scheduleShort(s) : text}
+    </span>
+  );
+}
+
+/* How its account is doing (docs/API.md "Account health"): the last good
+   sync, the output line behind a bad state (untrusted text, already
+   scrubbed: shown as text only), the session the last sync used, and a
+   new name its tool reported, to accept (the target changes, never the
+   folder) or dismiss. */
+export function SourceHealth({ source: s, job, onSaved }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const h = s.health;
+  if (!h?.result) return null;
+  const good = lastGood(h);
+  const login = loginText(h);
+  const rename = h.rename;
+
+  async function answer(accept) {
+    setBusy(true);
+    try {
+      const r = accept ? await acceptRename(s.id, rename.to) : await dismissRename(s.id);
+      if (!r?.ok) { toast(r?.error || "Could not save.", "err"); return; }
+      toast(accept ? `${sourceName(s)} is now ${sourceName(r.source)}; its folder stays as it is.`
+        : `${sourceName(s)}: suggestion dismissed.`);
+      onSaved?.(r.source);
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="source-health">
+      <span className="source-health-head">
+        {good && <span className={h.ok_at ? undefined : "is-err"} title={h.ok_at ? fmtFullDate(h.ok_at) : undefined}>{good}</span>}
+        {h.failures > 1 && <span className="is-err">{h.failures} failed in a row</span>}
+        {login && <span title="From the last sync's output">{login}</span>}
+      </span>
+      {h.line && <code className="source-health-line" title={h.line}>{h.line}</code>}
+      {rename && (
+        <span className="source-rename" role="status">
+          <span>Now called <b>{s.tool === "instaloader" ? `@${rename.to}` : rename.to}</b>?</span>
+          <button type="button" className="btn-link" disabled={busy || !!job}
+                  title={job ? "Wait for its sync to end" : `Sync @${rename.to} from now on; the folder and its files stay as they are`}
+                  onClick={() => answer(true)}>Accept</button>
+          <button type="button" className="btn-link" disabled={busy} onClick={() => answer(false)}>Dismiss</button>
+        </span>
+      )}
     </span>
   );
 }
@@ -105,6 +159,7 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
         </span>
         {summary && <span className="source-summary" title="What it downloads">{summary}</span>}
         <ScheduleLine source={s} />
+        <SourceHealth source={s} job={job} onSaved={onSaved} />
         <code className="source-folder" title={s.folder}>{s.folder}</code>
       </span>
       <ToolBadge tool={s.tool} />

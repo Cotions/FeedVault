@@ -25,6 +25,8 @@ import random
 import shutil
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend", "tests"))
 import fakes  # noqa: E402
@@ -315,6 +317,13 @@ def add_fake_tools(root, ts):
             "channel": "Demo Clips", "uploader_url": "https://www.tiktok.com/@demo.clips",
             "videos": [{"id": str(7400000000000000000 + i), "ts": ts - i * day, "title": f"clip {i}",
                         "description": f"clip {i} #demo", "duration": 15} for i in range(1, 5)]},
+        # Account health: one that went private, one whose output is nothing known.
+        "https://tiktok.com/@demo.hidden": {
+            "extractor_key": "TikTok", "uploader_id": "6900000000000000999", "uploader": "demo.hidden",
+            "fail": "private", "videos": []},
+        "https://x.com/demo_oops": {
+            "category": "twitter", "user": {"id": 7002, "name": "demo_oops", "nick": "Demo Oops"}, "fail": "odd",
+            "posts": []},
         "https://youtube.com/@demoshorts": {
             "extractor_key": "Youtube", "uploader_id": "@demoshorts", "uploader": "demoshorts",
             "channel": "Demo Shorts", "channel_id": "UCdemoShortsChannel00001",
@@ -361,9 +370,21 @@ def add_fake_instaloader(root, ts):
         "highlights": [{"title": "Kilns", "items": [{"id": 3200000000000000001, "ts": ts - 90 * day,
                                                      "video": False}]}],
     }
+    # Account health (seed_sources): Instagram's side of the demo creators
+    # with a source. pixel_bakery wants a login, mossy.trails is rate
+    # limited, night.tram is back (its last sync did not find it; a Sync
+    # works), quiet_kiln is now quiet.kiln.studio (found by the id the
+    # stamps file keeps, as instaloader does).
+    profiles = {
+        "demo.reels": profile,
+        "pixel_bakery": {"id": 9002, "fail": "login", "posts": []},
+        "mossy.trails": {"id": 9001, "fail": "429", "posts": []},
+        "night.tram": {"id": 9003, "name": "Night Tram", "posts": [post("DEMOtram001", 1)]},
+        "quiet.kiln.studio": {"id": 9004, "name": "Quiet Kiln Ceramics", "posts": [post("DEMOkiln001", 1)]},
+    }
     data = os.path.join(root, "fake_instaloader.json")
     with open(data, "w") as f:
-        json.dump({"profiles": {"demo.reels": profile}, "fail": None, "delay": 0}, f, indent=1)
+        json.dump({"profiles": profiles, "fail": None, "delay": 0}, f, indent=1)
     exe = os.path.join(root, "bin", "instaloader")
     os.makedirs(os.path.dirname(exe), exist_ok=True)
     with open(exe, "w") as f:
@@ -379,18 +400,69 @@ def seed_sources(data, media):
     """A source with options, so the Sources page shows one: demo_skies'
     media tab, images only, nothing before 2023-11-01, synced daily (by the
     fake gallery-dl add_fake_tools sets: the scheduler syncs it once the
-    demo starts)."""
+    demo starts). Then one source per account health state, each as its
+    last sync left it, and the fake tools answer a Sync the same way (see
+    add_fake_tools and add_fake_instaloader)."""
     out = os.path.join(data, "userdata", "sources.json")
     if os.path.exists(out):
         return
     os.makedirs(os.path.dirname(out), exist_ok=True)
     options = {"full_history": False, "session": None, "content": ["media"], "media": "images",
                "since": "2023-11-01", "first_posts": None, "schedule": "daily"}
+    rows = [{
+        "tool": "gallery-dl", "target": "https://x.com/demo_skies", "platform": "twitter", "author_id": None,
+        "person": None, "folder": os.path.join(media, "twitter", "demo_skies"), "options": json.dumps(options),
+        "created_at": 1_700_000_000, "last_sync_at": None, "last_result": None}]
+    now = int(time.time())
+    day = 86_400
+    good = now - 9 * day                           # their last sync that worked
+
+    def failed(health, line, failures, at, message):
+        return {"state": "failed", "error": health if health != "error" else "generic", "message": message,
+                "line": line, "added": 0, "job": None, "outdated": False, "failures": failures, "health": health,
+                "ok_at": good, "login": {"mode": "none", "found": None, "accepted": None}}
+    states = [
+        # (tool, target, platform, author, folder, schedule, last sync, last_result)
+        ("instaloader", "night.tram", "instagram", "9003", "night.tram", "daily", now - 2 * day,
+         failed("not_found", "Profile night.tram does not exist.", 2, now - 2 * day,
+                "Profile not found: renamed, deleted, or blocked")),
+        ("instaloader", "pixel_bakery", "instagram", "9002", "pixel_bakery", "daily", now - day,
+         {**failed("login_required", "pixel_bakery: Login required.", 1, now - day,
+                   "Instagram wants a logged-in session for this; see Settings"),
+          "login": {"mode": "login", "found": True, "accepted": False}}),
+        ("instaloader", "mossy.trails", "instagram", "9001", "mossy.trails", "hourly", now - 3600,
+         failed("rate_limited", "mossy.trails: Please wait a few minutes before you try again.", 4, now - 3600,
+                "Instagram is limiting requests: wait a while before syncing again")),
+        ("instaloader", "quiet_kiln", "instagram", "9004", "quiet_kiln", "off", now - 3 * day,
+         {"state": "done", "error": None, "message": "1 new post; the profile is now called quiet.kiln.studio "
+          "(accept the new name on the source)", "line": None, "added": 1, "job": None, "outdated": False,
+          "failures": 0, "health": "renamed", "ok_at": now - 3 * day,
+          "login": {"mode": "none", "found": None, "accepted": None},
+          "rename": {"from": "quiet_kiln", "to": "quiet.kiln.studio", "at": now - 3 * day}}),
+        ("yt-dlp", "https://tiktok.com/@demo.hidden", "tiktok", None, "tiktok/demo.hidden", "off", now - 5 * day,
+         failed("private", "ERROR: [tiktok:user] demo.hidden: This user's account is private. Log into an account "
+                "that has access", 1, now - 5 * day, "Private profile: the session in use does not follow it")),
+        ("gallery-dl", "https://x.com/demo_oops", "twitter", None, "twitter/demo_oops", "off", now - 6 * day,
+         failed("error", "[twitter][error] HttpError: '500 Internal Server Error' for 'https://api.x.com/graphql'",
+                3, now - 6 * day, "gallery-dl failed")),
+    ]
+    for tool, target, platform, author, folder, schedule, at, result in states:
+        rows.append({"tool": tool, "target": target, "platform": platform, "author_id": author, "person": None,
+                     "folder": os.path.join(media, folder),
+                     "options": json.dumps({**options, "content": None, "media": "all", "since": None,
+                                            "schedule": schedule,
+                                            # A saved login the site turns away (the fake's "login").
+                                            "session": {"mode": "login", "user": "demo.me"}
+                                            if target == "pixel_bakery" else None}),
+                     "created_at": 1_700_000_000, "last_sync_at": at, "last_result": json.dumps(result)})
     with open(out, "w") as f:
-        json.dump({"version": 1, "rows": [{
-            "tool": "gallery-dl", "target": "https://x.com/demo_skies", "platform": "twitter", "author_id": None,
-            "person": None, "folder": os.path.join(media, "twitter", "demo_skies"), "options": json.dumps(options),
-            "created_at": 1_700_000_000, "last_sync_at": None, "last_result": None}]}, f)
+        json.dump({"version": 1, "rows": rows}, f)
+    # The id instaloader keeps for quiet_kiln, which finds it under its new name.
+    stamps = os.path.join(data, "instaloader", "stamps.ini")
+    os.makedirs(os.path.dirname(stamps), exist_ok=True)
+    with open(stamps, "w") as f:
+        f.write(f"[quiet_kiln]\nprofile-id = 9004\npost-timestamp = "
+                f"{datetime.fromtimestamp(now - 30 * day, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f%z')}\n")
 
 
 def add_old_yt_dlp_sync(media, root, ts):

@@ -167,7 +167,9 @@ export function fmtUntil(ts, now = Date.now()) {
    ``errors``: last_result.error → its short name. */
 export function scheduleText(s, errors = {}, now = Date.now()) {
   const sch = s.schedule;
-  if (!sch || sch.every === "off" || sch.next_at == null) return "";
+  if (!sch || sch.every === "off") return "";
+  if (sch.stopped) return `${sch.every} · ${sch.stopped}`;
+  if (sch.next_at == null) return "";
   if (sch.paused) return `${sch.every} · all schedules paused`;
   if (sch.skipped) return `${sch.every} · ${sch.skipped}`;
   const r = s.last_result;
@@ -177,9 +179,10 @@ export function scheduleText(s, errors = {}, now = Date.now()) {
   return `${head} · ${failed ? "next try" : "next sync"} ${fmtUntil(sch.next_at, now)}`;
 }
 
-/* scheduleText for a card: "in 3 h", "due", "paused" or "skipped". */
+/* scheduleText for a card: "in 3 h", "due", "paused", "stopped" or "skipped". */
 export function scheduleShort(s, now = Date.now()) {
   const sch = s.schedule;
+  if (sch.stopped) return "stopped";
   if (sch.paused) return "paused";
   if (sch.skipped) return "skipped";
   return sch.next_at * 1000 <= now ? "due" : fmtUntil(sch.next_at, now);

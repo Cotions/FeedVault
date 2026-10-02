@@ -113,6 +113,7 @@ GALLERY_DL_FAIL = {
     "login": ("AuthRequired", "'cookies' needed to access this timeline", 16),
     "private": ("AuthorizationError", "{name}'s Tweets are protected", 16),
     "notfound": ("NotFoundError", "Requested user could not be found", 4),
+    "odd": ("HttpError", "'500 Internal Server Error' for 'https://api.x.com/graphql'", 4),   # no state: an error
 }
 
 

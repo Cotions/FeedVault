@@ -402,7 +402,16 @@ main {
 }
 
 @media (max-width: 640px) {
+  /* Nothing wider than a phone: the search box, a page's head and the
+     source form shrink or wrap. */
+  .header-search-wrap, input[type="text"].header-search { min-width: 0; }
+  .page-head { flex-wrap: wrap; }
+  input[type="text"].page-filter { min-width: 0; }
+  .sources-panel > .source-add { flex-basis: 100%; min-width: 0; }
+  .source-add .page-filter { flex-basis: 100%; max-width: none; }
   .app-body { flex-direction: column; }
+  /* In a column, auto margins would size it to its content's width. */
+  main { width: 100%; }
   .sidebar {
     position: static;
     width: 100%;
@@ -2577,11 +2586,25 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .source-badge { flex-shrink: 0; }
 .source-sync { font-size: 12px; padding: 6px 11px; flex-shrink: 0; }
 .creator-id .source-status { font-size: 11px; }
+.source-health { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 11.5px; color: var(--text-dim); }
+.source-health-head { display: flex; flex-wrap: wrap; column-gap: 10px; min-width: 0; }
+.source-health-line {
+  /* As wide as the row, never wider: a long line is cut, not a wider page. */
+  contain: inline-size;
+  font-size: 11px; color: #ffb3b5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.source-health .is-err { color: #ffb3b5; }
+.source-rename { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--text); }
+.warn-badge { margin-left: 0; align-self: flex-end; white-space: nowrap; color: #ffd59a; background: rgba(255, 196, 102, 0.12); border-color: rgba(255, 196, 102, 0.4); }
+.warn-badge .icon { color: #ffd59a; }
 .creator-card .source-sync { margin-right: 10px; }
 .source-suggestion .suggestion-why { gap: 3px; }
 @media (max-width: 760px) {
   .source-row { flex-wrap: wrap; }
   .source-id { flex-basis: 100%; }
+  .source-row .source-status { flex-wrap: wrap; max-width: 100%; }
+  .source-message { max-width: 100%; }
 }
 
 /* Settings: instaloader */

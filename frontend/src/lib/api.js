@@ -264,6 +264,17 @@ export async function deleteSource(id) {
 }
 // → { ok, job } or { ok: false, error } (already queued, cannot be synced)
 export function syncSource(id) { return post(`/api/sources/${id}/sync`); }
+// Accept the new name its tool reported (the target changes, never the folder) → { ok, source }
+export function acceptRename(id, to) { return post(`/api/sources/${id}/rename`, { to }); }
+// Forget that suggestion → { ok, source }
+export async function dismissRename(id) {
+  try {
+    return await request("DELETE", `/api/sources/${id}/rename`);
+  } catch (e) {
+    if (e.body && typeof e.body === "object") return e.body;
+    throw e;
+  }
+}
 // → { ok, jobs, skipped, errors: [{ source, error }] }
 export function syncAllSources() { return post("/api/sources/sync-all"); }
 // { session?, pause? } → { ok, config } or { ok: false, error }
