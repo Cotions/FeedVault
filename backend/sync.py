@@ -250,6 +250,8 @@ def _build(params):
         raise jobs.BadRequest("the source's target is not a profile name")
     if folder is None:
         raise jobs.BadRequest("the source's folder is not inside a media root")
+    if sources.in_saved(folder, cfg["media_roots"]):
+        raise jobs.BadRequest(sources.SAVED_REFUSED.format(folder=folder))
     try:
         os.makedirs(folder, exist_ok=True)
     except OSError as e:
@@ -839,6 +841,8 @@ def _archive_source(params, tool):
     folder = sources.inside_root(src["folder"], cfg["media_roots"])
     if folder is None:
         raise jobs.BadRequest("the source's folder is not inside a media root")
+    if sources.in_saved(folder, cfg["media_roots"]):
+        raise jobs.BadRequest(sources.SAVED_REFUSED.format(folder=folder))
     # Both tools expand $NAME in the folder they are given (os.path.expandvars).
     if "$" in folder:
         raise jobs.BadRequest("the source's folder holds a $, which the tool would expand")

@@ -38,7 +38,7 @@ from parsers import instaloader as parser
 
 KIND = "instaloader-post"
 SHORTCODE_RE = re.compile(r"[A-Za-z0-9_-]{5,40}", re.ASCII)
-SAVED = "_saved"                               # under the first media root: posts of owners with no folder
+SAVED = sources.SAVED                          # under the first media root: posts of owners with no folder
 QUEUE_MAX_DEFAULT = 20                         # Save jobs queued or running at once (config save_queue_max)
 QUEUE_MAX_LIMIT = 500
 

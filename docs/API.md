@@ -920,7 +920,13 @@ no person yet.
   being the link's first path part that is not a page kind (`/user/`,
   `/media`, `/en/`…), lowercase, without `@`. Present: an absolute path
   that resolves inside a media root (symlinks followed); anything else is
-  a 400.
+  a 400. Never a media root's `_saved/` or a folder inside it (where
+  [Save](#save-from-the-browser-userscript) keeps posts of accounts with no
+  folder), nor a link to it: a 400 that says to pick another folder, also
+  when it is the default (an instaloader target named `_saved`).
+  `GET /api/sources/resolve` answers `ok: false` for it, and a sync of a
+  stored source whose folder is there (sources.json edited by hand) is
+  refused with the same message.
 - `person` (an id) and `account` are optional. With `account`, the source
   belongs to that indexed account (unknown: 400); without, to the account of
   the folder's posts when there are some, else (a link) to the one account
@@ -933,7 +939,8 @@ no person yet.
   takes the source id only and builds everything from the stored source.
 
 **Suggestions.** Profile folders that already hold instaloader posts but no
-source, one per folder right under a media root, for the user to confirm
+source, one per folder right under a media root (never `_saved/`, whose
+posts are left out of them), for the user to confirm
 (`POST /api/sources` with the suggestion's `tool`, `target`, `folder` and
 `account`). FeedVault never creates a source on its own.
 
