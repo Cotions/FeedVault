@@ -286,7 +286,14 @@ export default function App() {
 
       <div className="app-body">
         <nav className="sidebar" aria-label="Main">
-          <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
+          <div className="side-row">
+            <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
+            {jobList?.new > 0 && (
+              <Link to="/?new=1" className="side-badge side-new" title="Posts indexed since you last marked everything seen">
+                {fmtInt(jobList.new)} new
+              </Link>
+            )}
+          </div>
           <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
           <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
           <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>

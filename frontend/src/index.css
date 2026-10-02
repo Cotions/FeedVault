@@ -2165,6 +2165,7 @@ a.btn-primary {
   text-decoration: none;
 }
 .side-new:hover { background: rgba(47, 158, 79, 0.26); }
+.new-badge { margin-left: 0; align-self: flex-end; white-space: nowrap; }
 .jobs-page { display: flex; flex-direction: column; gap: 18px; }
 .job-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .job-row {
