@@ -259,6 +259,7 @@ def test_a_renamed_profile_is_a_suggestion_the_user_accepts(env, client, fake):
     assert post(client, f"/api/sources/{s['id']}/rename", {"to": "someone.else"}, 400)
     r = post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"})["source"]
     assert (r["target"], r["folder"], r["health"]["rename"]) == ("carol.bakes", src["folder"], None)
+    assert r["last_result"]["resumed"] is True             # stopped as not found, it is scheduled again
     assert files(src["folder"]) == before                  # nothing moved, renamed or touched
     assert post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"}, 400)  # nothing left to accept
     userdata.flush()

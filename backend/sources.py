@@ -719,12 +719,23 @@ def failures(result):
 def rename(conn, sid, old, new):
     """Accept a rename suggestion: the source's target becomes ``new`` (its
     folder and files stay as they are) and the suggestion goes. False when
-    the target is no longer ``old`` (changed meanwhile)."""
+    the target is no longer ``old`` (changed meanwhile). A source the
+    scheduler had stopped (account not found) is scheduled again."""
     with conn:
         return conn.execute(
             "UPDATE sources SET target = ?, last_result = CASE WHEN json_valid(last_result) "
-            "AND json_type(last_result) = 'object' THEN json_remove(last_result, '$.rename') ELSE last_result END "
-            "WHERE id = ? AND target = ?", (new, sid, old)).rowcount > 0
+            "AND json_type(last_result) = 'object' THEN json_set(json_remove(last_result, '$.rename'), "
+            "'$.resumed', json('true')) ELSE last_result END WHERE id = ? AND target = ?",
+            (new, sid, old)).rowcount > 0
+
+
+def resume(conn, sid):
+    """Schedule again a source the scheduler stopped (health.paused): its
+    schedule changed. Its next sync's result replaces the mark."""
+    with conn:
+        conn.execute(
+            "UPDATE sources SET last_result = json_set(last_result, '$.resumed', json('true')) "
+            "WHERE id = ? AND json_valid(last_result) AND json_type(last_result) = 'object'", (sid,))
 
 
 def dismiss_rename(conn, sid):

@@ -132,11 +132,11 @@ def queued(monkeypatch, sched):
     return calls
 
 
-def synced(sid, at, state="done", failures=0):
+def synced(sid, at, state="done", failures=0, **more):
     conn = db.connect()
     with conn:
         conn.execute("UPDATE sources SET last_sync_at = ?, last_result = ? WHERE id = ?",
-                     (at, json.dumps({"state": state, "failures": failures}), sid))
+                     (at, json.dumps({"state": state, "failures": failures, **more}), sid))
 
 
 def test_delay_and_back_off():
@@ -250,7 +250,8 @@ def test_refused_is_held_an_interval(env, client, queued, monkeypatch):
 
 def test_status(env, client, sched):
     s = add(client, X)
-    assert s["schedule"] == {"every": "off", "next_at": None, "paused": False, "skipped": None, "failures": 0}
+    assert s["schedule"] == {"every": "off", "next_at": None, "paused": False, "skipped": None, "stopped": None,
+                             "failures": 0}
     s = post(client, f"/api/sources/{s['id']}", {"options": {"schedule": "daily"}})["source"]
     assert s["schedule"]["next_at"] == 0                # due
     synced(s["id"], NOW, "failed", 2)
@@ -352,3 +353,55 @@ def test_stored_times_of_any_shape(env, client, queued):
     got = client.get("/api/sources", headers=H).get_json()["sources"][0]["schedule"]
     assert (got["next_at"], got["failures"]) == (0, 0)
     assert len(scheduler.tick()) == 1
+
+
+def test_not_found_or_login_required_stops_it(env, client, queued):
+    gone = add(client, X, schedule="hourly")["id"]
+    walled = add(client, "carol.cooks", "instaloader", schedule="hourly")["id"]
+    limited = add(client, "https://x.com/busy", schedule="hourly")["id"]
+    synced(gone, NOW, "failed", 1, health="not_found")
+    synced(walled, NOW, "failed", 4, error="login_required")    # stored before health: its error
+    synced(limited, NOW, "failed", 1, health="rate_limited")
+    assert scheduler.tick(NOW + 30 * 24 * HOUR) == [{"id": 1}] and queued == [limited]   # the back-off applies
+    synced(limited, NOW + 30 * 24 * HOUR, "done")
+    for sid, why in ((gone, "account not found"), (walled, "login required")):
+        got = client.get(f"/api/sources/{sid}", headers=H).get_json()
+        assert (got["schedule"]["stopped"], got["schedule"]["next_at"]) == (f"paused: {why}", None)
+        assert (got["health"]["paused"], got["health"]["warning"]) == (why, why)
+    assert client.get(f"/api/sources/{limited}", headers=H).get_json()["schedule"]["stopped"] is None
+    # Changing its schedule resumes it, until a sync says so again.
+    s = post(client, f"/api/sources/{gone}", {"options": {"schedule": "daily"}})["source"]
+    assert (s["schedule"]["stopped"], s["schedule"]["next_at"], s["health"]["paused"]) == \
+        (None, NOW + 24 * HOUR, None)
+    assert s["health"]["state"] == "not_found"
+    assert scheduler.tick(NOW + 30 * 24 * HOUR + scheduler.SPREAD) == [{"id": 2}] and queued[-1] == gone
+    synced(gone, NOW + 30 * 24 * HOUR, "failed", 2, health="not_found")
+    assert client.get(f"/api/sources/{gone}", headers=H).get_json()["schedule"]["stopped"] == \
+        "paused: account not found"
+    # Off: nothing to stop.
+    s = post(client, f"/api/sources/{walled}", {"options": {"schedule": "off"}})["source"]
+    assert s["schedule"]["stopped"] is None
+
+
+def test_a_manual_sync_that_works_resumes_it(env, client, tools, sched):
+    tools["dl"].write_text(json.dumps({"accounts": {}, "fail": "notfound"}))
+    s = add(client, X, schedule="hourly")
+    sync_now(client, s["id"])
+    got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert (got["health"]["state"], got["schedule"]["stopped"]) == ("not_found", "paused: account not found")
+    assert scheduler.tick(NOW + 30 * 24 * HOUR) == []
+    sync_now(client, s["id"])                           # still not found: still stopped
+    assert client.get(f"/api/sources/{s['id']}", headers=H).get_json()["schedule"]["stopped"] == \
+        "paused: account not found"
+    put_x(tools)
+    sync_now(client, s["id"])
+    got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert (got["health"]["state"], got["schedule"]["stopped"], got["health"]["warning"]) == ("ok", None, None)
+    assert got["schedule"]["next_at"] == got["last_sync_at"] + HOUR
+
+
+def test_warning_after_three_failures(env, client, queued):
+    s = add(client, X)
+    for n, warning in ((2, None), (3, "3 failed syncs in a row"), (5, "5 failed syncs in a row")):
+        synced(s["id"], NOW, "failed", n, health="error")
+        assert client.get(f"/api/sources/{s['id']}", headers=H).get_json()["health"]["warning"] == warning

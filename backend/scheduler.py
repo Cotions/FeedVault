@@ -36,6 +36,14 @@ the next tick:
 - the media root holding its folder is offline: not a folder, or empty
   while the index has posts under it (a mount point with nothing mounted).
 
+Stopped: a source whose last sync said its account is not found (deleted,
+or renamed without a trace) or that a login is required (health.BLOCKING)
+is not synced on its own any more, as trying again would not change that;
+status says why ("paused: account not found", "paused: login required").
+It comes back when a sync of it works (Sync clicked), or when its schedule
+changes or a rename is accepted (health.paused: last_result.resumed). Rate
+limited is not stopped: the back-off above applies.
+
 A sync refused (jobs.BadRequest: its folder is no longer inside a media
 root…) is noted too and held for one interval. Notes and holds live in
 memory: a restart tries again at once. A note no longer shows once the
@@ -49,6 +57,7 @@ import time
 
 import config
 import db
+import health
 import jobs
 import scanner
 import sources
@@ -100,19 +109,22 @@ def _result(row):
 
 def status(s, cfg=None):
     """A public source's schedule, for the dashboard: {every, next_at (UTC
-    seconds, in the past when due; null when off), paused (all schedules
-    are), skipped (why it was not queued, or null), failures}."""
+    seconds, in the past when due; null when off or stopped), paused (all
+    schedules are), skipped (why it was not queued, or null), stopped (why
+    the scheduler no longer syncs it, or null), failures}."""
     cfg = cfg or config.load()
     every = s["options"]["schedule"]
     with _lock:
         note, held = _notes.get(s["id"]), _held.get(s["id"], 0)
+    why = health.paused(s["last_result"])
+    stopped = f"paused: {why}" if why and every in INTERVALS else None
     next_at = None
-    if every in INTERVALS:
+    if every in INTERVALS and not stopped:
         next_at = max(due_at(every, s["last_sync_at"], s["last_result"]), held)
     synced = s["last_sync_at"] if isinstance(s["last_sync_at"], int) else None
     shown = note is not None and every in INTERVALS and (synced is None or synced < note[1])
     return {"every": every, "next_at": next_at, "paused": cfg.get("schedules_paused") is True,
-            "skipped": note[0] if shown else None, "failures": sources.failures(s["last_result"])}
+            "skipped": note[0] if shown else None, "stopped": stopped, "failures": sources.failures(s["last_result"])}
 
 
 def forget(sid):
@@ -171,7 +183,7 @@ def tick(now=None):
     due = []
     for r in rows:
         every = sources.stored_options(r)["schedule"]
-        if every not in INTERVALS or r["id"] in busy:
+        if every not in INTERVALS or r["id"] in busy or health.paused(_result(r)):
             continue
         at = max(due_at(every, r["last_sync_at"], _result(r)), held.get(r["id"], 0))
         if at <= now:

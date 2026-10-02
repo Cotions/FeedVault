@@ -855,7 +855,8 @@ no person yet.
               "login": { "mode": "login", "found": true, "accepted": null } },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
   "session": { "mode": "login", "user": "me", "session_file": true },
-  "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "failures": 1 } }
+  "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "stopped": null,
+                "failures": 1 } }
 ```
 
 - `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
@@ -970,6 +971,11 @@ no person yet.
     `<private path>`. Tool output is untrusted text: the page shows it as
     text only.
   - `failures`: as `last_result.failures`
+  - `paused`: `"account not found"` or `"login required"` while the
+    scheduler no longer syncs it (see [Schedules](#schedules)), else `null`
+  - `warning`: why the Creators list warns about it: a blocking state
+    (as `paused`, also when its schedule is off) or `"3 failed syncs in a
+    row"` (3 or more), else `null`
   - `rename`: `{ "from": "old.name", "to": "new.name", "at": 1727503600 }`
     when the tool reported that the profile `target` names is now called
     `to` (instaloader only, see [Account health](#account-health)), else
@@ -991,7 +997,9 @@ no person yet.
   `options.schedule`), `next_at` (UTC seconds; in the past, or `0`, when it
   is due; `null` when `every` is `"off"`), `paused` (`schedules_paused` is
   on), `skipped` (why the scheduler did not queue it when it was due, or
-  `null`), `failures` (as `last_result.failures`, `0` when none).
+  `null`), `stopped` (`"paused: account not found"` or `"paused: login
+  required"` while the scheduler no longer syncs it, `next_at` then
+  `null`; else `null`), `failures` (as `last_result.failures`, `0` when none).
 
 | Method | Path | Returns |
 |---|---|---|
@@ -1390,6 +1398,13 @@ running is never queued again).
 - At most one source per platform is queued at a time, the most overdue
   first, and only when no sync of that platform is queued or running and
   the scheduler queued the last one 5 minutes ago or more.
+- A source whose last sync ended `not_found` or `login_required` (see
+  [Account health](#account-health)) is no longer synced on its own:
+  trying again would not change that. `schedule.stopped` says so. It is
+  scheduled again once a sync of it works (Sync clicked), or when its
+  schedule changes or a rename is accepted (`last_result.resumed` is set
+  until its next sync ends). `rate_limited` is not stopped: the back-off
+  above applies.
 - A due source is skipped, with `schedule.skipped` saying why, while its
   tool is not found (as [Downloaders](#downloaders) looks for it) or the
   media root holding its folder is offline (missing, or empty while posts

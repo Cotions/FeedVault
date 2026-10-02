@@ -861,6 +861,7 @@ def update_source(sid):
     sources.update(conn, sid, options, keys=("schedule",) if set(sent) <= {"schedule"} else None)
     if options["schedule"] != s["options"]["schedule"]:
         scheduler.forget(sid)
+        sources.resume(conn, sid)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
 

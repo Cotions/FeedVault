@@ -108,6 +108,8 @@ never in its options:
 - ``line``: the output line behind it, scrubbed (scrub())
 - ``login``: {mode, found, accepted} of the session the last run used
   (login()), kept by a run that never got that far
+- ``resumed``: true once the user changed the schedule (or accepted a
+  rename) after a blocking state: the scheduler tries it again (paused())
 - ``rename``: {from, to, at}, a new handle the tool reported for the
   target ``from``; kept until the user accepts it (the target changes,
   never the folder) or dismisses it, or the target changes otherwise
@@ -196,6 +198,10 @@ LOGIN = {
     ]),
 }
 SESSION_MODES = ("none", "cookies", "login")
+# The scheduler stops syncing a source in one of these (scheduler.py), and
+# the Creators list warns about it: syncing again on its own will not fix them.
+BLOCKING = {"not_found": "account not found", "login_required": "login required"}
+WARN_FAILURES = 3                              # failed syncs in a row before the Creators list warns
 
 
 def _texts(lines):
@@ -375,6 +381,22 @@ def state_of(result):
     return "error" if result.get("state") == "failed" else None
 
 
+def paused(result):
+    """Why the scheduler leaves a source alone ("account not found", "login
+    required"), else None: its last state is BLOCKING and nothing resumed
+    it since (a sync's end stores a new result, without ``resumed``)."""
+    if not isinstance(result, dict) or result.get("resumed") is True:
+        return None
+    return BLOCKING.get(state_of(result))
+
+
+def warning(state, failures):
+    """Why the Creators list warns about a source, else None."""
+    if state in BLOCKING:
+        return BLOCKING[state]
+    return f"{failures} failed syncs in a row" if failures >= WARN_FAILURES else None
+
+
 def public(result, last_sync_at, failures, target=None):
     """A source's health for the API, from its stored last_result (None or
     malformed: nothing known, every key null)."""
@@ -383,7 +405,8 @@ def public(result, last_sync_at, failures, target=None):
     return {"state": state, "result": r.get("state") if isinstance(r.get("state"), str) else None,
             "ok_at": _ok_at(r, last_sync_at), "last_sync_at": last_sync_at if _time(last_sync_at) else None,
             "line": scrub(r.get("line")) if state not in (None, "ok", "renamed") else None, "failures": failures,
-            "rename": _suggested(r.get("rename"), target), "login": _login(r.get("login"))}
+            "rename": _suggested(r.get("rename"), target), "login": _login(r.get("login")),
+            "paused": paused(r), "warning": warning(state, failures)}
 
 
 def _suggested(v, target):
