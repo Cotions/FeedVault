@@ -16,6 +16,7 @@ Same lock group and pause as instaloader syncs: one instaloader at a time.
 import os
 import re
 import shutil
+import threading
 from datetime import datetime, timezone
 
 import config
@@ -30,6 +31,8 @@ from parsers import instaloader as parser
 KIND = "instaloader-post"
 SHORTCODE_RE = re.compile(r"[A-Za-z0-9_-]{5,40}", re.ASCII)
 SAVED = "_saved"                               # under the first media root: posts of owners with no folder
+QUEUE_MAX_DEFAULT = 20                         # Save jobs queued or running at once (config save_queue_max)
+QUEUE_MAX_LIMIT = 500
 
 
 def valid_shortcode(value):
@@ -237,6 +240,30 @@ def have(conn, shortcode):
     return {"id": f"instagram:{shortcode}", "path": f"/p/instagram/{shortcode}"}
 
 
+class Full(Exception):
+    """Too many Save jobs are queued or running already."""
+
+
+def queue_max(cfg=None):
+    v = (cfg or config.load()).get("save_queue_max")
+    ok = isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= QUEUE_MAX_LIMIT
+    return v if ok else QUEUE_MAX_DEFAULT
+
+
+_submitting = threading.Lock()                 # "already queued?", the count and queueing, as one step
+
+
 def submit(shortcode):
-    """Queue a save: the job's public dict."""
-    return jobs.submit(KIND, {"shortcode": shortcode})
+    """Queue a save: (the job's public dict, whether it was already queued
+    or running). A shortcode with a Save job active gets that job back; one
+    more than queue_max() active Save jobs raises Full."""
+    with _submitting:
+        active = [j for j in jobs.active() if j["kind"] == KIND]
+        same = next((j for j in active if j["params"].get("shortcode") == shortcode), None)
+        if same is not None:
+            return same, True
+        limit = queue_max()
+        if len(active) >= limit:
+            raise Full(f"{limit} post{'' if limit == 1 else 's'} {'is' if limit == 1 else 'are'} already "
+                       "waiting to be saved; try again once some are done")
+        return jobs.submit(KIND, {"shortcode": shortcode}), False

@@ -206,11 +206,14 @@ def save_post():
     if post is not None:
         return jsonify({"ok": True, "have": True, "post": post})
     try:
-        job = save.submit(code)
+        job, existing = save.submit(code)
+    except save.Full as e:
+        return jsonify({"ok": False, "error": str(e)}), 429
     except jobs.BadRequest as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    print(f"[jobs] #{job['id']} {job['kind']} queued")
-    return jsonify({"ok": True, "have": False, "job": job})
+    if not existing:
+        print(f"[jobs] #{job['id']} {job['kind']} queued")
+    return jsonify({"ok": True, "have": False, "job": job, "existing": existing})
 
 
 # ---------------------------------------------------------------------------

@@ -225,3 +225,41 @@ def test_shares_the_instaloader_lock_and_pause(env, client, fake):
     assert first["group"] == second["group"] == "instaloader"
     assert second["state"] == "queued" and second["waits_until"] is not None
     jobs.cancel(second["id"])
+
+
+# ---------------------------------------------------------------------------
+# Rate safety
+# ---------------------------------------------------------------------------
+
+def test_a_second_click_returns_the_same_job(env, client, fake):
+    fake.set(profile(), delay=0.5)
+    first = save_post(client)
+    second = save_post(client)
+    assert first["existing"] is False and second["existing"] is True
+    assert second["job"]["id"] == first["job"]["id"]
+    assert [j["id"] for j in jobs.active()] == [first["job"]["id"]]
+    ended(first["job"]["id"])
+    assert len(fake.runs()) == 1
+    assert save_post(client)["have"] is True
+
+
+def test_queue_cap(env, client, fake):
+    set_config(instaloader={"pause": 3600}, save_queue_max=3)
+    fake.set(profile())
+    queued = [save_post(client, f"CSAVECAP0{i}")["job"] for i in range(3)]
+    r = save_post(client, "CSAVECAP09", status=429)
+    assert r["ok"] is False and "3 posts are already waiting" in r["error"]
+    # A shortcode already queued still answers with its job.
+    assert save_post(client, "CSAVECAP01")["job"]["id"] == queued[1]["id"]
+    jobs.cancel(queued[2]["id"])
+    assert save_post(client, "CSAVECAP09")["existing"] is False
+    for j in jobs.active():
+        if j["state"] == "queued":
+            jobs.cancel(j["id"])
+
+
+def test_queue_cap_default_and_bad_values(env):
+    assert save.queue_max({}) == 20
+    for bad in (0, -1, 501, "5", True, 2.5, None):
+        assert save.queue_max({"save_queue_max": bad}) == 20
+    assert save.queue_max({"save_queue_max": 1}) == 1
