@@ -78,7 +78,8 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
     group:     lock group, or a function of the params returning one
     summarize: optional, output lines -> (result dict, message) for a job
                that exited 0 and has no rescan target
-    start:     optional, (params, note, argv) -> None, run in the job's thread right before
+    start:     optional, (params, note, argv) -> None or a new argument list
+               (without the tool), run in the job's thread right before
                the process starts (no other job of its group is running);
                an exception fails the job with its message, Cancelled
                cancels it; note(text) adds a [feedvault] line to its log
@@ -320,7 +321,9 @@ def _run(job):
         kind = _kinds[job.kind]
         if kind.start:
             try:
-                kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"), job.argv)
+                args = kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"), job.argv)
+                if args is not None:
+                    _set_args(job, args)
             except Cancelled as e:
                 _note(job, f"[feedvault] {e}")
                 _finish(job, "cancelled", message=str(e))
@@ -612,6 +615,15 @@ def _insert(kind, params, spec, group, cwd, rescan, now):
          now, rescan, int(bool(spec.get("full_scan")))))
     conn.commit()
     return cur.lastrowid
+
+
+def _set_args(job, args):
+    """A start hook's argument list replaces the one built at queue time."""
+    job.args = [str(a) for a in args]
+    job.argv = [job.tool, *job.args]
+    conn = db.connect()
+    conn.execute("UPDATE jobs SET argv = ? WHERE id = ?", (json.dumps(job.argv), job.id))
+    conn.commit()
 
 
 def _save(job, tail=None):

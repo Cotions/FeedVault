@@ -9,8 +9,14 @@ instaloader:
 
 - ``--latest-stamps <data_dir>/instaloader/stamps.ini``: instaloader keeps
   the time of each profile's newest downloaded post there, away from the
-  media, so it stops at it whatever files exist (trashed posts stay gone);
-  ``--fast-update`` also stops at the first file that exists.
+  media, so it stops at it whatever files exist (trashed posts stay gone).
+- ``--fast-update`` (stop at the first post whose files exist) only for a
+  first sync with no stamp, where it is the only stopping point. With a
+  stamp it would stop at a post saved on its own (the userscript's Save, a
+  download by hand) newer than the stamp, and never fetch the posts between
+  them: the stamp alone limits the walk, and instaloader skips files that
+  exist one by one. Decided from the stamps file when the job is queued,
+  and again right before it starts (after seeding).
 - the first sync of a source seeds that file with the newest post FeedVault
   already has for the account, so it never walks the whole profile again
   (unless the source asks for its full history). Only dates that can be
@@ -226,10 +232,11 @@ def _build(params):
     options = _options(src)
     session = options["session"] or settings(cfg)["session"]
     pattern, _ = detect_pattern(folder)
+    stamps = configparser.ConfigParser(interpolation=None)
+    stamps.read(stamps_path(cfg), encoding="utf-8")
     return {"tool": "instaloader", "rescan": folder, "args": [
         "--latest-stamps", stamps_path(cfg),
-        # Full history walks the whole profile: past posts already there too.
-        *([] if options["full_history"] else ["--fast-update"]),
+        *(["--fast-update"] if fast_update(stamps, target, options) else []),
         "--no-compress-json",
         "--dirname-pattern", _escape(folder),
         "--filename-pattern", pattern,
@@ -237,6 +244,21 @@ def _build(params):
         *session_flags(session),
         "--", target,
     ]}
+
+
+def fast_update(stamps, target, options):
+    """Whether a sync passes --fast-update: only when the profile has no
+    stamp yet (a first sync) and walks only what is new (no full history,
+    which goes past the posts already there too)."""
+    return not options["full_history"] and not stamps.has_option(target, "post-timestamp")
+
+
+def _with_stamps(args, stamps, target, options):
+    """The argument list with --fast-update as fast_update() says now."""
+    out = [a for a in args if a != "--fast-update"]
+    if fast_update(stamps, target, options):
+        out.insert(out.index("--latest-stamps") + 2, "--fast-update")
+    return out
 
 
 def _options(src):
@@ -300,10 +322,20 @@ def _queued_source(conn, params, argv):
 
 def _start(params, note, argv=None):
     """Right before instaloader starts (no other instaloader runs): seed the
-    stamps file on a source's first sync."""
+    stamps file on a source's first sync. Returns the argument list with
+    --fast-update as the stamps file now says (see fast_update)."""
     conn = db.connect()
     src = _queued_source(conn, params, argv)
     options = _options(src)
+    _seed_stamp(conn, src, options, note)
+    if not argv:
+        return None
+    stamps = configparser.ConfigParser(interpolation=None)
+    stamps.read(stamps_path(), encoding="utf-8")
+    return _with_stamps(argv[1:], stamps, src["target"], options)
+
+
+def _seed_stamp(conn, src, options, note):
     path = stamps_path()
     stamps = configparser.ConfigParser(interpolation=None)
     stamps.read(path, encoding="utf-8")
