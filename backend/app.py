@@ -737,8 +737,12 @@ def _sources_active():
 
 def _with_session(s, cfg=None):
     """A source with the session its sync would use (its own, else its
-    tool's), for the form's login hint, and its schedule."""
-    return {**s, "session": sync.session_of(s["tool"], s["options"], cfg), "schedule": scheduler.status(s, cfg)}
+    tool's), for the form's login hint, and its schedule. A saved login
+    says whether its session file exists (only looked for, never opened)."""
+    session = sync.session_of(s["tool"], s["options"], cfg)
+    if session["mode"] == "login":
+        session = {**session, "session_file": any(os.path.exists(p) for p in downloaders.session_files(session["user"]))}
+    return {**s, "session": session, "schedule": scheduler.status(s, cfg)}
 
 
 @app.get("/api/sources")

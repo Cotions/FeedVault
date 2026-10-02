@@ -26,3 +26,26 @@ def test_states_through_the_fakes(env, fake, client, url, fail):
     run_sync(client, s["id"])
     h = get(client, f"/api/sources/{s['id']}")["health"]
     assert (h["state"], h["failures"], h["line"]) == ("ok", 0, None)
+
+
+@pytest.mark.parametrize("url", [X, YT])
+def test_login_state(env, fake, client, url):
+    import config
+    import sync
+    s = add(client, url)
+    cfg = config.load()
+    tool = "gallery-dl" if url == X else "yt-dlp"
+    cfg[tool] = {**sync.tool_settings(tool, cfg), "session": {"mode": "cookies", "browser": "firefox"}}
+    config.save(cfg)
+    fake.put(url, ACCOUNTS[url]())
+    run_sync(client, s["id"])
+    h = get(client, f"/api/sources/{s['id']}")["health"]
+    assert h["login"] == {"mode": "cookies", "found": True, "accepted": True}
+    fake.put(url, {**ACCOUNTS[url](), "fail": "login"})
+    run_sync(client, s["id"])
+    assert get(client, f"/api/sources/{s['id']}")["health"]["login"]["accepted"] is False
+    if tool == "yt-dlp":
+        fake.put(url, {**ACCOUNTS[url](), "fail": "cookies"})
+        run_sync(client, s["id"])
+        assert get(client, f"/api/sources/{s['id']}")["health"]["login"] == \
+            {"mode": "cookies", "found": False, "accepted": False}

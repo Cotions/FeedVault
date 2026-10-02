@@ -566,7 +566,9 @@ def test_a_sources_session_and_no_edits_while_it_syncs(env, client, tools):
     assert "queued or running" in r["error"]
     jobs.cancel(job["id"])
     ended(job["id"])
-    assert post(client, f"/api/sources/{s['id']}", {"options": {"session": LOGIN}})["source"]["session"] == LOGIN
+    # A saved login says whether its session file is there (looked for, never opened).
+    assert post(client, f"/api/sources/{s['id']}", {"options": {"session": LOGIN}})["source"]["session"] == \
+        {**LOGIN, "session_file": False}
 
 
 def test_last_n_floor_is_never_after_today(env, client):

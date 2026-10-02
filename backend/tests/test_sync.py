@@ -246,7 +246,8 @@ def test_first_sync_starts_after_the_newest_indexed_post(env, client, fake):
     assert s["account"] == {"platform": "instagram", "id": "777"}               # the alias's id now
     assert s["last_result"] == {"state": "done", "error": None, "message": "2 new posts", "line": None,
                                 "added": 2, "job": job["id"], "outdated": False, "failures": 0,
-                                "health": "ok", "ok_at": job["ended_at"]}
+                                "health": "ok", "ok_at": job["ended_at"],
+                                "login": {"mode": "none", "found": None, "accepted": None}}
     assert s["last_sync_at"] == job["ended_at"] and s["last_job_id"] == job["id"] and s["job"] is None
     # Nothing new: nothing downloaded.
     job = sync_now(client, s["id"])

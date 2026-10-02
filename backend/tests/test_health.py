@@ -306,3 +306,64 @@ def test_a_hand_edited_rename_is_checked(env, client, fake):
         assert h["rename"] is None, rename
         assert post(client, f"/api/sources/{s['id']}/rename", {"to": "x"}, 400), rename
     assert get(client, f"/api/sources/{s['id']}")["target"] == "nobody.here"
+
+
+# ---------------------------------------------------------------------------
+# Login state: the session the last sync used, as its output tells
+# ---------------------------------------------------------------------------
+
+def test_login_lines():
+    login = health.login
+    cookies, saved = {"mode": "cookies", "browser": "firefox"}, {"mode": "login", "user": "me"}
+    assert login("instaloader", [(1, "x")], {"mode": "none"}, "ok") == {"mode": "none", "found": None, "accepted": None}
+    assert login("instaloader", [(1, "Loaded session from /home/me/.config/instaloader/session-me."),
+                                 (2, "Logged in as me.")], saved, "ok") == \
+        {"mode": "login", "found": True, "accepted": True}
+    assert login("instaloader", [(1, "Session file does not exist yet - Logging in."),
+                                 (2, "Login error: no password")], saved, "login_required") == \
+        {"mode": "login", "found": False, "accepted": False}
+    assert login("instaloader", [(1, "Cookies loaded successfully from firefox"),
+                                 (2, "Login error: Not logged in. Are you logged in successfully in firefox?")],
+                 cookies, "error") == {"mode": "cookies", "found": True, "accepted": False}
+    assert login("instaloader", [(1, "Login error: No cookies found for Instagram in firefox, Are you logged in "
+                                     "successfully in firefox?")], cookies, "login_required")["found"] is False
+    # Found, then the site wanted a login anyway: refused.
+    assert login("instaloader", [(1, "Loaded session from /x/session-me."), (2, "me: Login required.")],
+                 saved, "login_required") == {"mode": "login", "found": True, "accepted": False}
+    assert login("yt-dlp", [(1, "Extracting cookies from firefox"), (2, "Extracted 52 cookies from firefox")],
+                 cookies, "ok") == {"mode": "cookies", "found": True, "accepted": True}
+    assert login("yt-dlp", [(1, "Extracted 52 cookies from firefox")], cookies, "rate_limited")["accepted"] is None
+    assert login("yt-dlp", [(1, 'ERROR: could not find firefox cookies database in "/home/me/.mozilla"')],
+                 cookies, "error") == {"mode": "cookies", "found": False, "accepted": False}
+    assert login("gallery-dl", [(1, "[cookies][info] Extracted 0 cookies from Firefox")], cookies, "ok")["found"] is False
+    assert login("gallery-dl", [(1, "[cookies][info] Extracted 9 cookies from Firefox")], cookies, "private") == \
+        {"mode": "cookies", "found": True, "accepted": True}
+    # Nothing said: unknown.
+    assert login("gallery-dl", [(1, "x")], cookies, "ok") == {"mode": "cookies", "found": None, "accepted": None}
+
+
+def test_login_state_of_the_last_sync(env, client, fake, monkeypatch):
+    carol_archive(env)
+    fake.set(carol_profile())
+    s = add_source(client, options={"session": {"mode": "login", "user": "my.account"}})
+    assert s["session"] == {"mode": "login", "user": "my.account", "session_file": False}
+    assert s["health"]["login"] is None
+    sync_now(client, s["id"])                          # no session saved: instaloader asks for a password
+    h = get(client, f"/api/sources/{s['id']}")["health"]
+    assert (h["state"], h["login"]) == ("login_required", {"mode": "login", "found": False, "accepted": False})
+    monkeypatch.setenv("FAKE_INSTALOADER_SESSION", "1")
+    sync_now(client, s["id"])
+    h = get(client, f"/api/sources/{s['id']}")["health"]
+    assert (h["state"], h["login"]) == ("ok", {"mode": "login", "found": True, "accepted": True})
+    profiles = carol_profile()
+    profiles["carol.cooks"]["fail"] = "login"
+    fake.set(profiles)
+    sync_now(client, s["id"])
+    h = get(client, f"/api/sources/{s['id']}")["health"]
+    assert h["login"] == {"mode": "login", "found": True, "accepted": False}
+    assert "Loaded session" not in json.dumps(get(client, f"/api/sources/{s['id']}"))   # no path kept
+    post(client, f"/api/sources/{s['id']}", {"options": {"session": {"mode": "none"}}})
+    fake.set(carol_profile())
+    sync_now(client, s["id"])
+    assert get(client, f"/api/sources/{s['id']}")["health"]["login"] == {"mode": "none", "found": None,
+                                                                         "accepted": None}

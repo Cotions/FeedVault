@@ -54,7 +54,9 @@ the flags FeedVault passes, newest post first:
   ``--cookies-from-browser`` (or ``config_cookies``: cookies from the
   user's own yt-dlp config) the info JSON holds the cookies, as yt-dlp's
   does (``cookies`` in each format and at the top, a ``Cookie`` in their
-  ``http_headers``).
+  ``http_headers``). Each tool says it read the browser's cookies as it
+  does ("[cookies][info] Extracted 12 cookies from Firefox", "Extracted 12
+  cookies from firefox"), unless the "cookies" fail says it could not.
 
 Every run appends {"tool", "argv", "at"} as one JSON line to
 FAKE_DOWNLOADS_LOG, when set.
@@ -200,6 +202,8 @@ def gallery_dl_main(argv):
     last = int(re.fullmatch(r"1-(\d+)", args.post_range).group(1)) if args.post_range else None
     data = _data()
     status = 0
+    if args.cookies_from_browser:
+        print(f"[cookies][info] Extracted 12 cookies from {args.cookies_from_browser.capitalize()}", file=sys.stderr)
     for url in args.urls:
         account = data["accounts"].get(url)
         if args.simulate and not data.get("fail"):
@@ -339,6 +343,10 @@ def yt_dlp_main(argv):
         longest = int(m.group(1))
     data = _data()
     status = 0
+    if args.cookies_from_browser and "cookies" not in [data.get("fail")] + [
+            (data["accounts"].get(u) or {}).get("fail") for u in args.urls]:
+        print(f"Extracting cookies from {args.cookies_from_browser}\n"
+              f"Extracted 12 cookies from {args.cookies_from_browser}")
     for url in args.urls:
         account = data["accounts"].get(url)
         if args.simulate and not data.get("fail"):

@@ -33,7 +33,8 @@ and Windows' other reserved characters in those become their full-width
 look-alikes, as instaloader's sanitize_path does), --no-compress-json (metadata
 JSON beside the media, plus the profile's JSON and a caption .txt),
 --no-posts, --reels, --tagged, --stories and --highlights (the last two
-fail with "Login required." without --login or --load-cookies), in
+fail with "Login required." without --login or --load-cookies; with
+either it prints instaloader's lines of a session loaded and accepted), in
 instaloader's order (tagged, reels, highlights, posts, stories),
 --no-videos, --no-video-thumbnails and --no-pictures (no picture of a post
 or carousel slide, nor a video's thumbnail: an image post gets its JSON and
@@ -355,6 +356,12 @@ def run(argv):
         print(f"Fatal error: {e}", file=sys.stderr)
         return 2
     logged_in = bool(args.login or args.load_cookies)
+    if args.login:
+        print(f"Loaded session from /home/someone/.config/instaloader/session-{args.login}.")
+        print(f"Logged in as {args.login}.")
+    elif args.load_cookies:
+        print(f"Cookies loaded successfully from {args.load_cookies}")
+        print("someone has been successfully logged in.")
     if args.latest_stamps:
         print(f"Using latest stamps from {args.latest_stamps}.")
     status = 0

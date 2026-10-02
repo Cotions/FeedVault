@@ -931,6 +931,16 @@ def _owner(params):
 
 
 def _outcome(params, code, lines, index, note=None, tool="instaloader"):
+    state, result, message = _ended_as(params, code, lines, index, note, tool)
+    # The session it used, as the output tells (health.login); a source's
+    # options do not change while it syncs (app.update_source).
+    src = sources.row(db.connect(), _source_id(params)) if "source" in params else None
+    if src is not None:
+        result["login"] = health.login(tool, lines, session_of(tool, _options(src)), _said(state, result))
+    return state, result, message
+
+
+def _ended_as(params, code, lines, index, note, tool):
     if tool != "instaloader":
         _note_listed(params, tool, lines)
     added = index["added"] if index else 0
@@ -999,12 +1009,15 @@ def _health_state(job):
     when the tool found the profile under a new name), the
     error it was classified as when it failed ("generic" and a missing tool
     are "error"), None when it never got that far (cancelled, interrupted)."""
-    if job["state"] == "done":
-        return "renamed" if (job["result"] or {}).get("rename") else "ok"
-    if job["state"] != "failed":
+    return _said(job["state"], job["result"] or {})
+
+
+def _said(state, result):
+    if state == "done":
+        return "renamed" if result.get("rename") else "ok"
+    if state != "failed":
         return None
-    error = (job["result"] or {}).get("error")
-    return error if error in health.STATES else "error"
+    return result.get("error") if result.get("error") in health.STATES else "error"
 
 
 def _failures(src, state):
@@ -1042,7 +1055,7 @@ def _ended(job):
             "line": health.scrub(r.get("line")), "added": r.get("added", 0), "job": job["id"],
             "outdated": r.get("outdated", False), "failures": _failures(src, job["state"]),
             **health.record(before, _health_state(job), job["state"], ended_at, src["target"] if src else None,
-                            r.get("rename"))}):
+                            r.get("rename"), r.get("login") if job["state"] in ("done", "failed") else None)}):
         return
     changed = {"sources"}
     src = sources.row(conn, sid)

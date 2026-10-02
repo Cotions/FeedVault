@@ -851,9 +851,10 @@ no person yet.
                    "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false,
                    "failures": 1, "health": "rate_limited", "ok_at": 1727420000 },
   "health": { "state": "rate_limited", "result": "failed", "ok_at": 1727420000, "last_sync_at": 1727503600,
-              "line": "…429 Too Many Requests…", "failures": 1, "rename": null },
+              "line": "…429 Too Many Requests…", "failures": 1, "rename": null,
+              "login": { "mode": "login", "found": true, "accepted": null } },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
-  "session": { "mode": "login", "user": "me" },
+  "session": { "mode": "login", "user": "me", "session_file": true },
   "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "failures": 1 } }
 ```
 
@@ -975,10 +976,17 @@ no person yet.
     `null`. Stored as `last_result.rename`; shown while `from` is still the
     target. FeedVault never renames on its own: the user accepts it
     (`POST /api/sources/<id>/rename`) or dismisses it.
+  - `login`: the session the last sync used, as its output told
+    (`last_result.login`): `mode` (`none`, `cookies`, `login`), `found`
+    (the session file or the browser's cookies were there) and `accepted`
+    (the site took them), each `true`, `false` or `null` when the output
+    did not say; `null` before a sync. Never from a request of FeedVault's.
 - `job`: the source's sync while it is queued or running (`waits_until`,
   see [Jobs](#jobs)), else `null`.
 - `session`: the session its sync would use (`options.session`, else the
-  tool's setting), for the form's login hint.
+  tool's setting), for the form's login hint. A saved login
+  (`"mode": "login"`) has `session_file`: whether instaloader's session
+  file for that user exists (only looked for, never opened).
 - `schedule`: its schedule, see [Schedules](#schedules): `every` (as
   `options.schedule`), `next_at` (UTC seconds; in the past, or `0`, when it
   is due; `null` when `every` is `"off"`), `paused` (`schedules_paused` is
@@ -1349,6 +1357,19 @@ name is kept as `health.rename`, a suggestion: accepting it changes the
 source's target only. Until then each sync finds the profile by its id
 again. gallery-dl and yt-dlp print nothing that names a new handle: a
 renamed X, TikTok or YouTube profile is `not_found` (or `error`).
+
+`login` comes from the lines each tool prints about its session:
+instaloader's `Loaded session from …` / `Cookies loaded successfully from
+…` (found), `Session file does not exist yet` / `No cookies found for
+Instagram` (missing), `Logged in as …` / `… has been successfully logged
+in.` (accepted: instaloader checks the session itself before saying so),
+`Not logged in.` / `Redirected to login page. You've been logged out`
+(refused); gallery-dl's `[cookies][info] Extracted <n> cookies from …` and
+yt-dlp's `Extracted <n> cookies from …` (found; 0 is missing), yt-dlp's
+`could not find … cookies database` / `failed to load cookies` (missing).
+Then a sync that ended `login_required` had its session refused, and one
+that ended otherwise (`ok`, `renamed`, `private`, `not_found`) with its
+session found had it accepted.
 
 ### Schedules
 

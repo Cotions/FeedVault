@@ -74,6 +74,27 @@ yt-dlp relays as given, are marked (YouTube)::
                     which a private account with embedding off gives too: left an error
     renamed         nothing: a renamed YouTube handle or TikTok user is only not found
 
+Login state (login()): whether the session the source's sync used was
+there and whether the site took it, from the same output, never from a
+request of FeedVault's::
+
+    instaloader --login         "Loaded session from <path>." (found), "Session file does not exist
+                                 yet - Logging in." (missing), "Logged in as <user>." (accepted: it
+                                 tests the session before printing it)
+    instaloader --load-cookies  "Cookies loaded successfully from <browser>" (found), "No cookies
+                                 found for Instagram in <browser>, …" (missing), "<user> has been
+                                 successfully logged in." (accepted), "Not logged in. Are you logged
+                                 in successfully in <browser>?" (refused)
+    instaloader, either         "Redirected to login page. You've been logged out, …" (refused)
+    gallery-dl (1.30, as above) "[cookies][info] Extracted <n> cookies from <Browser>" (found; 0: missing)
+    yt-dlp                      "Extracted <n> cookies from <browser>" (found; 0: missing),
+                                "could not find <browser> cookies database …", "failed to load
+                                 cookies" (missing)
+
+Then, whatever the tool: a run that ends ``login_required`` with a session
+was refused; one that ends otherwise (ok, renamed, private, not_found) with
+the session found had it accepted. Nothing seen: unknown (null).
+
 Errors about one video or file of a profile (a private video in a channel)
 are not the profile's: sync._item_errors sets them apart first.
 
@@ -85,6 +106,8 @@ never in its options:
   detected state: see classify()), kept by a run that never got that
   far (cancelled, interrupted)
 - ``line``: the output line behind it, scrubbed (scrub())
+- ``login``: {mode, found, accepted} of the session the last run used
+  (login()), kept by a run that never got that far
 - ``rename``: {from, to, at}, a new handle the tool reported for the
   target ``from``; kept until the user accepts it (the target changes,
   never the folder) or dismisses it, or the target changes otherwise
@@ -150,6 +173,31 @@ _SAME_NAME = re.compile(r"^Warning: Profile \S+ could not be retrieved by its na
 _HANDLE = re.compile(r"[a-z0-9._]{1,30}")
 
 
+# Login signals per tool: (what it says, pattern), matched on whole lines.
+LOGIN = {
+    "instaloader": _table([
+        ("found", r"^Loaded session from .+\.$"),
+        ("found", r"^Cookies loaded successfully from \w+$"),
+        ("missing", r"^Session file does not exist yet - Logging in\.$"),
+        ("missing", r"^(?:Login error: )?No cookies found for Instagram in "),
+        ("accepted", r"^Logged in as [A-Za-z0-9._]+\.$"),
+        ("accepted", r"^[A-Za-z0-9._]+ has been successfully logged in\.$"),
+        ("refused", r"Not logged in\. Are you logged in successfully in "),
+        ("refused", r"Redirected to login page\. You've been logged out"),
+    ]),
+    "gallery-dl": _table([
+        ("found", r"^\[cookies\]\[info\] Extracted [1-9]\d* cookies from "),
+        ("missing", r"^\[cookies\]\[info\] Extracted 0 cookies from "),
+    ]),
+    "yt-dlp": _table([
+        ("found", r"^Extracted [1-9]\d* cookies from "),
+        ("missing", r"^Extracted 0 cookies from "),
+        ("missing", r"could not find \w+ cookies database|failed to load cookies"),
+    ]),
+}
+SESSION_MODES = ("none", "cookies", "login")
+
+
 def _texts(lines):
     return [t.strip() for _, t in lines if t.strip() and not t.startswith("[feedvault]") and t.strip() != CLOSING]
 
@@ -188,6 +236,27 @@ def only_renamed(tool, lines):
         return False
     after = texts[len(texts) - texts[::-1].index(CLOSING):]
     return bool(after) and all(RENAMED["instaloader"].search(t) or _SAME_NAME.search(t) for t in after)
+
+
+def login(tool, lines, session, state):
+    """{mode, found, accepted} for the session a sync used (``session``:
+    sync.session_of's): found (the session file or the browser's cookies
+    were there), accepted (the site took them); each true, false or None
+    when the output does not say. Mode "none": both None."""
+    mode = session.get("mode") if isinstance(session, dict) else None
+    out = {"mode": mode if mode in SESSION_MODES else "none", "found": None, "accepted": None}
+    if out["mode"] == "none":
+        return out
+    seen = {signal for t in _texts(lines) for signal, pattern in LOGIN.get(tool, ()) if pattern.search(t)}
+    if "missing" in seen and not seen & {"found", "accepted"}:
+        return {**out, "found": False, "accepted": False}
+    if seen & {"found", "accepted", "refused"}:
+        out["found"] = True
+    if "refused" in seen or state == "login_required":
+        out["accepted"] = False
+    elif "accepted" in seen or (out["found"] and state in ("ok", "renamed", "private", "not_found")):
+        out["accepted"] = True
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -245,13 +314,14 @@ def scrub(text, limit=LINE_MAX):
 # The record kept on a source (in last_result, with its sync state)
 # ---------------------------------------------------------------------------
 
-def record(previous, state, job_state, ended_at, target, rename=None):
-    """The health keys of a new last_result: {health, ok_at, rename}.
+def record(previous, state, job_state, ended_at, target, rename=None, login_state=None):
+    """The health keys of a new last_result: {health, ok_at, login, rename}.
     ``previous``: the source's last_result as stored (any value:
     sources.json can be edited by hand). ``state``: what the run's output
     said (STATES), None for a run that never got that far (cancelled,
     interrupted): it keeps the previous one. ``rename``: (old, new) from
-    renamed(); a suggestion stays while the target is the one it was for."""
+    renamed(); a suggestion stays while the target is the one it was for.
+    ``login_state``: login()'s, None for a run that never got that far."""
     prev = previous if isinstance(previous, dict) else {}
     ok_at = ended_at if job_state == "done" else _ok_at(prev, None)
     suggestion = _rename(prev.get("rename"))
@@ -259,8 +329,16 @@ def record(previous, state, job_state, ended_at, target, rename=None):
         suggestion = {"from": rename[0], "to": rename[1], "at": ended_at}
     if suggestion and suggestion["from"] != str(target).lower():
         suggestion = None
-    out = {"health": state if state is not None else state_of(prev), "ok_at": ok_at}
+    out = {"health": state if state is not None else state_of(prev), "ok_at": ok_at,
+           "login": _login(login_state) or _login(prev.get("login"))}
     return {**out, "rename": suggestion} if suggestion else out
+
+
+def _login(v):
+    """A stored login state, checked again, else None."""
+    if not isinstance(v, dict) or v.get("mode") not in SESSION_MODES:
+        return None
+    return {"mode": v["mode"], **{k: v[k] if isinstance(v.get(k), bool) else None for k in ("found", "accepted")}}
 
 
 def _rename(v):
@@ -305,7 +383,7 @@ def public(result, last_sync_at, failures, target=None):
     return {"state": state, "result": r.get("state") if isinstance(r.get("state"), str) else None,
             "ok_at": _ok_at(r, last_sync_at), "last_sync_at": last_sync_at if _time(last_sync_at) else None,
             "line": scrub(r.get("line")) if state not in (None, "ok", "renamed") else None, "failures": failures,
-            "rename": _suggested(r.get("rename"), target)}
+            "rename": _suggested(r.get("rename"), target), "login": _login(r.get("login"))}
 
 
 def _suggested(v, target):
