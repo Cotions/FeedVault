@@ -842,13 +842,14 @@ no person yet.
   "account": { "platform": "instagram", "id": "somebody" },
   "person": { "id": 3, "name": "Some Body" },
   "options": { "full_history": false, "session": null, "content": ["posts", "reels"], "media": "all",
-               "since": "2024-01-01", "first_posts": null },
+               "since": "2024-01-01", "first_posts": null, "schedule": "daily" },
   "choices": { "content": ["posts", "reels", "stories", "highlights", "tagged"], "content_default": ["posts"],
                "login": ["stories", "highlights", "tagged"], "media": true, "since": true, "first_posts": false },
   "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait before syncing again",
-                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false },
+                   "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false,
+                   "failures": 1 },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
   "session": { "mode": "login", "user": "me" } }
 ```
@@ -892,6 +893,12 @@ no person yet.
     back to `null` once a sync succeeds, like `full_history`, and `since`
     set to the day of the oldest post that sync added or listed (see
     [What a source downloads](#what-a-source-downloads)).
+  - `schedule`: `"off"` (default), `"hourly"`, `"daily"` or `"weekly"`: how
+    often the scheduler syncs the source (see [Schedules](#schedules)).
+    Stories last 24 hours: options whose `content` turns `stories` on (it
+    was off) make an `"off"` schedule `"daily"`, unless they send a
+    `schedule` too. A source stored without one (sources.json from before)
+    has `"off"`.
   - Any other key, or a value outside the above, is a 400 naming the
     option; a stored value that is not valid (sources.json edited by hand)
     counts as its default, the other options as stored.
@@ -930,6 +937,9 @@ no person yet.
     Settings → Downloaders`, and `outdated` is `true` (else `false`)
   - `added`: new posts indexed (also after a failure: what was downloaded
     before it stopped is indexed)
+  - `failures`: failed syncs in a row (a failure adds one, a sync that
+    worked sets it to 0, a cancelled or interrupted one leaves it), for the
+    scheduler's back-off
 - `job`: the source's sync while it is queued or running (`waits_until`,
   see [Jobs](#jobs)), else `null`.
 - `session`: the session its sync would use (`options.session`, else the
@@ -941,7 +951,7 @@ no person yet.
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
 | POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back) |
+| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |

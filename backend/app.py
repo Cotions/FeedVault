@@ -838,8 +838,9 @@ def update_source(sid):
     body = request.get_json(silent=True) or {}
     if not isinstance(body.get("options"), dict):
         return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
-    if sid in _sources_active():
-        # The sync's end clears full history and last N: it would clear the new ones.
+    if sid in _sources_active() and set(body["options"]) - {"schedule"}:
+        # The sync's end clears full history and last N: it would clear the new
+        # ones. It reads the options again at the end, so a schedule can change.
         return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
     sent = body["options"]
     options, error = sources.parse_options(sent, base=s["options"], tool=s["tool"], platform=s["platform"],

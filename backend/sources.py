@@ -314,7 +314,11 @@ MEDIA_TOOLS = ("instaloader", "gallery-dl")
 FIRST_POSTS_TOOLS = ("gallery-dl", "yt-dlp")
 FIRST_POSTS_MAX = 10000
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts")
+# How often the scheduler syncs a source (scheduler.py); off by default.
+SCHEDULES = ("off", "hourly", "daily", "weekly")
+# Last: stored_options applies the keys in this order, and a stored
+# schedule wins over the one content's stories would pick.
+OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts", "schedule")
 LOGIN_REFUSED = ("{kinds} need a logged-in session: choose one for this source, or set one in "
                  "Settings → Sync")
 
@@ -345,7 +349,7 @@ def _since(value):
     return value if date(1970, 1, 1) <= day <= date.today() else None
 
 
-def parse_options(value, base=None, tool="instaloader", platform="instagram", target=None):
+def parse_options(value, base=None, tool="instaloader", platform="instagram", target=None, stories_daily=True):
     """A source's options merged over ``base``: (options, None), or (None,
     error) when ``value`` is malformed or asks for what the source cannot
     do (see choices). The options:
@@ -359,9 +363,12 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
     - media: all, images or videos (instaloader and gallery-dl);
     - since: null, or a YYYY-MM-DD date: nothing older is downloaded;
     - first_posts: null, or 1 to 10000: the first sync gets only that many
-      of the newest posts (gallery-dl and yt-dlp; not with full_history)."""
+      of the newest posts (gallery-dl and yt-dlp; not with full_history);
+    - schedule: off, hourly, daily or weekly. Stories last 24 h: content
+      that turns them on makes an off schedule daily, unless ``value``
+      sends a schedule too (``stories_daily`` False: never)."""
     out = {"full_history": False, "session": None, "content": None, "media": "all", "since": None,
-           "first_posts": None, **(base or {})}
+           "first_posts": None, "schedule": "off", **(base or {})}
     if value is None:
         return out, None
     if not isinstance(value, dict):
@@ -394,6 +401,9 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
                     any(not isinstance(k, str) or k not in can["content"] for k in content):
                 return None, f"content must be a non-empty list of: {', '.join(can['content'])}"
             content = [k for k in can["content"] if k in content]
+            if stories_daily and "stories" in content and "stories" not in (out["content"] or ()) \
+                    and "schedule" not in value and out["schedule"] == "off":
+                out["schedule"] = "daily"
             if content == can["content_default"]:
                 content = None
         out["content"] = content
@@ -415,14 +425,18 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
             if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= FIRST_POSTS_MAX:
                 return None, f"first_posts must be null or a whole number from 1 to {FIRST_POSTS_MAX}"
         out["first_posts"] = n
+    if "schedule" in value:
+        if value["schedule"] not in SCHEDULES:
+            return None, f"schedule must be one of: {', '.join(SCHEDULES)}"
+        out["schedule"] = value["schedule"]
     if out["full_history"] and out["first_posts"] is not None:
         return None, "the first sync is either the full history or only the last posts, not both"
     return out, None
 
 
-def clean_options(value, base=None, tool="instaloader", platform="instagram", target=None):
+def clean_options(value, base=None, tool="instaloader", platform="instagram", target=None, stories_daily=True):
     """parse_options' options, or None when malformed."""
-    return parse_options(value, base, tool, platform, target)[0]
+    return parse_options(value, base, tool, platform, target, stories_daily)[0]
 
 
 def login_refused(options, platform, session):
@@ -488,7 +502,8 @@ def _public(conn, row, accounts, active):
 def stored_options(src):
     """A stored source's options, checked again one by one: a malformed
     value gets its default and the others stay (sources.json can be edited
-    by hand)."""
+    by hand). A source stored without a schedule has none: its stories do
+    not pick one."""
     try:
         stored = json.loads(src["options"] or "{}")
     except ValueError:
@@ -497,7 +512,7 @@ def stored_options(src):
     out = clean_options(None, **where)
     for key in OPTION_KEYS:
         if isinstance(stored, dict) and key in stored:
-            out = clean_options({key: stored[key]}, out, **where) or out
+            out = clean_options({key: stored[key]}, out, **where, stories_daily=False) or out
     return out
 
 

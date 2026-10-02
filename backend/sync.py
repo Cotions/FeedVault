@@ -1003,6 +1003,18 @@ def _outdated(tool):
         return None
 
 
+def _failures(src, state):
+    """Failed syncs in a row, for the scheduler's back-off: a failure adds
+    one, a sync that worked starts again from 0, a cancelled or interrupted
+    one leaves the count."""
+    try:
+        before = (json.loads(src["last_result"] or "{}") if src is not None else {}).get("failures")
+    except (ValueError, AttributeError):
+        before = None
+    before = before if isinstance(before, int) and not isinstance(before, bool) and before >= 0 else 0
+    return before + 1 if state == "failed" else 0 if state == "done" else before
+
+
 def _ended(job):
     """Store how it went on the source, and let a new source adopt its account."""
     _tally(job)
@@ -1023,7 +1035,7 @@ def _ended(job):
     if not sources.record(conn, sid, job["id"], job["ended_at"] or int(time.time()), {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
             "line": r.get("line"), "added": r.get("added", 0), "job": job["id"],
-            "outdated": r.get("outdated", False)}):
+            "outdated": r.get("outdated", False), "failures": _failures(src, job["state"])}):
         return
     changed = {"sources"}
     src = sources.row(conn, sid)
