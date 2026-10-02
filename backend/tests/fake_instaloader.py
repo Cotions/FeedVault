@@ -12,7 +12,8 @@ profiles from the JSON file named by FAKE_INSTALOADER (default
      "fail": null | "429" | "login" | "private" | "notfound" | "crash" | "leak",
      "delay": 0}
 
-A profile may also have "reels" and "tagged" (posts as above; a tagged
+A profile may have its own "fail" (one of the same), used when the top
+one is null. A profile may also have "reels" and "tagged" (posts as above; a tagged
 post has its own "owner": {"username", "id", "full_name"?}), "stories" ([{"id", "ts",
 "video": bool}]) and "highlights" ([{"title", "items": [story items]}]).
 
@@ -140,26 +141,36 @@ def one_post(data, args, target):
 
 
 def fail(kind, target):
+    """A failed profile, as instaloader 4.15 prints it: each error on stderr
+    as it happens, repeated under "Errors or warnings occurred:" at the end
+    (context.error with repeat_at_end; the 429 retries are not repeated)."""
+    errors = []
     if kind == "429":
         print("JSON Query to graphql/query: 429 Too Many Requests [retrying; skip with ^C]", file=sys.stderr)
         print('Instagram responded with HTTP error "429 - Too Many Requests". Please do not run multiple\n'
               "instances of Instaloader in parallel or within short sequence.", file=sys.stderr)
-        print(f"{target}: Please wait a few minutes before you try again.", file=sys.stderr)
+        errors.append(f"{target}: Please wait a few minutes before you try again.")
     elif kind == "login":
-        print(f"{target}: Login required.", file=sys.stderr)
+        errors.append(f"{target}: Login required.")
     elif kind == "private":
-        print(f"{target}: Private but not followed.", file=sys.stderr)
+        errors.append(f"{target}: Private but not followed.")
     elif kind == "notfound":
         print(f"Profile {target} does not exist.\nThe most similar profile is: {target}_.", file=sys.stderr)
+        print("\nErrors or warnings occurred:", file=sys.stderr)
+        return 1
     elif kind == "crash":
         raise RuntimeError("fake crash")
     elif kind == "leak":
         # Made-up secrets in an error line: FeedVault must never store or show them.
         print(f"Loaded session from /home/someone/.config/instaloader/session-{target}.")
-        print(f"{target}: JSON Query to api/v1/users: 400 Bad Request - cookie sessionid=FAKE-SECRET-1; "
-              "csrftoken=FAKE-SECRET-2 [Cookie: ds_user_id=FAKE-SECRET-3] "
-              "Authorization: Bearer FAKESECRETFAKESECRET4", file=sys.stderr)
+        errors.append(f"{target}: JSON Query to api/v1/users: 400 Bad Request - cookie sessionid=FAKE-SECRET-1; "
+                      "csrftoken=FAKE-SECRET-2 [Cookie: ds_user_id=FAKE-SECRET-3] "
+                      "Authorization: Bearer FAKESECRETFAKESECRET4")
+    for e in errors:
+        print(e, file=sys.stderr)
     print("\nErrors or warnings occurred:", file=sys.stderr)
+    for e in errors:
+        print(e, file=sys.stderr)
     return 1
 
 
@@ -345,8 +356,8 @@ def run(argv):
         print(f"Using latest stamps from {args.latest_stamps}.")
     status = 0
     for target in args.targets:
-        if data.get("fail"):
-            status = fail(data["fail"], target)
+        if data.get("fail") or (data["profiles"].get(target) or {}).get("fail"):
+            status = fail(data.get("fail") or data["profiles"][target]["fail"], target)
             continue
         if target.startswith("-"):
             if not args.no_compress_json:

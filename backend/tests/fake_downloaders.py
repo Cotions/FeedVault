@@ -18,6 +18,11 @@ this script), keyed by the profile link FeedVault passes:
      "fail": null | "429" | "login" | "private" | "notfound",
      "config_cookies": false}
 
+An account may have its own "fail" (one of the same, or "cookies" for
+yt-dlp: its browser's cookie database is not there), used when the top
+one is null. Failures print the lines the real tools print for them
+(health.py lists them).
+
 and behave like gallery-dl 1.32 and yt-dlp 2026.08 for one profile link with
 the flags FeedVault passes, newest post first:
 
@@ -200,10 +205,12 @@ def gallery_dl_main(argv):
         if args.simulate and not data.get("fail"):
             print(f"# {url.rsplit('/', 1)[-1]}_1.jpg")      # the test item: nothing written
             continue
-        if data.get("fail") or account is None:
-            exc, msg, code = GALLERY_DL_FAIL[data.get("fail") or "notfound"]
+        fail = data.get("fail") or (account or {}).get("fail")
+        if fail or account is None:
+            exc, msg, code = GALLERY_DL_FAIL[fail or "notfound"]
             name = (account or {}).get("user", {}).get("name", "someone")
-            print(f"[twitter][error] {exc}: {msg.format(name=name)}", file=sys.stderr)
+            print(f"[{(account or {}).get('category', 'twitter')}][error] {exc}: {msg.format(name=name)}",
+                  file=sys.stderr)
             status |= code
             continue
         folder = args.D or os.path.join("gallery-dl", account["category"], account["user"]["name"])
@@ -254,12 +261,27 @@ def _gallery_dl_child(posts, account, folder, archive, args, abort, keep, after,
 
 # --- yt-dlp ---------------------------------------------------------------------
 
+# As yt-dlp 2026.08 words them (see health.py), by the list extractor that fails.
+COOKIES_HINT = ("Use --cookies-from-browser or --cookies for the authentication. See  "
+                "https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually "
+                "pass cookies")
 YT_DLP_FAIL = {
-    "429": "ERROR: [{ie}] {id}: HTTP Error 429: Too Many Requests",
-    "login": "ERROR: [{ie}] {id}: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies "
-             "for the authentication",
-    "private": "ERROR: [{ie}] {id}: This account is private",
-    "notfound": "ERROR: [{ie}] {id}: Unable to find user",
+    "429": "ERROR: [{ie}] {id}: Unable to download webpage: HTTP Error 429: Too Many Requests "
+           "(caused by <HTTPError 429: Too Many Requests>)",
+    "login": {"tiktok:user": "ERROR: [tiktok:user] {id}: TikTok is requiring login for access to this content. "
+                             + COOKIES_HINT,
+              None: "ERROR: [{ie}] {id}: Sign in to confirm you’re not a bot. " + COOKIES_HINT},
+    "private": {"tiktok:user": "ERROR: [tiktok:user] {id}: This user's account is private. Log into an account "
+                               "that has access. " + COOKIES_HINT,
+                None: "ERROR: [{ie}] {id}: Private video. Sign in if you've been granted access to this video. "
+                      + COOKIES_HINT},
+    "notfound": {"tiktok:user": "ERROR: [tiktok:user] {id}: Unable to extract secondary user ID. If you are able "
+                                "to get the channel_id from a video posted by this user, try using "
+                                "\"tiktokuser:channel_id\" as the input URL (replacing `channel_id` with its "
+                                "actual value)",
+                 None: "ERROR: [{ie}] {id}: Unable to download webpage: HTTP Error 404: Not Found "
+                       "(caused by <HTTPError 404: Not Found>)"},
+    "cookies": "ERROR: could not find {browser} cookies database in \"/home/someone/.mozilla/{browser}\"",
 }
 THUMB = {"TikTok": "image", "Youtube": "webp"}
 FAKE_COOKIE = "sessionid=FAKE-SECRET"
@@ -324,11 +346,15 @@ def yt_dlp_main(argv):
             print(f"[youtube] Extracting URL: {url}\n[youtube] {vid}: Downloading webpage\n"
                   f"[info] {vid}: Downloading 1 format(s): 18")
             continue
-        if data.get("fail") or account is None:
+        fail = data.get("fail") or (account or {}).get("fail")
+        if fail or account is None:
             # A profile's errors come from its list extractor, as yt-dlp's do.
             ie = {"TikTok": "tiktok:user", "Youtube": "youtube:tab"}.get(
                 (account or {}).get("extractor_key"), "generic")
-            print(YT_DLP_FAIL[data.get("fail") or "notfound"].format(ie=ie, id=url.rsplit("/", 1)[-1]),
+            line = YT_DLP_FAIL[fail or "notfound"]
+            if isinstance(line, dict):
+                line = line.get(ie, line[None])
+            print(line.format(ie=ie, id=url.rsplit("/", 1)[-1], browser=args.cookies_from_browser or "firefox"),
                   file=sys.stderr)
             status = 1
             continue

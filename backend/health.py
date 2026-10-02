@@ -1,9 +1,82 @@
-"""Account health: how a source's syncs have been going, kept with its sync
-state (the source's last_result, see sync._ended), never in its options.
+"""Account health: what each tool's output says about a source's account.
+
+Read from the lines a sync printed (stdout and stderr together, as jobs.py
+keeps them), by fixed patterns, one table per tool. Each pattern names the
+exact text it matches and where it was seen; output no pattern knows is an
+``error`` with its line, never a guess.
+
+States (first match wins, in this order: a throttled client also gets login
+pages and missing profiles, so rate limiting comes first):
+
+- ``rate_limited``: the site is limiting requests (the scheduler backs off)
+- ``private``: a private profile the session does not follow
+- ``login_required``: the site wants a logged-in session, or refused it
+- ``not_found``: no such profile (deleted, renamed without a trace, banned)
+- ``error``: none of the above; ``ok``: the sync worked
+
+instaloader 4.15.1, read from its installed source (instaloader.py,
+instaloadercontext.py, __main__.py)::
+
+    rate_limited    "JSON Query to graphql/query: 429 Too Many Requests [retrying; skip with ^C]"
+                    (_response_error: "<status> <reason>")
+                    "Please wait a few minutes before you try again." (Instagram's message, relayed)
+    private         "<target>: Private but not followed."
+                    "Profile <name>: private but not followed."
+    login_required  "<target>: Login required."  /  "profile <name> requires login"
+                    "Redirected to login page. Use --login or --load-cookies."
+                    "Download aborted: Redirected to login page. You've been logged out, please
+                     wait some time, recreate the session and try again."
+                    "Session file does not exist yet - Logging in."
+                    "Login error: …" (LoginException; "checkpoint_required", "challenge_required")
+                    "No cookies found for Instagram in <browser>, Are you logged in successfully in <browser>?"
+                    "Not logged in. Are you logged in successfully in <browser>?"
+                    "… 403 Forbidden …": Instagram turning an anonymous client away; instaloader then
+                     says the profile does not exist, so this comes before not_found
+    not_found       "Profile <name> does not exist."
+
+gallery-dl: not installed where this was written; its log format
+``[<category>][error] <Exception>: <message>`` and the exception names are
+those of gallery-dl 1.30 (gallery_dl/exception.py), the messages those its
+twitter extractor raises::
+
+    rate_limited    "[twitter][error] HttpError: '429 Too Many Requests' for '<url>'"
+    private         "[twitter][error] AuthorizationError: <name>'s Tweets are protected"
+    login_required  "[<category>][error] AuthRequired: '<what>' needed …"
+                    "[<category>][error] AuthenticationError: …"
+                    "[<category>][error] AuthorizationError: …" (any other)
+    not_found       "[<category>][error] NotFoundError: Requested user could not be found"
+
+yt-dlp 2026.08.19, read from its installed zipapp (networking/exceptions.py,
+extractor/common.py, extractor/tiktok.py, extractor/youtube/_tab.py); lines
+are ``ERROR: [<extractor>] <id>: <message>``. YouTube's own texts, which
+yt-dlp relays as given, are marked (YouTube)::
+
+    rate_limited    "HTTP Error 429: Too Many Requests"
+    private         "This user's account is private. Log into an account that has access" (TikTok)
+                    "This user's account is likely either private or all of their videos are private"
+                    "Private video. Sign in if you've been granted access to this video" (YouTube)
+    login_required  "Sign in to confirm you’re not a bot" (YouTube; ’ or ')
+                    "Sign in to confirm your age" (YouTube)
+                    "TikTok is requiring login for access to this content"
+                    "Use --cookies-from-browser or --cookies for the authentication" (the hint every
+                     raise_login_required adds)
+    not_found       "The channel/playlist does not exist and the URL redirected to youtube.com home page"
+                    "HTTP Error 404: Not Found"
+                    "Video unavailable" (YouTube; one video: the Downloaders test item)
+                    "YouTube said: This channel does not exist." (YouTube)
+                    "YouTube said: This account has been terminated …" (YouTube)
+    (none)          a TikTok user that does not exist: "Unable to extract secondary user ID. …",
+                    which a private account with embedding off gives too: left an error
+
+Errors about one video or file of a profile (a private video in a channel)
+are not the profile's: sync._item_errors sets them apart first.
+
+Kept on the source with its sync state (its last_result, see sync._ended),
+never in its options:
 
 - ``ok_at``: when its last sync that worked ended (kept across failures)
 - ``health``: what the last run's output said (``ok``, ``error``, or a
-  detected state: see sync.classify), kept by a run that never got that
+  detected state: see classify()), kept by a run that never got that
   far (cancelled, interrupted)
 - ``line``: the output line behind it, scrubbed (scrub())
 - ``failures``: failed syncs in a row (sync._failures)
@@ -20,6 +93,62 @@ import re
 
 STATES = ("ok", "rate_limited", "private", "login_required", "not_found", "error")
 LINE_MAX = 300
+
+
+def _table(rows):
+    return [(state, re.compile(pattern, re.I)) for state, pattern in rows]
+
+
+INSTALOADER = _table([
+    ("rate_limited", r"\b429 Too Many Requests\b"),
+    ("rate_limited", r"Please wait a few minutes before you try again"),
+    ("private", r"\bprivate but not followed\b"),
+    ("login_required", r"\bLogin required\.|\bprofile \S+ requires login\b"),
+    ("login_required", r"Redirected to login page\."),
+    ("login_required", r"Session file does not exist yet - Logging in\."),
+    ("login_required", r"^Login error: |checkpoint_required|challenge_required"),
+    ("login_required", r"No cookies found for Instagram in |Not logged in\. Are you logged in successfully in "),
+    ("login_required", r"\b403 Forbidden\b"),
+    ("not_found", r"\bProfile \S+ does not exist\."),
+])
+GALLERY_DL = _table([
+    ("rate_limited", r"\]\[error\] HttpError: '429 Too Many Requests'"),
+    ("private", r"\]\[error\] AuthorizationError: .*'s Tweets are protected"),
+    ("login_required", r"\]\[error\] (?:AuthRequired|AuthenticationError|AuthorizationError): "),
+    ("not_found", r"\]\[error\] NotFoundError: "),
+])
+YT_DLP = _table([
+    ("rate_limited", r"HTTP Error 429: Too Many Requests"),
+    ("private", r"This user's account is (?:likely either )?private"),
+    ("private", r"\bPrivate video\b"),
+    ("login_required", r"Sign in to confirm (?:you[’']re not a bot|your age)"),
+    ("login_required", r"TikTok is requiring login for access to this content"),
+    ("login_required", r"Use --cookies-from-browser or --cookies for the authentication"),
+    ("not_found", r"The channel/playlist does not exist and the URL redirected to youtube\.com home page"),
+    ("not_found", r"HTTP Error 404: Not Found"),
+    ("not_found", r"\bVideo unavailable\b"),
+    ("not_found", r"YouTube said: This (?:channel does not exist|account has been terminated)"),
+])
+TABLES = {"instaloader": INSTALOADER, "gallery-dl": GALLERY_DL, "yt-dlp": YT_DLP}
+# instaloader's heading of the errors it repeats as it ends: never the line that says what went wrong.
+CLOSING = "Errors or warnings occurred:"
+
+
+def _texts(lines):
+    return [t.strip() for _, t in lines if t.strip() and not t.startswith("[feedvault]") and t.strip() != CLOSING]
+
+
+def classify(lines, table):
+    """(state, line): the first state of ``table`` whose pattern a line
+    matches (the latest such line), else ("error", the last line). The
+    line is raw: scrub() it before storing it."""
+    texts = _texts(lines)
+    for state in dict.fromkeys(st for st, _ in table):
+        patterns = [p for st, p in table if st == state]
+        for t in reversed(texts):
+            if any(p.search(t) for p in patterns):
+                return state, t
+    return "error", texts[-1] if texts else None
 
 
 # ---------------------------------------------------------------------------

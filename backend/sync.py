@@ -121,7 +121,7 @@ How they meet the stopping points:
   without one, and again at sync time (the setting can change since).
 
 How it went is read from the output (login required, private, not found,
-rate limited) and stored on the source. Two syncs of one tool pause between
+rate limited: health.py's tables) and stored on the source. Two syncs of one tool pause between
 them (config ``<tool>.pause``).
 """
 import configparser
@@ -858,18 +858,9 @@ def _seed_posts(conn, src, options, note, moved=(), roots=()):
          f"{datetime.fromtimestamp(newest, timezone.utc):%Y-%m-%d %H:%M} UTC")
 
 
-# What went wrong, from the output: the first kind whose words appear.
-# Rate limiting comes first: Instagram also answers a throttled client with
-# login pages and missing profiles. A 403 is Instagram refusing an anonymous
-# client, after which instaloader says the profile does not exist.
-FAILURES = [(error, re.compile(words, re.I)) for error, words in [
-    ("rate_limited", r"\b429 too many|too many requests|please wait a few minutes|rate limit"),
-    ("private", r"private but not followed|privateprofilenotfollowedexception|profile is private"),
-    ("login_required", r"login required|loginrequiredexception|redirected to login|use --login|"
-                       r"session file does not exist|checkpoint_required|challenge_required|login_required|"
-                       r"login error|not logged in|\b403 forbidden\b"),
-    ("not_found", r"profile \S+ does not exist|profilenotexistsexception|\bnot found\b"),
-]]
+# What went wrong, from the output: one table of fixed patterns per tool,
+# with the exact strings they match, in health.py.
+FAILURES = health.INSTALOADER
 MESSAGES = {
     "rate_limited": "Instagram is limiting requests: wait a while before syncing again",
     "not_found": "Profile not found: renamed, deleted, or blocked",
@@ -879,22 +870,8 @@ MESSAGES = {
 }
 
 
-# gallery-dl logs "[<category>][error] <Exception>: <message>".
-GALLERY_DL_FAILURES = [(error, re.compile(words, re.I)) for error, words in [
-    ("rate_limited", r"\b429 too many|too many requests|rate limit"),
-    ("private", r"tweets are protected|\bprotected\b|private (?:account|profile)|account is private"),
-    ("login_required", r"authrequired|authorizationerror|authenticationerror|login required|"
-                       r"credentials required|insufficient privileges|requires? (?:a )?login|\b401 unauthorized\b"),
-    ("not_found", r"notfounderror|could not be found|\b404 not found\b|does not exist|account (?:is )?suspended"),
-]]
-YT_DLP_FAILURES = [(error, re.compile(words, re.I)) for error, words in [
-    ("rate_limited", r"http error 429|too many requests|rate[- ]limit"),
-    ("private", r"private video|account is private|is a private|private account"),
-    ("login_required", r"sign in to confirm|login required|log in for access|requires authentication|"
-                       r"use --cookies|age-restricted|members-only|\b401 unauthorized\b"),
-    ("not_found", r"http error 404|\bnot found\b|video unavailable|does not exist|unable to find|"
-                  r"account (?:has been )?(?:banned|terminated|suspended)"),
-]]
+GALLERY_DL_FAILURES = health.GALLERY_DL
+YT_DLP_FAILURES = health.YT_DLP
 TOOL_MESSAGES = {
     "rate_limited": "The site is limiting requests: wait a while before syncing again",
     "not_found": "Profile not found: renamed, deleted, or blocked",
@@ -903,19 +880,13 @@ TOOL_MESSAGES = {
 }
 
 
-# instaloader's heading of the errors it repeats as it ends: never the line that says what went wrong.
-CLOSING = "Errors or warnings occurred:"
-
-
 def classify(lines, failures=None):
-    """(error, line): what the output of a failed run says went wrong, and
-    the line that says it (else the last line of output)."""
-    texts = [t for _, t in lines if t.strip() and not t.startswith("[feedvault]") and t.strip() != CLOSING]
-    for error, words in failures or FAILURES:
-        for t in reversed(texts):
-            if words.search(t):
-                return error, t.strip()[:500]
-    return "generic", texts[-1].strip()[:500] if texts else None
+    """(error, line): what the output of a failed run says went wrong
+    (health.classify with the tool's table, FAILURES by default), and the
+    line that says it (else the last line of output); "generic" for
+    output no pattern knows. The line is raw: health.scrub it."""
+    state, line = health.classify(lines, failures or FAILURES)
+    return ("generic" if state == "error" else state), line
 
 
 # An error line about one item, not the profile: yt-dlp names the video's
