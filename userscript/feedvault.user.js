@@ -29,7 +29,7 @@ const MISS_TTL_MS = 30_000;
 const POST_PATH_RE = /^\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/;
 // A post page or dialog the Save button shows on: the whole path, and a
 // shortcode as POST /api/save accepts it.
-const SAVE_PATH_RE = /^\/(?:[A-Za-z0-9._]{1,30}\/)?(?:p|reel)\/([A-Za-z0-9_-]{5,40})\/?$/;
+const SAVE_PATH_RE = /^\/(?:[A-Za-z0-9._]{1,30}\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,40})\/?$/;
 // A profile page (or one of its tabs) the Sync profile button shows on.
 const PROFILE_PATH_RE = /^\/([A-Za-z0-9._]{1,30})\/(?:(?:reels|tagged)\/)?$/;
 // First path parts that are Instagram's own pages, not profiles.
@@ -98,22 +98,31 @@ function known(id) {
   return hit.saved;
 }
 
-function ask(ids) {
+// One FeedVault call. Resolves { status, body } (body null if not JSON), or
+// null when FeedVault does not answer.
+function api(method, path, body) {
   return new Promise((resolve) => {
     GM_xmlhttpRequest({
-      method: "POST",
-      url: `${API_BASE}/api/saved`,
+      method,
+      url: `${API_BASE}${path}`,
       headers: FV_HEADERS,
-      data: JSON.stringify({ ids }),
-      timeout: 5000,
+      data: body === undefined ? undefined : JSON.stringify(body),
+      timeout: 10000,
       onload: (r) => {
-        try { resolve(new Set(JSON.parse(r.responseText).saved || [])); }
-        catch { resolve(null); }
+        let json = null;
+        try { json = JSON.parse(r.responseText); } catch { /* not JSON */ }
+        resolve({ status: r.status, body: json });
       },
       onerror: () => resolve(null),
       ontimeout: () => resolve(null),
     });
   });
+}
+
+// The ids FeedVault has, or null when it does not answer.
+async function ask(ids) {
+  const r = await api("POST", "/api/saved", { ids });
+  return Array.isArray(r?.body?.saved) ? new Set(r.body.saved) : null;
 }
 
 async function flush() {
@@ -166,27 +175,6 @@ function paintTiles() {
 // ---------------------------------------------------------------------------
 // Save button: a post page, or the dialog a grid opens (it sets the same path)
 // ---------------------------------------------------------------------------
-
-// One FeedVault call. Resolves { status, body } (body null if not JSON), or
-// null when FeedVault does not answer.
-function api(method, path, body) {
-  return new Promise((resolve) => {
-    GM_xmlhttpRequest({
-      method,
-      url: `${API_BASE}${path}`,
-      headers: FV_HEADERS,
-      data: body === undefined ? undefined : JSON.stringify(body),
-      timeout: 10000,
-      onload: (r) => {
-        let json = null;
-        try { json = JSON.parse(r.responseText); } catch { /* not JSON */ }
-        resolve({ status: r.status, body: json });
-      },
-      onerror: () => resolve(null),
-      ontimeout: () => resolve(null),
-    });
-  });
-}
 
 const ENDED = new Set(["done", "failed", "cancelled", "interrupted"]);
 // shortcode -> { state: "sending" | "queued" | "running" | "failed" | "offline", job, message, error }
@@ -243,12 +231,16 @@ function dropPanel(prefix) {
   if (p && p.dataset.key.startsWith(prefix)) p.remove();
 }
 
-// A post FeedVault has gets a link to it; another, the Save button and its state.
+// A post FeedVault has gets a link to it (on any page of the post); another,
+// the Save button and its state (on the post itself).
 function paintPage() {
-  const code = savePathCode();
+  const code = shortcodeFromHref(location.pathname);
   const id = code && `instagram:${code}`;
-  const have = code ? known(id) : null;
-  if (code && have === null) pending.add(id);
+  const fresh = code ? known(id) : null;
+  if (code && fresh === null) pending.add(id);
+  // While a stale "not saved" is asked again, keep showing it (no flicker).
+  const have = fresh ?? (code ? cache.get(id)?.saved ?? null : null);
+  if (have !== true && code !== savePathCode()) { dropPanel("post:"); return; }
   if (code && have === null && !saves.has(code) && offline) {
     const p = panel(`post:${code}`);
     render(p, "offline", () => [button("offline", "FeedVault is not running — retry", () => startSave(code))]);
@@ -300,12 +292,15 @@ async function startSave(code) {
     paint();
     return;
   }
+  if (!b.job || typeof b.job.id !== "number") { setSave(code, { state: "failed", message: "unexpected answer" }); return; }
   applyJob(code, b.job);
+  if (ENDED.has(b.job.state)) return;
+  watchJob(b.job.id, () => saves.get(code)?.job?.id === b.job.id, () => savePathCode() === code,
+    (job) => (job ? applyJob(code, job) : setSave(code, { state: "failed", message: GONE })));
 }
 
-// A Save job's state, as GET /api/jobs/<id> says it; polls until it has ended.
+// A Save job's state, as GET /api/jobs/<id> says it.
 function applyJob(code, job) {
-  if (!job || typeof job.id !== "number") return;
   if (job.state === "done" && job.result?.post) {
     cache.set(`instagram:${code}`, { saved: true, at: Date.now() });
     saves.delete(code);
@@ -317,15 +312,27 @@ function applyJob(code, job) {
     return;
   }
   setSave(code, { state: job.state === "running" ? "running" : "queued", job });
-  setTimeout(() => pollJob(code, job.id), JOB_POLL_MS);
 }
 
-async function pollJob(code, jobId) {
-  if (saves.get(code)?.job?.id !== jobId) return;   // retried since: another job
-  const r = await api("GET", `/api/jobs/${jobId}`);
-  if (r === null) { setTimeout(() => pollJob(code, jobId), JOB_POLL_MS * 4); return; }   // FeedVault restarting
-  if (r.status === 404) { setSave(code, { state: "failed", message: "the job is gone (FeedVault restarted?)" }); return; }
-  applyJob(code, r.body);
+const GONE = "the job is gone (FeedVault restarted?)";
+
+// Poll GET /api/jobs/<id> until the job has ended: onUpdate(job) on each
+// answer, onUpdate(null) if it is unknown. Stops once still() is false (a
+// retry started another job); slower while shown() is false (its page is
+// not the one open), or when FeedVault does not answer or answers an error.
+async function watchJob(jobId, still, shown, onUpdate) {
+  for (;;) {
+    if (!still()) return;
+    const r = await api("GET", `/api/jobs/${jobId}`);
+    if (!still()) return;
+    if (r?.status === 404) { onUpdate(null); return; }
+    const job = r?.status === 200 && typeof r.body?.id === "number" ? r.body : null;
+    if (job) {
+      onUpdate(job);
+      if (ENDED.has(job.state)) return;
+    }
+    await sleep(job && shown() ? JOB_POLL_MS : JOB_POLL_MS * 6);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +341,7 @@ async function pollJob(code, jobId) {
 // ---------------------------------------------------------------------------
 
 // name -> { state: "checking" | "idle" | "confirm" | "sending" | "queued" | "running" | "done"
-//                  | "failed" | "offline", source, folder, job, message, error }
+//                  | "failed" | "offline", source, checked, job, message, error }
 const profiles = new Map();
 
 function profileName() {
@@ -375,7 +382,7 @@ function paintProfile() {
       const row = el("div", { class: "fv-row" });
       row.append(button("confirm", `Add @${name}`, () => addAndSync(name)),
                  button("idle", "Cancel", () => setProfile(name, { state: "idle" })));
-      out.push(row, note(`New instaloader source for @${name}, downloading into ${s.folder || "your first media root"}.`));
+      out.push(row, note(`New instaloader source for @${name}, downloading into the folder ${name} of your first media root.`));
     } else if (s.state === "queued") out.push(button("busy", "Sync queued", null, `Job #${s.job.id}`));
     else if (s.state === "running") out.push(button("busy", "Syncing…", null, `Job #${s.job.id}`));
     else if (s.state === "offline") out.push(button("offline", "FeedVault is not running — retry", () => clickProfile(name)));
@@ -396,23 +403,21 @@ function paintProfile() {
   });
 }
 
-// Is there a source for it already? (Asked once per profile visited.)
+// Is there an instaloader source for it already? (Asked once per profile
+// visited; whatever the link routing says, the button adds an instaloader one.)
 async function checkProfile(name) {
-  const r = await api("GET", `/api/sources/resolve?${new URLSearchParams({ url: `https://www.instagram.com/${name}/` })}`);
+  const r = await api("GET", "/api/sources");
   if (r === null) { setProfile(name, { state: "offline" }); return; }
-  const b = r.body || {};
-  if (!b.ok) { setProfile(name, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
-  if (typeof b.source !== "number") { setProfile(name, { state: "idle", folder: b.folder, source: null }); return; }
-  const got = await api("GET", `/api/sources/${encodeURIComponent(b.source)}`);
-  const src = got?.status === 200 ? got.body : null;
-  setProfile(name, { state: "idle", source: src });
+  if (!Array.isArray(r.body?.sources)) { setProfile(name, { state: "failed", message: `FeedVault answered ${r.status}` }); return; }
+  const src = r.body.sources.find((x) => x.tool === "instaloader" && x.target === name) || null;
+  setProfile(name, { state: "idle", source: src, checked: true });
   if (src?.job) followSync(name, src.job.id);   // already syncing: show it
 }
 
 function clickProfile(name) {
   const s = profiles.get(name);
   if (s?.source) { syncSource(name, s.source.id); return; }
-  if (s?.state === "offline" || (s?.state === "failed" && !s.folder)) { profiles.delete(name); paint(); return; }
+  if (!s?.checked) { profiles.delete(name); paint(); return; }   // offline, or the check failed: ask again
   setProfile(name, { state: "confirm" });
 }
 
@@ -439,27 +444,18 @@ async function syncSource(name, sid) {
   followSync(name, b.job.id);
 }
 
-async function followSync(name, jobId) {
-  setProfile(name, { job: { id: jobId } });
-  for (;;) {
-    if (profiles.get(name)?.job?.id !== jobId) return;
-    const r = await api("GET", `/api/jobs/${jobId}`);
-    if (r === null) { await sleep(JOB_POLL_MS * 4); continue; }
-    if (r.status !== 200 || !r.body) { setProfile(name, { state: "failed", message: "the job is gone (FeedVault restarted?)" }); return; }
-    const job = r.body;
-    if (!ENDED.has(job.state)) {
-      setProfile(name, { state: job.state === "running" ? "running" : "queued", job });
-      await sleep(JOB_POLL_MS);
-      continue;
-    }
+function followSync(name, jobId) {
+  setProfile(name, { state: "queued", job: { id: jobId } });
+  watchJob(jobId, () => profiles.get(name)?.job?.id === jobId, () => profileName() === name, async (job) => {
+    if (!job) { setProfile(name, { state: "failed", message: GONE }); return; }
+    if (!ENDED.has(job.state)) { setProfile(name, { state: job.state === "running" ? "running" : "queued", job }); return; }
     // The source after it: its account and person may be known only now.
     const sid = profiles.get(name)?.source?.id;
     const got = sid === undefined ? null : await api("GET", `/api/sources/${encodeURIComponent(sid)}`);
     const source = got?.status === 200 ? got.body : profiles.get(name)?.source;
     if (job.state === "done") setProfile(name, { state: "done", job, source, message: `Synced: ${job.message}` });
     else setProfile(name, { state: "failed", job, source, message: job.message || job.state, error: job.result?.error || null });
-    return;
-  }
+  });
 }
 
 function sleep(ms) {

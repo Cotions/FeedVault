@@ -219,8 +219,11 @@ def _outcome(params, code, lines, index):
 
 
 def _ended(job):
-    if job["state"] not in ("done", "failed") and valid_shortcode(job["params"].get("shortcode")):
-        _clear(staging(job["params"]["shortcode"]))   # cancelled or interrupted: what it left
+    """What a run left in its saving folder (cancelled, interrupted, or failed
+    before its outcome). Still listed as active here, so no new Save of the
+    shortcode can have started; one cancelled while queued never made one."""
+    if job["started_at"] is not None and valid_shortcode(job["params"].get("shortcode")):
+        _clear(staging(job["params"]["shortcode"]))
 
 
 jobs.register(KIND, label="Save a post", params={"shortcode": {"type": "text", "max": 40}},

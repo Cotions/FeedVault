@@ -1185,8 +1185,8 @@ that is what lets the userscript, and only it, send the header.
 - `POST /api/jobs` refuses kind `instaloader-post`: it is only started
   here, with the checks above.
 - The **Sync profile** button uses the source endpoints as they are:
-  `GET /api/sources/resolve?url=https://www.instagram.com/<name>/` (is
-  there a source already?), `POST /api/sources` with `{ "tool":
+  `GET /api/sources` (is there an instaloader source with that target
+  already?), `POST /api/sources` with `{ "tool":
   "instaloader", "target": "<name>" }` (the name checked by the same rules
   as a pasted one) after the user confirms, then
   `POST /api/sources/<id>/sync`. Its state is read from

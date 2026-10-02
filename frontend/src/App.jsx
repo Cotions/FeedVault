@@ -5,7 +5,7 @@ import { ScanContext } from "./lib/scan";
 import { JobsContext, ENDED, SAVE_KIND } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
 import { fmtAgo, fmtInt, plural } from "./lib/fmt";
-import { SYNC_KINDS, batchKey } from "./lib/sources";
+import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
 import Icon            from "./components/Icon";
 import CyberBackground from "./components/CyberBackground";
@@ -454,7 +454,7 @@ function saveToast(toast, j) {
   const code = j.params?.shortcode;
   if (j.state === "done" && j.result?.post) {
     toast(`Saved post ${code}`, "ok", { to: `/p/instagram/${encodeURIComponent(code)}`, label: "Show" });
-  } else if (j.state === "failed" && ["missing", "login_required"].includes(j.result?.error)) {
+  } else if (j.state === "failed" && SETUP_ERRORS.has(j.result?.error)) {
     toast(`Saving ${code} failed: ${j.message}`, "err", { to: "/settings", label: "Settings" });
   } else {
     toast(`${j.label}: ${j.message}`, j.state === "failed" ? "err" : undefined);
