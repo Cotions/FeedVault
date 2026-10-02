@@ -283,13 +283,18 @@ def trusted_newest(conn, platform, author_id):
     return newest
 
 
+# A queued sync whose source is gone by the time it starts: removed, or the
+# database was replaced under the queue.
+GONE = "source {sid} no longer exists (removed, or the database was replaced): nothing to sync"
+
+
 def _start(params, note):
     """Right before instaloader starts (no other instaloader runs): seed the
     stamps file on a source's first sync."""
     conn = db.connect()
     src = sources.row(conn, _source_id(params))
     if src is None:
-        raise RuntimeError("the source was removed")
+        raise jobs.Cancelled(GONE.format(sid=params["source"]))
     options = _options(src)
     path = stamps_path()
     stamps = configparser.ConfigParser(interpolation=None)
@@ -449,11 +454,15 @@ def _outdated(tool):
 
 def _ended(job):
     """Store how it went on the source, and let a new source adopt its account."""
+    _tally(job)
     if job["started_at"] is None:
         return                                 # cancelled while queued: it never ran
     sid = _source_id(job["params"])
     r = job["result"] or {}
     conn = db.connect()
+    src = sources.row(conn, sid)
+    if src is not None and job["argv"] and src["target"] != job["argv"][-1]:
+        return                                 # the id names another source now (database replaced)
     if not sources.record(conn, sid, job["id"], job["ended_at"] or int(time.time()), {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
             "line": r.get("line"), "added": r.get("added", 0), "job": job["id"],
@@ -568,7 +577,7 @@ def _start_archive(tool):
         conn = db.connect()
         src = sources.row(conn, _source_id(params))
         if src is None:
-            raise RuntimeError("the source was removed")
+            raise jobs.Cancelled(GONE.format(sid=params["source"]))
         data_dir = config.load()["data_directory"]
         os.makedirs(os.path.dirname(archives.path(tool, data_dir)), exist_ok=True)
         if _options(src)["full_history"]:
@@ -639,7 +648,8 @@ class Busy(Exception):
 
 
 def active():
-    """{source id: {id, state, waits_until}} of the syncs queued or running."""
+    """{source id: {id, state, waits_until}} of the syncs queued or running.
+    Live jobs only: nothing here outlives the process or the database."""
     out = {}
     kinds = set(KINDS.values())
     for j in jobs.active():
@@ -672,7 +682,9 @@ def sync(sid):
 def sync_all():
     """Queue a sync for every source not already queued or running, by
     target. They run one after another, the pause between each. Returns
-    (jobs, skipped, errors: [{source, error}] for those refused)."""
+    (jobs, skipped, errors: [{source, error}] for those refused). The jobs
+    queued become the batch (see batch)."""
+    global _batch
     queued, skipped, errors = [], 0, []
     with _submitting:
         busy = active()
@@ -686,4 +698,54 @@ def sync_all():
                 queued.append(jobs.submit(KINDS[tool], {"source": str(sid)}))
             except jobs.BadRequest as e:
                 errors.append({"source": sid, "error": str(e)})
+        if queued:
+            with _batch_lock:
+                _batch = {"id": queued[0]["id"], "started_at": queued[0]["created_at"],
+                          "jobs": [j["id"] for j in queued], "ended": {}}
+                # A job may have ended before it was in the batch (a source gone at start).
+                for j in queued:
+                    done = jobs.get(j["id"])
+                    if done and done["state"] in jobs.STATES[2:]:
+                        _batch["ended"][j["id"]] = _ending(done)
     return queued, skipped, errors
+
+
+# The last "Sync all", in memory only: a restart, which also ends every job
+# it queued, forgets it, so it can never show syncs a replaced database no
+# longer has. ended: {job id: _ending(job)}, filled by the ended hook.
+_batch = None
+_batch_lock = threading.Lock()
+
+
+def _ending(job):
+    r = job["result"] or {}
+    return {"state": job["state"], "added": r.get("added", 0), "source": int(job["params"]["source"]),
+            "label": job["label"]}
+
+
+def _tally(job):
+    with _batch_lock:
+        if _batch is not None and job["id"] in _batch["jobs"]:
+            _batch["ended"][job["id"]] = _ending(job)
+
+
+def batch():
+    """The last "Sync all" while FeedVault has run, or None: {id, started_at,
+    total, ended, failed, added, profiles (sources that added posts), first
+    (the label and source of the one that added the most), current (the
+    job running, else the next queued, else None), active (its job ids
+    still queued or running), done}. Progress counts live jobs only."""
+    with _batch_lock:
+        if _batch is None:
+            return None
+        b = {**_batch, "ended": dict(_batch["ended"])}
+    ids = set(b["jobs"])
+    live = [j for j in jobs.active() if j["id"] in ids and j["id"] not in b["ended"]]
+    ended = list(b["ended"].values())
+    adders = sorted((e for e in ended if e["added"]), key=lambda e: -e["added"])
+    current = next((j for j in live if j["state"] == "running"), None) or (live[0] if live else None)
+    return {"id": b["id"], "started_at": b["started_at"], "total": len(b["jobs"]),
+            "ended": len(b["jobs"]) - len(live), "failed": sum(e["state"] == "failed" for e in ended),
+            "added": sum(e["added"] for e in ended), "profiles": len(adders),
+            "first": {k: adders[0][k] for k in ("label", "source")} if adders else None,
+            "current": current, "active": [j["id"] for j in live], "done": not live}

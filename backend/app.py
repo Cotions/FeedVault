@@ -935,7 +935,7 @@ def clean_info_json_cookies():
 
 @app.get("/api/jobs")
 def list_jobs():
-    return jsonify(jobs.listing())
+    return jsonify({**jobs.listing(), "sync_all": sync.batch()})
 
 
 @app.get("/api/jobs/kinds")

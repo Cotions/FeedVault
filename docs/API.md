@@ -1199,7 +1199,7 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …] }`: queued and running jobs and the last 100 ended ones, newest first |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all) |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
 | GET | `/api/jobs/<id>` | job, or 404 |
@@ -1222,6 +1222,32 @@ Built-in kinds:
 | `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 
 More download kinds come with the userscript (#10).
+
+### Sync all
+
+`sync_all` in `GET /api/jobs` is the last `POST /api/sources/sync-all`
+that queued anything since FeedVault started, or `null`:
+
+```json
+{ "id": 51, "started_at": 1727500000, "total": 6, "ended": 2, "failed": 0,
+  "added": 31, "profiles": 2, "first": { "label": "Sync @somebody", "source": 4 },
+  "current": job, "active": [53, 54, 55, 56], "done": false }
+```
+
+- `id`: its first job's id; with `started_at`, what tells two batches apart.
+- `ended`: its jobs that are no longer queued or running, whatever their
+  state; `failed` those that failed; `added` the new posts they indexed;
+  `profiles` how many of them added at least one, and `first` (label and
+  source id) the one that added the most, or `null`.
+- `current`: the job running, else the next queued one, else `null`;
+  `active`: the ids of its jobs still queued or running; `done`: none is.
+
+It is kept in memory only and built from live jobs: a restart (which ends
+every queued job, see `interrupted`) forgets it, so the dashboard never
+shows syncs that a restored or rebuilt database no longer has. A sync job
+whose source no longer exists when it starts (removed, or the database was
+replaced) ends `cancelled` with the message `source <id> no longer exists
+(removed, or the database was replaced): nothing to sync`, also in its log.
 
 ### Log
 

@@ -64,6 +64,7 @@ def fake(env, monkeypatch):
     monkeypatch.setattr(jobs, "_closing", False)
     monkeypatch.setattr(jobs, "_cool", {})
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
+    monkeypatch.setattr(sync, "_batch", None)
     bin_dir = env["tmp"] / "bin"
     bin_dir.mkdir()
     exe = bin_dir / "instaloader"
@@ -567,6 +568,51 @@ def test_interrupted_sync_is_recorded_on_restart(env, client, fake):
     jobs.recover()
     s = get(client, f"/api/sources/{s['id']}")
     assert s["last_result"]["state"] == "interrupted" and s["last_sync_at"] is not None
+
+
+def test_queued_syncs_whose_source_is_gone_end_cancelled(env, client, fake, monkeypatch):
+    """#32: syncs queued by "Sync all" for sources a replaced database no
+    longer has end cancelled, and nothing reports them as active."""
+    profiles = {n: {"id": i + 1, "posts": [{"shortcode": f"{n[:2].upper()}POST00001", "ts": TS}]}
+                for i, n in enumerate(("aa.one", "bb.two", "cc.three"))}
+    fake.set(profiles)
+    ids = [add_source(client, n)["id"] for n in profiles]
+    set_config(instaloader={"pause": 30})
+    queued = post(client, "/api/sources/sync-all")["jobs"]
+    assert ended(queued[0]["id"])["state"] == "done"
+    b = get(client, "/api/jobs")["sync_all"]
+    assert (b["total"], b["ended"], b["done"], b["active"]) == (3, 1, False, [j["id"] for j in queued[1:]])
+    assert b["current"]["id"] == queued[1]["id"] and b["added"] == 1 and b["first"]["source"] == ids[0]
+    # The database is replaced under the queue: those sources are gone.
+    with db.connect() as conn:
+        conn.execute("DELETE FROM sources WHERE id IN (?, ?)", ids[1:])
+    monkeypatch.setattr(jobs, "_cool", {})
+    jobs._pump()
+    for j in queued[1:]:
+        job = ended(j["id"])
+        assert job["state"] == "cancelled" and "no longer exists" in job["message"]
+        assert any("no longer exists" in ln["text"] for ln in get(client, f"/api/jobs/{j['id']}/log")["lines"])
+    assert [s["job"] for s in get(client, "/api/sources")["sources"]] == [None]
+    assert sync.active() == {}
+    b = get(client, "/api/jobs")["sync_all"]
+    assert (b["ended"], b["done"], b["active"], b["current"], b["failed"]) == (3, True, [], None, 0)
+
+
+def test_sync_all_is_forgotten_with_the_process(env, client, fake):
+    """The batch lives in memory only: a fresh start has none, whatever the
+    database's jobs table holds."""
+    assert get(client, "/api/jobs")["sync_all"] is None
+
+
+def test_interrupted_sync_of_an_id_now_naming_another_source_is_not_recorded(env, client, fake):
+    s = add_source(client, "bb.two")
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO jobs(kind, params, argv, cwd, lock_group, state, created_at, started_at) "
+                     "VALUES ('instaloader-sync', ?, '[\"instaloader\", \"--\", \"aa.one\"]', '/', 'instaloader', "
+                     "'running', 1, 2)", (json.dumps({"source": str(s["id"])}),))
+    jobs.recover()
+    assert get(client, f"/api/sources/{s['id']}")["last_result"] is None
 
 
 # ---------------------------------------------------------------------------
