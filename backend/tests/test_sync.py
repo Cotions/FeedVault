@@ -422,9 +422,9 @@ def test_trashed_posts_are_not_downloaded_again(env, client, fake):
 # File names
 # ---------------------------------------------------------------------------
 
-def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fake):
-    """#31: instaloader keeps no list of deleted posts. B, saved then trashed
-    before the sync that passed it, comes back with it and goes straight back."""
+def _trashed_between(env, client, fake, delay=0):
+    """carol.cooks synced, then A and B newer than the stamp, B saved on its
+    own then trashed. Returns (source, folder)."""
     folder = carol_archive(env)
     fake.set(carol_profile(new=0))
     s = add_source(client)
@@ -436,6 +436,14 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     fake.set(profile)
     ended(post(client, "/api/save", {"platform": "instagram", "shortcode": "CPOSTB00001"})["job"]["id"])
     assert post(client, "/api/delete", {"posts": ["instagram:CPOSTB00001"]})["posts"] == ["instagram:CPOSTB00001"]
+    fake.set(profile, delay=delay)
+    return s, folder
+
+
+def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fake):
+    """#31: instaloader keeps no list of deleted posts. B, saved then trashed
+    before the sync that passed it, comes back with it and goes straight back."""
+    s, folder = _trashed_between(env, client, fake)
     job = sync_now(client, s["id"])
     assert job["state"] == "done" and job["result"]["added"] == 1 and job["message"] == "1 new post"
     assert db.saved_ids(db.connect(), ["instagram:CPOSTA00001", "instagram:CPOSTB00001"]) == ["instagram:CPOSTA00001"]
@@ -451,6 +459,19 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     job = sync_now(client, s["id"])
     assert job["result"]["added"] == 0
     assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
+    assert sync._trashed_before == {}
+
+
+def test_trashed_post_brought_back_by_a_cancelled_sync_goes_back_too(env, client, fake):
+    s, folder = _trashed_between(env, client, fake, delay=0.4)
+    job = post(client, f"/api/sources/{s['id']}/sync")["job"]
+    wait_for(lambda: any("CPOSTB00001" in n for n in os.listdir(folder)))      # B first: newest first
+    post(client, f"/api/jobs/{job['id']}/cancel")
+    assert ended(job["id"])["state"] == "cancelled"
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
+    assert not any("CPOSTB00001" in n for n in os.listdir(folder))
+    scanner.scan(env["roots"])
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
     assert sync._trashed_before == {}
 
 

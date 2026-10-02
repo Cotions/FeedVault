@@ -82,8 +82,9 @@ _FIELD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}(?:\[[A-Za-z0-9_]{1,64}\]){0
 _SPEC_RE = re.compile(r"[<>^]?0?\d?")           # at most "{num:>02}": never a width that fills memory
 _PYTHON_RE = re.compile(r"python(?:\d+(?:\.\d+)?)?")
 
-_formats_lock = threading.Lock()
-_formats = {"key": None, "formats": None, "error": None}
+_formats_lock = threading.Lock()               # the cache below, never held while gallery-dl runs
+_formats_run = threading.Lock()                # one run at a time
+_formats = {"key": None, "formats": None, "error": None, "last": None}
 
 
 def _safe_format(fmt):
@@ -104,8 +105,8 @@ def _safe_format(fmt):
 def _python_of(exe):
     """The argv that runs the Python the gallery-dl at ``exe`` runs with:
     its virtualenv's (pipx, a venv), else its ``#!`` line's when that names
-    a Python by absolute path (``/usr/bin/env python3`` too); else None (a
-    standalone build)."""
+    a Python by absolute path (``/usr/bin/env python3`` too; with flags such
+    as a distribution's ``-sP``); else None (a standalone build)."""
     import downloaders                         # it imports sync, which imports this module
     kind, venv = downloaders.install_of(exe)
     if venv:
@@ -119,11 +120,15 @@ def _python_of(exe):
     if not first.startswith(b"#!"):
         return None
     words = first[2:].decode("utf-8", "replace").split()
-    if not words or not os.path.isabs(words[0]) or len(words) > 2:
+    if not words or not os.path.isabs(words[0]):
         return None
-    named = words[1] if len(words) == 2 and os.path.basename(words[0]) == "env" else \
-        None if len(words) == 2 else os.path.basename(words[0])
-    return words if named and _PYTHON_RE.fullmatch(named) else None
+    if os.path.basename(words[0]) == "env":
+        return words if len(words) == 2 and _PYTHON_RE.fullmatch(words[1]) else None
+    flags = words[1:]
+    if not _PYTHON_RE.fullmatch(os.path.basename(words[0])) or len(flags) > 2 \
+            or not all(re.fullmatch(r"-[A-Za-z]{1,4}", f) for f in flags):
+        return None
+    return words
 
 
 def _read_formats(exe):
@@ -143,7 +148,10 @@ def _read_formats(exe):
             out, _ = proc.communicate(timeout=FORMATS_TIMEOUT)
         except subprocess.TimeoutExpired:
             jobs._killpg(proc, signal.SIGKILL)
-            proc.communicate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:  # a process that left the group still holds the pipe
+                proc.stdout.close()
             return None, f"no answer within {FORMATS_TIMEOUT} s"
         finally:
             jobs._killpg(proc, signal.SIGKILL)   # anything it left behind in its group
@@ -157,17 +165,20 @@ def _read_formats(exe):
         return None, "its answer is not JSON"
     if not isinstance(rows, list) or len(rows) > FORMATS_COUNT:
         return None, "its answer is not a list of extractors"
-    formats, by_category = {}, {}
+    formats, by_category, refused = {}, {}, set()
     for row in rows:
         if not (isinstance(row, list) and len(row) == 3 and all(isinstance(v, str) for v in row)):
             continue
         category, sub, fmt = row
         if not (_NAME_RE.fullmatch(category) and (sub == "" or _NAME_RE.fullmatch(sub)) and _safe_format(fmt)):
+            refused.add(category)
             continue
         formats[(category, sub)] = fmt
         by_category.setdefault(category, set()).add(fmt)
     for category, fmts in by_category.items():
-        if len(fmts) == 1:
+        # One format for the whole category only when no extractor of it was
+        # refused: a refused one's files would get the others' format.
+        if len(fmts) == 1 and category not in refused:
             formats[(category, None)] = next(iter(fmts))
     return (formats, None) if formats else (None, "it listed no archive format")
 
@@ -175,8 +186,9 @@ def _read_formats(exe):
 def installed_formats(run=True):
     """(formats, error) of the installed gallery-dl (see _read_formats),
     read once per executable and version of its file and kept in memory; a
-    failure too. ``run`` False: only what is already known, nothing started
-    ((None, None) then)."""
+    failure too. ``run`` False: only what is already known, nothing started:
+    the last formats read, even from an older version (gallery-dl rarely
+    changes one), else (None, None)."""
     import jobs
     exe = jobs.tool_path("gallery-dl")
     if exe is None:
@@ -190,9 +202,14 @@ def installed_formats(run=True):
         if _formats["key"] == key:
             return _formats["formats"], _formats["error"]
         if not run:
-            return None, None
+            return _formats["last"], None
+    with _formats_run:
+        with _formats_lock:
+            if _formats["key"] == key:         # read by the run this one waited for
+                return _formats["formats"], _formats["error"]
         formats, error = _read_formats(exe)
-        _formats.update(key=key, formats=formats, error=error)
+        with _formats_lock:
+            _formats.update(key=key, formats=formats, error=error, last=formats or _formats["last"])
         return formats, error
 
 
@@ -229,7 +246,8 @@ def gallery_dl_entry(d, formats=None):
 
 def _json_entries(paths, formats=None, unknown=None):
     """The entries of these files' metadata JSONs; ``unknown``, when given,
-    counts per category the files of a category with no known format."""
+    counts per category the files with no entry: no format known for their
+    category, or their metadata lacks the format's keys."""
     out = []
     for p in paths:
         if not p.endswith(".json"):
@@ -242,8 +260,7 @@ def _json_entries(paths, formats=None, unknown=None):
         entry = gallery_dl_entry(d, formats)
         if entry:
             out.append(entry)
-        elif unknown is not None and isinstance(d, dict) and "filename" in d and "extension" in d \
-                and _format_of(d, formats) is None:
+        elif unknown is not None and isinstance(d, dict) and "filename" in d and "extension" in d:
             category = str(d.get("category"))[:64]
             unknown[category] = unknown.get(category, 0) + 1
     return out

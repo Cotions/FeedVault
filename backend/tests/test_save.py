@@ -361,6 +361,11 @@ def test_saved_post_is_never_moved_over_a_file(env, client, fake):
     assert len([n for n in os.listdir(env["media"] / "_saved") if CODE in n]) == 4
     assert not (folder / f"stranger-2024-06-11-{CODE}.json").exists()
     assert any("1 saved post left in _saved" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+    # Saved one by one, it sets no starting point: the sync walks the whole
+    # profile, the posts older than it included.
+    assert "--fast-update" not in job["argv"]
+    assert any("still in _saved, give no starting point" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+    assert (folder / "stranger-2024-06-01-COLDER00000.json").is_file()
 
 
 def test_saved_post_move_rolls_back_on_failure(env, client, fake, monkeypatch):

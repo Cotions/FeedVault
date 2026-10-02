@@ -210,8 +210,10 @@ That sync puts it straight back in the trash once its folder is indexed
 (a post in the trash as a whole, not in the index when the sync started,
 in the source's folder after it, and still in the trash), says so in its
 log (`1 trashed post came back with this sync …: back in the trash`) and
-does not count it in `added`. Restoring it then brings back that latest
-deletion.
+does not count it in `added`. A sync cancelled while instaloader ran has
+its folder indexed when it ends, for the same check. The post then has
+two entries in the trash: the one it was deleted with and the one the
+sync's copy went to; restoring it brings back the latest.
 
 ### Trash contents
 
@@ -1009,9 +1011,10 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   which a copy may have made later than posts never downloaded: such posts
   are left out, and an account with nothing else gets no seed (the job log
   says `first sync: no reliable date, fetching full history`). Posts just
-  moved out of `_saved/` never seed it; when they are all the account has,
-  the stamp is set before every post (1970), so the first sync walks the
-  whole profile, skipping them, and a retry does the same.
+  moved out of `_saved/`, or still in it, never seed it; when they are all
+  the account has, the stamp is set before every post (1970), so the first
+  sync walks the whole profile, skipping the files already there, and a
+  retry does the same.
 - **Metadata on.** `--no-compress-json` writes each post's JSON beside its
   media, so new posts get captions, stats and the account's numeric id.
   The folder's name becomes an alias of that id (see [People](#people)),
@@ -1095,12 +1098,15 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive 
   installed gallery-dl: its own Python runs a short script listing each
   extractor's `archive_fmt` (argv only, no shell, in an empty folder, 20 s
   at most, output checked: plain `{field}` and `{field[key]}` formats
-  only), cached until the gallery-dl file changes. When that cannot be
+  only; a category gets one format for all its files only when every
+  extractor of it was accepted), cached until the gallery-dl file changes
+  and read once when FeedVault starts. Trashing a gallery-dl post uses the
+  last formats read (it never starts gallery-dl itself). When that cannot be
   done (no Python found beside it, a timeout, odd output), FeedVault's own
   table is used (twitter, tiktok, instagram, reddit, bluesky, pixiv) and
-  the log says so. Files of a category with no known format are not
-  seeded, and the log says how many and that this sync may download them
-  again. With `options.full_history` too (the profile is
+  the log says so. Files of a category with no known format, or whose
+  metadata lacks a key the format needs, are not seeded, and the log says
+  how many and that this sync may download them again. With `options.full_history` too (the profile is
   walked, what is indexed is still not fetched again); not for a source
   with no account yet.
 - **YouTube.** A youtube.com source only downloads videos up to

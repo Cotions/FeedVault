@@ -477,7 +477,7 @@ def fake_gallery_dl_package(tmp, formats, monkeypatch):
                    "import fake_downloaders\nsys.exit(fake_downloaders.gallery_dl_main(sys.argv[1:]))\n")
     exe.chmod(0o755)
     set_config(tools={"gallery-dl": str(exe)})
-    monkeypatch.setattr(archives, "_formats", {"key": None, "formats": None, "error": None})
+    monkeypatch.setattr(archives, "_formats", {"key": None, "formats": None, "error": None, "last": None})
     return runs
 
 
@@ -494,13 +494,15 @@ def test_archive_formats_from_the_installed_gallery_dl(env, fake, client, monkey
     runs = fake_gallery_dl_package(env["tmp"], [
         ["twitter", "media", "{tweet_id}_{retweet_id}_{num}"], ["twitter", "tweet", "{tweet_id}_{retweet_id}_{num}"],
         ["newsite", "user", "{post[id]}_{num}"], ["newsite", "post", "p{post[id]}_{num}"],
-        ["odd", "user", "{id|slug}"], ["evil", "user", "{x.__class__}"]], monkeypatch)
+        ["odd", "user", "{id|slug}"], ["evil", "user", "{x.__class__}"],
+        ["mixed", "user", "{id}"], ["mixed", "post", "{id|slug}"]], monkeypatch)
     formats, error = archives.installed_formats()
     assert error is None
     assert formats == {("twitter", "media"): "{tweet_id}_{retweet_id}_{num}",
                        ("twitter", "tweet"): "{tweet_id}_{retweet_id}_{num}",
                        ("twitter", None): "{tweet_id}_{retweet_id}_{num}",
-                       ("newsite", "user"): "{post[id]}_{num}", ("newsite", "post"): "p{post[id]}_{num}"}
+                       ("newsite", "user"): "{post[id]}_{num}", ("newsite", "post"): "p{post[id]}_{num}",
+                       ("mixed", "user"): "{id}"}     # not ("mixed", None): its "post" files are not "{id}"
     # Read once, kept: not run again, not for the trash either.
     assert archives.installed_formats() == (formats, None) and archives.installed_formats(run=False)[0] == formats
     assert runs.read_text() == "x"
@@ -510,11 +512,27 @@ def test_archive_formats_from_the_installed_gallery_dl(env, fake, client, monkey
     assert archives.gallery_dl_entry({**d, "subcategory": "user"}, formats) == "newsite12_1"
     assert archives.gallery_dl_entry({**d, "subcategory": "other"}, formats) is None       # no one format for it
     assert archives.gallery_dl_entry(d) is None                                             # not in the table
-    # A new version of the file: read again.
+    # A new version of the file: read again by the next seed; the trash
+    # uses the last formats read until then.
     exe = config.load()["tools"]["gallery-dl"]
     os.utime(exe, (TS, TS))
+    assert archives.installed_formats(run=False) == (formats, None)
     archives.installed_formats()
     assert runs.read_text() == "xx"
+
+
+@pytest.mark.parametrize("line, argv", [
+    ("#!/usr/bin/python3", ["/usr/bin/python3"]),
+    ("#!/usr/bin/python3 -sP", ["/usr/bin/python3", "-sP"]),
+    ("#!/usr/bin/env python3.12", ["/usr/bin/env", "python3.12"]),
+    ("#!/usr/bin/env -S python3", None),
+    ("#!/bin/sh -c", None),
+    ("#!python3", None),
+    ("#!/usr/bin/python3 -c 'import os'", None)])
+def test_python_of_a_shebang(tmp_path, line, argv):
+    exe = tmp_path / "gallery-dl"
+    exe.write_text(line + "\nprint()\n")
+    assert archives._python_of(str(exe)) == argv
 
 
 def test_first_sync_seeds_with_installed_formats_and_logs_the_rest(env, fake, client, monkeypatch):
@@ -559,8 +577,8 @@ def test_first_sync_says_when_formats_are_from_the_table(env, fake, client):
     conn.commit()
     log = [ln["text"] for ln in jobs.log(run_sync(client, s["id"])["id"])["lines"]]
     assert any("gallery-dl's own archive formats could not be read" in t and "twitter" in t for t in log)
-    assert "[feedvault] 1 nosuchsite file not seeded: no archive format known for nosuchsite, so this sync may " \
-        "download it again" in log
+    assert "[feedvault] 1 nosuchsite file not seeded (no archive format known for nosuchsite, or its metadata " \
+        "lacks a key the format needs), so this sync may download it again" in log
 
 
 def test_first_yt_dlp_sync_skips_what_any_tool_indexed(env, fake, client):
