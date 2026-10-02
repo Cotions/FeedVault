@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cancelJob, getJobLog } from "../lib/api";
-import { useJobs, ENDED, jobDuration } from "../lib/jobs";
+import { useJobs, ENDED, SAVE_KIND, jobDuration } from "../lib/jobs";
 import { fmtAgo, fmtFullDate, fmtStamp } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -86,8 +86,9 @@ function StateChip({ state }) {
 }
 
 function JobTitle({ job }) {
-  // A source sync's label names its profile; its param is only an id.
-  const params = job.params?.source ? [] : Object.values(job.params || {});
+  // A source sync's label names its profile (its param is only an id); a
+  // save's names its shortcode.
+  const params = job.params?.source || job.kind === SAVE_KIND ? [] : Object.values(job.params || {});
   return (
     <span className="job-title">
       <span className="dim mono">#{job.id}</span> {job.label}

@@ -80,6 +80,7 @@ GM_addStyle(`
 const cache = new Map();
 let pending = new Set();
 let timer = null;
+let offline = false;                           // the last /api/saved went unanswered
 
 function shortcodeFromHref(href) {
   try {
@@ -121,6 +122,7 @@ async function flush() {
   ids.forEach((id) => pending.delete(id));
   if (!ids.length) return;
   const saved = await ask(ids);
+  if ((saved === null) !== offline) { offline = saved === null; paintPage(); }
   if (saved === null) return;                 // backend offline: try again on the next scan
   const now = Date.now();
   ids.forEach((id) => cache.set(id, { saved: saved.has(id), at: now }));
@@ -225,10 +227,7 @@ function render(p, sig, build) {
 
 function note(text, settings) {
   const n = el("div", { class: "fv-note" }, text);
-  if (settings) {
-    n.append(" — see ");
-    n.append(link(`${API_BASE}/settings`, "Settings → Downloaders"));
-  }
+  if (settings) n.append(el("br"), link(`${API_BASE}/settings`, "Open Settings → Downloaders"));
   return n;
 }
 
@@ -250,6 +249,11 @@ function paintPage() {
   const id = code && `instagram:${code}`;
   const have = code ? known(id) : null;
   if (code && have === null) pending.add(id);
+  if (code && have === null && !saves.has(code) && offline) {
+    const p = panel(`post:${code}`);
+    render(p, "offline", () => [button("offline", "FeedVault is not running — retry", () => startSave(code))]);
+    return;
+  }
   if (!code || (have === null && !saves.has(code))) { dropPanel("post:"); return; }
   const p = panel(`post:${code}`);
   if (have) {
@@ -263,7 +267,7 @@ function paintPage() {
   const s = saves.get(code);
   const st = s?.state || "idle";
   render(p, `${st}|${s?.job?.id || ""}|${s?.message || ""}`, () => {
-    if (st === "sending") return [button("busy", "Saving…", null)];
+    if (st === "sending") return [button("busy", "Sending…", null)];
     if (st === "queued") {
       const wait = s.job.waits_until ? `, waits until ${new Date(s.job.waits_until * 1000).toLocaleTimeString()}` : "";
       return [button("busy", "Queued", null, `Job #${s.job.id}${wait}`)];
