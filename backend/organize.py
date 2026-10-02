@@ -270,5 +270,7 @@ def forget_gone(conn, post_ids):
             changed.append("collection_posts")
         if conn.execute(f"UPDATE collections SET cover_post = NULL WHERE cover_post {gone}").rowcount:
             changed.append("collections")
+        if conn.execute(f"DELETE FROM saved_posts WHERE post_id {gone}").rowcount:
+            changed.append("saved_posts")
         conn.execute("DELETE FROM temp.gone_posts")
     return changed

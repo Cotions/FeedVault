@@ -374,11 +374,23 @@ def _migrate_14(conn):
     conn.execute("INSERT INTO seen_at(id, at) SELECT 1, ? WHERE EXISTS (SELECT 1 FROM posts)", (int(time.time()),))
 
 
+def _migrate_15(conn):
+    """Posts the Save button added (save.py), user data mirrored by
+    userdata.py. Saved one by one, not synced, so they never seed an
+    instaloader stamp (sync.trusted_newest), whatever folder they are in;
+    an entry goes once a stamp later than its post exists."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS saved_posts (
+            post_id  TEXT PRIMARY KEY,
+            saved_at INTEGER NOT NULL
+        )""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
-              _migrate_13, _migrate_14]
+              _migrate_13, _migrate_14, _migrate_15]
 
 BACKUPS_KEPT = 3
 

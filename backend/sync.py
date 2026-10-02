@@ -456,9 +456,10 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _seed_stamp(conn, src, options, note, moved=(), roots=()):
-    """Seed the stamps file on a first sync (no stamp yet). Posts just moved
-    out of _saved (``moved``) were saved one by one, not synced: they never
-    seed it, nor those still in _saved (left there by gather). When they
+    """Seed the stamps file on a first sync (no stamp yet). Posts saved one
+    by one, not synced, never seed it: those Save added (saved_posts,
+    whatever folder they went to), those just moved out of _saved
+    (``moved``) and those still in it (left there by gather). When they
     are all there is, the stamp goes before every post (EPOCH), so the walk
     passes them and goes on to the older posts; it is in the file before
     instaloader runs, so a retry does the same."""
@@ -477,11 +478,12 @@ def _seed_stamp(conn, src, options, note, moved=(), roots=()):
         return
     newest, held = None, []
     saved = {os.path.normpath(os.path.join(r, save.SAVED)) for r in roots}
+    skip = set(moved) | save.saved_posts(conn)
     if src["author_id"] is not None:
         key = people.canonical(conn, src["platform"], src["author_id"])
         a = db.accounts(conn).get(key)
         if a and a["newest"] is not None:
-            newest = trusted_newest(conn, *key, skip=set(moved), saved=saved, held=held)
+            newest = trusted_newest(conn, *key, skip=skip, saved=saved, held=held)
             if newest is None and not held and not moved:
                 note("first sync: no reliable date, fetching full history")
                 return
@@ -491,7 +493,7 @@ def _seed_stamp(conn, src, options, note, moved=(), roots=()):
         # --fast-update would stop. The stamp goes before every post instead.
         key = sources._handle_account(conn, src["platform"], target)
         if key is not None:
-            trusted_newest(conn, *key, skip=set(moved), saved=saved, held=held)
+            trusted_newest(conn, *key, skip=skip, saved=saved, held=held)
     if newest is None and (held or moved):
         if not stamps.has_section(target):
             stamps.add_section(target)
@@ -501,7 +503,7 @@ def _seed_stamp(conn, src, options, note, moved=(), roots=()):
         note(f"first sync of {target}: downloading everything but the "
              f"{len(moved)} post{'' if len(moved) == 1 else 's'} saved already" if moved else
              f"first sync of {target}: downloading everything (the {n} post{'' if n == 1 else 's'} "
-             f"saved one by one, still in _saved, give no starting point)")
+             f"saved one by one give{'s' if n == 1 else ''} no starting point)")
         return
     if newest is None:
         note(f"first sync of {target}: no post indexed yet, downloading everything")
@@ -698,8 +700,29 @@ def _ended(job):
                 save.gather(conn, sources.row(conn, sid), roots, lambda text: print(f"[sync] source {sid}: {text}"))
             except Exception as e:             # they join it before its next sync instead
                 print(f"[sync] source {sid}: could not move its saved posts: {e}")
+        if src["tool"] == "instaloader":
+            try:
+                _forget_saved(conn, sources.row(conn, sid))
+            except Exception as e:             # they only seed nothing a while longer
+                print(f"[sync] source {sid}: could not update its saved posts: {e}")
     for name in sorted(changed):
         userdata.changed(name)
+
+
+def _forget_saved(conn, src):
+    """The saved posts (saved_posts) of the source's account that its stamp
+    is now later than: the walk has passed them, so they can no longer
+    seed one, and their entries go."""
+    import save                                # it imports this module
+    if src is None or src["author_id"] is None:
+        return
+    stamps = configparser.ConfigParser(interpolation=None)
+    stamps.read(stamps_path(), encoding="utf-8")
+    try:
+        stamp = datetime.strptime(stamps.get(src["target"], "post-timestamp"), STAMP_FORMAT).timestamp()
+    except (configparser.Error, ValueError):
+        return
+    save.forget_synced(conn, *people.canonical(conn, src["platform"], src["author_id"]), stamp)
 
 
 jobs.register(KIND, label="Sync from Instagram", params={"source": {"type": "text", "max": 15}},

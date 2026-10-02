@@ -364,7 +364,7 @@ def test_saved_post_is_never_moved_over_a_file(env, client, fake):
     # Saved one by one, it sets no starting point: the sync walks the whole
     # profile, the posts older than it included.
     assert "--fast-update" not in job["argv"]
-    assert any("still in _saved, give no starting point" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+    assert any("saved one by one gives no starting point" in ln["text"] for ln in jobs.log(job["id"])["lines"])
     assert (folder / "stranger-2024-06-01-COLDER00000.json").is_file()
 
 
@@ -446,3 +446,97 @@ def test_saved_post_moves_once_the_first_sync_finds_the_account(env, client, fak
     assert not [n for n in os.listdir(env["media"] / "_saved") if CODE in n]
     meta = db.connect().execute("SELECT meta_path FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()[0]
     assert meta.startswith(str(folder))
+
+
+# ---------------------------------------------------------------------------
+# A saved post never seeds a sync's stamp (#41)
+# ---------------------------------------------------------------------------
+
+MARCH, SEPTEMBER = 1709294400, 1725192000        # 2024-03-01, 2024-09-01 12:00 UTC
+
+
+def dora(between=3):
+    """@dora's profile: a March post, ``between`` posts after it, a September one."""
+    posts = [{"shortcode": "CDORAMAR001", "ts": MARCH, "caption": "march"},
+             {"shortcode": "CDORASEP001", "ts": SEPTEMBER, "caption": "september"}]
+    posts += [{"shortcode": f"CDORABTW00{i}", "ts": MARCH + (i + 1) * 30 * DAY, "caption": f"between {i}"}
+              for i in range(between)]
+    return {"dora": {"id": 999, "name": "Dora", "posts": posts}}
+
+
+def _save_september_into(env, client, fake, folder):
+    fake.set(dora())
+    job = save_now(client, "CDORASEP001")
+    assert job["state"] == "done" and job["result"]["folder"] == str(folder)
+    conn = db.connect()
+    assert [r[0] for r in conn.execute("SELECT post_id FROM saved_posts")] == ["instagram:CDORASEP001"]
+
+
+def _first_sync_fetches_between(env, client, fake, sid, folder):
+    job = sync_now(client, sid)
+    assert job["state"] == "done", job
+    log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert any("starting after its newest indexed post, 2024-03-01" in t for t in log), log
+    assert job["result"]["added"] == 3
+    have = db.saved_ids(db.connect(), [f"instagram:CDORABTW00{i}" for i in range(3)])
+    assert len(have) == 3
+    # The walk passed the saved post: its entry is no longer needed.
+    assert db.connect().execute("SELECT COUNT(*) FROM saved_posts").fetchone()[0] == 0
+
+
+def test_saved_post_in_an_existing_folder_does_not_seed_the_first_sync(env, client, fake):
+    """An old archive folder (no source) with a March post; a September post
+    saved into it. The first sync starts after March, not September."""
+    folder = env["media"] / "dora"
+    write_post(folder, "CDORAMAR001", MARCH, owner("dora", "999"))
+    scanner.scan(env["roots"])
+    _save_september_into(env, client, fake, folder)
+    s = add_source(client, target="dora")
+    assert s["folder"] == str(folder)
+    _first_sync_fetches_between(env, client, fake, s["id"], folder)
+
+
+def test_saved_post_in_a_source_never_synced_does_not_seed_it(env, client, fake):
+    folder = env["media"] / "dora"
+    write_post(folder, "CDORAMAR001", MARCH, owner("dora", "999"))
+    scanner.scan(env["roots"])
+    s = add_source(client, target="dora")
+    _save_september_into(env, client, fake, folder)
+    _first_sync_fetches_between(env, client, fake, s["id"], folder)
+
+
+def test_saved_posts_alone_walk_the_whole_profile(env, client, fake):
+    """A handle folder with nothing but a saved post: the stamp goes before every post."""
+    folder = env["media"] / "dora"
+    folder.mkdir()
+    _save_september_into(env, client, fake, folder)
+    s = add_source(client, target="dora")
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done" and "--fast-update" not in job["argv"]
+    log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert any("downloading everything (the 1 post saved one by one gives no starting point)" in t for t in log)
+    assert job["result"]["added"] == 4
+
+
+def test_a_post_a_sync_got_first_is_not_noted_as_saved(env, client, fake, monkeypatch):
+    """Save placed nothing new (the sync had it): not a saved post."""
+    folder = env["media"] / "dora"
+    write_post(folder, "CDORAMAR001", MARCH, owner("dora", "999"))
+    scanner.scan(env["roots"])
+    monkeypatch.setattr(save, "have", lambda conn, code: None)      # as if it arrived while the save ran
+    fake.set(dora())
+    assert save_now(client, "CDORAMAR001")["result"]["post"] == "instagram:CDORAMAR001"
+    assert db.connect().execute("SELECT COUNT(*) FROM saved_posts").fetchone()[0] == 0
+
+
+def test_saved_posts_are_user_data(env, client, fake):
+    import userdata
+    (env["media"] / "dora").mkdir()
+    fake.set(dora())
+    save_now(client, "CDORASEP001")
+    conn = db.connect()
+    assert userdata.export(conn, "saved_posts", config.load()["data_directory"]) == 1
+    with conn:
+        conn.execute("DELETE FROM saved_posts")
+    assert userdata.load(conn, "saved_posts", config.load()["data_directory"]) == 1
+    assert [r[0] for r in conn.execute("SELECT post_id FROM saved_posts")] == ["instagram:CDORASEP001"]

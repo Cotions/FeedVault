@@ -1010,9 +1010,12 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   name without a date (`{target} - {shortcode}`) only has the file's mtime,
   which a copy may have made later than posts never downloaded: such posts
   are left out, and an account with nothing else gets no seed (the job log
-  says `first sync: no reliable date, fetching full history`). Posts just
-  moved out of `_saved/`, or still in it, never seed it; when they are all
-  the account has, the stamp is set before every post (1970), so the first
+  says `first sync: no reliable date, fetching full history`). Posts saved
+  one by one never seed it: those the Save button added, whatever folder
+  they went to (listed in `saved_posts`, see
+  [Save from the browser](#save-from-the-browser-userscript)),
+  and any post in `_saved/` or just moved out of it. When they are all the
+  account has, the stamp is set before every post (1970), so the first
   sync walks the whole profile, skipping the files already there, and a
   retry does the same.
 - **Metadata on.** `--no-compress-json` writes each post's JSON beside its
@@ -1268,6 +1271,14 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
   [How a sync runs](#how-a-sync-runs)), the handle in place of the target.
   A file already there is never overwritten (the copy downloaded is
   dropped). Then that folder is indexed.
+- A post this adds to the index (not one a sync got first) is listed in
+  table `saved_posts` (`post_id`, `saved_at`), user data written to
+  `<data_directory>/userdata/saved_posts.json` 2 s after the last change:
+  saved one by one, it never seeds a first sync's stamp (see
+  [How a sync runs](#how-a-sync-runs)), or a newer saved post would make
+  that sync skip the posts in between. An entry is dropped once the
+  account's stamp is later than its post (a sync has walked past it), or
+  when the post is deleted for good.
 - `result`: `{ "post": "instagram:C8xYzAbCdEf" | null, "folder", "added",
   "updated", "error", "line", "account", "person" }`: `post` the post's
   FeedVault id once it is indexed; `error` as for a sync (`login_required`,

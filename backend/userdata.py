@@ -2,7 +2,7 @@
 
 The index is derived from the media folders and rebuilds from a rescan. A few
 tables are not: review decisions, tags, collections, people, sources, the
-"new posts" mark. Each one is
+"new posts" mark, the posts the Save button added. Each one is
 registered here once, and gets the same treatment:
 
 - written to ``<data_dir>/userdata/<name>.json`` shortly after it changes
@@ -107,6 +107,8 @@ register("sources", "sources", ("tool", "target", "platform", "author_id", "pers
 
 # "Mark all seen" (news.py): one row, the time before which posts are not new.
 register("seen_at", "seen_at", ("id", "at"), "id")
+# Posts the Save button added (save.py): they never seed a sync's stamp.
+register("saved_posts", "saved_posts", ("post_id", "saved_at"), "post_id")
 
 def path(data_dir, name):
     return os.path.join(data_dir, "userdata", f"{name}.json")
