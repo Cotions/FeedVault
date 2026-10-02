@@ -388,16 +388,19 @@ def _run(job):
         _finish(job, "failed", message=f"job runner error: {e}")
 
 
+PROC = "/proc"                                 # Linux only: without it, no process is ever stopped at startup
+
+
 def identity(pid):
     """(start time, executable) of a live process, else None. The start time
     is in clock ticks since boot: a pid reused by another process, or after a
     reboot, has another."""
     try:
-        with open(f"/proc/{pid}/stat") as f:
+        with open(f"{PROC}/{pid}/stat") as f:
             fields = f.read().rsplit(")", 1)[1].split()   # the name, in brackets, may hold anything
         if fields[0] == "Z":
             return None                        # a zombie has no executable left
-        return int(fields[19]), os.readlink(f"/proc/{pid}/exe")
+        return int(fields[19]), os.readlink(f"{PROC}/{pid}/exe")
     except (OSError, IndexError, ValueError):
         return None
 
@@ -654,40 +657,105 @@ def recover():
     conn = db.connect()
     rows = conn.execute("SELECT id, pid, pid_start, pid_exe FROM jobs WHERE state IN ('queued', 'running')").fetchall()
     ids = [r["id"] for r in rows]
-    _stop_leftovers([r["pid"] for r in rows if r["pid"] and r["pid_start"] is not None
-                     and identity(r["pid"]) == (r["pid_start"], r["pid_exe"])])
+    left = [r for r in rows if r["pid"] and r["pid_start"] is not None]
+    if left and not os.path.isdir(PROC):
+        print(f"[jobs] no {PROC}: processes left running when FeedVault last stopped are not looked for")
+        left = []
+    stopped = _stop_leftovers([(r["id"], r["pid"], (r["pid_start"], r["pid_exe"])) for r in left])
     # When it really ended is unknown: ended_at stays NULL.
     conn.executemany("UPDATE jobs SET state = 'interrupted', message = ?, ended_at = NULL WHERE id = ?",
                      [(INTERRUPTED, i) for i in ids])
     conn.commit()
+    for i in stopped:
+        _note_tail(conn, i, f"[feedvault] {LEFT_RUNNING.format(pid=stopped[i])}")
     for i in ids:
         _ended(get(i))
     if ids:
         print(f"[jobs] {len(ids)} job{'' if len(ids) == 1 else 's'} interrupted when FeedVault last stopped")
 
 
-def _stop_leftovers(pids):
-    """SIGTERM to each group, then SIGKILL after KILL_AFTER to the groups whose
-    leader is still the same process. One whose leader has gone is left: its
-    pid may already belong to someone else."""
-    groups = {}
-    for pid in pids:
-        found = identity(pid)
-        try:
-            os.killpg(pid, signal.SIGTERM)     # the job's process leads its own group
-        except (ProcessLookupError, PermissionError):
+LEFT_RUNNING = "process {pid} was still running after FeedVault stopped: stopped at the next start"
+
+
+def _pin(pid, recorded):
+    """A pidfd of ``pid`` when it is still the process recorded (start time
+    and executable), else None; -1 when the system has no pidfds (the check
+    then only holds until the signal). While the pidfd's process lives, its
+    pid cannot be given to another."""
+    try:
+        fd = os.pidfd_open(pid)
+    except AttributeError:
+        fd = -1
+    except OSError:
+        return None                            # gone (or pidfds unsupported: ENOSYS)
+    if identity(pid) != recorded:
+        if fd >= 0:
+            os.close(fd)
+        return None
+    return fd
+
+
+def _signal_group(fd, pid, recorded, sig):
+    """Signal the group ``pid`` leads, if ``pid`` is still the process
+    pinned by ``fd`` (else the one recorded). False when it is gone."""
+    try:
+        if fd >= 0:
+            signal.pidfd_send_signal(fd, 0)    # ProcessLookupError once it has exited
+        elif identity(pid) != recorded:
+            return False
+        os.killpg(pid, sig)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _stop_leftovers(found):
+    """``found``: [(job id, pid, (start time, executable) recorded)]. SIGTERM
+    to the group of each pid that is still that process, then SIGKILL after
+    KILL_AFTER to those still there. A pid that is someone else's now is
+    never signalled. Returns {job id: pid} of those signalled."""
+    groups, stopped = {}, {}
+    for job_id, pid, recorded in found:
+        fd = _pin(pid, recorded)
+        if fd is None:
+            if identity(pid) is not None:
+                print(f"[jobs] process {pid} of job #{job_id} is another program now: left alone")
             continue
-        groups[pid] = found
-        print(f"[jobs] stopping process {pid}, left running when FeedVault last stopped")
+        if not _signal_group(fd, pid, recorded, signal.SIGTERM):
+            _close(fd)
+            continue
+        groups[pid] = (fd, recorded)
+        stopped[job_id] = pid
+        print(f"[jobs] stopping process {pid} (job #{job_id}), left running when FeedVault last stopped")
     deadline = time.monotonic() + KILL_AFTER
     while groups and time.monotonic() < deadline:
-        groups = {pid: found for pid, found in groups.items() if identity(pid) == found}
+        for pid, (fd, recorded) in list(groups.items()):
+            if identity(pid) != recorded:
+                _close(fd)
+                del groups[pid]
         time.sleep(0.05)
-    for pid in groups:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+    for pid, (fd, recorded) in groups.items():
+        if _signal_group(fd, pid, recorded, signal.SIGKILL):
+            print(f"[jobs] process {pid} ignored SIGTERM: killed")
+        _close(fd)
+    return stopped
+
+
+def _close(fd):
+    if fd >= 0:
+        os.close(fd)
+
+
+def _note_tail(conn, job_id, text):
+    """Add a line to an ended job's kept log."""
+    row = conn.execute("SELECT tail FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    try:
+        tail = json.loads(row["tail"]) if row and row["tail"] else []
+    except ValueError:
+        tail = []
+    n = tail[-1][0] + 1 if tail and isinstance(tail[-1], list) and isinstance(tail[-1][0], int) else 1
+    conn.execute("UPDATE jobs SET tail = ? WHERE id = ?", (json.dumps([*tail[-(TAIL_KEPT - 1):], [n, text]]), job_id))
+    conn.commit()
 
 
 _COLUMNS = "id, kind, params, argv, cwd, lock_group, state, created_at, started_at, ended_at, " \

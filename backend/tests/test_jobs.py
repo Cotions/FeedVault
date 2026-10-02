@@ -656,3 +656,83 @@ def test_running_job_records_its_process(runner):
     assert jobs.identity(row["pid"]) == (row["pid_start"], row["pid_exe"])
     gate.touch()
     assert ended(job["id"])["state"] == "done"
+
+
+def sleeper():
+    """A harmless process in a group of its own, as a job's tool would be."""
+    proc = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+    wait_for(lambda: jobs.identity(proc.pid))
+    return proc
+
+
+def left_running(proc, start=None):
+    """A job row as a killed FeedVault leaves it, for ``proc``."""
+    import db
+    found_start, exe = jobs.identity(proc.pid)
+    conn = db.connect()
+    with conn:
+        return conn.execute("INSERT INTO jobs(kind, params, argv, cwd, lock_group, state, created_at, started_at, "
+                            "pid, pid_start, pid_exe) VALUES ('x', '{}', '[\"sleep\"]', '/', 'g', 'running', 1, 2, "
+                            "?, ?, ?)", (proc.pid, found_start if start is None else start, exe)).lastrowid
+
+
+def test_leftover_sleep_is_stopped_and_logged(runner, capsys):
+    proc = sleeper()
+    try:
+        job_id = left_running(proc)
+        jobs.recover()
+        assert proc.wait(5) == -signal.SIGTERM
+        out = capsys.readouterr().out
+        assert f"[jobs] stopping process {proc.pid} (job #{job_id}), left running when FeedVault last stopped" in out
+        assert jobs.get(job_id)["state"] == "interrupted"
+        assert [ln["text"] for ln in jobs.log(job_id)["lines"]] == [
+            f"[feedvault] process {proc.pid} was still running after FeedVault stopped: stopped at the next start"]
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_leftover_sleep_with_another_start_time_is_left_alone(runner, capsys):
+    proc = sleeper()
+    try:
+        job_id = left_running(proc, start=jobs.identity(proc.pid)[0] - 1)    # the pid was reused since
+        jobs.recover()
+        time.sleep(0.3)
+        assert proc.poll() is None and alive(proc.pid)
+        assert f"process {proc.pid} of job #{job_id} is another program now: left alone" in capsys.readouterr().out
+        assert jobs.get(job_id)["state"] == "interrupted" and jobs.log(job_id)["lines"] == []
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_without_proc_nothing_is_stopped(runner, monkeypatch, capsys):
+    proc = sleeper()
+    try:
+        job_id = left_running(proc)
+        monkeypatch.setattr(jobs, "PROC", str(runner["tmp"] / "no-proc"))
+        jobs.recover()
+        time.sleep(0.3)
+        assert proc.poll() is None and alive(proc.pid)
+        assert "processes left running when FeedVault last stopped are not looked for" in capsys.readouterr().out
+        assert jobs.get(job_id)["state"] == "interrupted"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_a_process_that_exits_between_check_and_signal_is_not_signalled(runner, monkeypatch):
+    """The pidfd pins the process checked: once it has exited, its pid is
+    not signalled, whoever has it by then."""
+    proc = sleeper()
+    recorded = jobs.identity(proc.pid)
+    fd = jobs._pin(proc.pid, recorded)
+    assert fd is not None
+    proc.kill()
+    proc.wait()                                    # reaped: the pid is free for anyone
+    sent = []
+    monkeypatch.setattr(jobs.os, "killpg", lambda pid, sig: sent.append(pid))
+    try:
+        assert jobs._signal_group(fd, proc.pid, recorded, signal.SIGTERM) is False and sent == []
+    finally:
+        jobs._close(fd)

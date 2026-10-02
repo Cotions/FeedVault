@@ -1505,7 +1505,13 @@ its process id, the process's start time (field 22 of `/proc/<pid>/stat`)
 and its executable; on the next start, a job left `running` has its process
 group stopped (SIGTERM, then SIGKILL after 10 seconds if it is still there)
 only if that pid still exists with the same start time and executable. A pid reused by another program is never
-signalled. The job is then `interrupted`.
+signalled: the process is pinned (a pidfd) when it is checked, and each
+signal goes only while that same process is alive. The server log says
+which processes were stopped (and which pids are another program's now),
+and the job's own log gets a line (`process <pid> was still running after
+FeedVault stopped: stopped at the next start`). Linux only: without
+`/proc`, nothing is looked for or signalled. The job is then
+`interrupted`.
 
 Jobs are kept in the database (`jobs` table), not with the user data: they
 are not exported to `userdata/`.
