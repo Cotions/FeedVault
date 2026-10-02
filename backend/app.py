@@ -752,13 +752,25 @@ def resolve_source():
     default folder, shown before saving."""
     cfg = config.load()
     try:
-        r = sources.resolve(request.args.get("url"), sources.routes(cfg), cfg["media_roots"])
+        if request.args.get("tool") == "instaloader":
+            # A profile name or @name, as POST /api/sources takes it with that tool.
+            target = sources.parse_target("instaloader", request.args.get("url"))
+            if target is None:
+                raise sources.Refused("not an Instagram profile name")
+            folder = os.path.join(cfg["media_roots"][0], target) if cfg["media_roots"] else None
+            if folder and sources.in_saved(folder, cfg["media_roots"]):
+                raise sources.Refused(sources.SAVED_REFUSED.format(folder=folder))
+            r = {"tool": "instaloader", "platform": sources.PLATFORM["instaloader"], "target": target, "folder": folder}
+        else:
+            r = sources.resolve(request.args.get("url"), sources.routes(cfg), cfg["media_roots"])
     except sources.Refused as e:
         # An answer, not a failed request: the page asks as the user types.
         return jsonify({"ok": False, "error": str(e)})
     conn = db.connect()
     folder = sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]
-    return jsonify({"ok": True, **r, "source": sources.existing(conn, r["tool"], r["target"], folder)})
+    return jsonify({"ok": True, **r, "source": sources.existing(conn, r["tool"], r["target"], folder),
+                    "choices": sources.choices(r["tool"], r["platform"], r["target"]),
+                    "session": sync.session_of(r["tool"], sources.clean_options(None), cfg)})
 
 
 @app.post("/api/sources")
@@ -792,9 +804,11 @@ def create_source():
         if not account:
             return jsonify({"ok": False, "error": "account must be { platform, id }"}), 400
         account = account[0]
-    options = sources.clean_options(body.get("options"), tool=tool)
-    if options is None:
-        return jsonify({"ok": False, "error": "options must be { full_history, session }"}), 400
+    platform = sources.PLATFORM[tool] if tool == "instaloader" else r["platform"]
+    options, error = sources.parse_options(body.get("options"), tool=tool, platform=platform, target=target)
+    error = error or sources.login_refused(options, platform, sync.session_of(tool, options, cfg))
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
     try:
         sid = sources.create(conn, cfg["media_roots"], tool, target, folder, person, account, options,
@@ -820,10 +834,17 @@ def update_source(sid):
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
     body = request.get_json(silent=True) or {}
-    options = sources.clean_options(body["options"], base=s["options"], tool=s["tool"]) \
-        if isinstance(body.get("options"), dict) else None
-    if options is None:
-        return jsonify({"ok": False, "error": "send options: { full_history, session }"}), 400
+    if not isinstance(body.get("options"), dict):
+        return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
+    sent = body["options"]
+    options, error = sources.parse_options(sent, base=s["options"], tool=s["tool"], platform=s["platform"],
+                                           target=s["target"])
+    if not error and sent.get("first_posts") not in (None, s["options"]["first_posts"]) \
+            and s["last_sync_at"] is not None:
+        error = "only the last posts is for a source's first sync, and this one has synced already"
+    error = error or sources.login_refused(options, s["platform"], sync.session_of(s["tool"], options))
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
     sources.update(conn, sid, options)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})

@@ -841,7 +841,10 @@ no person yet.
   "folder": "/archive/instaloader/somebody",
   "account": { "platform": "instagram", "id": "somebody" },
   "person": { "id": 3, "name": "Some Body" },
-  "options": { "full_history": false, "session": null },
+  "options": { "full_history": false, "session": null, "content": ["posts", "reels"], "media": "all",
+               "since": "2024-01-01", "first_posts": null },
+  "choices": { "content": ["posts", "reels", "stories", "highlights", "tagged"], "content_default": ["posts"],
+               "login": ["stories", "highlights", "tagged"], "media": true, "since": true, "first_posts": false },
   "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait before syncing again",
@@ -870,6 +873,35 @@ no person yet.
     [instaloader settings](#instaloader-settings) and
     [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings)), or
     one of the session values (gallery-dl and yt-dlp: none or cookies).
+  - `content`: `null` (default: what `choices.content_default` names), or
+    a non-empty list of what to fetch, from `choices.content`; sent in any
+    order, stored in that order, and the default alone is stored as `null`.
+    See [What a source downloads](#what-a-source-downloads).
+  - `media`: `"all"` (default), `"images"` or `"videos"`; only `"all"`
+    where `choices.media` is `false` (yt-dlp).
+  - `since`: `null` (default), or a date `YYYY-MM-DD` from `1970-01-01` to
+    today: nothing posted before it (UTC) is downloaded.
+  - `first_posts`: `null` (default), or a whole number from 1 to 10000: the
+    first sync gets only that many of the newest posts instead of the full
+    history. Only where `choices.first_posts` (gallery-dl and yt-dlp:
+    instaloader cannot stop after a number of a profile's posts), not with
+    `full_history` (a 400: one or the other), and once a source has synced
+    (`last_sync_at` set) it can only be cleared. Set back to `null` once a
+    sync succeeds, like `full_history`.
+  - Any other key, or a value outside the above, is a 400 naming the
+    option; a stored value that is not valid (sources.json edited by hand)
+    counts as the defaults.
+  - Stories, highlights and tagged posts on Instagram (`choices.login`)
+    need a logged-in session: asking for them when the session the sync
+    would use (the source's, else the tool's setting) is `none` is a 400
+    (`Stories need a logged-in session: …`), and a sync of a source that
+    asks for them with no session (the setting changed since) is refused
+    with the same message.
+- `choices`: what this source's options can be, for the form: `content`
+  (empty when the link itself picks what is downloaded: a gallery-dl link
+  that is not the profile's own page, any yt-dlp link), `content_default`,
+  `login` (those of `content` that need a logged-in session), and whether
+  `media`, `since` and `first_posts` can be set.
 - `last_sync_at`: when the last sync ended (any outcome), or `null`.
 - `last_result`: how it ended, or `null` before the first sync:
   - `state`: the job's (`done`, `failed`, `cancelled`, `interrupted`)
@@ -900,10 +932,10 @@ no person yet.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
-| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null }` (`source`: the id of the source already there for it). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted |
+| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
 | POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }` |
+| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |
@@ -1152,6 +1184,27 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive 
   of them.
 - **Pause.** The next sync of the same tool waits the tool's `pause`
   (default 30 s); see [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings).
+
+### What a source downloads
+
+A source's `options` (see [Sources](#sources)) say what its syncs fetch.
+What each tool and platform offers (`choices`):
+
+| Tool | Platform | `content` (default first) | `media` | `since` | `first_posts` |
+|---|---|---|---|---|---|
+| instaloader | instagram | `posts`, `reels`, `stories`, `highlights`, `tagged` | yes | yes | no |
+| gallery-dl | instagram | `posts`, `reels`, `stories`, `highlights`, `tagged` | yes | yes | yes |
+| gallery-dl | twitter | `timeline`, `media`, `tweets`, `with_replies` | yes | yes | yes |
+| gallery-dl | bluesky | `media`, `posts`, `replies`, `video` | yes | yes | yes |
+| gallery-dl | tiktok | `posts`, `reposts`, `stories` | yes | yes | yes |
+| gallery-dl | any other | none | yes | yes | yes |
+| yt-dlp | any | none | no | yes | yes |
+
+gallery-dl offers `content` only for a link to the profile's own page
+(`instagram.com/<name>`, `x.com/<name>`, `bsky.app/profile/<name>`,
+`tiktok.com/@<name>`); a link to one of its pages (`x.com/<name>/media`)
+already picks what is downloaded. yt-dlp downloads what the link lists (a
+YouTube channel's tab, for instance).
 
 ### gallery-dl and yt-dlp settings
 

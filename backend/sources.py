@@ -20,6 +20,7 @@ Nothing here runs a tool: sync.py builds the job from a stored source.
 import json
 import os
 import re
+from datetime import date
 from urllib.parse import urlsplit
 
 import db
@@ -263,19 +264,98 @@ def clean_session(value, modes=SESSION_MODES):
     return {"mode": "none"}
 
 
-def clean_options(value, base=None, tool="instaloader"):
-    """A source's options merged over ``base``, or None when malformed:
-    full_history (bool: the next sync walks everything instead of starting
-    after what is already there) and session (null: the tool's setting,
-    else see clean_session; no login for gallery-dl and yt-dlp)."""
-    out = {"full_history": False, "session": None, **(base or {})}
-    if value is None:
-        return out
-    if not isinstance(value, dict) or set(value) - {"full_history", "session"}:
+# ---------------------------------------------------------------------------
+# What a source downloads (sync.py turns it into flags)
+# ---------------------------------------------------------------------------
+
+# What a source can fetch besides the defaults, by tool and platform, in the
+# order shown; the first entry of DEFAULT_CONTENT is what it gets with none
+# chosen. gallery-dl only on a profile's own page (its "include" option),
+# yt-dlp never: there the link picks it (x.com/name/media, a YouTube tab).
+CONTENT = {
+    ("instaloader", "instagram"): ("posts", "reels", "stories", "highlights", "tagged"),
+    ("gallery-dl", "instagram"): ("posts", "reels", "stories", "highlights", "tagged"),
+    ("gallery-dl", "twitter"): ("timeline", "media", "tweets", "with_replies"),
+    ("gallery-dl", "bluesky"): ("media", "posts", "replies", "video"),
+    ("gallery-dl", "tiktok"): ("posts", "reposts", "stories"),
+}
+DEFAULT_CONTENT = {key: (kinds[0],) for key, kinds in CONTENT.items()}
+# A profile's own page on each platform gallery-dl has content choices for
+# (the extractors that read "include"), as normalized links have it.
+_PROFILE_PAGES = {
+    "instagram": re.compile(r"/[A-Za-z0-9._]+"),
+    "twitter": re.compile(r"/[A-Za-z0-9_]+"),
+    "bluesky": re.compile(r"/profile/[^/]+"),
+    "tiktok": re.compile(r"/@[^/]+"),
+}
+# Instagram shows these to logged-in viewers only.
+LOGIN_CONTENT = {"stories", "highlights", "tagged"}
+MEDIA = ("all", "images", "videos")
+MEDIA_TOOLS = ("instaloader", "gallery-dl")
+# instaloader cannot stop after N posts of a profile (its --count only
+# applies to hashtags, locations, the feed and saved posts).
+FIRST_POSTS_TOOLS = ("gallery-dl", "yt-dlp")
+FIRST_POSTS_MAX = 10000
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts")
+LOGIN_REFUSED = ("{kinds} need a logged-in session: choose one for this source, or set one in "
+                 "Settings → Downloaders")
+
+
+def choices(tool, platform, target):
+    """What the options of a source can be: {content (the kinds it can
+    fetch, empty when the link picks), content_default, login (kinds that
+    need a logged-in session), media, since, first_posts (whether each can
+    be set)}."""
+    kinds = CONTENT.get((tool, platform), ())
+    if tool == "gallery-dl" and kinds:
+        page = _PROFILE_PAGES[platform]
+        if not isinstance(target, str) or not page.fullmatch(urlsplit(target).path):
+            kinds = ()
+    return {"content": list(kinds), "content_default": list(DEFAULT_CONTENT[(tool, platform)]) if kinds else [],
+            "login": [k for k in kinds if platform == "instagram" and k in LOGIN_CONTENT],
+            "media": tool in MEDIA_TOOLS, "since": True, "first_posts": tool in FIRST_POSTS_TOOLS}
+
+
+def _since(value):
+    """A YYYY-MM-DD date from 1970-01-01 to today, else None."""
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
         return None
+    try:
+        day = date.fromisoformat(value)
+    except ValueError:
+        return None
+    return value if date(1970, 1, 1) <= day <= date.today() else None
+
+
+def parse_options(value, base=None, tool="instaloader", platform="instagram", target=None):
+    """A source's options merged over ``base``: (options, None), or (None,
+    error) when ``value`` is malformed or asks for what the source cannot
+    do (see choices). The options:
+
+    - full_history: bool, the next sync walks everything instead of
+      starting after what is already there;
+    - session: null (the tool's setting), else see clean_session (no login
+      for gallery-dl and yt-dlp);
+    - content: null (the default), else the kinds to fetch, of choices();
+      the default alone is stored as null;
+    - media: all, images or videos (instaloader and gallery-dl);
+    - since: null, or a YYYY-MM-DD date: nothing older is downloaded;
+    - first_posts: null, or 1 to 10000: the first sync gets only that many
+      of the newest posts (gallery-dl and yt-dlp; not with full_history)."""
+    out = {"full_history": False, "session": None, "content": None, "media": "all", "since": None,
+           "first_posts": None, **(base or {})}
+    if value is None:
+        return out, None
+    if not isinstance(value, dict):
+        return None, "options must be an object"
+    unknown = set(value) - set(OPTION_KEYS)
+    if unknown:
+        return None, f"unknown option {sorted(unknown)[0]!r}: options are {', '.join(OPTION_KEYS)}"
+    can = choices(tool, platform, target)
     if "full_history" in value:
         if not isinstance(value["full_history"], bool):
-            return None
+            return None, "full_history must be true or false"
         out["full_history"] = value["full_history"]
     if "session" in value:
         if value["session"] is None:
@@ -283,8 +363,58 @@ def clean_options(value, base=None, tool="instaloader"):
         else:
             out["session"] = clean_session(value["session"], SESSION_MODES if tool == "instaloader" else COOKIE_MODES)
             if out["session"] is None:
-                return None
-    return out
+                return None, ('session must be null, { "mode": "none" }, { "mode": "cookies", "browser": '
+                              f'{" | ".join(BROWSERS)} }}'
+                              + (' or { "mode": "login", "user": "<name>" }' if tool == "instaloader" else ""))
+    if "content" in value:
+        content = value["content"]
+        if content is not None:
+            if not can["content"]:
+                return None, ("this link picks what it downloads (a profile's own page offers a choice)"
+                              if tool == "gallery-dl" else f"{tool} downloads what the link lists: pick it "
+                                                            "with the link (a YouTube tab, for instance)")
+            if not isinstance(content, list) or not content or \
+                    any(not isinstance(k, str) or k not in can["content"] for k in content):
+                return None, f"content must be a non-empty list of: {', '.join(can['content'])}"
+            content = [k for k in can["content"] if k in content]
+            if content == can["content_default"]:
+                content = None
+        out["content"] = content
+    if "media" in value:
+        if value["media"] not in MEDIA:
+            return None, f"media must be one of: {', '.join(MEDIA)}"
+        if value["media"] != "all" and not can["media"]:
+            return None, f"{tool} downloads every video: media must be all"
+        out["media"] = value["media"]
+    if "since" in value:
+        if value["since"] is not None and _since(value["since"]) is None:
+            return None, "since must be a date as YYYY-MM-DD, from 1970-01-01 to today"
+        out["since"] = value["since"]
+    if "first_posts" in value:
+        n = value["first_posts"]
+        if n is not None:
+            if not can["first_posts"]:
+                return None, f"{tool} cannot stop after a number of posts: first_posts must be null"
+            if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= FIRST_POSTS_MAX:
+                return None, f"first_posts must be null or a whole number from 1 to {FIRST_POSTS_MAX}"
+        out["first_posts"] = n
+    if out["full_history"] and out["first_posts"] is not None:
+        return None, "the first sync is either the full history or only the last posts, not both"
+    return out, None
+
+
+def clean_options(value, base=None, tool="instaloader", platform="instagram", target=None):
+    """parse_options' options, or None when malformed."""
+    return parse_options(value, base, tool, platform, target)[0]
+
+
+def login_refused(options, platform, session):
+    """The message refusing what ``options`` fetch when it needs a login
+    that ``session`` (the one a sync would use) is not, else None."""
+    need = [k for k in (options["content"] or ()) if platform == "instagram" and k in LOGIN_CONTENT]
+    if not need or session["mode"] != "none":
+        return None
+    return LOGIN_REFUSED.format(kinds=", ".join(need).capitalize())
 
 
 def inside_root(folder, roots):
@@ -329,12 +459,25 @@ def _public(conn, row, accounts, active):
         "folder": row["folder"],
         "account": {"platform": key[0], "id": key[1]} if key else None,
         "person": person,
-        "options": json.loads(row["options"] or "{}"),
+        "options": stored_options(row),
+        "choices": choices(row["tool"], row["platform"], row["target"]),
         "created_at": row["created_at"], "last_sync_at": row["last_sync_at"],
         "last_job_id": row["last_job_id"],
         "last_result": json.loads(row["last_result"]) if row["last_result"] else None,
         "job": job,
     }
+
+
+def stored_options(src):
+    """A stored source's options, checked again (defaults when malformed:
+    sources.json can be edited by hand)."""
+    try:
+        stored = json.loads(src["options"] or "{}")
+    except ValueError:
+        stored = None
+    tool, platform, target = src["tool"], src["platform"], src["target"]
+    return clean_options(stored if isinstance(stored, dict) else None, tool=tool, platform=platform, target=target) \
+        or clean_options(None, tool=tool, platform=platform, target=target)
 
 
 def get(conn, sid, active=None):

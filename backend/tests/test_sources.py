@@ -11,6 +11,7 @@ import userdata
 
 ALICE = owner("alice.example", 111, "Alice Example")
 TS = 1717243200                                     # 2024-06-01 12:00 UTC
+OPTS = {"full_history": False, "session": None, "content": None, "media": "all", "since": None, "first_posts": None}
 
 
 def get(client, url, status=200):
@@ -63,10 +64,10 @@ def test_parse_target():
 
 
 def test_clean_options_and_session():
-    assert sources.clean_options(None) == {"full_history": False, "session": None}
-    assert sources.clean_options({"full_history": True}) == {"full_history": True, "session": None}
-    base = {"full_history": True, "session": {"mode": "none"}}
-    assert sources.clean_options({"session": None}, base) == {"full_history": True, "session": None}
+    assert sources.clean_options(None) == OPTS
+    assert sources.clean_options({"full_history": True}) == {**OPTS, "full_history": True}
+    base = {**OPTS, "full_history": True, "session": {"mode": "none"}}
+    assert sources.clean_options({"session": None}, base) == {**OPTS, "full_history": True}
     for s in [{"mode": "none"}, {"mode": "cookies", "browser": "firefox"}, {"mode": "login", "user": "me.name_1"}]:
         assert sources.clean_session(s) == s
         assert sources.clean_options({"session": s})["session"] == s
@@ -77,6 +78,63 @@ def test_clean_options_and_session():
         assert sources.clean_session(s) is None, s
     for o in [{"full_history": "yes"}, {"session": {"mode": "x"}}, {"argv": ["--login"]}, [], "x"]:
         assert sources.clean_options(o) is None, o
+
+
+def test_options_content_media_since_first_posts():
+    clean = sources.parse_options
+    ig = {"tool": "instaloader", "platform": "instagram", "target": "carol.cooks"}
+    x = {"tool": "gallery-dl", "platform": "twitter", "target": "https://x.com/someone"}
+    yt = {"tool": "yt-dlp", "platform": "youtube", "target": "https://youtube.com/@someone"}
+    # Content: from the source's choices, stored in their order; the default alone is null.
+    assert clean({"content": ["stories", "posts", "reels"]}, **ig)[0]["content"] == ["posts", "reels", "stories"]
+    assert clean({"content": ["posts"]}, **ig)[0]["content"] is None
+    assert clean({"content": ["media", "with_replies"]}, **x)[0]["content"] == ["media", "with_replies"]
+    assert clean({"content": None, "media": "videos", "since": "2024-01-01", "first_posts": 50}, **x)[0] == \
+        {**OPTS, "media": "videos", "since": "2024-01-01", "first_posts": 50}
+    for value, words in [
+            ({"content": []}, "non-empty list"), ({"content": ["posts", "igtv"]}, "non-empty list"),
+            ({"content": "posts"}, "non-empty list"), ({"content": [1]}, "non-empty list"),
+            ({"media": "gifs"}, "media must be"), ({"media": None}, "media must be"),
+            ({"since": "2024-1-1"}, "YYYY-MM-DD"), ({"since": "2024-02-30"}, "YYYY-MM-DD"),
+            ({"since": "1969-12-31"}, "YYYY-MM-DD"), ({"since": "2999-01-01"}, "YYYY-MM-DD"),
+            ({"since": 20240101}, "YYYY-MM-DD"), ({"since": "2024-01-01 or 1"}, "YYYY-MM-DD"),
+            ({"first_posts": 5}, "cannot stop after"), ({"argv": ["--stories"]}, "unknown option")]:
+        options, error = clean(value, **ig)
+        assert options is None and words in error, (value, error)
+    for value, words in [({"first_posts": 0}, "1 to 10000"), ({"first_posts": 10001}, "1 to 10000"),
+                         ({"first_posts": True}, "1 to 10000"), ({"first_posts": "5"}, "1 to 10000"),
+                         ({"first_posts": 5, "full_history": True}, "not both"),
+                         ({"content": ["timeline", "likes"]}, "non-empty list")]:
+        options, error = clean(value, **x)
+        assert options is None and words in error, (value, error)
+    # A link to one of a profile's pages picks its content; yt-dlp has no media choice.
+    assert "picks what it downloads" in clean({"content": ["media"]}, **{**x, "target": "https://x.com/someone/media"})[1]
+    assert "link lists" in clean({"content": ["videos"]}, **yt)[1]
+    assert "every video" in clean({"media": "images"}, **yt)[1]
+    assert clean({"first_posts": 10000, "since": "1970-01-01"}, **yt)[0]["first_posts"] == 10000
+    # Only stories, highlights and tagged posts on Instagram need a login.
+    opts = clean({"content": ["posts", "reels", "stories", "tagged"]}, **ig)[0]
+    assert sources.login_refused(opts, "instagram", {"mode": "none"}) == \
+        "Stories, tagged need a logged-in session: choose one for this source, or set one in Settings → Downloaders"
+    assert sources.login_refused(opts, "instagram", {"mode": "login", "user": "me"}) is None
+    assert sources.login_refused(clean({"content": ["reels"]}, **ig)[0], "instagram", {"mode": "none"}) is None
+    tt = clean({"content": ["stories"]}, tool="gallery-dl", platform="tiktok", target="https://tiktok.com/@a")[0]
+    assert sources.login_refused(tt, "tiktok", {"mode": "none"}) is None
+
+
+def test_choices():
+    assert sources.choices("instaloader", "instagram", "carol.cooks") == {
+        "content": ["posts", "reels", "stories", "highlights", "tagged"], "content_default": ["posts"],
+        "login": ["stories", "highlights", "tagged"], "media": True, "since": True, "first_posts": False}
+    assert sources.choices("gallery-dl", "twitter", "https://x.com/someone")["content"] == \
+        ["timeline", "media", "tweets", "with_replies"]
+    for target in ["https://x.com/someone/media", "https://x.com/someone/with_replies"]:
+        assert sources.choices("gallery-dl", "twitter", target)["content"] == []
+    assert sources.choices("gallery-dl", "bluesky", "https://bsky.app/profile/a.bsky.social")["content_default"] == \
+        ["media"]
+    assert sources.choices("gallery-dl", "reddit", "https://reddit.com/user/someone")["content"] == []
+    assert sources.choices("yt-dlp", "tiktok", "https://tiktok.com/@a") == {
+        "content": [], "content_default": [], "login": [], "media": False, "since": True, "first_posts": True}
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +162,7 @@ def test_suggestions_from_existing_folders(env, client):
     s = post(client, "/api/sources", {k: carol[k] for k in ("tool", "target", "folder", "account")})["source"]
     assert (s["target"], s["folder"], s["account"], s["person"]) == \
         ("carol.cooks", f"{media}/carol.cooks", carol["account"], None)
-    assert s["options"] == {"full_history": False, "session": None} and s["last_result"] is None
+    assert s["options"] == OPTS and s["last_result"] is None
     assert s["url"] == "https://www.instagram.com/carol.cooks/" and s["job"] is None
     r = get(client, "/api/sources")
     assert [x["id"] for x in r["sources"]] == [s["id"]]
@@ -173,9 +231,9 @@ def test_update_and_delete(env, client):
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "carol.cooks"})["source"]
     url = f"/api/sources/{s['id']}"
     r = post(client, url, {"options": {"session": {"mode": "cookies", "browser": "firefox"}}})
-    assert r["source"]["options"] == {"full_history": False, "session": {"mode": "cookies", "browser": "firefox"}}
+    assert r["source"]["options"] == {**OPTS, "session": {"mode": "cookies", "browser": "firefox"}}
     r = post(client, url, {"options": {"full_history": True}})        # only the keys sent change
-    assert r["source"]["options"] == {"full_history": True, "session": {"mode": "cookies", "browser": "firefox"}}
+    assert r["source"]["options"] == {**OPTS, "full_history": True, "session": {"mode": "cookies", "browser": "firefox"}}
     for body in [{}, {"options": {"session": {"mode": "login"}}}, {"options": None}, {"folder": "/etc"}]:
         post(client, url, body, 400)
     assert get(client, url)["options"]["full_history"] is True
@@ -187,6 +245,62 @@ def test_update_and_delete(env, client):
     post(client, url, {"options": {}}, 404)
     delete(client, url, 404)
     get(client, "/api/sources/99999999999999999999", 404)
+
+
+def test_options_api(env, client, monkeypatch):
+    archive(env)
+    import config
+    body = {"tool": "instaloader", "target": "carol.cooks"}
+    r = post(client, "/api/sources", {**body, "options": {"content": ["posts", "stories"]}}, 400)
+    assert r["error"].startswith("Stories need a logged-in session")
+    r = post(client, "/api/sources", {**body, "options": {"since": "2024-13-01"}}, 400)
+    assert "YYYY-MM-DD" in r["error"]
+    r = post(client, "/api/sources", {**body, "options": {"first_posts": 10}}, 400)
+    assert "cannot stop after" in r["error"]
+    # With a login (the source's own, or the tool's setting), they are accepted.
+    s = post(client, "/api/sources", {**body, "options": {
+        "content": ["stories", "posts"], "session": {"mode": "login", "user": "me"}, "since": "2024-01-01"}})["source"]
+    assert s["options"] == {**OPTS, "content": ["posts", "stories"], "session": {"mode": "login", "user": "me"},
+                            "since": "2024-01-01"}
+    assert s["choices"]["login"] == ["stories", "highlights", "tagged"]
+    url = f"/api/sources/{s['id']}"
+    assert "logged-in" in post(client, url, {"options": {"session": {"mode": "none"}}}, 400)["error"]
+    cfg = config.load()
+    cfg["instaloader"] = {"session": {"mode": "cookies", "browser": "firefox"}}
+    config.save(cfg)
+    r = post(client, url, {"options": {"session": None, "content": ["posts", "reels", "highlights"], "media": "images"}})
+    assert r["source"]["options"] == {**OPTS, "content": ["posts", "reels", "highlights"], "media": "images",
+                                      "since": "2024-01-01"}
+    for bad in [{"media": "all", "x": 1}, {"since": "tomorrow"}, {"content": ["posts; rm -rf ~"]}]:
+        post(client, url, {"options": bad}, 400)
+    assert get(client, url)["options"]["media"] == "images"
+    # A stored value that is not valid any more (edited by hand) reads as the defaults.
+    db.connect().execute("UPDATE sources SET options = ? WHERE id = ?",
+                         (json.dumps({"content": ["igtv"], "media": "images"}), s["id"]))
+    db.connect().commit()
+    assert get(client, url)["options"] == OPTS
+
+
+def test_first_posts_only_before_the_first_sync(env, client):
+    s = post(client, "/api/sources", {"target": "https://x.com/someone", "options": {"first_posts": 20}})["source"]
+    assert s["options"]["first_posts"] == 20 and s["choices"]["first_posts"] is True
+    url = f"/api/sources/{s['id']}"
+    assert post(client, url, {"options": {"first_posts": 30}})["source"]["options"]["first_posts"] == 30
+    sources.record(db.connect(), s["id"], 1, TS, {"state": "failed"})
+    r = post(client, url, {"options": {"first_posts": 40}}, 400)
+    assert "synced already" in r["error"]
+    # Other changes keep it; it can still be cleared.
+    assert post(client, url, {"options": {"media": "videos"}})["source"]["options"]["first_posts"] == 30
+    assert post(client, url, {"options": {"first_posts": None}})["source"]["options"]["first_posts"] is None
+
+
+def test_resolve_gives_choices(env, client):
+    r = get(client, "/api/sources/resolve?url=x.com/someone")
+    assert r["choices"]["content"] == ["timeline", "media", "tweets", "with_replies"]
+    assert r["session"] == {"mode": "none"}
+    r = get(client, "/api/sources/resolve?url=%40Carol.Cooks&tool=instaloader")
+    assert (r["ok"], r["tool"], r["target"], r["choices"]["first_posts"]) == (True, "instaloader", "carol.cooks", False)
+    assert get(client, "/api/sources/resolve?url=a%20b&tool=instaloader")["ok"] is False
 
 
 def test_api_guard(env, client):

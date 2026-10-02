@@ -186,6 +186,11 @@ def config_flags(tool, cfg=None):
     return [IGNORE_CONFIG[tool]] if tool_settings(tool, cfg)["ignore_config"] else []
 
 
+def session_of(tool, options, cfg=None):
+    """The session a sync of a source uses: its own, else the tool's setting."""
+    return options["session"] or (settings(cfg) if tool == "instaloader" else tool_settings(tool, cfg))["session"]
+
+
 def stamps_path(cfg=None):
     return os.path.join((cfg or config.load())["data_directory"], "instaloader", "stamps.ini")
 
@@ -290,13 +295,7 @@ def _with_stamps(args, stamps, target, options):
 
 def _options(src):
     """A stored source's options, checked again (defaults when malformed)."""
-    try:
-        stored = json.loads(src["options"] or "{}")
-    except ValueError:
-        stored = None
-    tool = src["tool"]
-    return sources.clean_options(stored if isinstance(stored, dict) else None, tool=tool) \
-        or sources.clean_options(None, tool=tool)
+    return sources.stored_options(src)
 
 
 def _write_stamps(stamps, path):
