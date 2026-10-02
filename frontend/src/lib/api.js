@@ -71,6 +71,16 @@ async function post(path, body = {}) {
   }
 }
 
+// DELETE, with the error body returned as post() returns it.
+async function del(path) {
+  try {
+    return await request("DELETE", path);
+  } catch (e) {
+    if (e.body && typeof e.body === "object") return e.body;
+    throw e;
+  }
+}
+
 function qs(params) {
   const s = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -200,14 +210,7 @@ export function createPerson(name, accounts = []) { return post("/api/people", {
 // changes: { name } and/or { notes } → { ok, person }
 export function updatePerson(id, changes) { return post(`/api/people/${id}`, changes); }
 // Unlinks every account; posts are never touched → { ok, unlinked }
-export async function deletePerson(id) {
-  try {
-    return await request("DELETE", `/api/people/${id}`);
-  } catch (e) {
-    if (e.body && typeof e.body === "object") return e.body;
-    throw e;
-  }
-}
+export function deletePerson(id) { return del(`/api/people/${id}`); }
 // { add: [{ platform, id }], remove: [...] } → { ok, added, removed, person }
 export function linkAccounts(id, { add = [], remove = [] } = {}) {
   return post(`/api/people/${id}/accounts`, { add, remove });
@@ -254,27 +257,13 @@ export function createSource(body) { return post("/api/sources", body); }
 // options: { full_history?, session?, content?, media?, since?, first_posts? } → { ok, source }
 export function updateSource(id, options) { return post(`/api/sources/${id}`, { options }); }
 // The folder, files and posts stay → { ok }; 409 while its sync is queued or running
-export async function deleteSource(id) {
-  try {
-    return await request("DELETE", `/api/sources/${id}`);
-  } catch (e) {
-    if (e.body && typeof e.body === "object") return e.body;
-    throw e;
-  }
-}
+export function deleteSource(id) { return del(`/api/sources/${id}`); }
 // → { ok, job } or { ok: false, error } (already queued, cannot be synced)
 export function syncSource(id) { return post(`/api/sources/${id}/sync`); }
 // Accept the new name its tool reported (the target changes, never the folder) → { ok, source }
 export function acceptRename(id, to) { return post(`/api/sources/${id}/rename`, { to }); }
 // Forget that suggestion → { ok, source }
-export async function dismissRename(id) {
-  try {
-    return await request("DELETE", `/api/sources/${id}/rename`);
-  } catch (e) {
-    if (e.body && typeof e.body === "object") return e.body;
-    throw e;
-  }
-}
+export function dismissRename(id) { return del(`/api/sources/${id}/rename`); }
 // → { ok, jobs, skipped, errors: [{ source, error }] }
 export function syncAllSources() { return post("/api/sources/sync-all"); }
 // { session?, pause? } → { ok, config } or { ok: false, error }

@@ -360,7 +360,7 @@ def test_not_found_or_login_required_stops_it(env, client, queued):
     walled = add(client, "carol.cooks", "instaloader", schedule="hourly")["id"]
     limited = add(client, "https://x.com/busy", schedule="hourly")["id"]
     synced(gone, NOW, "failed", 1, health="not_found")
-    synced(walled, NOW, "failed", 4, error="login_required")    # stored before health: its error
+    synced(walled, NOW, "failed", 4, health="login_required")
     synced(limited, NOW, "failed", 1, health="rate_limited")
     assert scheduler.tick(NOW + 30 * 24 * HOUR) == [{"id": 1}] and queued == [limited]   # the back-off applies
     synced(limited, NOW + 30 * 24 * HOUR, "done")
@@ -405,3 +405,21 @@ def test_warning_after_three_failures(env, client, queued):
     for n, warning in ((2, None), (3, "3 failed syncs in a row"), (5, "5 failed syncs in a row")):
         synced(s["id"], NOW, "failed", n, health="error")
         assert client.get(f"/api/sources/{s['id']}", headers=H).get_json()["health"]["warning"] == warning
+
+
+def test_what_keeps_or_lifts_the_stop(env, client, queued):
+    import health
+    # A run that never got that far keeps "resumed": it said nothing new.
+    prev = {"state": "failed", "health": "not_found", "resumed": True, "failures": 2}
+    kept = health.record(prev, None, "interrupted", NOW, "x")
+    assert kept["resumed"] is True and health.paused({**kept, "state": "interrupted"}) is None
+    assert "resumed" not in health.record(prev, "not_found", "failed", NOW, "x")
+    # A result stored before health (its error from broader patterns) does not stop it.
+    assert health.paused({"state": "failed", "error": "not_found", "failures": 1}) is None
+    # A new session lifts it too (a login fixed).
+    s = add(client, "carol.cooks", "instaloader", schedule="daily")
+    synced(s["id"], NOW, "failed", 1, health="login_required")
+    assert client.get(f"/api/sources/{s['id']}", headers=H).get_json()["schedule"]["stopped"] == \
+        "paused: login required"
+    s = post(client, f"/api/sources/{s['id']}", {"options": {"session": LOGIN}})["source"]
+    assert s["schedule"]["stopped"] is None and s["last_result"]["resumed"] is True

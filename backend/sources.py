@@ -716,6 +716,11 @@ def failures(result):
     return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
 
 
+# A run that reported a new name worked: once the suggestion is answered its state is ok.
+_ANSWERED = (", '$.health', CASE WHEN json_extract(last_result, '$.health') = 'renamed' THEN 'ok' "
+             "ELSE json_extract(last_result, '$.health') END")
+
+
 def rename(conn, sid, old, new):
     """Accept a rename suggestion: the source's target becomes ``new`` (its
     folder and files stay as they are) and the suggestion goes. False when
@@ -725,7 +730,7 @@ def rename(conn, sid, old, new):
         return conn.execute(
             "UPDATE sources SET target = ?, last_result = CASE WHEN json_valid(last_result) "
             "AND json_type(last_result) = 'object' THEN json_set(json_remove(last_result, '$.rename'), "
-            "'$.resumed', json('true')) ELSE last_result END WHERE id = ? AND target = ?",
+            f"'$.resumed', json('true'){_ANSWERED}) ELSE last_result END WHERE id = ? AND target = ?",
             (new, sid, old)).rowcount > 0
 
 
@@ -742,7 +747,7 @@ def dismiss_rename(conn, sid):
     """Forget a source's rename suggestion; the next one the tool reports comes back."""
     with conn:
         conn.execute(
-            "UPDATE sources SET last_result = json_remove(last_result, '$.rename') "
+            f"UPDATE sources SET last_result = json_set(json_remove(last_result, '$.rename'){_ANSWERED}) "
             "WHERE id = ? AND json_valid(last_result) AND json_type(last_result) = 'object'", (sid,))
 
 

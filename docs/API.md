@@ -1402,8 +1402,10 @@ running is never queued again).
   [Account health](#account-health)) is no longer synced on its own:
   trying again would not change that. `schedule.stopped` says so. It is
   scheduled again once a sync of it works (Sync clicked), or when its
-  schedule changes or a rename is accepted (`last_result.resumed` is set
-  until its next sync ends). `rate_limited` is not stopped: the back-off
+  schedule or its session changes or a rename is accepted
+  (`last_result.resumed` is set until a sync of it ends `done` or
+  `failed`). Only a state read by these tables stops it: a `last_result`
+  stored before them (an `error` only) keeps the back-off. `rate_limited` is not stopped: the back-off
   above applies.
 - A due source is skipped, with `schedule.skipped` saying why, while its
   tool is not found (as [Downloaders](#downloaders) looks for it) or the

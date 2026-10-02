@@ -327,7 +327,8 @@ def record(previous, state, job_state, ended_at, target, rename=None, login_stat
     said (STATES), None for a run that never got that far (cancelled,
     interrupted): it keeps the previous one. ``rename``: (old, new) from
     renamed(); a suggestion stays while the target is the one it was for.
-    ``login_state``: login()'s, None for a run that never got that far."""
+    ``login_state``: login()'s, None for a run that never got that far.
+    Such a run also keeps ``resumed``: it said nothing new about the account."""
     prev = previous if isinstance(previous, dict) else {}
     ok_at = ended_at if job_state == "done" else _ok_at(prev, None)
     suggestion = _rename(prev.get("rename"))
@@ -337,6 +338,8 @@ def record(previous, state, job_state, ended_at, target, rename=None, login_stat
         suggestion = None
     out = {"health": state if state is not None else state_of(prev), "ok_at": ok_at,
            "login": _login(login_state) or _login(prev.get("login"))}
+    if state is None and prev.get("resumed") is True:
+        out["resumed"] = True
     return {**out, "rename": suggestion} if suggestion else out
 
 
@@ -384,10 +387,12 @@ def state_of(result):
 def paused(result):
     """Why the scheduler leaves a source alone ("account not found", "login
     required"), else None: its last state is BLOCKING and nothing resumed
-    it since (a sync's end stores a new result, without ``resumed``)."""
+    it since (a sync's end stores a new result, without ``resumed``). Only
+    a state these tables read (``health``) stops it: an ``error`` stored
+    before them came from broader patterns, and keeps the back-off."""
     if not isinstance(result, dict) or result.get("resumed") is True:
         return None
-    return BLOCKING.get(state_of(result))
+    return BLOCKING.get(result.get("health"))
 
 
 def warning(state, failures):

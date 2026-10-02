@@ -741,7 +741,7 @@ def _with_session(s, cfg=None):
     says whether its session file exists (only looked for, never opened)."""
     session = sync.session_of(s["tool"], s["options"], cfg)
     if session["mode"] == "login":
-        session = {**session, "session_file": any(os.path.exists(p) for p in downloaders.session_files(session["user"]))}
+        session = {**session, "session_file": downloaders.session_file_exists(session["user"])}
     return {**s, "session": session, "schedule": scheduler.status(s, cfg)}
 
 
@@ -861,6 +861,8 @@ def update_source(sid):
     sources.update(conn, sid, options, keys=("schedule",) if set(sent) <= {"schedule"} else None)
     if options["schedule"] != s["options"]["schedule"]:
         scheduler.forget(sid)
+    # A new schedule or session: a source the scheduler stopped is tried again.
+    if options["schedule"] != s["options"]["schedule"] or options["session"] != s["options"]["session"]:
         sources.resume(conn, sid)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
@@ -876,7 +878,7 @@ def accept_rename(sid):
         return jsonify({"ok": False, "error": "no such source"}), 404
     suggestion = s["health"]["rename"]
     body = request.get_json(silent=True) or {}
-    if suggestion is None or suggestion["from"] != s["target"]:
+    if suggestion is None or suggestion["from"] != s["target"].lower():
         return jsonify({"ok": False, "error": "this source has no rename to accept"}), 400
     if body.get("to") != suggestion["to"]:
         return jsonify({"ok": False, "error": f"send the suggested name: {{ to: \"{suggestion['to']}\" }}"}), 400

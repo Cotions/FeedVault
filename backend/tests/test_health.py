@@ -260,6 +260,7 @@ def test_a_renamed_profile_is_a_suggestion_the_user_accepts(env, client, fake):
     r = post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"})["source"]
     assert (r["target"], r["folder"], r["health"]["rename"]) == ("carol.bakes", src["folder"], None)
     assert r["last_result"]["resumed"] is True             # stopped as not found, it is scheduled again
+    assert r["health"]["state"] == "ok"                     # answered: no "renamed" badge left
     assert files(src["folder"]) == before                  # nothing moved, renamed or touched
     assert post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"}, 400)  # nothing left to accept
     userdata.flush()
@@ -290,7 +291,7 @@ def test_a_rename_suggestion_dismissed_or_refused(env, client, fake):
     post(client, f"/api/jobs/{job['id']}/cancel")
     ended(job["id"])
     r = client.delete(f"/api/sources/{s['id']}/rename", headers=H).get_json()["source"]
-    assert (r["target"], r["health"]["rename"]) == ("carol.cooks", None)
+    assert (r["target"], r["health"]["rename"], r["health"]["state"]) == ("carol.cooks", None, "ok")
     assert post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"}, 400)
     assert client.delete("/api/sources/999/rename", headers=H).status_code == 404
 
@@ -368,3 +369,15 @@ def test_login_state_of_the_last_sync(env, client, fake, monkeypatch):
     sync_now(client, s["id"])
     assert get(client, f"/api/sources/{s['id']}")["health"]["login"] == {"mode": "none", "found": None,
                                                                          "accepted": None}
+
+
+def test_a_rename_of_a_target_stored_with_capitals(env, client, fake):
+    s = add_source(client, "nobody.here")
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE sources SET target = 'Nobody.Here', last_result = ? WHERE id = ?",
+                     (json.dumps({"state": "done", "health": "renamed",
+                                  "rename": {"from": "nobody.here", "to": "somebody.now", "at": TS}}), s["id"]))
+    assert get(client, f"/api/sources/{s['id']}")["health"]["rename"]["to"] == "somebody.now"
+    r = post(client, f"/api/sources/{s['id']}/rename", {"to": "somebody.now"})["source"]
+    assert (r["target"], r["health"]["rename"]) == ("somebody.now", None)
