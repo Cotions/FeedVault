@@ -422,6 +422,38 @@ def test_trashed_posts_are_not_downloaded_again(env, client, fake):
 # File names
 # ---------------------------------------------------------------------------
 
+def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fake):
+    """#31: instaloader keeps no list of deleted posts. B, saved then trashed
+    before the sync that passed it, comes back with it and goes straight back."""
+    folder = carol_archive(env)
+    fake.set(carol_profile(new=0))
+    s = add_source(client)
+    sync_now(client, s["id"])
+    profile = carol_profile(new=0)
+    profile["carol.cooks"]["posts"] += [
+        {"shortcode": "CPOSTA00001", "ts": TS + 3 * DAY, "caption": "A"},
+        {"shortcode": "CPOSTB00001", "ts": TS + 4 * DAY, "caption": "B"}]
+    fake.set(profile)
+    ended(post(client, "/api/save", {"platform": "instagram", "shortcode": "CPOSTB00001"})["job"]["id"])
+    assert post(client, "/api/delete", {"posts": ["instagram:CPOSTB00001"]})["posts"] == ["instagram:CPOSTB00001"]
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done" and job["result"]["added"] == 1 and job["message"] == "1 new post"
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTA00001", "instagram:CPOSTB00001"]) == ["instagram:CPOSTA00001"]
+    assert not any("CPOSTB00001" in n for n in os.listdir(folder))
+    log = [ln["text"] for ln in get(client, f"/api/jobs/{job['id']}/log")["lines"]]
+    assert "[feedvault] 1 trashed post came back with this sync (instaloader keeps no list of deleted posts): " \
+           "back in the trash" in log
+    # It can still be restored: its latest deletion comes back.
+    r = post(client, "/api/trash/restore", {"posts": ["instagram:CPOSTB00001"]})
+    assert r["posts"] == ["instagram:CPOSTB00001"]
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
+    # Restored, it is in the index when the next sync starts: that sync leaves it.
+    job = sync_now(client, s["id"])
+    assert job["result"]["added"] == 0
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
+    assert sync._trashed_before == {}
+
+
 def test_detect_pattern(env, tmp_path):
     d = tmp_path / "dated"
     write_filename_post(d, "carol.cooks", "B_QcFdCp9iM", TS, slides=3)
@@ -525,7 +557,7 @@ def test_what_came_before_a_failure_is_indexed(env, client, fake, monkeypatch):
     s = add_source(client)
     # instaloader exits 1 after a non-fatal error late in the run.
     real = sync._outcome
-    monkeypatch.setattr(sync, "_outcome", lambda p, code, lines, index: real(p, 1, lines + [(999, "x: boom")], index))
+    monkeypatch.setattr(sync, "_outcome", lambda p, code, lines, index, note: real(p, 1, lines + [(999, "x: boom")], index, note))
     jobs._kinds[sync.KIND].outcome = sync._outcome
     try:
         job = sync_now(client, s["id"])

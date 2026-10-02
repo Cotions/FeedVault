@@ -10,6 +10,9 @@ instaloader:
 - ``--latest-stamps <data_dir>/instaloader/stamps.ini``: instaloader keeps
   the time of each profile's newest downloaded post there, away from the
   media, so it stops at it whatever files exist (trashed posts stay gone).
+  It keeps no list of deleted posts: a trashed post newer than the stamp
+  (deleted before the sync that passed it) comes back, and goes straight
+  back to the trash after the sync (retrash), with a line in its log.
 - ``--fast-update`` (stop at the first post whose files exist) only for a
   first sync with no stamp, where it is the only stopping point. With a
   stamp it would stop at a post saved on its own (the userscript's Save, a
@@ -38,6 +41,8 @@ gallery-dl and yt-dlp (archives.py):
   older in front (STOPS_AT_ARCHIVED).
 - the first sync of a source seeds the archive with the posts already
   indexed for its account.
+- the user's own config files are skipped (``--config-ignore``,
+  ``--ignore-config``) when the tool's ``ignore_config`` setting is on.
 - metadata on (``--write-metadata``; ``--write-info-json --write-thumbnail``),
   into the source's folder; YouTube videos longer than ``youtube_max_seconds``
   are not downloaded (ChannelVault's).
@@ -130,20 +135,31 @@ def session_flags(session):
     return []
 
 
+# The flag that makes each tool skip the user's own config files: a config
+# can change the output layout, turn off metadata or add postprocessors that
+# run commands. Off by default, as people keep their credentials there.
+IGNORE_CONFIG = {"gallery-dl": "--config-ignore", "yt-dlp": "--ignore-config"}
+
+
 def tool_settings(tool, cfg=None):
     """gallery-dl's or yt-dlp's settings, cleaned: {"session": {...}, "pause":
-    seconds}, the session "none" or a browser's cookies (they have no login
-    of their own FeedVault could name)."""
+    seconds, "ignore_config": bool}, the session "none" or a browser's
+    cookies (they have no login of their own FeedVault could name)."""
     raw = (cfg or config.load()).get(tool) or {}
     session = sources.clean_session(raw.get("session"), sources.COOKIE_MODES) or {"mode": "none"}
-    return {"session": session, "pause": _pause(raw.get("pause"), TOOL_PAUSE_DEFAULT)}
+    return {"session": session, "pause": _pause(raw.get("pause"), TOOL_PAUSE_DEFAULT),
+            "ignore_config": raw.get("ignore_config") is True}
 
 
 def clean_tool_settings(tool, value, current):
     """Settings from POST /api/config merged over ``current``. Returns (settings, error)."""
-    if not isinstance(value, dict) or set(value) - {"session", "pause"}:
-        return None, f"{tool} must be {{ session, pause }}"
+    if not isinstance(value, dict) or set(value) - {"session", "pause", "ignore_config"}:
+        return None, f"{tool} must be {{ session, pause, ignore_config }}"
+    if "ignore_config" in value and not isinstance(value["ignore_config"], bool):
+        return None, "ignore_config must be true or false"
     out = dict(current)
+    if "ignore_config" in value:
+        out["ignore_config"] = value["ignore_config"]
     if "session" in value:
         out["session"] = sources.clean_session(value["session"], sources.COOKIE_MODES)
         if out["session"] is None:
@@ -159,6 +175,11 @@ def clean_tool_settings(tool, value, current):
 def cookie_flags(session):
     """--cookies-from-browser <browser>: the tool reads the browser's cookies, FeedVault never."""
     return ["--cookies-from-browser", session["browser"]] if session["mode"] == "cookies" else []
+
+
+def config_flags(tool, cfg=None):
+    """The tool's flag to skip the user's config files, when its setting says so."""
+    return [IGNORE_CONFIG[tool]] if tool_settings(tool, cfg)["ignore_config"] else []
 
 
 def stamps_path(cfg=None):
@@ -331,13 +352,82 @@ def _start(params, note, argv=None):
     conn = db.connect()
     src = _queued_source(conn, params, argv)
     options = _options(src)
-    moved = save.gather(conn, src, config.load()["media_roots"], note)
+    roots = config.load()["media_roots"]
+    moved = save.gather(conn, src, roots, note)
     _seed_stamp(conn, src, options, note, moved)
+    _trashed_before[src["id"]] = _trashed(conn, roots)
     if not argv:
         return None
     stamps = configparser.ConfigParser(interpolation=None)
     stamps.read(stamps_path(), encoding="utf-8")
     return _with_stamps(argv[1:], stamps, src["target"], options)
+
+
+_trashed_before = {}                           # source id -> trashed posts not in the index when its sync starts
+
+
+def _in_trash(roots):
+    """Ids of the Instagram posts in the trash as a whole (not one item, not
+    an extra copy)."""
+    import trash                               # it imports scanner, which is heavy at startup
+    return {g["public"]["post"] for g in trash._all_entries(roots)
+            if g["public"]["platform"] == "instagram" and isinstance(g["public"]["post"], str)
+            and not g["public"]["partial"] and not g["public"]["copy"]}
+
+
+def _indexed(conn, ids):
+    """{id: meta path} of the posts in ``ids`` that are in the index."""
+    ids, out = sorted(ids), {}
+    for i in range(0, len(ids), 500):
+        part = ids[i:i + 500]
+        out.update(conn.execute(f"SELECT id, meta_path FROM posts WHERE id IN ({','.join('?' * len(part))})",
+                                part).fetchall())
+    return out
+
+
+def _trashed(conn, roots):
+    """The posts in the trash (_in_trash) that are not in the index."""
+    ids = _in_trash(roots)
+    return ids - set(_indexed(conn, ids))
+
+
+def _retrash(params, note):
+    sid = None
+    try:
+        sid = _source_id(params)
+        src = sources.row(db.connect(), sid)
+        return retrash(sid, src["folder"] if src else None, note or print)
+    except Exception as e:                     # the sync still ends as it went
+        _trashed_before.pop(sid, None)
+        (note or print)(f"could not put the trashed posts it brought back in the trash: {e}")
+        return []
+
+
+def retrash(sid, folder, note):
+    """Put back in the trash the posts the sync of source ``sid`` brought
+    back: in the trash and not in the index when it started, in its folder
+    now, and still in the trash (not restored meanwhile). Returns their ids."""
+    import trash
+    before = _trashed_before.pop(sid, None)
+    if not before or not folder:
+        return []
+    cfg = config.load()
+    base = os.path.join(os.path.realpath(folder), "")
+    now = _indexed(db.connect(), before)
+    back = sorted({pid for pid, meta in now.items() if os.path.realpath(meta).startswith(base)}
+                  & _in_trash(cfg["media_roots"]))
+    if not back:
+        return []
+    report = trash.delete(back, [], cfg["media_roots"], cfg["data_directory"])
+    gone = report["posts"]
+    if gone:
+        note(f"{len(gone)} trashed post{'' if len(gone) == 1 else 's'} came back with this sync "
+             f"(instaloader keeps no list of deleted posts): back in the trash")
+    if len(gone) < len(back):
+        left = len(back) - len(gone)
+        why = report.get("error") or "; ".join(e["error"] for e in report["errors"][:1]) or "unknown error"
+        note(f"{left} trashed post{'' if left == 1 else 's'} came back and could not go back to the trash: {why}")
+    return gone
 
 
 # A stamp before every post: the sync walks the whole profile, without
@@ -490,8 +580,10 @@ def _owner(params):
     return {"account": account, "person": src["person"]["id"] if src["person"] else None}
 
 
-def _outcome(params, code, lines, index, tool="instaloader"):
+def _outcome(params, code, lines, index, note=None, tool="instaloader"):
     added = index["added"] if index else 0
+    if tool == "instaloader" and index:
+        added = max(0, added - len(_retrash(params, note)))
     result = {"added": added, "updated": index["updated"] if index else 0, "error": None, "line": None,
               **_owner(params)}
     new = f"{added} new post{'' if added == 1 else 's'}"
@@ -541,6 +633,10 @@ def _ended(job):
     if job["started_at"] is None:
         return                                 # cancelled while queued: it never ran
     sid = _source_id(job["params"])
+    # Left when the run ended before its outcome or after hook (cancelled,
+    # or the tool could not start).
+    _trashed_before.pop(sid, None)
+    _info_before.pop(sid, None)
     r = job["result"] or {}
     conn = db.connect()
     src = sources.row(conn, sid)
@@ -610,6 +706,7 @@ def _build_gallery_dl(params):
     options = _options(src)
     session = options["session"] or tool_settings("gallery-dl", cfg)["session"]
     return {"tool": "gallery-dl", "rescan": folder, "args": [
+        *config_flags("gallery-dl", cfg),
         "--write-metadata",
         "--download-archive", archives.path("gallery-dl", cfg["data_directory"]),
         # Stop after 5 files in a row that are already there; full history goes on to the end.
@@ -648,6 +745,7 @@ def _build_yt_dlp(params):
     tabs = src["platform"] == "youtube" and _youtube_root(target)
     stop = STOPS_AT_ARCHIVED.get(src["platform"], True) and not (options["full_history"] or tabs)
     return {"tool": "yt-dlp", "rescan": folder, "args": [
+        *config_flags("yt-dlp", cfg),
         "--write-info-json", "--write-thumbnail",
         "--download-archive", archives.path("yt-dlp", cfg["data_directory"]),
         *(["--break-on-existing"] if stop else []),
@@ -675,9 +773,18 @@ def _start_archive(tool):
             note("first sync: no post indexed yet, downloading everything")
             return
         key = people.canonical(conn, src["platform"], src["author_id"])
-        posts, added = archives.seed(tool, conn, key[0], key[1], data_dir)
+        formats, unknown = None, {}
+        if tool == "gallery-dl":
+            formats, error = archives.installed_formats()
+            if formats is None:
+                note(f"gallery-dl's own archive formats could not be read ({error}): using FeedVault's "
+                     f"table ({', '.join(sorted(archives.GALLERY_DL_FORMATS))})")
+        posts, added = archives.seed(tool, conn, key[0], key[1], data_dir, formats, unknown)
         note(f"first sync: {added} archive entr{'y' if added == 1 else 'ies'} added for "
              f"{posts} post{'' if posts == 1 else 's'} already indexed")
+        for category, files in sorted(unknown.items()):
+            note(f"{files} {category} file{'' if files == 1 else 's'} not seeded: no archive format known for "
+                 f"{category}, so this sync may download {'it' if files == 1 else 'them'} again")
     return start
 
 
@@ -715,12 +822,12 @@ def _describe(label):
 
 jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source": {"type": "text", "max": 15}},
               build=_build_gallery_dl, group="gallery-dl", start=_start_archive("gallery-dl"),
-              outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "gallery-dl"),
+              outcome=lambda p, code, lines, index, note: _outcome(p, code, lines, index, note, "gallery-dl"),
               ended=_ended, pause=lambda params: tool_settings("gallery-dl")["pause"],
               describe=_describe("Sync with gallery-dl"))
 jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
               build=_build_yt_dlp, group="yt-dlp", start=_start_yt_dlp, after=_strip_cookies,
-              outcome=lambda p, code, lines, index: _outcome(p, code, lines, index, "yt-dlp"),
+              outcome=lambda p, code, lines, index, note: _outcome(p, code, lines, index, note, "yt-dlp"),
               ended=_ended, pause=lambda params: tool_settings("yt-dlp")["pause"],
               describe=_describe("Sync with yt-dlp"))
 

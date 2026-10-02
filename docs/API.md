@@ -96,7 +96,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30 }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30 }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false }` |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false }` |
 | POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`; `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
@@ -201,8 +201,14 @@ manifest lines (`"archive": { "gallery-dl": [...], "yt-dlp": [...] }`), and
 restoring it takes them out again. Emptying the trash or purging keeps them.
 instaloader has no archive: its `--latest-stamps` keeps a trashed post
 older than the profile's newest download from coming back, but a trashed
-post newer than the stamp (trashed before any sync passed it) can be
-downloaded again by the next sync.
+post newer than the stamp (trashed before any sync passed it, such as a
+post saved on its own then deleted) is downloaded again by the next sync.
+That sync puts it straight back in the trash once its folder is indexed
+(a post in the trash as a whole, not in the index when the sync started,
+in the source's folder after it, and still in the trash), says so in its
+log (`1 trashed post came back with this sync …: back in the trash`) and
+does not count it in `added`. Restoring it then brings back that latest
+deletion.
 
 ### Trash contents
 
@@ -1055,10 +1061,10 @@ later routes the host to another one) and so is its folder
 (inside a media root; for yt-dlp, without `$`, which yt-dlp would expand):
 
 ```
-gallery-dl --write-metadata --download-archive <data_directory>/gallery-dl/archive.sqlite3
+gallery-dl [--config-ignore] --write-metadata --download-archive <data_directory>/gallery-dl/archive.sqlite3
            -o skip=abort:5 -D <folder> [--cookies-from-browser <browser>] -- <link>
 
-yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
+yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
        [--break-on-existing] -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
        [--match-filters "duration <= <youtube_max_seconds>"] [--cookies-from-browser <browser>] -- <link>
 ```
@@ -1081,9 +1087,17 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
   first with what FeedVault already indexed for its account (aliases
   included): gallery-dl gets the entry of every file of the account's
   gallery-dl posts (from their metadata JSONs: `<category>` and the
-  extractor's archive format, for twitter, tiktok, instagram, reddit,
-  bluesky and pixiv), yt-dlp a line `<platform> <id>` for every post. The
-  job log says how many. With `options.full_history` too (the profile is
+  extractor's archive format), yt-dlp a line `<platform> <id>` for every
+  post. The job log says how many. The archive formats are read from the
+  installed gallery-dl: its own Python runs a short script listing each
+  extractor's `archive_fmt` (argv only, no shell, in an empty folder, 20 s
+  at most, output checked: plain `{field}` and `{field[key]}` formats
+  only), cached until the gallery-dl file changes. When that cannot be
+  done (no Python found beside it, a timeout, odd output), FeedVault's own
+  table is used (twitter, tiktok, instagram, reddit, bluesky, pixiv) and
+  the log says so. Files of a category with no known format are not
+  seeded, and the log says how many and that this sync may download them
+  again. With `options.full_history` too (the profile is
   walked, what is indexed is still not fetched again); not for a source
   with no account yet.
 - **YouTube.** A youtube.com source only downloads videos up to
@@ -1106,9 +1120,10 @@ yt-dlp --write-info-json --write-thumbnail --download-archive <data_directory>/y
 
 ### gallery-dl and yt-dlp settings
 
-`GET /api/config` has `"gallery-dl": { "session": {…}, "pause": 30 }` and
-`"yt-dlp": { "session": {…}, "pause": 30 }`; `POST /api/config` with
-either (`session` and/or `pause`) changes it.
+`GET /api/config` has `"gallery-dl": { "session": {…}, "pause": 30,
+"ignore_config": false }` and `"yt-dlp": { "session": {…}, "pause": 30,
+"ignore_config": false }`; `POST /api/config` with either (`session`,
+`pause` and/or `ignore_config`) changes it.
 
 | `session` | Flags | What it means |
 |---|---|---|
@@ -1122,6 +1137,12 @@ sends cookies.
 after a `gallery-dl-sync` job ends the next one waits that long before it
 starts (`waits_until`), and the same for `yt-dlp-sync`; one tool's pause
 never holds the other's syncs.
+
+`ignore_config`: `true` or `false` (default `false`). With `true`, the
+tool's syncs and its Test skip the user's own config files
+(`--config-ignore` for gallery-dl, `--ignore-config` for yt-dlp), so
+options set there (another output folder, a different archive, cookies)
+do not change what FeedVault runs.
 
 `youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
 
@@ -1554,8 +1575,8 @@ fixed public item with the session flags its syncs use, in
 ```
 instaloader --no-posts --no-profile-pic --no-metadata-json --dirname-pattern <data_directory>/downloaders/test
             [--load-cookies <browser> | --login <user>] -- instagram
-gallery-dl --simulate [--cookies-from-browser <browser>] -- https://x.com/jack/status/20
-yt-dlp --simulate --no-playlist [--cookies-from-browser <browser>] -- https://www.youtube.com/watch?v=jNQXAC9IVRw
+gallery-dl [--config-ignore] --simulate [--cookies-from-browser <browser>] -- https://x.com/jack/status/20
+yt-dlp [--ignore-config] --simulate --no-playlist [--cookies-from-browser <browser>] -- https://www.youtube.com/watch?v=jNQXAC9IVRw
 ```
 
 instaloader fetches the profile's metadata and nothing else; gallery-dl

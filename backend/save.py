@@ -273,7 +273,7 @@ MESSAGES = {
 }
 
 
-def _outcome(params, code, lines, index):
+def _outcome(params, code, lines, index, note=None):
     shortcode = _shortcode(params)
     stage = staging(shortcode)
     cfg = config.load()

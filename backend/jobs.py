@@ -88,7 +88,7 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
                the rescan; an exception is noted in its log and changes
                nothing else
     outcome:   optional, (params, exit code, output lines, index result or
-               None) -> (state, result, message) for a job whose process
+               None, note) -> (state, result, message) for a job whose process
                exited and was not cancelled. With it, the rescan folder is
                indexed whatever the exit code (what a download got before it
                failed counts too)
@@ -369,7 +369,8 @@ def _run(job):
             if job.rescan:
                 _note(job, f"[feedvault] indexing {job.rescan}")
                 index = _index(job)
-            state, result, message = kind.outcome(job.params, code, list(job.lines), index)
+            state, result, message = kind.outcome(job.params, code, list(job.lines), index,
+                                                  lambda text: _note(job, f"[feedvault] {text}"))
             _finish(job, state, result=result, message=message)
         elif code != 0:
             _finish(job, "failed", message=_last_line(job) or f"exit code {code}")

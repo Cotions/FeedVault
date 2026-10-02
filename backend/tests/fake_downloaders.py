@@ -21,6 +21,8 @@ this script), keyed by the profile link FeedVault passes:
 and behave like gallery-dl 1.32 and yt-dlp 2026.08 for one profile link with
 the flags FeedVault passes, newest post first:
 
+- both: the flag that skips the user's config (``--config-ignore``,
+  ``--ignore-config``), with no effect: there is no config to skip.
 - gallery-dl: ``--write-metadata`` (``<file>.<ext>.json`` beside each file,
   shaped like the fixtures), ``--download-archive`` (its SQLite table, one
   ``<category><archive_fmt>`` entry per file), ``-o skip=abort:N`` (stops
@@ -134,6 +136,7 @@ def gallery_dl_main(argv):
     _log("gallery-dl", argv)
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--write-metadata", action="store_true")
+    ap.add_argument("--config-ignore", action="store_true")
     ap.add_argument("--download-archive")
     ap.add_argument("-o", action="append", default=[])
     ap.add_argument("-D")
@@ -233,7 +236,7 @@ def yt_dlp_main(argv):
         return 0
     _log("yt-dlp", argv)
     ap = argparse.ArgumentParser(add_help=False)
-    for flag in ("--write-info-json", "--write-thumbnail", "--break-on-existing"):
+    for flag in ("--write-info-json", "--write-thumbnail", "--break-on-existing", "--ignore-config"):
         ap.add_argument(flag, action="store_true")
     ap.add_argument("--download-archive")
     ap.add_argument("-o", default="%(title)s [%(id)s].%(ext)s")

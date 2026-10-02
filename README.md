@@ -94,6 +94,10 @@ gallery-dl --write-metadata \
 X timelines need a logged-in session (`--cookies-from-browser firefox`);
 single public tweets and TikTok usually do not.
 
+FeedVault's own syncs read your gallery-dl and yt-dlp config files too. If
+something there changes where or how files are saved, turn on "Ignore my
+<tool> config" in that tool's card in Settings → Downloaders.
+
 ## Downloading with yt-dlp
 
 yt-dlp writes an info JSON per video when asked to; FeedVault reads it and
