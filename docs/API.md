@@ -851,7 +851,7 @@ no person yet.
                    "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false,
                    "failures": 1, "health": "rate_limited", "ok_at": 1727420000 },
   "health": { "state": "rate_limited", "result": "failed", "ok_at": 1727420000, "last_sync_at": 1727503600,
-              "line": "…429 Too Many Requests…", "failures": 1 },
+              "line": "…429 Too Many Requests…", "failures": 1, "rename": null },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
   "session": { "mode": "login", "user": "me" },
   "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "failures": 1 } }
@@ -969,6 +969,12 @@ no person yet.
     `<private path>`. Tool output is untrusted text: the page shows it as
     text only.
   - `failures`: as `last_result.failures`
+  - `rename`: `{ "from": "old.name", "to": "new.name", "at": 1727503600 }`
+    when the tool reported that the profile `target` names is now called
+    `to` (instaloader only, see [Account health](#account-health)), else
+    `null`. Stored as `last_result.rename`; shown while `from` is still the
+    target. FeedVault never renames on its own: the user accepts it
+    (`POST /api/sources/<id>/rename`) or dismisses it.
 - `job`: the source's sync while it is queued or running (`waits_until`,
   see [Jobs](#jobs)), else `null`.
 - `session`: the session its sync would use (`options.session`, else the
@@ -987,6 +993,8 @@ no person yet.
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
+| POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target |
+| DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back) |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |
 
@@ -1330,6 +1338,17 @@ Anything else is `error`, with its line. A TikTok user that does not exist
 only gives yt-dlp's `Unable to extract secondary user ID`, which a private
 account can give too: it stays an `error`. gallery-dl was not installed
 where the table was written; its strings are those of its 1.30 source.
+
+`renamed`: the sync worked, and the tool said the profile now has another
+name. Only instaloader says so: with `--latest-stamps` it keeps each
+profile's id, and when the name is gone it looks the id up and prints
+`Profile <old> has changed its name to <new>.` (it exits 1 for that line
+alone; FeedVault counts that run as done). It moves the stamps to the new
+name but not the files (that is only without `--latest-stamps`). The new
+name is kept as `health.rename`, a suggestion: accepting it changes the
+source's target only. Until then each sync finds the profile by its id
+again. gallery-dl and yt-dlp print nothing that names a new handle: a
+renamed X, TikTok or YouTube profile is `not_found` (or `error`).
 
 ### Schedules
 

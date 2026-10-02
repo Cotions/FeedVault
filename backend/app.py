@@ -861,6 +861,45 @@ def update_source(sid):
     return jsonify({"ok": True, "source": _source_or_404(sid)})
 
 
+@app.post("/api/sources/<int:sid>/rename")
+def accept_rename(sid):
+    """Accept the new handle the tool reported: the target changes, never
+    the folder or its files."""
+    conn = db.connect()
+    s = sources.get(conn, sid)
+    if s is None:
+        return jsonify({"ok": False, "error": "no such source"}), 404
+    suggestion = s["health"]["rename"]
+    body = request.get_json(silent=True) or {}
+    if suggestion is None or suggestion["from"] != s["target"]:
+        return jsonify({"ok": False, "error": "this source has no rename to accept"}), 400
+    if body.get("to") != suggestion["to"]:
+        return jsonify({"ok": False, "error": f"send the suggested name: {{ to: \"{suggestion['to']}\" }}"}), 400
+    if sid in _sources_active():
+        return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
+    new = sources.parse_target(s["tool"], suggestion["to"])
+    if new is None or new != suggestion["to"]:
+        return jsonify({"ok": False, "error": "the suggested name is not a profile name"}), 400
+    other = sources.existing(conn, s["tool"], new)
+    if other is not None and other != sid:
+        return jsonify({"ok": False, "error": f"there is already a {s['tool']} source for {new}"}), 409
+    if not sources.rename(conn, sid, s["target"], new):
+        return jsonify({"ok": False, "error": "the source's target changed meanwhile"}), 409
+    scheduler.forget(sid)
+    userdata.changed("sources")
+    return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
+@app.delete("/api/sources/<int:sid>/rename")
+def dismiss_rename(sid):
+    conn = db.connect()
+    if sources.row(conn, sid) is None:
+        return jsonify({"ok": False, "error": "no such source"}), 404
+    sources.dismiss_rename(conn, sid)
+    userdata.changed("sources")
+    return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
 @app.post("/api/sources/<int:sid>/sync")
 def sync_source(sid):
     if sources.row(db.connect(), sid) is None:

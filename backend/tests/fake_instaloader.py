@@ -21,7 +21,10 @@ It behaves like instaloader 4.15 for one profile target (or one post,
 ``-<shortcode>``) with the flags
 FeedVault passes: it honours --latest-stamps (post-timestamp,
 reels-timestamp, tagged-timestamp and story-timestamp of the target's
-section, written back as instaloader does; highlights have none),
+section, written back as instaloader does; highlights have none; a
+target no profile has whose stamped profile-id one has is a renamed
+profile: "Profile <old> has changed its name to <new>.", the section moves
+to the new name and the profile is downloaded, exit 1 as instaloader's),
 --fast-update (stops at the first file that exists), --dirname-pattern and
 --filename-pattern (str.format with target, profile, shortcode, date_utc;
 a tagged post's target is ``<profile>/:tagged``, a highlight's
@@ -366,6 +369,22 @@ def run(argv):
             status = one_post(data, args, target) or status
             continue
         profile = data["profiles"].get(target)
+        repeat = []
+        if profile is None and args.latest_stamps:
+            # check_profile_id: the profile id --latest-stamps keeps finds a renamed profile.
+            stamps = configparser.ConfigParser()
+            stamps.read(args.latest_stamps)
+            pid = stamps.get(target, "profile-id", fallback=None)
+            new = next((name for name, p in data["profiles"].items() if str(p["id"]) == pid), None)
+            if new is not None:
+                print(f"Trying to find profile {target} using its unique ID {pid}.")
+                repeat.append(f"Profile {target} has changed its name to {new}.")
+                print(repeat[-1], file=sys.stderr)
+                stamps[new] = dict(stamps[target])
+                stamps.remove_section(target)
+                with open(args.latest_stamps, "w") as f:
+                    stamps.write(f)
+                target, profile, status = new, data["profiles"][new], 1
         if profile is None:
             status = fail("notfound", target)
             continue
@@ -420,6 +439,8 @@ def run(argv):
                 stamps.write(f)
         if status:
             print("\nErrors or warnings occurred:", file=sys.stderr)
+            for e in repeat:
+                print(e, file=sys.stderr)
     return status
 
 

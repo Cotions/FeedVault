@@ -500,7 +500,7 @@ def _public(conn, row, accounts, active):
         "created_at": row["created_at"], "last_sync_at": row["last_sync_at"],
         "last_job_id": row["last_job_id"],
         "last_result": result,
-        "health": health.public(result, row["last_sync_at"], failures(result)),
+        "health": health.public(result, row["last_sync_at"], failures(result), row["target"]),
         "job": job,
     }
 
@@ -714,6 +714,25 @@ def failures(result):
     """Failed syncs in a row in a stored last_result (any value), else 0."""
     n = result.get("failures") if isinstance(result, dict) else None
     return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+
+
+def rename(conn, sid, old, new):
+    """Accept a rename suggestion: the source's target becomes ``new`` (its
+    folder and files stay as they are) and the suggestion goes. False when
+    the target is no longer ``old`` (changed meanwhile)."""
+    with conn:
+        return conn.execute(
+            "UPDATE sources SET target = ?, last_result = CASE WHEN json_valid(last_result) "
+            "AND json_type(last_result) = 'object' THEN json_remove(last_result, '$.rename') ELSE last_result END "
+            "WHERE id = ? AND target = ?", (new, sid, old)).rowcount > 0
+
+
+def dismiss_rename(conn, sid):
+    """Forget a source's rename suggestion; the next one the tool reports comes back."""
+    with conn:
+        conn.execute(
+            "UPDATE sources SET last_result = json_remove(last_result, '$.rename') "
+            "WHERE id = ? AND json_valid(last_result) AND json_type(last_result) = 'object'", (sid,))
 
 
 def delete(conn, sid):

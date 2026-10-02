@@ -11,7 +11,7 @@ import health
 import jobs
 import userdata
 
-from test_sync import (TS, add_source, carol_archive, carol_profile, fake, get, post, sync_now)  # noqa: F401
+from test_sync import (H, TS, add_source, carol_archive, carol_profile, fake, get, post, sync_now)  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -207,3 +207,102 @@ def test_instaloader_states_through_the_fake(env, client, fake, fail, state):
     h = get(client, f"/api/sources/{s['id']}")["health"]
     assert (h["state"], h["result"], h["failures"]) == (state, "failed", 1)
     assert h["line"] and "Errors or warnings occurred" not in h["line"]
+
+
+# ---------------------------------------------------------------------------
+# Renamed (#11): a suggestion the user accepts or dismisses
+# ---------------------------------------------------------------------------
+
+def test_renamed_lines():
+    lines = [(1, "Trying to find profile carol.cooks using its unique ID 777."),
+             (2, "Profile carol.cooks has changed its name to Carol.Bakes."), (3, "[1/1] Downloading profile x"),
+             (4, ""), (5, "Errors or warnings occurred:"), (6, "Profile carol.cooks has changed its name to Carol.Bakes."),
+             (7, "[feedvault] indexing /media/carol.cooks")]
+    assert health.renamed("instaloader", lines) == ("carol.cooks", "carol.bakes")
+    assert health.only_renamed("instaloader", lines)
+    assert not health.only_renamed("instaloader", lines + [(7, "carol.bakes: Login required.")])
+    assert not health.only_renamed("instaloader", lines[:4])
+    assert not health.only_renamed("yt-dlp", lines) and health.renamed("yt-dlp", lines) is None
+    same = [(1, "Errors or warnings occurred:"),
+            (2, "Warning: Profile carol could not be retrieved by its name, but by its ID.")]
+    assert health.renamed("instaloader", same) is None and health.only_renamed("instaloader", same)
+    # Only a handle: anything else in the line is not a name to suggest.
+    assert health.renamed("instaloader", [(1, "Profile a has changed its name to ../b.")]) is None
+    assert health.renamed("instaloader", [(1, "x: Profile a has changed its name to b.")]) is None
+
+
+def files(folder):
+    return sorted((os.path.relpath(os.path.join(d, f), folder), os.path.getmtime(os.path.join(d, f)))
+                  for d, _, fs in os.walk(folder) for f in fs)
+
+
+def test_a_renamed_profile_is_a_suggestion_the_user_accepts(env, client, fake):
+    carol_archive(env)
+    fake.set(carol_profile())
+    s = add_source(client)
+    sync_now(client, s["id"])
+    bakes = {"carol.bakes": carol_profile(new=3)["carol.cooks"]}  # the same id, 777
+    fake.set(bakes)
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done" and "now called carol.bakes" in job["message"]
+    src = get(client, f"/api/sources/{s['id']}")
+    h = src["health"]
+    assert (h["state"], h["failures"], h["line"]) == ("renamed", 0, None)
+    assert h["rename"] == {"from": "carol.cooks", "to": "carol.bakes", "at": job["ended_at"]}
+    assert src["target"] == "carol.cooks"                    # never renamed on its own
+    # Not accepted yet: the first sync seeds the old name's stamps with the
+    # account's id again (sync._seed_posts), so instaloader finds it by id.
+    job = sync_now(client, s["id"])
+    h = get(client, f"/api/sources/{s['id']}")["health"]
+    assert (job["state"], h["state"], h["rename"]["to"]) == ("done", "renamed", "carol.bakes")
+    before = files(src["folder"])
+    assert post(client, f"/api/sources/{s['id']}/rename", {"to": "someone.else"}, 400)
+    r = post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"})["source"]
+    assert (r["target"], r["folder"], r["health"]["rename"]) == ("carol.bakes", src["folder"], None)
+    assert files(src["folder"]) == before                  # nothing moved, renamed or touched
+    assert post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"}, 400)  # nothing left to accept
+    userdata.flush()
+    saved = json.load(open(userdata.path(config.load()["data_directory"], "sources"), encoding="utf-8"))
+    assert [x["target"] for x in saved["rows"]] == ["carol.bakes"]
+    job = sync_now(client, s["id"])
+    h = get(client, f"/api/sources/{s['id']}")["health"]
+    assert (job["state"], h["state"]) == ("done", "ok")
+    assert fake.runs()[-1]["argv"][-1] == "carol.bakes"
+
+
+def test_a_rename_suggestion_dismissed_or_refused(env, client, fake):
+    carol_archive(env)
+    fake.set(carol_profile())
+    s = add_source(client)
+    sync_now(client, s["id"])
+    fake.set({"carol.bakes": carol_profile()["carol.cooks"]})
+    sync_now(client, s["id"])
+    other = add_source(client, "carol.bakes", folder=str(env["media"] / "elsewhere"))
+    assert post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"}, 409)
+    assert get(client, f"/api/sources/{s['id']}")["target"] == "carol.cooks"
+    client.delete(f"/api/sources/{other['id']}", headers=H)
+    fake.set({"carol.bakes": carol_profile()["carol.cooks"]}, delay=5)
+    job = post(client, f"/api/sources/{s['id']}/sync")["job"]
+    from test_sync import ended, wait_for
+    wait_for(lambda: jobs.get(job["id"])["state"] == "running")
+    assert post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"}, 409)
+    post(client, f"/api/jobs/{job['id']}/cancel")
+    ended(job["id"])
+    r = client.delete(f"/api/sources/{s['id']}/rename", headers=H).get_json()["source"]
+    assert (r["target"], r["health"]["rename"]) == ("carol.cooks", None)
+    assert post(client, f"/api/sources/{s['id']}/rename", {"to": "carol.bakes"}, 400)
+    assert client.delete("/api/sources/999/rename", headers=H).status_code == 404
+
+
+def test_a_hand_edited_rename_is_checked(env, client, fake):
+    s = add_source(client, "nobody.here")
+    conn = db.connect()
+    for rename in ({"from": "nobody.here", "to": "../../etc"}, {"from": "nobody.here", "to": "A B"},
+                   {"from": "nobody.here"}, "x", {"from": "someone", "to": "x"}):
+        with conn:
+            conn.execute("UPDATE sources SET last_result = ? WHERE id = ?",
+                         (json.dumps({"state": "done", "rename": rename}), s["id"]))
+        h = get(client, f"/api/sources/{s['id']}")["health"]
+        assert h["rename"] is None, rename
+        assert post(client, f"/api/sources/{s['id']}/rename", {"to": "x"}, 400), rename
+    assert get(client, f"/api/sources/{s['id']}")["target"] == "nobody.here"

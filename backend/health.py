@@ -13,6 +13,8 @@ pages and missing profiles, so rate limiting comes first):
 - ``login_required``: the site wants a logged-in session, or refused it
 - ``not_found``: no such profile (deleted, renamed without a trace, banned)
 - ``error``: none of the above; ``ok``: the sync worked
+- ``renamed``: the sync worked, and the tool found the profile under a new
+  handle (a suggestion for the user, see renamed())
 
 instaloader 4.15.1, read from its installed source (instaloader.py,
 instaloadercontext.py, __main__.py)::
@@ -33,6 +35,8 @@ instaloadercontext.py, __main__.py)::
                     "… 403 Forbidden …": Instagram turning an anonymous client away; instaloader then
                      says the profile does not exist, so this comes before not_found
     not_found       "Profile <name> does not exist."
+    renamed         "Profile <old> has changed its name to <new>." (check_profile_id, after "Trying to
+                     find profile <old> using its unique ID <id>.": the profile id --latest-stamps keeps)
 
 gallery-dl: not installed where this was written; its log format
 ``[<category>][error] <Exception>: <message>`` and the exception names are
@@ -45,6 +49,7 @@ twitter extractor raises::
                     "[<category>][error] AuthenticationError: …"
                     "[<category>][error] AuthorizationError: …" (any other)
     not_found       "[<category>][error] NotFoundError: Requested user could not be found"
+    renamed         nothing: gallery-dl never names a profile's new handle
 
 yt-dlp 2026.08.19, read from its installed zipapp (networking/exceptions.py,
 extractor/common.py, extractor/tiktok.py, extractor/youtube/_tab.py); lines
@@ -67,6 +72,7 @@ yt-dlp relays as given, are marked (YouTube)::
                     "YouTube said: This account has been terminated …" (YouTube)
     (none)          a TikTok user that does not exist: "Unable to extract secondary user ID. …",
                     which a private account with embedding off gives too: left an error
+    renamed         nothing: a renamed YouTube handle or TikTok user is only not found
 
 Errors about one video or file of a profile (a private video in a channel)
 are not the profile's: sync._item_errors sets them apart first.
@@ -79,6 +85,9 @@ never in its options:
   detected state: see classify()), kept by a run that never got that
   far (cancelled, interrupted)
 - ``line``: the output line behind it, scrubbed (scrub())
+- ``rename``: {from, to, at}, a new handle the tool reported for the
+  target ``from``; kept until the user accepts it (the target changes,
+  never the folder) or dismisses it, or the target changes otherwise
 - ``failures``: failed syncs in a row (sync._failures)
 
 A last_result stored before any of this (or edited by hand in sources.json)
@@ -91,7 +100,7 @@ or cookie folder, ever reaches the database, sources.json or the page.
 """
 import re
 
-STATES = ("ok", "rate_limited", "private", "login_required", "not_found", "error")
+STATES = ("ok", "renamed", "rate_limited", "private", "login_required", "not_found", "error")
 LINE_MAX = 300
 
 
@@ -134,6 +143,13 @@ TABLES = {"instaloader": INSTALOADER, "gallery-dl": GALLERY_DL, "yt-dlp": YT_DLP
 CLOSING = "Errors or warnings occurred:"
 
 
+# A new handle, as the tool names it; only instaloader does.
+RENAMED = {"instaloader": re.compile(r"^Profile ([A-Za-z0-9._]{1,30}) has changed its name to ([A-Za-z0-9._]{1,30})\.$")}
+# instaloader's other line of the same lookup, when the name did not change.
+_SAME_NAME = re.compile(r"^Warning: Profile \S+ could not be retrieved by its name, but by its ID\.$")
+_HANDLE = re.compile(r"[a-z0-9._]{1,30}")
+
+
 def _texts(lines):
     return [t.strip() for _, t in lines if t.strip() and not t.startswith("[feedvault]") and t.strip() != CLOSING]
 
@@ -149,6 +165,29 @@ def classify(lines, table):
             if any(p.search(t) for p in patterns):
                 return state, t
     return "error", texts[-1] if texts else None
+
+
+def renamed(tool, lines):
+    """(old, new) handles when the tool reported the profile's new name
+    (lowercase, as instaloader keeps names), else None."""
+    pattern = RENAMED.get(tool)
+    for t in reversed(_texts(lines)) if pattern else ():
+        m = pattern.search(t)
+        if m and m.group(1).lower() != m.group(2).lower():
+            return m.group(1).lower(), m.group(2).lower()
+    return None
+
+
+def only_renamed(tool, lines):
+    """Whether instaloader's closing list of errors holds nothing but the
+    rename lookup: it exits 1 for it, although the profile was downloaded."""
+    if tool != "instaloader":
+        return False
+    texts = [t.strip() for _, t in lines if t.strip() and not t.startswith("[feedvault]")]
+    if CLOSING not in texts:
+        return False
+    after = texts[len(texts) - texts[::-1].index(CLOSING):]
+    return bool(after) and all(RENAMED["instaloader"].search(t) or _SAME_NAME.search(t) for t in after)
 
 
 # ---------------------------------------------------------------------------
@@ -206,15 +245,29 @@ def scrub(text, limit=LINE_MAX):
 # The record kept on a source (in last_result, with its sync state)
 # ---------------------------------------------------------------------------
 
-def record(previous, state, job_state, ended_at):
-    """The health keys of a new last_result: {health, ok_at}. ``previous``:
-    the source's last_result as stored (any value: sources.json can be
-    edited by hand). ``state``: what the run's output said (STATES), None
-    for a run that never got that far (cancelled, interrupted): it keeps
-    the previous one."""
+def record(previous, state, job_state, ended_at, target, rename=None):
+    """The health keys of a new last_result: {health, ok_at, rename}.
+    ``previous``: the source's last_result as stored (any value:
+    sources.json can be edited by hand). ``state``: what the run's output
+    said (STATES), None for a run that never got that far (cancelled,
+    interrupted): it keeps the previous one. ``rename``: (old, new) from
+    renamed(); a suggestion stays while the target is the one it was for."""
     prev = previous if isinstance(previous, dict) else {}
     ok_at = ended_at if job_state == "done" else _ok_at(prev, None)
-    return {"health": state if state is not None else state_of(prev), "ok_at": ok_at}
+    suggestion = _rename(prev.get("rename"))
+    if rename and rename[0] == str(target).lower():
+        suggestion = {"from": rename[0], "to": rename[1], "at": ended_at}
+    if suggestion and suggestion["from"] != str(target).lower():
+        suggestion = None
+    out = {"health": state if state is not None else state_of(prev), "ok_at": ok_at}
+    return {**out, "rename": suggestion} if suggestion else out
+
+
+def _rename(v):
+    """A stored rename suggestion, checked again (two handles), else None."""
+    if not isinstance(v, dict) or not all(isinstance(v.get(k), str) and _HANDLE.fullmatch(v[k]) for k in ("from", "to")):
+        return None
+    return {"from": v["from"], "to": v["to"], "at": v["at"] if _time(v.get("at")) else None}
 
 
 def _time(v):
@@ -244,11 +297,18 @@ def state_of(result):
     return "error" if result.get("state") == "failed" else None
 
 
-def public(result, last_sync_at, failures):
+def public(result, last_sync_at, failures, target=None):
     """A source's health for the API, from its stored last_result (None or
     malformed: nothing known, every key null)."""
     r = result if isinstance(result, dict) else {}
     state = state_of(r)
     return {"state": state, "result": r.get("state") if isinstance(r.get("state"), str) else None,
             "ok_at": _ok_at(r, last_sync_at), "last_sync_at": last_sync_at if _time(last_sync_at) else None,
-            "line": scrub(r.get("line")) if state not in (None, "ok") else None, "failures": failures}
+            "line": scrub(r.get("line")) if state not in (None, "ok", "renamed") else None, "failures": failures,
+            "rename": _suggested(r.get("rename"), target)}
+
+
+def _suggested(v, target):
+    """The stored suggestion while it is for the source's target."""
+    suggestion = _rename(v)
+    return suggestion if suggestion and suggestion["from"] == str(target).lower() else None

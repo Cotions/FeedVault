@@ -939,7 +939,12 @@ def _outcome(params, code, lines, index, note=None, tool="instaloader"):
     result = {"added": added, "updated": index["updated"] if index else 0, "error": None, "line": None,
               **_owner(params)}
     new = f"{added} new post{'' if added == 1 else 's'}"
-    if code == 0 or (tool == "yt-dlp" and code == BREAK_ON_EXISTING):
+    rename = health.renamed(tool, lines)
+    if rename:
+        result["rename"] = rename
+    if code == 0 or (tool == "yt-dlp" and code == BREAK_ON_EXISTING) or health.only_renamed(tool, lines):
+        if rename:
+            new += f"; the profile is now called {rename[1]} (accept the new name on the source)"
         return "done", result, new
     if tool != "instaloader":
         # One video or file that could not be had is not the profile failing.
@@ -990,11 +995,12 @@ def _stored_result(src):
 
 
 def _health_state(job):
-    """What a sync's output said, as health.STATES: ok when it worked, the
+    """What a sync's output said, as health.STATES: ok when it worked (renamed
+    when the tool found the profile under a new name), the
     error it was classified as when it failed ("generic" and a missing tool
     are "error"), None when it never got that far (cancelled, interrupted)."""
     if job["state"] == "done":
-        return "ok"
+        return "renamed" if (job["result"] or {}).get("rename") else "ok"
     if job["state"] != "failed":
         return None
     error = (job["result"] or {}).get("error")
@@ -1035,7 +1041,8 @@ def _ended(job):
             "state": job["state"], "error": r.get("error"), "message": job["message"],
             "line": health.scrub(r.get("line")), "added": r.get("added", 0), "job": job["id"],
             "outdated": r.get("outdated", False), "failures": _failures(src, job["state"]),
-            **health.record(before, _health_state(job), job["state"], ended_at)}):
+            **health.record(before, _health_state(job), job["state"], ended_at, src["target"] if src else None,
+                            r.get("rename"))}):
         return
     changed = {"sources"}
     src = sources.row(conn, sid)
