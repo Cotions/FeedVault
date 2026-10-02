@@ -1029,8 +1029,10 @@ comes from the stored source:
 ```
 instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-update]
             --no-compress-json --dirname-pattern <folder> --filename-pattern <pattern>
-            --title-pattern {date_utc}_UTC_{typename} [session flags] -- <target>
+            --title-pattern {date_utc}_UTC_{typename} [content flags] [session flags] -- <target>
 ```
+
+(content flags: see [What a source downloads](#what-a-source-downloads))
 
 - **Incremental.** `--latest-stamps` keeps, per profile, the time of the
   newest post downloaded, in FeedVault's data directory, not next to the
@@ -1041,7 +1043,8 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   own (the userscript's Save) newer than the stamp, and the posts between
   them would never be fetched. It is passed only when `stamps.ini` has no
   entry for the target (a first sync that could not be seeded, and not
-  with `full_history`); decided from that file when the job is queued and
+  with `full_history`, with reels, without posts, or with a `since`
+  floor, which sets the stamp); decided from that file when the job is queued and
   again right before it starts, after seeding (the job's `argv` shows what
   ran).
 - **Saved posts join the folder.** Right before each sync, the posts of
@@ -1125,10 +1128,10 @@ later routes the host to another one) and so is its folder
 
 ```
 gallery-dl [--config-ignore] --write-metadata --download-archive <data_directory>/gallery-dl/archive.sqlite3
-           -o skip=abort:5 -D <folder> [--cookies-from-browser <browser>] -- <link>
+           -o skip=abort:5 [content flags] -D <folder> [--cookies-from-browser <browser>] -- <link>
 
 yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive <data_directory>/yt-dlp/archive.txt
-       [--break-on-existing] -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
+       [--break-on-existing] [content flags] -o <folder>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
        [--match-filters "duration <= <youtube_max_seconds>"] [--cookies-from-browser <browser>] -- <link>
 ```
 
@@ -1205,6 +1208,47 @@ gallery-dl offers `content` only for a link to the profile's own page
 `tiktok.com/@<name>`); a link to one of its pages (`x.com/<name>/media`)
 already picks what is downloaded. yt-dlp downloads what the link lists (a
 YouTube channel's tab, for instance).
+
+The flags each option becomes (the date `2024-01-01` as an example; `N`
+the number of posts):
+
+| Option | instaloader | gallery-dl | yt-dlp |
+|---|---|---|---|
+| `content` | `--reels`, `--stories`, `--highlights`, `--tagged`; `--no-posts` without `posts` | `-o include=<kinds>` (`with_replies` is `with-replies`), only when not the default | — |
+| `media: images` | `--no-videos --no-video-thumbnails --post-filter "not is_video"` | `--filter "extension in exts_image"` | — |
+| `media: videos` | `--post-filter "is_video"` (a carousel with a video is left out) | `--filter "extension in exts_video"` | — |
+| `since` | `--post-filter "date_utc >= datetime(2024, 1, 1)"`, and the stamps (below) | X: `--date-after 2023-12-31T23:59:59` (stops at the first older post); others: `--filter "(not date or date >= datetime(2024, 1, 1))"` | `--dateafter 20240101`, plus `--break-match-filters "upload_date >=? 20240101"` where the sync may stop (as `--break-on-existing`) |
+| `first_posts` | — | `--post-range 1-N` | `--playlist-items 1:N` |
+
+instaloader's filter terms are joined with `and` into one `--post-filter`,
+also given as `--storyitem-filter` with stories or highlights (both have
+`is_video` and `date_utc`); gallery-dl's into one `--filter`. Both tools
+evaluate those as Python: they are built from fixed text and the three
+numbers of a date checked as above, never from text a request sent, and a
+stored value that is not valid counts as the default (no flag).
+
+- **Stopping points.** instaloader keeps a stamp per kind in
+  `stamps.ini`: `post-timestamp`, `reels-timestamp`, `tagged-timestamp`,
+  `story-timestamp` (highlights have none: each is walked, the files there
+  skipped). A kind turned on later has no stamp yet, so its first sync
+  walks it all. `--fast-update` is only for a first sync of posts (see
+  below) and never with reels: reels are walked first, and a reel on the
+  grid is the same file, so the posts would stop at it.
+- **The floor and the stamps.** Right before an instaloader sync, after
+  the first-sync seed, each stamp of posts, reels and tagged posts the
+  source fetches that is missing or older than `since` is set to just
+  before it, so the walk stops there; the filter drops anything older that
+  still comes through (a pinned post). A newer stamp stays. Lowering
+  `since` later, or widening `media`, does not bring back what earlier
+  syncs walked past: `full_history` does (back to `since`, when set).
+  gallery-dl and yt-dlp skip what their archive lists (only what was
+  downloaded is in it), so for them too only `full_history` walks back.
+- **Last N.** gallery-dl and yt-dlp seed their archive first as usual, so
+  posts already indexed are skipped within those N. yt-dlp applies it at
+  each level: a YouTube channel's own page gets N per tab; TikTok's pinned
+  videos (listed first) count among them. `first_posts` is set back to
+  `null` once a sync succeeds.
+- The job log says when a floor or "last N" applies.
 
 ### gallery-dl and yt-dlp settings
 
