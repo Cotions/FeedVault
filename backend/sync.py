@@ -288,13 +288,21 @@ def trusted_newest(conn, platform, author_id):
 GONE = "source {sid} no longer exists (removed, or the database was replaced): nothing to sync"
 
 
-def _start(params, note):
+def _queued_source(conn, params, argv):
+    """The source a sync about to start is for. Cancelled when it is gone,
+    or when its id names another source now (the database was replaced):
+    argv[-1] is the target the job was queued with."""
+    src = sources.row(conn, _source_id(params))
+    if src is None or (argv and src["target"] != argv[-1]):
+        raise jobs.Cancelled(GONE.format(sid=params["source"]))
+    return src
+
+
+def _start(params, note, argv=None):
     """Right before instaloader starts (no other instaloader runs): seed the
     stamps file on a source's first sync."""
     conn = db.connect()
-    src = sources.row(conn, _source_id(params))
-    if src is None:
-        raise jobs.Cancelled(GONE.format(sid=params["source"]))
+    src = _queued_source(conn, params, argv)
     options = _options(src)
     path = stamps_path()
     stamps = configparser.ConfigParser(interpolation=None)
@@ -592,12 +600,10 @@ def _build_yt_dlp(params):
 
 
 def _start_archive(tool):
-    def start(params, note):
+    def start(params, note, argv=None):
         """Right before the tool starts: seed its archive on a source's first sync."""
         conn = db.connect()
-        src = sources.row(conn, _source_id(params))
-        if src is None:
-            raise jobs.Cancelled(GONE.format(sid=params["source"]))
+        src = _queued_source(conn, params, argv)
         data_dir = config.load()["data_directory"]
         os.makedirs(os.path.dirname(archives.path(tool, data_dir)), exist_ok=True)
         if _options(src)["full_history"]:
@@ -618,11 +624,10 @@ _seed_yt_dlp = _start_archive("yt-dlp")
 _info_before = {}                              # source id -> its folder's info JSONs right before yt-dlp starts
 
 
-def _start_yt_dlp(params, note):
+def _start_yt_dlp(params, note, argv=None):
+    _seed_yt_dlp(params, note, argv)
     src = sources.row(db.connect(), _source_id(params))
-    if src is not None:
-        _info_before[src["id"]] = info_cookies.listing(src["folder"])
-    _seed_yt_dlp(params, note)
+    _info_before[src["id"]] = info_cookies.listing(src["folder"])
 
 
 def _strip_cookies(job, note):
@@ -703,7 +708,7 @@ def sync_all():
     """Queue a sync for every source not already queued or running, by
     target. They run one after another, the pause between each. Returns
     (jobs, skipped, errors: [{source, error}] for those refused). The jobs
-    queued become the batch (see batch)."""
+    queued become the batch (see batch), or join it while it still runs."""
     global _batch
     queued, skipped, errors = [], 0, []
     with _submitting:
@@ -720,8 +725,12 @@ def sync_all():
                 errors.append({"source": sid, "error": str(e)})
         if queued:
             with _batch_lock:
-                _batch = {"id": queued[0]["id"], "started_at": queued[0]["created_at"],
-                          "jobs": [j["id"] for j in queued], "ended": {}}
+                running = _batch is not None and len(_batch["ended"]) < len(_batch["jobs"])
+                if running:
+                    _batch["jobs"].extend(j["id"] for j in queued)
+                else:
+                    _batch = {"id": queued[0]["id"], "started_at": queued[0]["created_at"],
+                              "jobs": [j["id"] for j in queued], "ended": {}}
                 # A job may have ended before it was in the batch (a source gone at start).
                 for j in queued:
                     done = jobs.get(j["id"])
@@ -758,7 +767,7 @@ def batch():
     with _batch_lock:
         if _batch is None:
             return None
-        b = {**_batch, "ended": dict(_batch["ended"])}
+        b = {**_batch, "jobs": list(_batch["jobs"]), "ended": dict(_batch["ended"])}
     ids = set(b["jobs"])
     live = [j for j in jobs.active() if j["id"] in ids and j["id"] not in b["ended"]]
     ended = list(b["ended"].values())

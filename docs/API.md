@@ -146,6 +146,11 @@ new.
 default now) becomes the mark, unless the mark is already later: it never
 moves backwards, nor past now. `{ "ok": true, "since": <the mark> }`; a
 body that is not `{}`, `{ "at": <whole seconds> }` or empty is a 400.
+The dashboard's **Mark all seen** sends `new_until` from `GET /api/jobs` (the
+newest new post's `first_seen` when it counted them), so a post indexed
+since, which it has not shown, stays new. A full scan stamps `first_seen`
+folder by folder, so a mark set while it runs leaves the folders it commits
+afterwards new.
 
 ## Deleting
 
@@ -1248,7 +1253,7 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12 }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts (see [New posts](#new-posts)), for the sidebar, which polls this |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000 }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts), for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
 | GET | `/api/jobs/<id>` | job, or 404 |
@@ -1275,7 +1280,8 @@ More download kinds come with the userscript (#10).
 ### Sync all
 
 `sync_all` in `GET /api/jobs` is the last `POST /api/sources/sync-all`
-that queued anything since FeedVault started, or `null`:
+that queued anything since FeedVault started, or `null`. One sent while the
+last is still running adds its jobs to it (one batch, one summary):
 
 ```json
 { "id": 51, "started_at": 1727500000, "total": 6, "ended": 2, "failed": 0,
@@ -1297,7 +1303,7 @@ It is kept in memory only and built from live jobs: a restart (which ends
 every queued job, see `interrupted`) forgets it, so the dashboard never
 shows syncs that a restored or rebuilt database no longer has. A sync job
 whose source no longer exists when it starts (removed, or the database was
-replaced) ends `cancelled` with the message `source <id> no longer exists
+replaced, including when its id now names another profile) ends `cancelled` with the message `source <id> no longer exists
 (removed, or the database was replaced): nothing to sync`, also in its log.
 
 ### Log

@@ -4,8 +4,8 @@ import { getScan, startScan, getJobs, quitApp, onConnectionChange } from "./lib/
 import { ScanContext } from "./lib/scan";
 import { JobsContext, ENDED } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
-import { fmtAgo, fmtInt } from "./lib/fmt";
-import { SYNC_KINDS } from "./lib/sources";
+import { fmtAgo, fmtInt, plural } from "./lib/fmt";
+import { SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
 import Icon            from "./components/Icon";
 import CyberBackground from "./components/CyberBackground";
@@ -196,7 +196,7 @@ export default function App() {
   }, [jobsActive, visible, online, quit, pollJobs]);
 
   const jobsCtx = useMemo(
-    () => ({ list: jobList, running: jobsRunning, active: jobsActive, newCount: jobList?.new ?? 0, started: jobStarted }),
+    () => ({ list: jobList, running: jobsRunning, active: jobsActive, newCount: jobList?.new ?? 0, newUntil: jobList?.new_until ?? null, started: jobStarted }),
     [jobList, jobsRunning, jobsActive, jobStarted],
   );
 
@@ -425,8 +425,6 @@ export default function App() {
   );
 }
 
-const batchKey = b => `${b.id}:${b.started_at}`;
-const plural = (n, word) => `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
 // "Sync @name" / "Sync x.com/name" → "@name" / "x.com/name"
 const syncName = label => label.replace(/^Sync /, "");
 

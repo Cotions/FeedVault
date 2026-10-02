@@ -178,9 +178,24 @@ def test_posts_indexed_after_the_mark_are_new(env, client):
     assert ids(client, new="1", person=str(pid)) == new[:2]
     assert ids(client, q="is:new") == new
     assert ids(client, q="IS:NEW bread") == ["instagram:NEWCAROL0001"]
+    # Inside a tag name it is part of the name, not the filter.
+    assert db.NEW not in db.post_filter('tag:"draft is:new ideas"')[0]
+    assert db.parse_search('tag:"draft is:new ideas"') == ("", ["draft is:new ideas"])
     assert ids(client, new="1", review="unreviewed") == new
     summary = client.get("/api/posts/summary", headers=H, query_string={"new": "1"}).get_json()
     assert summary["posts"] == 3
+    # The jobs poll carries the count and its newest post. Marking up to that
+    # one leaves a post indexed since the count new.
+    newest = conn.execute("SELECT MAX(first_seen) FROM posts").fetchone()[0]
+    jobs = client.get("/api/jobs", headers=H).get_json()
+    assert (jobs["new"], jobs["new_until"]) == (3, newest)
+    mark = seen(conn)
+    with conn:
+        conn.execute("UPDATE posts SET first_seen = ? WHERE id IN (?, ?)", (mark + 1, *new[:2]))
+        conn.execute("UPDATE posts SET first_seen = ? WHERE id = ?", (mark + 2, new[2]))
+    assert client.get("/api/jobs", headers=H).get_json()["new_until"] == mark + 2
+    assert client.post("/api/new/seen", headers=H, json={"at": mark + 1}).get_json()["since"] == mark + 1
+    assert ids(client, new="1") == new[2:]
     # Marked seen: none is new any more, and the summary cache follows.
     assert client.post("/api/new/seen", headers=H, json={}).get_json()["ok"]
     assert new_count(client)["count"] == 0 and ids(client, new="1") == []
@@ -200,3 +215,31 @@ def test_alias_posts_count_for_their_account(env, client):
     scanner.index_dirs(env["roots"], [str(folder)], new=True)
     accounts = new_count(client)["by_account"]
     assert [(a["id"], a["count"]) for a in accounts] == [("777", 1)]
+
+
+def test_mark_seen_while_a_scan_runs_leaves_the_folders_after_it_new(env, client, monkeypatch):
+    archive(env)
+    archive(env, 1, "dana.draws", 888)
+    scanner.scan(env["roots"])
+    conn = db.connect()
+    news.ensure(conn)
+    set_seen(conn, 1000)
+    write_post(env["media"] / "carol.cooks", "NEWCAROL0001", TS + 100, owner("carol.cooks", 777))
+    write_post(env["media"] / "dana.draws", "NEWDANA00001", TS + 101, owner("dana.draws", 888))
+    # A clock that moves on every look, and "Mark all seen" clicked while
+    # the scan is between carol.cooks (committed) and dana.draws.
+    clock = [int(time.time()) - 1000]
+
+    def tick():
+        clock[0] += 10
+        return clock[0]
+    monkeypatch.setattr(scanner, "time", type("Clock", (), {"time": staticmethod(tick)}))
+    parse_dir = scanner.parsers.parse_dir
+
+    def parse(root, dirpath, names):
+        if dirpath.endswith("dana.draws"):
+            news.mark_seen(db.connect(), clock[0])
+        return parse_dir(root, dirpath, names)
+    monkeypatch.setattr(scanner.parsers, "parse_dir", parse)
+    assert scanner.scan(env["roots"])["added"] == 2
+    assert ids(client, new="1") == ["instagram:NEWDANA00001"]

@@ -101,7 +101,8 @@ export function getAuthors()   { return get("/api/authors"); }
 
 // New posts since the last "Mark all seen" (docs/API.md "New posts").
 export function getNew()       { return get("/api/new"); }
-export function markSeen()     { return post("/api/new/seen"); }
+// at: unix seconds, posts first seen after it stay new; default now.
+export function markSeen(at)   { return post("/api/new/seen", at == null ? {} : { at }); }
 export function getStats()     { return get("/api/stats"); }
 // { totals, by_author, by_kind, by_year, largest, trash }, see docs/API.md "Storage".
 // person: an id, to cover that person's posts only.

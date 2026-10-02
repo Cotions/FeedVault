@@ -67,6 +67,9 @@ export function useSources() {
   return { ...api, jobOf, sync, remove };
 }
 
+// One "Sync all" (GET /api/jobs sync_all): what its summary is hidden and toasted by.
+export const batchKey = b => `${b.id}:${b.started_at}`;
+
 /* "Sync all": the backend's last batch (GET /api/jobs `sync_all`), from
    the shared jobs poll. Only live jobs count, so a restart or a replaced
    database can never leave a batch showing.
@@ -100,7 +103,7 @@ export function useSyncAll() {
   }
 
   const b = list?.sync_all;
-  const key = b ? `${b.id}:${b.started_at}` : null;
+  const key = b ? batchKey(b) : null;
   let batch = null;
   if (b && !(b.done && key === hidden)) {
     const active = new Set(b.active);

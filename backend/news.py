@@ -39,8 +39,11 @@ def mark_seen(conn, at=None):
 
 
 def count(conn):
-    """How many posts are new: cheap (posts_first_seen), for every jobs poll."""
-    return conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {db.NEW}").fetchone()[0]
+    """(how many posts are new, the newest one's first_seen or None): cheap
+    (posts_first_seen), for every jobs poll. "Mark all seen" sends that
+    first_seen back as ``at``, so what was indexed since the count stays new."""
+    n, newest = conn.execute(f"SELECT COUNT(*), MAX(p.first_seen) FROM posts p WHERE {db.NEW}").fetchone()
+    return n, newest
 
 
 def summary(conn):

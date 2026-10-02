@@ -100,7 +100,7 @@ def _scan(roots):
     report = {"started_at": started, "finished_at": None,
               "added": 0, "updated": 0, "missing": 0, "unmatched": 0, "errors": []}
     # Building the index from nothing: what it finds is not new.
-    first_seen = 0 if conn.execute("SELECT 1 FROM posts LIMIT 1").fetchone() is None else started
+    fresh = conn.execute("SELECT 1 FROM posts LIMIT 1").fetchone() is None
     seen_meta = set()
     unmatched = []                             # (path, size, mtime, reason)
     copies = []                                # (parsed post, meta mtime), see db.save_copies
@@ -125,6 +125,9 @@ def _scan(roots):
                 unmatched.append((path, *_size_mtime(path), message))
             for path, reason in result.skipped:
                 unmatched.append((path, *_size_mtime(path), reason))
+            # Stamped per folder, right before its commit: a "Mark all seen"
+            # while the scan runs leaves the folders committed after it new.
+            first_seen = 0 if fresh else int(time.time())
             for post in result.posts:
                 _index_post(conn, post, started, report, seen_meta, unmatched, copies, first_seen)
             for n in names:

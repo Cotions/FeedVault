@@ -78,7 +78,7 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
     group:     lock group, or a function of the params returning one
     summarize: optional, output lines -> (result dict, message) for a job
                that exited 0 and has no rescan target
-    start:     optional, (params, note) -> None, run in the job's thread right before
+    start:     optional, (params, note, argv) -> None, run in the job's thread right before
                the process starts (no other job of its group is running);
                an exception fails the job with its message, Cancelled
                cancels it; note(text) adds a [feedvault] line to its log
@@ -320,7 +320,7 @@ def _run(job):
         kind = _kinds[job.kind]
         if kind.start:
             try:
-                kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"))
+                kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"), job.argv)
             except Cancelled as e:
                 _note(job, f"[feedvault] {e}")
                 _finish(job, "cancelled", message=str(e))

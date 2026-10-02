@@ -729,9 +729,7 @@ _IS_NEW = re.compile(r'(?<!\S)is:new(?!\S)', re.IGNORECASE)
 
 
 def parse_search(q):
-    """Split the search box text into (the words left, [tag names]); is:new
-    is taken out first (see post_filter)."""
-    q = _IS_NEW.sub(" ", q)
+    """Split the search box text into (the words left, [tag names])."""
     tags = []
 
     def take(m):
@@ -808,9 +806,11 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
     where, args = [], []
     tags = list(tags or ())
     if q:
-        new = new or bool(_IS_NEW.search(q))
         q, more = parse_search(q)
         tags += more
+        # After the tags: an is:new inside tag:"…" is part of a tag name.
+        new = new or bool(_IS_NEW.search(q))
+        q = _IS_NEW.sub(" ", q).strip()
     if q:
         match = fts_query(q)
         if match is None:

@@ -6,7 +6,7 @@ import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
-import { KINDS, platformLabel, fmtBytes, fmtInt } from "../lib/fmt";
+import { KINDS, platformLabel, fmtBytes, fmtInt, plural } from "../lib/fmt";
 import { sameTag, searchTags, tagsMatch, withTags } from "../lib/tags";
 import { personPath } from "../lib/people";
 import PostCard from "../components/PostCard";
@@ -39,7 +39,7 @@ export default function Feed() {
   const tagKey   = JSON.stringify(params.getAll("tag").filter(t => t.trim()));
   const untagged = params.get("untagged") === "1";
   const newOnly  = params.get("new") === "1";
-  const { newCount, started } = useJobs();
+  const { newCount, newUntil, started } = useJobs();
   const [seenTick, setSeenTick] = useState(0);         // bumped by "Mark all seen"
 
   const filters = useMemo(() => ({ q, platform, kind, author, person, review, tag: JSON.parse(tagKey), untagged, new: newOnly, sort }),
@@ -156,17 +156,18 @@ export default function Feed() {
     }
   }
 
-  // Everything indexed so far stops being new; the sidebar and Creators
-  // counts follow with the jobs poll.
+  // What the count showed stops being new (up to its newest post: one
+  // indexed since stays new); the sidebar and Creators counts follow with
+  // the jobs poll.
   const [marking, setMarking] = useState(false);
   async function runMarkSeen() {
     setMarking(true);
     try {
-      const r = await markSeen();
+      const r = await markSeen(newUntil);
       if (!r?.ok) { toast(r?.error || "Could not mark the posts seen.", "err"); return; }
       started();
       setSeenTick(t => t + 1);
-      toast(`${fmtInt(newCount)} new post${newCount === 1 ? "" : "s"} marked seen.`);
+      toast(`${plural(newCount, "new post")} marked seen.`);
     } catch (e) {
       toast(e.message, "err");
     } finally {
@@ -302,7 +303,7 @@ export default function Feed() {
         <div className="page-head-spacer" />
         {newCount > 0 && (
           <button type="button" className="btn-secondary" onClick={runMarkSeen} disabled={marking}
-                  title="Posts indexed until now stop being new">
+                  title="These new posts stop being new; any indexed since stay new">
             <Icon name="check" size={14} />{marking ? "Marking…" : "Mark all seen"}
           </button>
         )}

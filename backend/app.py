@@ -958,7 +958,8 @@ def clean_info_json_cookies():
 @app.get("/api/jobs")
 def list_jobs():
     # The sidebar's "New" count rides along with the poll (news.py).
-    return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": news.count(db.connect())})
+    new, new_until = news.count(db.connect())
+    return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until})
 
 
 @app.get("/api/jobs/kinds")
