@@ -996,8 +996,12 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
   in `waits_until`.
 - **Result.** The source folder is indexed when the job ends (exit code 0
   or not, but not when cancelled): `result` `{ "added", "updated", "error",
-  "line" }`, `message` `"3 new posts"`, or for a failure the plain-language
+  "line", "account", "person" }`, `message` `"3 new posts"`, or for a failure the plain-language
   message of `error`. The outcome is stored on the source (`last_result`).
+  `account` (`{ "platform", "id" }`: the source's account, else that of its
+  folder's posts, else `null`) and `person` (an id or `null`) are for the
+  dashboard's toast to link to: the Feed's new posts of that account, or the
+  person's page for a failure.
 
 ### instaloader settings
 
@@ -1244,7 +1248,7 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all) |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12 }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts (see [New posts](#new-posts)), for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
 | GET | `/api/jobs/<id>` | job, or 404 |
@@ -1276,7 +1280,7 @@ that queued anything since FeedVault started, or `null`:
 ```json
 { "id": 51, "started_at": 1727500000, "total": 6, "ended": 2, "failed": 0,
   "added": 31, "profiles": 2, "first": { "label": "Sync @somebody", "source": 4 },
-  "current": job, "active": [53, 54, 55, 56], "done": false }
+  "current": job, "jobs": [51, 52, 53, 54, 55, 56], "active": [53, 54, 55, 56], "done": false }
 ```
 
 - `id`: its first job's id; with `started_at`, what tells two batches apart.
@@ -1285,7 +1289,9 @@ that queued anything since FeedVault started, or `null`:
   `profiles` how many of them added at least one, and `first` (label and
   source id) the one that added the most, or `null`.
 - `current`: the job running, else the next queued one, else `null`;
-  `active`: the ids of its jobs still queued or running; `done`: none is.
+  `jobs`: the ids of its jobs; `active`: those still queued or running;
+  `done`: none is. The dashboard toasts one summary when a batch it saw
+  running is done ("31 new posts from 6 profiles"), not one per job.
 
 It is kept in memory only and built from live jobs: a restart (which ends
 every queued job, see `interrupted`) forgets it, so the dashboard never

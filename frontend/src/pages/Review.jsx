@@ -397,7 +397,7 @@ function ReviewSession({ scope, scopeControls }) {
     stage = (
       <div className="review-empty">
         <Icon name="check" size={34} className="review-done-mark" />
-        <h3>Nothing left to review in this scope</h3>
+        <h3>{scope.new ? "Nothing new left to review" : "Nothing left to review in this scope"}</h3>
         <p className="mono">
           this session: {session.kept} kept · {session.trashed} trashed{session.items ? ` · ${session.items} items` : ""}
         </p>
@@ -606,8 +606,9 @@ export default function Review() {
   const order    = params.get("order") === "asc" ? "asc" : "desc";
   const tag      = params.get("tag") || "";
   const untagged = !tag && params.get("untagged") === "1";
-  const scope    = useMemo(() => ({ platform, author, person, kind, order, tag: tag ? [tag] : [], untagged }),
-    [platform, author, person, kind, order, tag, untagged]);
+  const newOnly  = params.get("new") === "1";
+  const scope    = useMemo(() => ({ platform, author, person, kind, order, tag: tag ? [tag] : [], untagged, new: newOnly }),
+    [platform, author, person, kind, order, tag, untagged, newOnly]);
   const scopeKey = JSON.stringify(scope);
 
   const { data: authorsData } = useApi(getAuthors, 0);
@@ -662,6 +663,10 @@ export default function Review() {
         <option value="__untagged">Untagged only</option>
         {tag && !(tagsData || []).some(t => t.name === tag) && <option value={tag}>{tag}</option>}
         {(tagsData || []).map(t => <option key={t.name} value={t.name}>{t.name} ({t.count})</option>)}
+      </select>
+      <select className="sort-select" aria-label="New posts" value={newOnly ? "1" : ""} onChange={e => setParam({ new: e.target.value })}>
+        <option value="">New and old</option>
+        <option value="1">New since last visit</option>
       </select>
       <select className="sort-select" aria-label="Order" value={order} onChange={e => setParam({ order: e.target.value === "asc" ? "asc" : "" })}>
         <option value="desc">Newest first</option>

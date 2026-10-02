@@ -96,6 +96,10 @@ export function getPost(platform, postId) {
 export function getPostsSummary(params = {}, opts) { return get(`/api/posts/summary${qs(params)}`, opts); }
 // [account], most posts first; see docs/API.md "People".
 export function getAuthors()   { return get("/api/authors"); }
+
+// New posts since the last "Mark all seen" (docs/API.md "New posts").
+export function getNew()       { return get("/api/new"); }
+export function markSeen()     { return post("/api/new/seen"); }
 export function getStats()     { return get("/api/stats"); }
 // { totals, by_author, by_kind, by_year, largest, trash }, see docs/API.md "Storage".
 // person: an id, to cover that person's posts only.

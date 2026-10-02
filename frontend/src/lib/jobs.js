@@ -4,15 +4,17 @@ import { createContext, useContext } from "react";
    card. Provided by App, which polls GET /api/jobs: every second or so while
    a job is queued or running, rarely otherwise.
 
-   { list, running, active, started(job) }
-   - list:       last GET /api/jobs answer ({ running, queued, jobs }) or null
+   { list, running, active, newCount, started(job) }
+   - list:       last GET /api/jobs answer ({ running, queued, jobs, sync_all, new }) or null
    - active:     running + queued
+   - newCount:   posts new since the last "Mark all seen" (list.new)
    - started(job): tell the poller a job was just started, so it polls now
                  and fast until the job ends (a toast says how it ended) */
 export const JobsContext = createContext({
   list: null,
   running: 0,
   active: 0,
+  newCount: 0,
   started: () => {},
 });
 

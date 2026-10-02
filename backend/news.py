@@ -38,6 +38,11 @@ def mark_seen(conn, at=None):
     return seen_at(conn)
 
 
+def count(conn):
+    """How many posts are new: cheap (posts_first_seen), for every jobs poll."""
+    return conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {db.NEW}").fetchone()[0]
+
+
 def summary(conn):
     """{count, since, by_person: [{id, name, count}], by_account: [{platform,
     id, handle, person, count}]}, most new posts first. An account is as on

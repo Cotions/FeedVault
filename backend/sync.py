@@ -408,9 +408,29 @@ def _item_errors(tool, lines):
     return found or None
 
 
+def _owner(params):
+    """{"account", "person"} of the source, for the dashboard to link to: the
+    account (that of the folder's posts for a source without one yet) and
+    the person's id, or None."""
+    conn = db.connect()
+    try:
+        src = sources.get(conn, _source_id(params))
+        account = src and src["account"]
+        if src and account is None:
+            key = sources._folder_account(conn, src["platform"], src["folder"], config.load()["media_roots"])
+            account = {"platform": key[0], "id": key[1]} if key else None
+    except Exception as e:                     # only a link: the sync still ends as it went
+        print(f"[sync] source {params['source']}: no account to link to: {e}")
+        src = None
+    if src is None:
+        return {"account": None, "person": None}
+    return {"account": account, "person": src["person"]["id"] if src["person"] else None}
+
+
 def _outcome(params, code, lines, index, tool="instaloader"):
     added = index["added"] if index else 0
-    result = {"added": added, "updated": index["updated"] if index else 0, "error": None, "line": None}
+    result = {"added": added, "updated": index["updated"] if index else 0, "error": None, "line": None,
+              **_owner(params)}
     new = f"{added} new post{'' if added == 1 else 's'}"
     if code == 0 or (tool == "yt-dlp" and code == BREAK_ON_EXISTING):
         return "done", result, new
@@ -733,8 +753,8 @@ def batch():
     """The last "Sync all" while FeedVault has run, or None: {id, started_at,
     total, ended, failed, added, profiles (sources that added posts), first
     (the label and source of the one that added the most), current (the
-    job running, else the next queued, else None), active (its job ids
-    still queued or running), done}. Progress counts live jobs only."""
+    job running, else the next queued, else None), jobs (its job ids),
+    active (those still queued or running), done}. Progress counts live jobs only."""
     with _batch_lock:
         if _batch is None:
             return None
@@ -748,4 +768,4 @@ def batch():
             "ended": len(b["jobs"]) - len(live), "failed": sum(e["state"] == "failed" for e in ended),
             "added": sum(e["added"] for e in ended), "profiles": len(adders),
             "first": {k: adders[0][k] for k in ("label", "source")} if adders else None,
-            "current": current, "active": [j["id"] for j in live], "done": not live}
+            "current": current, "jobs": b["jobs"], "active": [j["id"] for j in live], "done": not live}

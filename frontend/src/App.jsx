@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Routes, Route, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { getScan, startScan, getJobs, quitApp, onConnectionChange } from "./lib/api";
 import { ScanContext } from "./lib/scan";
 import { JobsContext, ENDED } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
-import { fmtAgo } from "./lib/fmt";
+import { fmtAgo, fmtInt } from "./lib/fmt";
+import { SYNC_KINDS } from "./lib/sources";
+import { personPath } from "./lib/people";
 import Icon            from "./components/Icon";
 import CyberBackground from "./components/CyberBackground";
 import ScrollManager   from "./components/ScrollManager";
@@ -48,13 +50,14 @@ export default function App() {
   const [jobList, setJobList] = useState(null);
   const [visible, setVisible] = useState(() => !document.hidden);
   // Jobs already ended when the dashboard first loaded are not news: only
-  // those above that first answer's newest id get a toast, once each.
-  const jobsSeen = useRef(null);         // { since, told: Set } after the first poll
+  // those above that first answer's newest id get a toast, once each, and
+  // a "Sync all" batch only if it was not over yet.
+  const jobsSeen = useRef(null);         // { since, told: Set, batches: Set } after the first poll
 
-  const toast = useCallback((text, kind = "ok") => {
+  const toast = useCallback((text, kind = "ok", link) => {
     const id = ++toastId.current;
-    setToasts(list => [...list.slice(-3), { id, text, kind }]);
-    setTimeout(() => setToasts(list => list.filter(t => t.id !== id)), kind === "err" ? 7000 : 4000);
+    setToasts(list => [...list.slice(-3), { id, text, kind, link }]);
+    setTimeout(() => setToasts(list => list.filter(t => t.id !== id)), link ? 9000 : kind === "err" ? 7000 : 4000);
   }, []);
 
   // The search box drives the Feed's `q` query parameter, so reload and Back
@@ -139,16 +142,21 @@ export default function App() {
   // two polls) count too.
   const applyJobs = useCallback(list => {
     setJobList(list);
+    const batch = list.sync_all;
     if (!jobsSeen.current) {
       const active = list.jobs.filter(j => !ENDED.has(j.state)).map(j => j.id);
       const since = Math.min(list.jobs[0]?.id ?? 0, ...active.map(id => id - 1));
-      jobsSeen.current = { since, told: new Set() };
+      jobsSeen.current = { since, told: new Set(), batches: new Set(batch?.done ? [batchKey(batch)] : []) };
     }
-    const { since, told } = jobsSeen.current;
+    const { since, told, batches } = jobsSeen.current;
+    const inBatch = new Set(batch?.jobs || []);
     let changed = false;
     for (const j of list.jobs) {
       if (j.id <= since || told.has(j.id) || !ENDED.has(j.state)) continue;
       told.add(j.id);
+      if (j.result?.added || j.result?.updated) changed = true;
+      if (inBatch.has(j.id)) continue;            // one summary once the batch is over
+      if (SYNC_KINDS.has(j.kind)) { syncToast(toast, j); continue; }
       // Which tool or source, for jobs that name one ("Done, yt-dlp: 2024.08.06").
       // A source sync names its profile in its label, not its params (an id).
       const what = j.params?.source ? j.label : Object.values(j.params || {}).join(" ");
@@ -156,7 +164,10 @@ export default function App() {
       if (j.state === "done") toast(`Done${head}: ${j.message}`);
       else if (j.state === "failed") toast(`Failed${head}: ${j.message}`, "err");
       else toast(`${j.label}: ${j.message}`);
-      if (j.result?.added || j.result?.updated) changed = true;
+    }
+    if (batch?.done && !batches.has(batchKey(batch))) {
+      batches.add(batchKey(batch));
+      batchToast(toast, batch);
     }
     if (changed) setRefreshKey(k => k + 1);
   }, [toast]);
@@ -185,7 +196,7 @@ export default function App() {
   }, [jobsActive, visible, online, quit, pollJobs]);
 
   const jobsCtx = useMemo(
-    () => ({ list: jobList, running: jobsRunning, active: jobsActive, started: jobStarted }),
+    () => ({ list: jobList, running: jobsRunning, active: jobsActive, newCount: jobList?.new ?? 0, started: jobStarted }),
     [jobList, jobsRunning, jobsActive, jobStarted],
   );
 
@@ -385,6 +396,11 @@ export default function App() {
           <div key={t.id} className={`toast toast-${t.kind}`}>
             <Icon name={t.kind === "err" ? "warn" : "check"} size={15} />
             <span>{t.text}</span>
+            {t.link && (
+              <Link to={t.link.to} className="toast-link" onClick={() => setToasts(list => list.filter(x => x.id !== t.id))}>
+                {t.link.label}
+              </Link>
+            )}
             <button
               type="button"
               className="del-btn"
@@ -400,4 +416,40 @@ export default function App() {
     </JobsContext.Provider>
     </ScanContext.Provider>
   );
+}
+
+const batchKey = b => `${b.id}:${b.started_at}`;
+const plural = (n, word) => `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
+// "Sync @name" / "Sync x.com/name" → "@name" / "x.com/name"
+const syncName = label => label.replace(/^Sync /, "");
+
+/* A sync that ended on its own (not part of "Sync all"): what came in, one
+   click from the Feed filtered to it, or what failed, one click from its
+   source. */
+function syncToast(toast, j) {
+  const added = j.result?.added || 0;
+  const who = syncName(j.label);
+  if (j.state === "failed") {
+    const to = j.result?.person ? personPath(j.result.person) : "/creators";
+    toast(`Sync of ${who} failed: ${j.message}`, "err", { to, label: "Source" });
+  } else if (j.state === "done" && added > 0) {
+    const a = j.result.account;
+    const to = `/?${new URLSearchParams({ new: "1", ...(a ? { platform: a.platform, author: a.id } : {}) })}`;
+    toast(`${plural(added, "new post")} from ${who}`, "ok", { to, label: "Show" });
+  } else if (j.state === "done") {
+    toast(`${who}: no new posts`);
+  } else {
+    toast(`${j.label}: ${j.message}`);
+  }
+}
+
+// "Sync all" is one toast when it is over (and one more if any failed).
+function batchToast(toast, b) {
+  if (b.added > 0) {
+    const from = b.profiles === 1 && b.first ? syncName(b.first.label) : plural(b.profiles, "profile");
+    toast(`${plural(b.added, "new post")} from ${from}`, "ok", { to: "/?new=1", label: "Show" });
+  } else if (!b.failed) {
+    toast(`Synced ${plural(b.total, "source")}: no new posts`);
+  }
+  if (b.failed) toast(`${fmtInt(b.failed)} of ${plural(b.total, "sync")} failed`, "err", { to: "/creators", label: "Sources" });
 }
