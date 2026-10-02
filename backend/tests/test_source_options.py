@@ -76,10 +76,15 @@ def test_instaloader_flags(env, client):
             since="2024-02-29")
     args = build(s)
     assert args[args.index("{date_utc}_UTC_{typename}") + 1:] == [
-        "--no-posts", "--stories",
-        "--post-filter", "is_video and date_utc >= datetime(2024, 2, 29)",
+        "--no-posts", "--stories", "--no-pictures",
+        "--post-filter", "date_utc >= datetime(2024, 2, 29)",
         "--storyitem-filter", "is_video and date_utc >= datetime(2024, 2, 29)",
         "--login", "me", "--", "dave.draws"]
+    # Videos only, posts: --no-pictures, which instaloader refuses with --fast-update.
+    s = add(client, "fay.films", "instaloader", media="videos")
+    args = build(s)
+    assert args[args.index("{date_utc}_UTC_{typename}") + 1:] == ["--no-pictures", "--", "fay.films"]
+    assert "--fast-update" not in args
     s = add(client, "erin.paints", "instaloader", media="images")
     args = build(s)
     assert args[args.index("{date_utc}_UTC_{typename}") + 1:] == [
@@ -183,7 +188,8 @@ def test_filters_are_fixed_text_and_a_date():
     for since in ["1970-01-01", "2024-02-29", "2026-10-02"]:
         y, m, d = (int(p) for p in since.split("-"))
         options = sources.clean_options({"since": since, "media": "videos"})
-        assert sync.item_filter(options) == f"is_video and date_utc >= datetime({y}, {m}, {d})"
+        assert sync.item_filter(options) == f"date_utc >= datetime({y}, {m}, {d})"
+        assert sync.item_filter(options, story=True) == f"is_video and date_utc >= datetime({y}, {m}, {d})"
 
 
 # ---------------------------------------------------------------------------
@@ -341,8 +347,8 @@ def test_instaloader_sync_fetches_what_the_options_say(env, client, tools):
                                                           "media": "videos"}})
     job = sync_now(client, s["id"])
     assert job["state"] == "done" and "--tagged" in job["argv"]
-    assert after(job["argv"], "--post-filter") == f"is_video and {expr}"
-    assert shortcodes(client, "888") == []                     # the tagged post is an image: filtered
+    assert "--no-pictures" in job["argv"] and after(job["argv"], "--post-filter") == expr
+    assert shortcodes(client, "888") == []                     # the tagged post is an image: no file, not a post
     post(client, f"/api/sources/{s['id']}", {"options": {"media": "all"}})
     c = stamps()
     c.remove_option("carol.cooks", "tagged-timestamp")          # the filtered run walked past it
@@ -366,6 +372,26 @@ def test_images_only(env, client, tools):
     assert job["state"] == "done"
     assert shortcodes(client, "777") == ["COLDPOST001", "CPOSTIMG001", "CPOSTIMG002"]
     assert not any(n.endswith(".mp4") for n in os.listdir(env["media"] / "carol.cooks"))
+
+
+def test_videos_only_keeps_a_carousels_videos(env, client, tools):
+    data = ig_profile()
+    data["profiles"]["carol.cooks"]["posts"] += [ig_post("CCAROMIX001", 4, "carousel", slides=3, video_slides=[2]),
+                                                 ig_post("CCAROIMG001", 5, "carousel", slides=2)]
+    tools["ig"].write_text(json.dumps(data))
+    s = add(client, "carol.cooks", "instaloader", media="videos")
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done", job["message"]
+    assert "--no-pictures" in job["argv"] and "--post-filter" not in job["argv"] and "--fast-update" not in job["argv"]
+    # The video post, and the mixed carousel with its one video; image posts and the image carousel are not posts.
+    assert shortcodes(client, "777") == ["CCAROMIX001", "CPOSTVID001"]
+    names = sorted(os.listdir(env["media"] / "carol.cooks"))
+    mixed = [n for n in names if "CCAROMIX001" in n and not n.endswith((".json", ".txt"))]
+    assert mixed == ["carol.cooks-2024-06-05-CCAROMIX001_2.mp4"]
+    assert not any(n.endswith(".jpg") for n in names)
+    r = client.get("/api/posts?author=777&limit=100", headers=H).get_json()
+    carousel = next(p for p in r["posts"] if p["post_id"] == "CCAROMIX001")
+    assert carousel["kind"] == "carousel"
 
 
 def x_account():

@@ -58,12 +58,15 @@ What a source downloads (its options, sources.parse_options):
   ``--no-posts`` without posts; gallery-dl ``-o include=…`` (a profile's
   own page only: its user extractor dispatches to one per kind). yt-dlp
   has none: the link picks (a YouTube tab).
-- media: instaloader ``--post-filter`` (and ``--storyitem-filter``)
-  ``is_video`` / ``not is_video``, plus ``--no-videos
-  --no-video-thumbnails`` for images (a carousel's videos). Post by post:
-  a carousel is not a video post, so "videos" leaves carousels out.
-  gallery-dl, file by file: ``--filter "extension in exts_video"`` /
-  ``exts_image``.
+- media: instaloader images: ``--post-filter`` (and ``--storyitem-filter``)
+  ``not is_video``, plus ``--no-videos --no-video-thumbnails`` (a
+  carousel's videos). Videos: ``--no-pictures``, file by file, so a
+  carousel keeps its videos; it leaves an image post its metadata only,
+  which the parser does not index (no media). Story items ignore
+  --no-pictures: ``--storyitem-filter is_video`` for them. --no-pictures
+  cannot go with --fast-update (instaloader refuses): fast_update() is
+  False with it. gallery-dl, file by file: ``--filter "extension in
+  exts_video"`` / ``exts_image``.
 - since (a floor): instaloader ``date_utc >= datetime(Y, M, D)`` in the
   same filters; gallery-dl ``--date-after`` (it stops at the first older
   post) where a profile lists newest first with nothing pinned in front
@@ -350,10 +353,11 @@ def fast_update(stamps, target, options):
     stamp yet (a first sync) and walks only what is new (no full history,
     which goes past the posts already there too), for posts, and not with
     reels: those walked first would stop the posts at the first reel of
-    the grid, its file just written."""
+    the grid, its file just written. Never with videos only: instaloader
+    refuses --fast-update with --no-pictures."""
     content = _content(options)
     return not options["full_history"] and "posts" in content and "reels" not in content \
-        and not stamps.has_option(target, "post-timestamp")
+        and options["media"] != "videos" and not stamps.has_option(target, "post-timestamp")
 
 
 # instaloader flags per content kind (posts are on unless --no-posts).
@@ -368,12 +372,14 @@ def _floor(options):
     return day.year, day.month, day.day
 
 
-def item_filter(options):
-    """The expression for --post-filter and --storyitem-filter (both
-    instaloader.Post and StoryItem have is_video and date_utc), or None.
-    instaloader evaluates it as Python: it is made of fixed text and the
-    three numbers of a checked date only, never of anything a user typed."""
-    terms = {"images": ["not is_video"], "videos": ["is_video"]}.get(options["media"], [])
+def item_filter(options, story=False):
+    """The expression for --post-filter, or with ``story`` for
+    --storyitem-filter (both instaloader.Post and StoryItem have is_video
+    and date_utc), or None. Videos only is --no-pictures for posts, a
+    filter for story items only (they ignore it). instaloader evaluates it
+    as Python: it is made of fixed text and the three numbers of a checked
+    date only, never of anything a user typed."""
+    terms = {"images": ["not is_video"], "videos": ["is_video"] if story else []}.get(options["media"], [])
     floor = _floor(options)
     if floor is not None:
         terms.append("date_utc >= datetime(%d, %d, %d)" % floor)
@@ -383,14 +389,16 @@ def item_filter(options):
 def content_flags(options):
     """What an instaloader sync fetches (sources.CONTENT), which media and since when."""
     content = _content(options)
-    expr = item_filter(options)
+    expr, story = item_filter(options), item_filter(options, story=True)
     return [
         *(["--no-posts"] if "posts" not in content else []),
         *[CONTENT_FLAGS[k] for k in sources.CONTENT[("instaloader", "instagram")] if k in content and k != "posts"],
         # Images only: video posts are filtered out, a carousel's videos and their thumbnails are not fetched.
         *(["--no-videos", "--no-video-thumbnails"] if options["media"] == "images" else []),
+        # Videos only: no picture is fetched, a carousel's videos are.
+        *(["--no-pictures"] if options["media"] == "videos" else []),
         *(["--post-filter", expr] if expr else []),
-        *(["--storyitem-filter", expr] if expr and {"stories", "highlights"} & set(content) else []),
+        *(["--storyitem-filter", story] if story and {"stories", "highlights"} & set(content) else []),
     ]
 
 

@@ -55,6 +55,6 @@ test("summary", () => {
 });
 
 test("media effects say what each tool does", () => {
-  assert.match(mediaEffect("instaloader", "videos"), /carousels are skipped/);
+  assert.match(mediaEffect("instaloader", "videos"), /carousels keep their videos/);
   assert.equal(mediaEffect("gallery-dl", "videos"), "images are skipped");
 });

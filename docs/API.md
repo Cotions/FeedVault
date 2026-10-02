@@ -1222,13 +1222,13 @@ the number of posts):
 |---|---|---|---|
 | `content` | `--reels`, `--stories`, `--highlights`, `--tagged`; `--no-posts` without `posts` | `-o include=<kinds>` (`with_replies` is `with-replies`), only when not the default | — |
 | `media: images` | `--no-videos --no-video-thumbnails --post-filter "not is_video"` | `--filter "extension in exts_image"` | — |
-| `media: videos` | `--post-filter "is_video"` (post by post: a carousel is not a video post, so it is left out, videos and all) | `--filter "extension in exts_video"` (file by file) | — |
+| `media: videos` | `--no-pictures` (file by file: a carousel keeps its videos; an image post leaves only its metadata, which is not indexed), and `--storyitem-filter "is_video"` with stories or highlights (story items ignore `--no-pictures`). Never with `--fast-update`, which instaloader refuses with it | `--filter "extension in exts_video"` (file by file) | — |
 | `since` | `--post-filter "date_utc >= datetime(2024, 1, 1)"`, and the stamps (below) | X: `--date-after 2023-12-31T23:59:59` (stops at the first older post); others: `--filter "(not date or date >= datetime(2024, 1, 1))"` | `--dateafter 20240101`, plus `--break-match-filters "upload_date >=? 20240101"` where the sync may stop (as `--break-on-existing`) |
 | `first_posts` | — | `--post-range 1-N` (N per kind of `content`: each is its own extractor) | `--playlist-items 1:N` |
 
 instaloader's filter terms are joined with `and` into one `--post-filter`,
 also given as `--storyitem-filter` with stories or highlights (both have
-`is_video` and `date_utc`); gallery-dl's into one `--filter`. Both tools
+`is_video` and `date_utc`; `is_video` is a story-item term only); gallery-dl's into one `--filter`. Both tools
 evaluate those as Python: they are built from fixed text and the three
 numbers of a date checked as above, never from text a request sent, and a
 stored value that is not valid counts as the default (no flag).

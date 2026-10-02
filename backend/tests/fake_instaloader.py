@@ -8,7 +8,7 @@ profiles from the JSON file named by FAKE_INSTALOADER (default
     {"profiles": {"somebody": {"id": 555, "name": "Some Body", "bio": "…",
                                "posts": [{"shortcode": "C0FAKE00001", "ts": 1717243200,
                                           "caption": "…", "kind": "image" | "video" | "carousel",
-                                          "slides": 3}]}},
+                                          "slides": 3, "video_slides": [2]}]}},
      "fail": null | "429" | "login" | "private" | "notfound" | "crash",
      "delay": 0}
 
@@ -29,7 +29,10 @@ JSON beside the media, plus the profile's JSON and a caption .txt),
 --no-posts, --reels, --tagged, --stories and --highlights (the last two
 fail with "Login required." without --login or --load-cookies), in
 instaloader's order (tagged, reels, highlights, posts, stories),
---no-videos and --no-video-thumbnails, and --post-filter and
+--no-videos, --no-video-thumbnails and --no-pictures (no picture of a post
+or carousel slide, nor a video's thumbnail: an image post gets its JSON and
+caption only; story items ignore it, as instaloader's do; refused with
+--fast-update), and --post-filter and
 --storyitem-filter, evaluated as instaloader does (each name must be an
 attribute of the item: ``is_video``, ``date_utc`` (naive UTC), ``typename``;
 ``datetime`` is the class).
@@ -82,20 +85,22 @@ def node(p, profile, target):
          "edge_media_to_caption": {"edges": [{"node": {"text": p["caption"]}}] if p.get("caption") else []},
          "edge_media_preview_like": {"count": p.get("likes", 12)}, "edge_media_to_comment": {"count": 3}}
     if kind == "carousel":
-        n["edge_sidecar_to_children"] = {"edges": [{"node": {"is_video": False}}] * p.get("slides", 2)}
+        n["edge_sidecar_to_children"] = {"edges": [{"node": {"is_video": s in p.get("video_slides", ())}}
+                                                   for s in range(1, p.get("slides", 2) + 1)]}
     return n
 
 
-def write(base, p, profile, owner, videos=True, thumbnails=True):
+def write(base, p, profile, owner, videos=True, thumbnails=True, pictures=True):
     """A post's files, named after ``base``, as instaloader writes them."""
     kind = p.get("kind", "image")
     slides = p.get("slides", 2) if kind == "carousel" else 1
     colour = tuple((sum(map(ord, p["shortcode"])) * k) % 256 for k in (3, 7, 11))
     for s in range(1, slides + 1):
         name = f"{base}_{s}" if slides > 1 else base
-        if kind != "video" or thumbnails or not videos:
+        video = kind == "video" or (kind == "carousel" and s in p.get("video_slides", ()))
+        if pictures and (not video or thumbnails or not videos):
             png(name + ".jpg", tuple((c + 40 * s) % 256 for c in colour))
-        if kind == "video" and videos:
+        if video and videos:
             mp4(name + ".mp4")
     with open(base + ".json", "w") as f:
         json.dump({"node": node(p, profile, owner),
@@ -212,8 +217,8 @@ def walk(posts, target, owner_target, profile, args, folder, stamps, key, keep):
         os.makedirs(os.path.dirname(base), exist_ok=True)
         kind = p.get("kind", "image")
         slides = p.get("slides", 2) if kind == "carousel" else 1
-        first = base + ("_1" if slides > 1 else "") + ".jpg"
-        if os.path.exists(first) or os.path.exists(base + ".mp4"):
+        first = base + ("_1" if slides > 1 else "")
+        if any(os.path.exists(first + ext) for ext in (".jpg", ".mp4")):
             print(f"[{i:2d}/{len(ordered):2d}] {base}.jpg exists")
             if args.fast_update and not p.get("pinned"):
                 break
@@ -222,7 +227,7 @@ def walk(posts, target, owner_target, profile, args, folder, stamps, key, keep):
         # A tagged post is its owner's: their id and name (full_name, else the user name).
         mine = {"id": owner["id"], "name": owner.get("full_name", owner["username"])} if owner else {}
         write(base, p, {**profile, **mine}, owner.get("username", target),
-              videos=not args.no_videos, thumbnails=not args.no_video_thumbnails)
+              videos=not args.no_videos, thumbnails=not args.no_video_thumbnails, pictures=not args.no_pictures)
         print(f"[{i:2d}/{len(ordered):2d}] {base}.jpg json ")
     if args.latest_stamps and ordered:
         newest = max(ordered, key=lambda p: p["ts"])
@@ -273,7 +278,7 @@ def main(argv):
                  "--load-cookies", "--login", "--post-filter", "--storyitem-filter"):
         ap.add_argument(flag)
     for flag in ("--fast-update", "--no-compress-json", "--no-posts", "--reels", "--tagged", "--stories",
-                 "--highlights", "--no-videos", "--no-video-thumbnails"):
+                 "--highlights", "--no-videos", "--no-video-thumbnails", "--no-pictures"):
         ap.add_argument(flag, action="store_true")
     ap.add_argument("targets", nargs="*")
     args = ap.parse_args(argv)
@@ -281,6 +286,9 @@ def main(argv):
                                                                    "fake_instaloader.json")
     with open(data_file) as f:
         data = json.load(f)
+    if args.no_pictures and args.fast_update:
+        print("Fatal error: --no-pictures and --fast-update cannot be used together.", file=sys.stderr)
+        return 2
     if args.login and not os.environ.get("FAKE_INSTALOADER_SESSION"):
         print("Session file does not exist yet - Logging in.", file=sys.stderr)
         print("Login error: no password to log in with.", file=sys.stderr)

@@ -348,6 +348,11 @@ def parse_dir(root, dirpath, names):
             continue                           # Profile, Hashtag, iterator state
         node = data["node"] if isinstance(data["node"], dict) else {}
         media, claimed = _media_for(dirpath, base, names)
+        if not media:
+            # Metadata alone: instaloader fetched none of its files (a sync
+            # of videos only, --no-pictures, leaves an image post so).
+            result.claimed |= {base + s for s in _SIDE_SUFFIXES if base + s in names_set}
+            continue
         post = _post_from(node, node_type, info.get("version"), path, media)
         if post is None:
             result.errors.append((path, "no post id in metadata"))

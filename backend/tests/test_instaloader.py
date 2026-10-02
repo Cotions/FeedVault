@@ -121,6 +121,16 @@ def test_iphone_shape_fallbacks(tmp_path):
     assert (p.author_handle, p.posted_at, p.likes, p.comments) == ("alice.example", 1717243200, 7, 1)
 
 
+def test_metadata_without_media_is_not_a_post(tmp_path):
+    # What --no-pictures (videos only) leaves of an image post: its JSON and caption.
+    base = str(tmp_path / base_name(1717243200))
+    write_meta(base, post_node("NOPIC000001", 1717243200, owner("alice.example", 111)))
+    open(base + ".txt", "w").write("a caption")
+    r = parse(tmp_path)
+    assert r.posts == [] and r.errors == []
+    assert r.claimed == {os.path.basename(base) + ".json", os.path.basename(base) + ".txt"}
+
+
 def test_parser_never_needs_network():
     # The parser module must not import instaloader itself (which could log in).
     src = open(instaloader.__file__).read()

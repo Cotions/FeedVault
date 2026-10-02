@@ -37,12 +37,12 @@ export const MEDIA = [
   ["videos", "videos only"],
 ];
 
-// What a media choice does: gallery-dl picks file by file; instaloader post
-// by post (a carousel is not a video post, so "videos" leaves it out).
+// What a media choice does: both tools pick file by file (instaloader's
+// "videos" is --no-pictures: a carousel keeps its videos).
 export function mediaEffect(tool, media) {
   const insta = tool === "instaloader";
   if (media === "images") return insta ? "videos are skipped, carousels keep their images" : "videos are skipped";
-  if (media === "videos") return insta ? "video posts and reels; carousels are skipped" : "images are skipped";
+  if (media === "videos") return insta ? "images are skipped, carousels keep their videos" : "images are skipped";
   return "everything the posts have";
 }
 
