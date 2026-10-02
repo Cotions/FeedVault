@@ -6,7 +6,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -168,10 +168,12 @@ EVIL = "__import__('os').system('id')"
 @pytest.mark.parametrize("target", ["carol.cooks", X, YOUTUBE])
 def test_tampered_options_never_reach_argv(env, client, options, target):
     s = add(client, target, "instaloader" if "." in target and "/" not in target else None)
+    good = {k: v for k, v in options.items() if k == "since" and v == "2024-01-01"}
+    set_stored(s["id"], good)
     want = build(s)
     set_stored(s["id"], options)
     args = build(s)
-    assert args == want                                  # the defaults, the stored value ignored
+    assert args == want                                  # the bad values' defaults, a good one kept
     assert not any("import" in a or "system" in a or "; id" in a for a in args)
     # And through the API: refused.
     assert post(client, f"/api/sources/{s['id']}", {"options": options}, 400)["ok"] is False
@@ -216,13 +218,16 @@ def test_floor_raises_the_stamps_after_the_seed(env, client):
 
 
 def test_full_history_walks_back_to_the_floor(env, client):
-    s = add(client, "carol.cooks", "instaloader", full_history=True, since="2024-01-01")
+    s = add(client, "carol.cooks", "instaloader", full_history=True, since="2024-01-01",
+            content=["posts", "reels", "tagged"], session=LOGIN)
     c = configparser.ConfigParser(interpolation=None)
-    c.read_dict({"carol.cooks": {"post-timestamp": "2024-06-01T12:00:00.000000+0000"}})
+    c.read_dict({"carol.cooks": {key: "2024-06-01T12:00:00.000000+0000"
+                                 for key in ("post-timestamp", "reels-timestamp", "tagged-timestamp")}})
     sync._write_stamps(c, sync.stamps_path())
     row = sources.row(db.connect(), s["id"])
     sync._seed_stamp(db.connect(), row, sync._options(row), lambda text: None)
-    assert stamp("carol.cooks", "post-timestamp").date().isoformat() == "2023-12-31"
+    for key in ("post-timestamp", "reels-timestamp", "tagged-timestamp"):   # every kind, not only posts
+        assert stamp("carol.cooks", key).date().isoformat() == "2023-12-31", key
 
 
 def test_a_kind_turned_on_later_has_no_stamp(env, client):
@@ -432,3 +437,30 @@ def test_yt_dlp_floor_and_last_n(env, client, tools):
     assert job["state"] == "done" and job["exit_code"] == 101     # stopped at the first older video
     r = client.get("/api/posts?platform=youtube&limit=100", headers=H).get_json()
     assert sorted(p["post_id"] for p in r["posts"]) == [f"VIDEO{i:06d}" for i in range(0, 4)]
+
+
+def test_a_sources_session_and_no_edits_while_it_syncs(env, client, tools):
+    tools["ig"].write_text(json.dumps({**ig_profile(), "delay": 0.5}))
+    s = add(client, "carol.cooks", "instaloader")
+    assert s["session"] == {"mode": "none"}                 # the tool's, for the form's login hint
+    assert client.get("/api/sources", headers=H).get_json()["sources"][0]["session"] == {"mode": "none"}
+    job = post(client, f"/api/sources/{s['id']}/sync", {})["job"]
+    r = post(client, f"/api/sources/{s['id']}", {"options": {"full_history": True}}, 409)
+    assert "queued or running" in r["error"]
+    jobs.cancel(job["id"])
+    ended(job["id"])
+    assert post(client, f"/api/sources/{s['id']}", {"options": {"session": LOGIN}})["source"]["session"] == LOGIN
+
+
+def test_last_n_floor_is_never_after_today(env, client):
+    s = add(client, X, first_posts=1)
+    conn = db.connect()
+    started = int(time.time()) - 10
+    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+    meta = os.path.join(s["folder"], "a.json")
+    conn.execute("INSERT INTO posts(id, platform, post_id, author_id, kind, posted_at, saved_at, indexed_at, first_seen, "
+                 "tool, meta_path) VALUES ('twitter:1', 'twitter', '1', '1', 'image', ?, ?, ?, ?, 'gallery-dl', ?)",
+                 (int(tomorrow.timestamp()), started + 5, started + 5, started + 5, meta))
+    conn.commit()
+    floor = sync._first_posts_floor(conn, sources.row(conn, s["id"]), {"started_at": started})
+    assert floor == date.today().isoformat()

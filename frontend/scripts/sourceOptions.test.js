@@ -2,7 +2,7 @@
 // and the row's summary. Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formError, formOf, needsLogin, optionsOf, optionsSummary, today } from "../src/lib/sourceOptions.js";
+import { formError, formOf, mediaEffect, needsLogin, optionsOf, optionsSummary, today } from "../src/lib/sourceOptions.js";
 
 const IG = { content: ["posts", "reels", "stories", "highlights", "tagged"], content_default: ["posts"],
              login: ["stories", "highlights", "tagged"], media: true, since: true, first_posts: false };
@@ -52,4 +52,9 @@ test("summary", () => {
                                                                  first_posts: 30 } }),
                "media, replies · images only · first sync: last 30 posts");
   assert.equal(optionsSummary({ platform: "youtube", options: { media: "all", full_history: false } }), "");
+});
+
+test("media effects say what each tool does", () => {
+  assert.match(mediaEffect("instaloader", "videos"), /carousels are skipped/);
+  assert.equal(mediaEffect("gallery-dl", "videos"), "images are skipped");
 });

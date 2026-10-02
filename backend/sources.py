@@ -192,14 +192,31 @@ def resolve(text, table, roots):
         raise Refused(error)
     url, host, tool = parsed
     platform = platform_of(host)
+    target = url
     if tool == "instaloader":
         target = parse_target("instaloader", url)
         if target is None:
             raise Refused("paste a link to an Instagram profile, not to a post")
-        folder = os.path.join(roots[0], target) if roots else None
-    else:
-        target = url
-        folder = os.path.join(roots[0], platform, folder_name(url)) if roots else None
+    return _resolved(tool, platform, target, roots)
+
+
+def resolve_name(text, roots):
+    """resolve() for an Instagram profile name or @name, with instaloader."""
+    target = parse_target("instaloader", text)
+    if target is None:
+        raise Refused("not an Instagram profile name")
+    return _resolved("instaloader", PLATFORM["instaloader"], target, roots)
+
+
+def default_folder(tool, platform, target, roots):
+    """Where a new source's posts go unless another folder is picked."""
+    if tool == "instaloader":
+        return os.path.join(roots[0], target)
+    return os.path.join(roots[0], platform, folder_name(target))
+
+
+def _resolved(tool, platform, target, roots):
+    folder = default_folder(tool, platform, target, roots) if roots else None
     if folder and in_saved(folder, roots):
         raise Refused(SAVED_REFUSED.format(folder=folder))
     return {"tool": tool, "platform": platform, "target": target, "folder": folder}
@@ -469,15 +486,19 @@ def _public(conn, row, accounts, active):
 
 
 def stored_options(src):
-    """A stored source's options, checked again (defaults when malformed:
-    sources.json can be edited by hand)."""
+    """A stored source's options, checked again one by one: a malformed
+    value gets its default and the others stay (sources.json can be edited
+    by hand)."""
     try:
         stored = json.loads(src["options"] or "{}")
     except ValueError:
         stored = None
-    tool, platform, target = src["tool"], src["platform"], src["target"]
-    return clean_options(stored if isinstance(stored, dict) else None, tool=tool, platform=platform, target=target) \
-        or clean_options(None, tool=tool, platform=platform, target=target)
+    where = {"tool": src["tool"], "platform": src["platform"], "target": src["target"]}
+    out = clean_options(None, **where)
+    for key in OPTION_KEYS:
+        if isinstance(stored, dict) and key in stored:
+            out = clean_options({key: stored[key]}, out, **where) or out
+    return out
 
 
 def get(conn, sid, active=None):
@@ -581,12 +602,10 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
         raise Refused("the target is not a profile name or a profile link in the routing table")
     if tool == "instaloader":
         platform = PLATFORM[tool]
-        default = os.path.join(roots[0], target)
     else:
         platform = platform_of(route(urlsplit(target).hostname, table)[0])
-        default = os.path.join(roots[0], platform, folder_name(target))
     if folder is None:
-        folder = default
+        folder = default_folder(tool, platform, target, roots)
     real = inside_root(folder, roots)
     if real is None:
         raise Refused("the folder must be inside a media root")

@@ -108,9 +108,11 @@ function CardOptionsButtons({ sync, onEdit }) {
   if (!sync) return null;
   return sync.sources.map(s => {
     const summary = optionsSummary(s);
+    const busy = !sync.idle.includes(s);         // its sync's end would undo what changes now
     return (
-      <button key={s.id} type="button" className="icon-btn creator-opts" onClick={() => onEdit(s)}
-              title={`What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}`}
+      <button key={s.id} type="button" className="icon-btn creator-opts" disabled={busy} onClick={() => onEdit(s)}
+              title={busy ? "Its sync is queued or running"
+                : `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}`}
               aria-label={`Options of ${sourceName(s)} (${s.tool})`}>
         <Icon name="settings" size={15} />
       </button>

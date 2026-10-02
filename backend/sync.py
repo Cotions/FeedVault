@@ -60,8 +60,10 @@ What a source downloads (its options, sources.parse_options):
   has none: the link picks (a YouTube tab).
 - media: instaloader ``--post-filter`` (and ``--storyitem-filter``)
   ``is_video`` / ``not is_video``, plus ``--no-videos
-  --no-video-thumbnails`` for images (a carousel's videos);
-  gallery-dl ``--filter "extension in exts_video"`` / ``exts_image``.
+  --no-video-thumbnails`` for images (a carousel's videos). Post by post:
+  a carousel is not a video post, so "videos" leaves carousels out.
+  gallery-dl, file by file: ``--filter "extension in exts_video"`` /
+  ``exts_image``.
 - since (a floor): instaloader ``date_utc >= datetime(Y, M, D)`` in the
   same filters; gallery-dl ``--date-after`` (it stops at the first older
   post) where a profile lists newest first with nothing pinned in front
@@ -69,8 +71,9 @@ What a source downloads (its options, sources.parse_options):
   yt-dlp ``--dateafter``, plus ``--break-match-filters`` to stop at the
   first older video where it may stop at all (as for --break-on-existing).
 - first_posts (the first sync's newest N): gallery-dl ``--post-range
-  1-N``, yt-dlp ``--playlist-items 1:N`` (each level: a YouTube channel's
-  page gets N per tab). instaloader has no way to (``--count`` is not for
+  1-N`` (each kind's extractor has its own: N per kind), yt-dlp
+  ``--playlist-items 1:N`` (each level: a YouTube channel's page gets N
+  per tab). instaloader has no way to (``--count`` is not for
   profiles): refused when the source is saved.
 
 The filters instaloader and gallery-dl evaluate as Python are fixed text
@@ -92,13 +95,16 @@ How they meet the stopping points:
   there; the filter still drops anything older that comes through (a
   pinned post). Raising the floor later just filters; lowering it, or
   widening media, does not bring back what the stamps passed: that is
-  what full history is for (which then walks back to the floor).
+  what full history is for (it drops the post, reels and tagged stamps,
+  then walks back to the floor).
 - "last N" is for the first sync only: set back to null once a sync
   succeeds (like full history), and the API refuses setting it on a
-  source that has synced. gallery-dl and yt-dlp still seed their archive
+  source that has synced without it. Options cannot change while a sync
+  is queued or running, as its end sets these two back. gallery-dl and
+  yt-dlp still seed their archive
   first, so posts already indexed are skipped within those N. The day of
-  the oldest post it added becomes the source's floor (unless it has a
-  later one): the archive alone would not keep the next sync from going on
+  the oldest post it added (today at the latest) becomes the source's
+  floor (unless it has a later one): the archive alone would not keep the next sync from going on
   to the older posts (gallery-dl stops at 5 files in a row it has, fewer
   than N may be; TikTok and a YouTube channel's page never stop early).
 - stories, highlights and tagged posts need a logged-in session (Instagram
@@ -115,7 +121,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 import archives
@@ -726,9 +732,12 @@ def _seed_posts(conn, src, options, note, moved=(), roots=()):
     stamps.read(path, encoding="utf-8")
     target = src["target"]
     if options["full_history"]:
+        # Every kind with a stamp walks back again (to the floor, if any).
         note(f"{target}: full history, every post not in the folder yet")
-        if stamps.has_option(target, "post-timestamp"):
-            stamps.remove_option(target, "post-timestamp")
+        gone = [key for key in STAMP_KEYS.values() if stamps.has_option(target, key)]
+        for key in gone:
+            stamps.remove_option(target, key)
+        if gone:
             _write_stamps(stamps, path)
         return
     if stamps.has_option(target, "post-timestamp"):
@@ -977,7 +986,10 @@ def _first_posts_floor(conn, src, job):
     prefix = os.path.join(src["folder"], "")
     oldest = conn.execute("SELECT MIN(posted_at) FROM posts WHERE first_seen >= ? AND posted_at IS NOT NULL "
                           "AND substr(meta_path, 1, ?) = ?", (job["started_at"], len(prefix), prefix)).fetchone()[0]
-    return datetime.fromtimestamp(oldest, timezone.utc).strftime("%Y-%m-%d") if oldest is not None else None
+    if oldest is None:
+        return None
+    # Not after today: a floor is a day up to today's, in local time.
+    return min(datetime.fromtimestamp(oldest, timezone.utc).date(), date.today()).isoformat()
 
 
 def _forget_saved(conn, src):

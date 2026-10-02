@@ -6,7 +6,8 @@ import { useJobs } from "../lib/jobs";
 import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import {
-  FIRST_POSTS_MAX, MEDIA, formError, formOf, kindEffect, kindLabel, needsLogin, optionsOf, optionsSummary, today,
+  FIRST_POSTS_MAX, MEDIA, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin, optionsOf, optionsSummary,
+  today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
@@ -114,7 +115,7 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
    content kinds, images or videos, a date floor and the first sync. Each
    with what it does in one line. ``firstSync``: the source has not synced
    yet (last N posts is for its first sync only). */
-export function SourceOptions({ platform, choices, session, form, onChange, firstSync = true }) {
+export function SourceOptions({ tool, platform, choices, session, form, onChange, firstSync = true }) {
   const id = useId();
   const set = patch => onChange({ ...form, ...patch });
   const login = needsLogin(form, choices, session);
@@ -142,10 +143,10 @@ export function SourceOptions({ platform, choices, session, form, onChange, firs
       {choices.media && (
         <fieldset className="source-opt">
           <legend>Media</legend>
-          {MEDIA.map(([v, label, effect]) => (
+          {MEDIA.map(([v, label]) => (
             <label key={v} className="source-opt-line">
               <input type="radio" name={`${id}-media`} checked={form.media === v} onChange={() => set({ media: v })} />
-              <b>{label}</b><span className="dim">{effect}</span>
+              <b>{label}</b><span className="dim">{mediaEffect(tool, v)}</span>
             </label>
           ))}
         </fieldset>
@@ -178,7 +179,10 @@ export function SourceOptions({ platform, choices, session, form, onChange, firs
             <input type="number" min="1" max={FIRST_POSTS_MAX} step="1" className="source-opt-count"
                    aria-label="Number of posts" value={form.count}
                    onChange={e => set({ first: "last", count: e.target.value })} />
-            <b>posts</b><span className="dim">later syncs only fetch newer ones</span>
+            <b>posts</b>
+            <span className="dim">
+              {form.content.length > 1 && "of each kind; "}later syncs only fetch newer ones
+            </span>
           </label>
         )}
       </fieldset>
@@ -186,26 +190,17 @@ export function SourceOptions({ platform, choices, session, form, onChange, firs
   );
 }
 
-/* Edit what a source downloads. The tool's session comes from resolve,
-   for the login hint; the source's own session wins. */
+/* Edit what a source downloads. ``s.session``: the session its sync
+   would use, for the login hint. Last N stays open until a first sync
+   with it has worked. */
 export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   const toast = useToast();
   const [form, setForm] = useState(() => formOf(s.options, s.choices));
-  const [session, setSession] = useState(s.options.session);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const firstSync = !s.last_sync_at;
+  const firstSync = !s.last_sync_at || s.options.first_posts != null;
   const problem = formError(form, s.choices);
   const focus = useRef(null);
-
-  useEffect(() => {
-    if (s.options.session) return undefined;
-    const ctl = new AbortController();
-    resolveSource(s.tool === "instaloader" ? s.target : s.url, { signal: ctl.signal }, s.tool)
-      .then(r => { if (r?.ok) setSession(r.session); })
-      .catch(() => {});
-    return () => ctl.abort();
-  }, [s]);
 
   async function save() {
     setBusy(true);
@@ -230,14 +225,14 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
       confirmLabel="Save"
       busy={busy}
       error={error || problem}
-      confirmDisabled={!!problem || needsLogin(form, s.choices, session).length > 0}
+      confirmDisabled={!!problem || needsLogin(form, s.choices, s.session).length > 0}
       onConfirm={save}
       onCancel={onClose}
       initialFocus={focus}
     >
       <div ref={focus} tabIndex={-1}>
-        <SourceOptions platform={s.platform} choices={s.choices} session={session} form={form} onChange={setForm}
-                       firstSync={firstSync} />
+        <SourceOptions tool={s.tool} platform={s.platform} choices={s.choices} session={s.session} form={form}
+                       onChange={setForm} firstSync={firstSync} />
       </div>
     </ConfirmDialog>
   );
@@ -368,7 +363,8 @@ export function AddSource({ person = null, onAdded }) {
         </div>
       )}
       {form && resolved.source == null && (
-        <SourceOptions platform={resolved.platform} choices={resolved.choices} session={resolved.session} form={form}
+        <SourceOptions tool={resolved.tool} platform={resolved.platform} choices={resolved.choices}
+                       session={resolved.session} form={form}
                        onChange={f => { setForms(fs => ({ ...fs, [kind]: f })); setError(null); }} />
       )}
       {(error || problem || resolved?.ok === false) && (

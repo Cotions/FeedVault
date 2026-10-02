@@ -849,7 +849,8 @@ no person yet.
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait before syncing again",
                    "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false },
-  "job": { "id": 42, "state": "queued", "waits_until": 1727503660 } }
+  "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
+  "session": { "mode": "login", "user": "me" } }
 ```
 
 - `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
@@ -867,8 +868,8 @@ no person yet.
   - `full_history`: `false` (default): the first sync starts after the
     newest post FeedVault already has for the account, see below. `true`:
     the next sync walks the whole profile and downloads every post not in
-    the folder yet (without `--fast-update`, the stamp dropped first); once
-    it succeeds, it is set back to `false`.
+    the folder yet (without `--fast-update`, the post, reels and tagged
+    stamps dropped first); once it succeeds, it is set back to `false`.
   - `session`: `null` to use the global setting (see
     [instaloader settings](#instaloader-settings) and
     [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings)), or
@@ -886,13 +887,14 @@ no person yet.
     history. Only where `choices.first_posts` (gallery-dl and yt-dlp:
     instaloader cannot stop after a number of a profile's posts), not with
     `full_history` (a 400: one or the other), and once a source has synced
-    (`last_sync_at` set) it can only be cleared. Set back to `null` once a
-    sync succeeds, like `full_history`, and `since` set to the day of the
-    oldest post that sync added (see
+    (`last_sync_at` set) without it, or after it worked, it cannot be set
+    (while a first sync with it has only failed, it can still change). Set
+    back to `null` once a sync succeeds, like `full_history`, and `since`
+    set to the day of the oldest post that sync added (see
     [What a source downloads](#what-a-source-downloads)).
   - Any other key, or a value outside the above, is a 400 naming the
     option; a stored value that is not valid (sources.json edited by hand)
-    counts as the defaults.
+    counts as its default, the other options as stored.
   - Stories, highlights and tagged posts on Instagram (`choices.login`)
     need a logged-in session: asking for them when the session the sync
     would use (the source's, else the tool's setting) is `none` is a 400
@@ -930,6 +932,8 @@ no person yet.
     before it stopped is indexed)
 - `job`: the source's sync while it is queued or running (`waits_until`,
   see [Jobs](#jobs)), else `null`.
+- `session`: the session its sync would use (`options.session`, else the
+  tool's setting), for the form's login hint.
 
 | Method | Path | Returns |
 |---|---|---|
@@ -937,7 +941,7 @@ no person yet.
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
 | POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused |
+| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back) |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |
@@ -1218,9 +1222,9 @@ the number of posts):
 |---|---|---|---|
 | `content` | `--reels`, `--stories`, `--highlights`, `--tagged`; `--no-posts` without `posts` | `-o include=<kinds>` (`with_replies` is `with-replies`), only when not the default | — |
 | `media: images` | `--no-videos --no-video-thumbnails --post-filter "not is_video"` | `--filter "extension in exts_image"` | — |
-| `media: videos` | `--post-filter "is_video"` (a carousel with a video is left out) | `--filter "extension in exts_video"` | — |
+| `media: videos` | `--post-filter "is_video"` (post by post: a carousel is not a video post, so it is left out, videos and all) | `--filter "extension in exts_video"` (file by file) | — |
 | `since` | `--post-filter "date_utc >= datetime(2024, 1, 1)"`, and the stamps (below) | X: `--date-after 2023-12-31T23:59:59` (stops at the first older post); others: `--filter "(not date or date >= datetime(2024, 1, 1))"` | `--dateafter 20240101`, plus `--break-match-filters "upload_date >=? 20240101"` where the sync may stop (as `--break-on-existing`) |
-| `first_posts` | — | `--post-range 1-N` | `--playlist-items 1:N` |
+| `first_posts` | — | `--post-range 1-N` (N per kind of `content`: each is its own extractor) | `--playlist-items 1:N` |
 
 instaloader's filter terms are joined with `and` into one `--post-filter`,
 also given as `--storyitem-filter` with stories or highlights (both have
@@ -1248,12 +1252,13 @@ stored value that is not valid counts as the default (no flag).
 - **Last N.** gallery-dl and yt-dlp seed their archive first as usual, so
   posts already indexed are skipped within those N. yt-dlp applies it at
   each level: a YouTube channel's own page gets N per tab; TikTok's pinned
-  videos (listed first) count among them. `first_posts` is set back to
-  `null` once a sync succeeds, and `since` becomes the day (UTC) of the
-  oldest post that sync added, unless it is later already: the archive
-  alone would not keep the next sync from going on to older posts
-  (gallery-dl stops only at 5 files in a row it has; TikTok and a YouTube
-  channel's page are walked to the end).
+  videos (listed first) count among them. gallery-dl applies it per kind
+  of `content`. `first_posts` is set back to `null` once a sync succeeds,
+  and `since` becomes the day (UTC) of the oldest post that sync added
+  (today at the latest), unless it is later already: the archive alone
+  would not keep the next sync from going on to older posts (gallery-dl
+  stops only at 5 files in a row it has; TikTok and a YouTube channel's
+  page are walked to the end).
 - The job log says when a floor or "last N" applies.
 
 ### gallery-dl and yt-dlp settings

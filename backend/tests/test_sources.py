@@ -274,11 +274,15 @@ def test_options_api(env, client, monkeypatch):
     for bad in [{"media": "all", "x": 1}, {"since": "tomorrow"}, {"content": ["posts; rm -rf ~"]}]:
         post(client, url, {"options": bad}, 400)
     assert get(client, url)["options"]["media"] == "images"
-    # A stored value that is not valid any more (edited by hand) reads as the defaults.
+    # A stored value that is not valid any more (edited by hand) reads as its default; the others stay.
     db.connect().execute("UPDATE sources SET options = ? WHERE id = ?",
                          (json.dumps({"content": ["igtv"], "media": "images"}), s["id"]))
     db.connect().commit()
-    assert get(client, url)["options"] == OPTS
+    assert get(client, url)["options"] == {**OPTS, "media": "images"}
+    for broken in ["{", "[]", json.dumps({"media": 3, "since": "2099-01-01", "x": 1})]:
+        db.connect().execute("UPDATE sources SET options = ? WHERE id = ?", (broken, s["id"]))
+        db.connect().commit()
+        assert get(client, url)["options"] == OPTS
 
 
 def test_first_posts_only_before_the_first_sync(env, client):
@@ -286,12 +290,13 @@ def test_first_posts_only_before_the_first_sync(env, client):
     assert s["options"]["first_posts"] == 20 and s["choices"]["first_posts"] is True
     url = f"/api/sources/{s['id']}"
     assert post(client, url, {"options": {"first_posts": 30}})["source"]["options"]["first_posts"] == 30
+    # A first sync that failed: last N is still to do, and can still change.
     sources.record(db.connect(), s["id"], 1, TS, {"state": "failed"})
-    r = post(client, url, {"options": {"first_posts": 40}}, 400)
-    assert "synced already" in r["error"]
-    # Other changes keep it; it can still be cleared.
-    assert post(client, url, {"options": {"media": "videos"}})["source"]["options"]["first_posts"] == 30
+    assert post(client, url, {"options": {"first_posts": 40}})["source"]["options"]["first_posts"] == 40
+    # Other changes keep it; it can be cleared, and once gone it cannot come back.
+    assert post(client, url, {"options": {"media": "videos"}})["source"]["options"]["first_posts"] == 40
     assert post(client, url, {"options": {"first_posts": None}})["source"]["options"]["first_posts"] is None
+    assert "synced already" in post(client, url, {"options": {"first_posts": 40}}, 400)["error"]
 
 
 def test_resolve_gives_choices(env, client):

@@ -734,16 +734,24 @@ def _sources_active():
     return sync.active()
 
 
+def _with_session(s, cfg=None):
+    """A source with the session its sync would use (its own, else its
+    tool's), for the form's login hint."""
+    return {**s, "session": sync.session_of(s["tool"], s["options"], cfg)}
+
+
 @app.get("/api/sources")
 def list_sources():
-    return jsonify(sources.listing(db.connect(), _roots(), _sources_active()))
+    r = sources.listing(db.connect(), _roots(), _sources_active())
+    cfg = config.load()
+    return jsonify({**r, "sources": [_with_session(s, cfg) for s in r["sources"]]})
 
 
 def _source_or_404(sid):
     s = sources.get(db.connect(), sid, _sources_active())
     if s is None:
         abort(404)
-    return s
+    return _with_session(s)
 
 
 @app.get("/api/sources/resolve")
@@ -754,13 +762,7 @@ def resolve_source():
     try:
         if request.args.get("tool") == "instaloader":
             # A profile name or @name, as POST /api/sources takes it with that tool.
-            target = sources.parse_target("instaloader", request.args.get("url"))
-            if target is None:
-                raise sources.Refused("not an Instagram profile name")
-            folder = os.path.join(cfg["media_roots"][0], target) if cfg["media_roots"] else None
-            if folder and sources.in_saved(folder, cfg["media_roots"]):
-                raise sources.Refused(sources.SAVED_REFUSED.format(folder=folder))
-            r = {"tool": "instaloader", "platform": sources.PLATFORM["instaloader"], "target": target, "folder": folder}
+            r = sources.resolve_name(request.args.get("url"), cfg["media_roots"])
         else:
             r = sources.resolve(request.args.get("url"), sources.routes(cfg), cfg["media_roots"])
     except sources.Refused as e:
@@ -824,7 +826,7 @@ def get_source(sid):
     s = sources.get(db.connect(), sid, _sources_active())
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
-    return jsonify(s)
+    return jsonify(_with_session(s))
 
 
 @app.post("/api/sources/<int:sid>")
@@ -836,11 +838,15 @@ def update_source(sid):
     body = request.get_json(silent=True) or {}
     if not isinstance(body.get("options"), dict):
         return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
+    if sid in _sources_active():
+        # The sync's end clears full history and last N: it would clear the new ones.
+        return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
     sent = body["options"]
     options, error = sources.parse_options(sent, base=s["options"], tool=s["tool"], platform=s["platform"],
                                            target=s["target"])
+    # Last N stays open while a first sync with it has not worked yet.
     if not error and sent.get("first_posts") not in (None, s["options"]["first_posts"]) \
-            and s["last_sync_at"] is not None:
+            and s["last_sync_at"] is not None and s["options"]["first_posts"] is None:
         error = "only the last posts is for a source's first sync, and this one has synced already"
     error = error or sources.login_refused(options, s["platform"], sync.session_of(s["tool"], options))
     if error:

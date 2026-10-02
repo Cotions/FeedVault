@@ -32,10 +32,19 @@ const KINDS = {
 };
 
 export const MEDIA = [
-  ["all", "images and videos", "everything the posts have"],
-  ["images", "images only", "videos are skipped"],
-  ["videos", "videos only", "images are skipped"],
+  ["all", "images and videos"],
+  ["images", "images only"],
+  ["videos", "videos only"],
 ];
+
+// What a media choice does: gallery-dl picks file by file; instaloader post
+// by post (a carousel is not a video post, so "videos" leaves it out).
+export function mediaEffect(tool, media) {
+  const insta = tool === "instaloader";
+  if (media === "images") return insta ? "videos are skipped, carousels keep their images" : "videos are skipped";
+  if (media === "videos") return insta ? "video posts and reels; carousels are skipped" : "images are skipped";
+  return "everything the posts have";
+}
 
 export const FIRST_POSTS_MAX = 10000;
 
