@@ -49,6 +49,11 @@ class BadRequest(ValueError):
     """Unknown kind or bad parameters: the API answers 400."""
 
 
+class Cancelled(Exception):
+    """Raised by a kind's start: there is nothing left to run (its source is
+    gone). The job ends cancelled with this message, also noted in its log."""
+
+
 class Kind:
     def __init__(self, name, label, params, build, group, summarize=None, start=None, outcome=None,
                  ended=None, pause=None, describe=None, after=None):
@@ -73,10 +78,10 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
     group:     lock group, or a function of the params returning one
     summarize: optional, output lines -> (result dict, message) for a job
                that exited 0 and has no rescan target
-    start:     optional, (params, note) -> None, run in the job's thread right before
+    start:     optional, (params, note, argv) -> None, run in the job's thread right before
                the process starts (no other job of its group is running);
-               an exception fails the job with its message; note(text) adds a
-               [feedvault] line to its log
+               an exception fails the job with its message, Cancelled
+               cancels it; note(text) adds a [feedvault] line to its log
     after:     optional, (public job dict, note) -> None, run in the job's
                thread once its process has exited, cancelled or not, before
                the rescan; an exception is noted in its log and changes
@@ -315,7 +320,11 @@ def _run(job):
         kind = _kinds[job.kind]
         if kind.start:
             try:
-                kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"))
+                kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"), job.argv)
+            except Cancelled as e:
+                _note(job, f"[feedvault] {e}")
+                _finish(job, "cancelled", message=str(e))
+                return
             except Exception as e:
                 _finish(job, "failed", message=str(e) or type(e).__name__)
                 return
@@ -406,7 +415,7 @@ def _index(job):
     if job.full_scan:
         report = scanner.run(roots)            # every root: a scan of one would mark the others missing
     else:
-        report = scanner.index_dirs(roots, list(scanner.folders(job.rescan)))
+        report = scanner.index_dirs(roots, list(scanner.folders(job.rescan)), new=True)
     return {"added": report["added"], "updated": report["updated"]}
 
 

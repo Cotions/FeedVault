@@ -23,7 +23,10 @@ export const ERRORS = {
   generic: "failed",
 };
 
-const BATCH_KEY = "feedvault.syncAll";
+// The "Sync all" summary the user hid, by batch (id and start time); the
+// batch itself lives in the backend, in memory (docs/API.md "Sync all").
+const HIDDEN_KEY = "feedvault.syncAllHidden";
+localStorage.removeItem("feedvault.syncAll");   // job ids kept by older builds (#32)
 
 /* Every source, kept fresh: reloaded after a scan and whenever a sync job
    starts, moves on or ends (a source shows its sync's state and, once it has
@@ -64,31 +67,22 @@ export function useSources() {
   return { ...api, jobOf, sync, remove };
 }
 
-/* "Sync all": the jobs it queued, remembered in localStorage so the progress
-   survives a reload, and their progress from the shared jobs poll.
+// One "Sync all" (GET /api/jobs sync_all): what its summary is hidden and toasted by.
+export const batchKey = b => `${b.id}:${b.started_at}`;
+
+/* "Sync all": the backend's last batch (GET /api/jobs `sync_all`), from
+   the shared jobs poll. Only live jobs count, so a restart or a replaced
+   database can never leave a batch showing.
 
    { batch: { total, ended, failed, added, current, done, jobs } | null,
      start(), clear(), busy }
    current: the job running now, else the next queued one; jobs: those not
-   ended yet (to stop them). */
+   ended yet (to stop them). clear() hides a finished batch's summary. */
 export function useSyncAll() {
   const { list, started } = useJobs();
   const toast = useToast();
-  const [ids, setIds] = useState(() => {
-    try {
-      const v = JSON.parse(localStorage.getItem(BATCH_KEY));
-      return Array.isArray(v) && v.every(Number.isInteger) ? v : null;
-    } catch {
-      return null;
-    }
-  });
+  const [hidden, setHidden] = useState(() => localStorage.getItem(HIDDEN_KEY));
   const [busy, setBusy] = useState(false);
-
-  function remember(v) {
-    setIds(v);
-    if (v) localStorage.setItem(BATCH_KEY, JSON.stringify(v));
-    else localStorage.removeItem(BATCH_KEY);
-  }
 
   async function start() {
     setBusy(true);
@@ -100,7 +94,6 @@ export function useSyncAll() {
         toast(r.skipped ? "Every source is already syncing." : "No source to sync.");
         return;
       }
-      remember(r.jobs.map(j => j.id));
       started(r.jobs[0]);
     } catch (err) {
       toast(err.message, "err");
@@ -109,25 +102,17 @@ export function useSyncAll() {
     }
   }
 
+  const b = list?.sync_all;
+  const key = b ? batchKey(b) : null;
   let batch = null;
-  if (ids && list) {
-    const jobs = ids.map(id => list.jobs.find(j => j.id === id)).filter(Boolean);
-    const ended = jobs.filter(j => ENDED.has(j.state));
-    const current = jobs.find(j => j.state === "running") || jobs.find(j => j.state === "queued") || null;
-    // A job not listed is either long over (older than the history kept)
-    // or newer than the last poll.
-    const oldest = list.jobs.length ? Math.min(...list.jobs.map(j => j.id)) : 0;
-    const missing = ids.filter(id => !jobs.some(j => j.id === id));
-    const pruned = missing.filter(id => id < oldest).length;
-    batch = {
-      total: ids.length,
-      ended: ended.length + pruned,
-      failed: ended.filter(j => j.state === "failed").length,
-      added: ended.reduce((n, j) => n + (j.result?.added || 0), 0),
-      current,
-      done: !current && missing.length === pruned,
-      jobs: jobs.filter(j => !ENDED.has(j.state)),
-    };
+  if (b && !(b.done && key === hidden)) {
+    const active = new Set(b.active);
+    batch = { ...b, jobs: list.jobs.filter(j => active.has(j.id)) };
   }
-  return { batch, start, clear: () => remember(null), busy };
+  function clear() {
+    if (!key) return;
+    setHidden(key);
+    localStorage.setItem(HIDDEN_KEY, key);
+  }
+  return { batch, start, clear, busy };
 }

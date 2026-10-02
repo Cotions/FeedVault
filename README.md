@@ -161,6 +161,13 @@ indexed (tick "Full history" to fetch everything). **Creators** offers your
 existing instaloader folders as sources to confirm, and **Sync all** runs
 every source one after another with a pause between them.
 
+When a sync adds posts, a notice says so ("12 new posts from @name") and
+links to them. Posts indexed since you last pressed **Mark all seen** are
+**new**: the sidebar counts them next to Feed, Creators shows how many each
+person and account has, the Feed's "New since last visit" chip (or `is:new`
+in the search box) shows only those, and Review can go through just them.
+What was already in the archive is never new, whenever it was posted.
+
 By default syncs run without a login (public profiles only). **Settings →
 Instagram sync** can make instaloader use your browser's Instagram cookies
 (`--load-cookies`) or a session it saved after `instaloader --login` in a

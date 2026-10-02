@@ -76,6 +76,8 @@ function qs(params) {
   for (const [k, v] of Object.entries(params)) {
     // A list repeats the parameter (tag=a&tag=b).
     if (Array.isArray(v)) v.forEach(x => s.append(k, String(x)));
+    // A flag (untagged, new) is on as 1, which the server reads; off is left out.
+    else if (v === true) s.set(k, "1");
     else if (v !== undefined && v !== null && v !== "" && v !== false) s.set(k, String(v));
   }
   const str = s.toString();
@@ -96,6 +98,11 @@ export function getPost(platform, postId) {
 export function getPostsSummary(params = {}, opts) { return get(`/api/posts/summary${qs(params)}`, opts); }
 // [account], most posts first; see docs/API.md "People".
 export function getAuthors()   { return get("/api/authors"); }
+
+// New posts since the last "Mark all seen" (docs/API.md "New posts").
+export function getNew()       { return get("/api/new"); }
+// at: unix seconds, posts first seen after it stay new; default now.
+export function markSeen(at)   { return post("/api/new/seen", at == null ? {} : { at }); }
 export function getStats()     { return get("/api/stats"); }
 // { totals, by_author, by_kind, by_year, largest, trash }, see docs/API.md "Storage".
 // person: an id, to cover that person's posts only.

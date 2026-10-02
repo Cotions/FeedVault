@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getAuthors, getPeople, getSuggestions, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
+import { getAuthors, getPeople, getSuggestions, getNew, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
+import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
 import { platformLabel, platformShort, authorFeedPath, fmtBytes, fmtInt } from "../lib/fmt";
@@ -53,7 +54,13 @@ function CardSyncButton({ sync, onSync }) {
   );
 }
 
-function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync }) {
+// Posts indexed since the last "Mark all seen" (docs/API.md "New posts").
+function NewBadge({ count }) {
+  if (!count) return null;
+  return <span className="side-badge new-badge" title="New since you last marked everything seen">{fmtInt(count)} new</span>;
+}
+
+function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh }) {
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
@@ -72,6 +79,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
       <span className="person-stats">
         <span className="creator-count">{fmtInt(p.count)}</span>
         <span className="creator-sub">{fmtBytes(p.bytes)}</span>
+        <NewBadge count={fresh} />
       </span>
     </>
   );
@@ -92,7 +100,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
   );
 }
 
-function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync }) {
+function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, fresh }) {
   const former = matchedFormer(a, query);
   const body = (
     <>
@@ -105,7 +113,10 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
         </span>
         <CardSyncStatus sync={sync} />
       </span>
-      <span className="creator-count">{a.count}</span>
+      <span className="person-stats">
+        <span className="creator-count">{a.count}</span>
+        <NewBadge count={fresh} />
+      </span>
     </>
   );
   const selectable = selectMode && a.id != null;
@@ -242,6 +253,15 @@ export default function Creators() {
   const authorsApi = useApi(getAuthors, key);
   const peopleApi  = useApi(getPeople, key);
   const suggestApi = useApi(getSuggestions, key);
+  // New counts per card, again whenever the jobs poll's total moves.
+  const { newCount } = useJobs();
+  const newApi = useApi(getNew, `${key}:${newCount}`);
+  const fresh = useMemo(() => {
+    const m = new Map();
+    for (const p of newApi.data?.by_person || []) m.set(`person:${p.id}`, p.count);
+    for (const a of newApi.data?.by_account || []) m.set(`account:${accountKey(a)}`, a.count);
+    return m;
+  }, [newApi.data]);
   const [filter, setFilter] = useState("");
   const [busy,   setBusy]   = useState(false);
   const [merge,  setMerge]  = useState(null);                // { name, error } while the dialog is open
@@ -454,6 +474,7 @@ export default function Creators() {
                     onToggle={shift => sel.toggle(index(`person:${p.id}`), shift)}
                     sync={syncOf(`person:${p.id}`)}
                     onSync={sources.sync}
+                    fresh={fresh.get(`person:${p.id}`)}
                   />
                 ))}
               </div>
@@ -476,6 +497,7 @@ export default function Creators() {
                     onToggle={shift => sel.toggle(index(`account:${accountKey(a)}`), shift)}
                     sync={a.id != null ? syncOf(`account:${accountKey(a)}`) : null}
                     onSync={sources.sync}
+                    fresh={a.id != null ? fresh.get(`account:${accountKey(a)}`) : 0}
                   />
                 ))}
               </div>

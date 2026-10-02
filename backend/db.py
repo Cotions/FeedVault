@@ -12,6 +12,7 @@ import re
 import sqlite3
 import string
 import threading
+import time
 
 import thumbs
 
@@ -356,11 +357,28 @@ def _migrate_13(conn):
         conn.execute(f"ALTER TABLE jobs ADD COLUMN {column}")
 
 
+def _migrate_14(conn):
+    """New posts (news.py). posts.first_seen: when the index first had the
+    post, set on insert only (0: known before this, or found by the scan
+    that built the index). seen_at: the user's one high-water mark, user
+    data mirrored by userdata.py; a post is new when first_seen is after it.
+    A database already in use starts with it at now, so its whole archive
+    is not new; a new one starts without, for userdata.py to restore it."""
+    conn.execute("ALTER TABLE posts ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0")
+    conn.execute("CREATE INDEX IF NOT EXISTS posts_first_seen ON posts(first_seen)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS seen_at (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            at INTEGER NOT NULL
+        )""")
+    conn.execute("INSERT INTO seen_at(id, at) SELECT 1, ? WHERE EXISTS (SELECT 1 FROM posts)", (int(time.time()),))
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
-              _migrate_13]
+              _migrate_13, _migrate_14]
 
 BACKUPS_KEPT = 3
 
@@ -496,8 +514,10 @@ def connect():
 # Writes (used by the scanner)
 # ---------------------------------------------------------------------------
 
-def upsert_post(conn, p, meta_mtime, meta_size, now):
-    """Insert or refresh one parsed post and its media. Returns "added" or "updated"."""
+def upsert_post(conn, p, meta_mtime, meta_size, now, first_seen=None):
+    """Insert or refresh one parsed post and its media. Returns "added" or
+    "updated". ``first_seen`` (default ``now``) is kept on insert only: a
+    post the index already has never becomes new again."""
     row = conn.execute("SELECT saved_at FROM posts WHERE id = ?", (p.id,)).fetchone()
     saved_at = min(row["saved_at"], int(meta_mtime)) if row else int(meta_mtime or now)
     values = dict(
@@ -508,11 +528,11 @@ def upsert_post(conn, p, meta_mtime, meta_size, now):
         hashtags=json.dumps(p.hashtags), tool=p.tool, tool_version=p.tool_version,
         side_files=json.dumps(p.side_files),
         meta_path=p.meta_path, meta_mtime=meta_mtime, meta_size=meta_size,
-        missing=0, indexed_at=now,
+        missing=0, indexed_at=now, first_seen=now if first_seen is None else first_seen,
     )
     cols = ", ".join(values)
     marks = ", ".join(f":{k}" for k in values)
-    updates = ", ".join(f"{k} = excluded.{k}" for k in values if k != "id")
+    updates = ", ".join(f"{k} = excluded.{k}" for k in values if k not in ("id", "first_seen"))
     conn.execute(f"INSERT INTO posts ({cols}) VALUES ({marks}) "
                  f"ON CONFLICT(id) DO UPDATE SET {updates}", values)
 
@@ -705,6 +725,7 @@ def fts_query(q):
 # tag:name or tag:"two words"; an unclosed quote runs to the end (still typing).
 _ASCII_FOLD = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)   # what NOCASE folds
 _TAG_TERM = re.compile(r'(?<!\S)tag:(?:"([^"]*)"?|(\S*))', re.IGNORECASE)
+_IS_NEW = re.compile(r'(?<!\S)is:new(?!\S)', re.IGNORECASE)
 
 
 def parse_search(q):
@@ -766,8 +787,13 @@ PERSON_ACCOUNTS = """
       ON pa.platform = a.platform AND pa.author_id = a.alias_id WHERE pa.person_id = ?"""
 
 
+# Posts first indexed after the user last marked everything seen (news.py);
+# none while there is no mark.
+NEW = "p.first_seen > COALESCE((SELECT at FROM seen_at WHERE id = 1), 9223372036854775807)"
+
+
 def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
-                person=None):
+                person=None, new=False):
     """WHERE clause and arguments for the /api/posts filters, over _FROM.
     None when the search text can match nothing. Shared by list_posts,
     post_summary and storage so a count and its size can never disagree.
@@ -775,12 +801,16 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
     ``tags``: the post must have every one; ``tag:`` terms in ``q`` add to them.
     ``author`` is the whole account: an id takes in its folder-name aliases,
     an alias its id (and the id's other aliases). ``person`` (an id) every
-    account linked to that person."""
+    account linked to that person. ``new``: only new posts; ``is:new`` in
+    ``q`` too."""
     where, args = [], []
     tags = list(tags or ())
     if q:
         q, more = parse_search(q)
         tags += more
+        # After the tags: an is:new inside tag:"…" is part of a tag name.
+        new = new or bool(_IS_NEW.search(q))
+        q = _IS_NEW.sub(" ", q).strip()
     if q:
         match = fts_query(q)
         if match is None:
@@ -797,6 +827,8 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
         args.append(name)
     if untagged:
         where.append("p.id NOT IN (SELECT post_id FROM post_tags)")
+    if new:
+        where.append(NEW)
     if platform:
         where.append("p.platform = ?")
         args.append(platform)
@@ -821,8 +853,8 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
 
 
 def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted",
-               offset=0, limit=60, review=None, order="desc", tags=(), untagged=False, person=None):
-    f = post_filter(q, platform, author, kind, review, tags, untagged, person)
+               offset=0, limit=60, review=None, order="desc", tags=(), untagged=False, person=None, new=False):
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new)
     if f is None:
         return 0, []
     clause, args = f
@@ -836,9 +868,9 @@ def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted
 
 
 def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
-                 person=None):
+                 person=None, new=False):
     """Posts, media and bytes matched by the /api/posts filters, all pages."""
-    f = post_filter(q, platform, author, kind, review, tags, untagged, person)
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new)
     if f is None:
         return {"posts": 0, "media": 0, "bytes": 0}
     clause, args = f

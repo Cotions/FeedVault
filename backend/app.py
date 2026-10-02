@@ -22,6 +22,7 @@ import duplicates
 import hashing
 import info_cookies
 import jobs
+import news
 import organize
 import people
 import scanner
@@ -108,6 +109,7 @@ def _post_filters():
         tags=[" ".join(t.split()) for t in request.args.getlist("tag") if t.strip()],
         untagged=request.args.get("untagged") == "1",
         person=_person_arg(),
+        new=request.args.get("new") == "1",
     )
 
 
@@ -128,6 +130,26 @@ def list_posts():
 @app.get("/api/posts/summary")
 def posts_summary():
     return jsonify(db.post_summary(db.connect(), **_post_filters()))
+
+
+# ---------------------------------------------------------------------------
+# New posts (news.py)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/new")
+def new_posts():
+    return jsonify(news.summary(db.connect()))
+
+
+@app.post("/api/new/seen")
+def mark_seen():
+    body = request.get_json(silent=True)
+    body = {} if body is None else body
+    at = body.get("at") if isinstance(body, dict) else None
+    if not isinstance(body, dict) or (at is not None and (not isinstance(at, int) or isinstance(at, bool)
+                                                          or not 0 <= at < 2**53)):
+        return jsonify({"ok": False, "error": "send { at } (unix seconds), or nothing for now"}), 400
+    return jsonify({"ok": True, "since": news.mark_seen(db.connect(), at)})
 
 
 @app.get("/api/posts/<platform>/<post_id>")
@@ -935,7 +957,9 @@ def clean_info_json_cookies():
 
 @app.get("/api/jobs")
 def list_jobs():
-    return jsonify(jobs.listing())
+    # The sidebar's "New" count rides along with the poll (news.py).
+    new, new_until = news.count(db.connect())
+    return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until})
 
 
 @app.get("/api/jobs/kinds")
@@ -1148,6 +1172,7 @@ def main():
         print(f"[db] {e}")
         sys.exit(1)
     userdata.restore_all(db.connect(), cfg["data_directory"])
+    news.ensure(db.connect())
     jobs.recover()
     # Ctrl+C and SIGTERM still write the last few seconds of user data, after
     # stopping running jobs (atexit runs the last registered first).

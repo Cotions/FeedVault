@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPosts, getPostsSummary, getAuthors, getPeople, getTags, deleteItems, setDecision } from "../lib/api";
+import { getPosts, getPostsSummary, getAuthors, getPeople, getTags, deleteItems, setDecision, markSeen } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
+import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
-import { KINDS, platformLabel, fmtBytes, fmtInt } from "../lib/fmt";
+import { KINDS, platformLabel, fmtBytes, fmtInt, plural } from "../lib/fmt";
 import { sameTag, searchTags, tagsMatch, withTags } from "../lib/tags";
 import { personPath } from "../lib/people";
 import PostCard from "../components/PostCard";
@@ -19,7 +20,7 @@ import CreatorPicker from "../components/CreatorPicker";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
-const FILTERS = ["platform", "kind", "author", "person", "review", "tag", "untagged", "sort"];
+const FILTERS = ["platform", "kind", "author", "person", "review", "tag", "untagged", "new", "sort"];
 const SUMMARY_DELAY = 250;
 
 export default function Feed() {
@@ -37,9 +38,12 @@ export default function Feed() {
   const review   = reviewP === "unreviewed" || reviewP === "kept" ? reviewP : "";
   const tagKey   = JSON.stringify(params.getAll("tag").filter(t => t.trim()));
   const untagged = params.get("untagged") === "1";
+  const newOnly  = params.get("new") === "1";
+  const { newCount, newUntil, started } = useJobs();
+  const [seenTick, setSeenTick] = useState(0);         // bumped by "Mark all seen"
 
-  const filters = useMemo(() => ({ q, platform, kind, author, person, review, tag: JSON.parse(tagKey), untagged, sort }),
-    [q, platform, kind, author, person, review, tagKey, untagged, sort]);
+  const filters = useMemo(() => ({ q, platform, kind, author, person, review, tag: JSON.parse(tagKey), untagged, new: newOnly, sort }),
+    [q, platform, kind, author, person, review, tagKey, untagged, newOnly, sort]);
   const tagFilter = filters.tag;
   const filterKey = JSON.stringify(filters);
 
@@ -63,14 +67,14 @@ export default function Feed() {
       error => { if (alive) setResult(prev => ({ ...prev, key: filterKey, error })); },
     );
     return () => { alive = false; };
-  }, [filters, filterKey, refreshKey]);
+  }, [filters, filterKey, refreshKey, seenTick]);
 
   /* ── "Would free": size of everything the filters match ─ */
   // Only with a filter: unfiltered, it is the whole archive (see Storage).
   // Built from the cleaned values, so ?review=bogus or a blank q is no filter.
   const anyFilter  = !!(rawQ || FILTERS.some(f => f !== "sort" && params.get(f)));
-  const summaryKey = q || platform || kind || author || person || review || tagFilter.length || untagged
-    ? JSON.stringify({ q, platform, kind, author, person, review, tag: tagFilter, untagged }) : null;
+  const summaryKey = q || platform || kind || author || person || review || tagFilter.length || untagged || newOnly
+    ? JSON.stringify({ q, platform, kind, author, person, review, tag: tagFilter, untagged, new: newOnly }) : null;
   const [summary, setSummary] = useState({ key: null, data: null });
   const [summaryTick, setSummaryTick] = useState(0);    // bumped after a delete or keep
   useEffect(() => {
@@ -85,7 +89,7 @@ export default function Feed() {
       );
     }, SUMMARY_DELAY);
     return () => { clearTimeout(t); ctrl.abort(); };
-  }, [summaryKey, refreshKey, summaryTick]);
+  }, [summaryKey, refreshKey, summaryTick, seenTick]);
   const freeable = summary.key === summaryKey ? summary.data : null;
 
   const current = result.key === filterKey;
@@ -149,6 +153,25 @@ export default function Feed() {
       toast(e.message, "err");
     } finally {
       setKeeping(false);
+    }
+  }
+
+  // What the count showed stops being new (up to its newest post: one
+  // indexed since stays new); the sidebar and Creators counts follow with
+  // the jobs poll.
+  const [marking, setMarking] = useState(false);
+  async function runMarkSeen() {
+    setMarking(true);
+    try {
+      const r = await markSeen(newUntil);
+      if (!r?.ok) { toast(r?.error || "Could not mark the posts seen.", "err"); return; }
+      started();
+      setSeenTick(t => t + 1);
+      toast(`${plural(newCount, "new post")} marked seen.`);
+    } catch (e) {
+      toast(e.message, "err");
+    } finally {
+      setMarking(false);
     }
   }
 
@@ -263,7 +286,8 @@ export default function Feed() {
     <div className="card feed">
       <div className="page-head">
         <h2 className="page-title">
-          {q ? "Results" : selectedPerson ? selectedPerson.name : selectedAuthor ? `@${selectedAuthor.handle}`
+          {q ? "Results" : newOnly && !author && !person && !tagFilter.length ? "New since last visit"
+            : selectedPerson ? selectedPerson.name : selectedAuthor ? `@${selectedAuthor.handle}`
             : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span> : "Feed"}
         </h2>
         <span className="page-count">
@@ -277,9 +301,24 @@ export default function Feed() {
           </span>
         )}
         <div className="page-head-spacer" />
+        {newCount > 0 && (
+          <button type="button" className="btn-secondary" onClick={runMarkSeen} disabled={marking}
+                  title="These new posts stop being new; any indexed since stay new">
+            <Icon name="check" size={14} />{marking ? "Marking…" : "Mark all seen"}
+          </button>
+        )}
       </div>
 
       <div className="feed-filters" role="group" aria-label="Filters">
+        <button
+          type="button"
+          className={`btn-secondary select-toggle${newOnly ? " is-on" : ""}`}
+          aria-pressed={newOnly}
+          onClick={() => setParam({ new: newOnly ? "" : "1" })}
+          title="Only posts indexed since you last marked everything seen"
+        >
+          <Icon name="refresh" size={13} />New since last visit{newCount > 0 ? ` (${fmtInt(newCount)})` : ""}
+        </button>
         <label className="filter">
           <span>Platform</span>
           <select className="sort-select" value={platform} onChange={e => setParam({ platform: e.target.value, author: "" })}>
@@ -358,10 +397,15 @@ export default function Feed() {
             <Icon name="users" size={14} />Person
           </Link>
         )}
+        {newOnly && !author && !person && (
+          <Link className="btn-secondary review-link" to="/review?new=1" title="Keep or trash the new posts, one by one">
+            <Icon name="review" size={14} />Review new posts
+          </Link>
+        )}
         {(author || person) && (
           <Link
             className="btn-secondary review-link"
-            to={`/review?${new URLSearchParams(person ? { person } : { ...(platform ? { platform } : {}), author })}`}
+            to={`/review?${new URLSearchParams({ ...(person ? { person } : { ...(platform ? { platform } : {}), author }), ...(newOnly ? { new: "1" } : {}) })}`}
             title={`Keep or trash this ${person ? "person" : "creator"}'s unreviewed posts, one by one`}
           >
             <Icon name="review" size={14} />Review this {person ? "person" : "creator"}
@@ -390,7 +434,14 @@ export default function Feed() {
       ) : firstLoad ? (
         <div className="empty">Loading…</div>
       ) : showEmpty ? (
-        anyFilter ? (
+        newOnly && !q && !platform && !kind && !author && !person && !review && !tagFilter.length && !untagged ? (
+          <div className="feed-empty">
+            <span className="feed-empty-mark"><Icon name="check" size={30} /></span>
+            <h3>Nothing new</h3>
+            <p>No post has been indexed since you last marked everything seen. A sync or a rescan that finds new posts brings them here.</p>
+            <button type="button" className="btn-secondary" onClick={() => setParam({ new: "" })}>Show all posts</button>
+          </div>
+        ) : anyFilter ? (
           <div className="empty">
             No posts match{q ? <> “{q}”</> : ""}.{" "}
             <button type="button" className="btn-link" onClick={clearFilters}>Clear filters</button>

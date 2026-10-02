@@ -85,9 +85,11 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&person=&kind=&tag=&untagged=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&person=&kind=&tag=&untagged=&new=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&person=&kind=&review=&tag=&untagged=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/posts/summary?q=&platform=&author=&person=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
+| POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`, see [New posts](#new-posts) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
 | GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
@@ -104,6 +106,51 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
+
+## New posts
+
+A post is **new** when the index first had it after the user last marked
+everything seen. Each post keeps when that was (`first_seen`, set when it is
+first indexed and never changed by a rescan); the user has one high-water
+mark, `seen_at`. `posted_at` plays no part: an old post downloaded today is
+new.
+
+- What a download adds (a sync job's rescan) and what a full scan finds that
+  the index did not have are new. A scan that builds the index from nothing
+  (first run, deleted or replaced database), files back from the trash and
+  files moved by Duplicates are not: they were there before.
+- `seen_at` is user data: table `seen_at`, one row, written to
+  `<data_directory>/userdata/seen_at.json` (`{"version": 1, "rows": [{"id":
+  1, "at": 1727500000}]}`) like the others and read back into a database
+  that has none. A database upgraded to this version starts with it at the
+  time of the upgrade, and a new one with nothing to restore at its first
+  start, so an existing archive is never all new.
+- Strictly after: a post indexed in the same second as the mark is not new.
+
+`GET /api/new`:
+
+```json
+{ "count": 12, "since": 1727500000,
+  "by_person": [{ "id": 3, "name": "Some Body", "count": 9 }],
+  "by_account": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "person": 3, "count": 9 },
+                 { "platform": "tiktok", "id": "6900000000000000777", "handle": "demo.clips", "person": null, "count": 3 }] }
+```
+
+- `count`: every new post, those without an author included; `since`: the
+  mark (`null` only before the first start has set it).
+- `by_account`: accounts as on the Creators page (folder-name aliases count
+  for the id they stand for), `person` the id of the person linked, else
+  `null`; `by_person`: the same added up per person. Most new posts first.
+
+`POST /api/new/seen` marks everything seen: `at` (Unix seconds, optional,
+default now) becomes the mark, unless the mark is already later: it never
+moves backwards, nor past now. `{ "ok": true, "since": <the mark> }`; a
+body that is not `{}`, `{ "at": <whole seconds> }` or empty is a 400.
+The dashboard's **Mark all seen** sends `new_until` from `GET /api/jobs` (the
+newest new post's `first_seen` when it counted them), so a post indexed
+since, which it has not shown, stays new. A full scan stamps `first_seen`
+folder by folder, so a mark set while it runs leaves the folders it commits
+afterwards new.
 
 ## Deleting
 
@@ -284,11 +331,14 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `q`: full-text search over post text, author handle, author name and album (SQLite
   FTS5; plain words, prefix match on the last word). `tag:name` and
   `tag:"two words"` in it are tag filters, not words (see [Tags](#tags)), and
-  mix freely with text: `tag:outfits red dress`
+  mix freely with text: `tag:outfits red dress`. `is:new` in it is the same
+  as `new=1`
 - `tag`: a tag name, matched without regard to (ASCII) case. Repeat it for several:
   a post must have all of them (`tag=a&tag=b`). Combined with any `tag:` in `q`;
   a value that cannot be a tag name matches nothing
 - `untagged=1`: only posts with no tag
+- `new=1`: only posts new since the last "Mark all seen" (see
+  [New posts](#new-posts))
 - `platform`: `instagram`, `twitter` (X, x.com included), `tiktok`, or another
   gallery-dl category name for sites without their own mapping (`reddit`, `bluesky`, …)
 - `author`: author id (from `/api/authors`) or one of its folder-name aliases;
@@ -302,7 +352,7 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `offset` (default 0), `limit` (default 60, max 200)
 
 `/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
-`platform`, `author`, `person`, `kind`, `review`, `tag`, `untagged`; `sort`, `order`, `offset` and `limit`
+`platform`, `author`, `person`, `kind`, `review`, `tag`, `untagged`, `new`; `sort`, `order`, `offset` and `limit`
 are ignored) and totals everything they match, not just one page: `posts` is
 always equal to the `total` that `/api/posts` returns for the same filters,
 `media` and `bytes` count the media items of those posts that are not missing.
@@ -951,8 +1001,12 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
   in `waits_until`.
 - **Result.** The source folder is indexed when the job ends (exit code 0
   or not, but not when cancelled): `result` `{ "added", "updated", "error",
-  "line" }`, `message` `"3 new posts"`, or for a failure the plain-language
+  "line", "account", "person" }`, `message` `"3 new posts"`, or for a failure the plain-language
   message of `error`. The outcome is stored on the source (`last_result`).
+  `account` (`{ "platform", "id" }`: the source's account, else that of its
+  folder's posts, else `null`) and `person` (an id or `null`) are for the
+  dashboard's toast to link to: the Feed's new posts of that account, or the
+  person's page for a failure.
 
 ### instaloader settings
 
@@ -1199,7 +1253,7 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …] }`: queued and running jobs and the last 100 ended ones, newest first |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000 }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts), for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
 | GET | `/api/jobs/<id>` | job, or 404 |
@@ -1222,6 +1276,35 @@ Built-in kinds:
 | `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 
 More download kinds come with the userscript (#10).
+
+### Sync all
+
+`sync_all` in `GET /api/jobs` is the last `POST /api/sources/sync-all`
+that queued anything since FeedVault started, or `null`. One sent while the
+last is still running adds its jobs to it (one batch, one summary):
+
+```json
+{ "id": 51, "started_at": 1727500000, "total": 6, "ended": 2, "failed": 0,
+  "added": 31, "profiles": 2, "first": { "label": "Sync @somebody", "source": 4 },
+  "current": job, "jobs": [51, 52, 53, 54, 55, 56], "active": [53, 54, 55, 56], "done": false }
+```
+
+- `id`: its first job's id; with `started_at`, what tells two batches apart.
+- `ended`: its jobs that are no longer queued or running, whatever their
+  state; `failed` those that failed; `added` the new posts they indexed;
+  `profiles` how many of them added at least one, and `first` (label and
+  source id) the one that added the most, or `null`.
+- `current`: the job running, else the next queued one, else `null`;
+  `jobs`: the ids of its jobs; `active`: those still queued or running;
+  `done`: none is. The dashboard toasts one summary when a batch it saw
+  running is done ("31 new posts from 6 profiles"), not one per job.
+
+It is kept in memory only and built from live jobs: a restart (which ends
+every queued job, see `interrupted`) forgets it, so the dashboard never
+shows syncs that a restored or rebuilt database no longer has. A sync job
+whose source no longer exists when it starts (removed, or the database was
+replaced, including when its id now names another profile) ends `cancelled` with the message `source <id> no longer exists
+(removed, or the database was replaced): nothing to sync`, also in its log.
 
 ### Log
 
