@@ -11,8 +11,11 @@ import { accountKey, accountRef, accountText, matchedFormer, matches, personPath
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import SelectionBar from "../components/SelectionBar";
-import { AddSource, RemoveSourceDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton } from "../components/Sources";
-import { useSources, useSyncAll } from "../lib/sources";
+import {
+  AddSource, RemoveSourceDialog, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
+} from "../components/Sources";
+import { sourceName, useSources, useSyncAll } from "../lib/sources";
+import { optionsSummary } from "../lib/sourceOptions";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -100,7 +103,24 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
   );
 }
 
-function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, fresh }) {
+// An account card's sources have no row of their own: Options per source here.
+function CardOptionsButtons({ sync, onEdit }) {
+  if (!sync) return null;
+  return sync.sources.map(s => {
+    const summary = optionsSummary(s);
+    const busy = !sync.idle.includes(s);         // its sync's end would undo what changes now
+    return (
+      <button key={s.id} type="button" className="icon-btn creator-opts" disabled={busy} onClick={() => onEdit(s)}
+              title={busy ? "Its sync is queued or running"
+                : `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}`}
+              aria-label={`Options of ${sourceName(s)} (${s.tool})`}>
+        <Icon name="settings" size={15} />
+      </button>
+    );
+  });
+}
+
+function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh }) {
   const former = matchedFormer(a, query);
   const body = (
     <>
@@ -133,14 +153,18 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
         <Link to={authorFeedPath(a.platform, a)} className="creator-main" title={`Show posts by @${a.handle}`}>{body}</Link>
       )}
       {a.id != null && !selectMode && (
-        <Link
-          to={`/review?${new URLSearchParams({ platform: a.platform, author: a.id })}`}
-          className="icon-btn creator-review"
-          title={`Review @${a.handle}'s unreviewed posts`}
-          aria-label={`Review @${a.handle}`}
-        >
-          <Icon name="review" size={15} />
-        </Link>
+        // Review, and Options under it when the account has a source.
+        <span className={sync ? "creator-tools" : undefined}>
+          <Link
+            to={`/review?${new URLSearchParams({ platform: a.platform, author: a.id })}`}
+            className="icon-btn creator-review"
+            title={`Review @${a.handle}'s unreviewed posts`}
+            aria-label={`Review @${a.handle}`}
+          >
+            <Icon name="review" size={15} />
+          </Link>
+          <CardOptionsButtons sync={sync} onEdit={onEdit} />
+        </span>
       )}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
@@ -269,6 +293,7 @@ export default function Creators() {
   const sources = useSources();
   const syncAll = useSyncAll();
   const [removing, setRemoving] = useState(null);           // the source to remove
+  const [editing,  setEditing]  = useState(null);           // the source whose options are open
   const [addAll,   setAddAll]   = useState(null);           // { error } while that dialog is open
 
   const data = authorsApi.data;
@@ -432,7 +457,8 @@ export default function Creators() {
           {loose.length > 0 && (
             <ul className="source-list">
               {loose.map(src => (
-                <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving} />
+                <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
+                           onSaved={sources.reload} />
               ))}
             </ul>
           )}
@@ -497,6 +523,7 @@ export default function Creators() {
                     onToggle={shift => sel.toggle(index(`account:${accountKey(a)}`), shift)}
                     sync={a.id != null ? syncOf(`account:${accountKey(a)}`) : null}
                     onSync={sources.sync}
+                    onEdit={setEditing}
                     fresh={a.id != null ? fresh.get(`account:${accountKey(a)}`) : 0}
                   />
                 ))}
@@ -516,6 +543,7 @@ export default function Creators() {
       )}
 
       <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
+      {editing && <SourceOptionsDialog source={editing} onClose={() => setEditing(null)} onSaved={sources.reload} />}
 
       <ConfirmDialog
         open={!!addAll}

@@ -8,7 +8,10 @@ Writes <dir>/media (fake posts), <dir>/data (database goes here) and
 <dir>/bin (set as the tools in the config; they never touch the network), so
 adding https://x.com/demo_skies, https://tiktok.com/@demo.clips or
 https://youtube.com/@demoshorts as a source and syncing it downloads invented
-posts (<dir>/fake_downloads.json). One TikTok profile, old.sync, is as a yt-dlp
+posts (<dir>/fake_downloads.json). Likewise an instaloader stand-in: the
+profile demo.reels has posts, reels, stories, highlights and tagged posts
+(<dir>/fake_instaloader.json). The demo_skies source is there already, with
+options (media tab, images, since 2023-11-01). One TikTok profile, old.sync, is as a yt-dlp
 sync with cookies left it before FeedVault removed them. Start the backend against it with:
 
     FEEDVAULT_CONFIG=<dir>/config.json backend/venv/bin/python backend/app.py
@@ -300,10 +303,13 @@ def add_fake_tools(root, ts):
     with a few invented profiles to sync. Returns the config's tools."""
     day = 86_400
     accounts = {
+        # Every third post a retweet (not on the media tab), one a reply, one a video.
         "https://x.com/demo_skies": {
             "category": "twitter", "user": {"id": 7001, "name": "demo_skies", "nick": "Demo Skies"},
             "posts": [{"id": str(1900000000000000000 + i), "ts": ts - i * day, "text": f"evening sky, take {i}",
-                       "files": 1 + i % 3} for i in range(1, 7)]},
+                       "files": 1 + i % 3, "video": i == 2,
+                       "in": ["with-replies"] if i == 5 else ["timeline", "tweets"] if i % 3 == 0
+                       else ["timeline", "tweets", "media"]} for i in range(1, 9)]},
         "https://tiktok.com/@demo.clips": {
             "extractor_key": "TikTok", "uploader_id": "6900000000000000777", "uploader": "demo.clips",
             "channel": "Demo Clips", "uploader_url": "https://www.tiktok.com/@demo.clips",
@@ -316,6 +322,7 @@ def add_fake_tools(root, ts):
             "videos": [{"id": f"DEMOshort{i:02d}", "ts": ts - i * day, "title": f"short {i}",
                         "duration": 40 if i % 4 else 1200} for i in range(1, 6)]},
     }
+    instaloader = add_fake_instaloader(root, ts)
     data = os.path.join(root, "fake_downloads.json")
     with open(data, "w") as f:
         json.dump({"accounts": accounts, "fail": None}, f, indent=1)
@@ -330,7 +337,56 @@ def add_fake_tools(root, ts):
                     f"sys.exit(fake_downloaders.{main}(sys.argv[1:]))\n")
         os.chmod(exe, 0o755)
         tools[tool] = exe
-    return tools
+    return {**tools, "instaloader": instaloader}
+
+
+def add_fake_instaloader(root, ts):
+    """An instaloader stand-in (backend/tests/fake_instaloader.py) with one
+    profile, demo.reels, that has every kind instaloader downloads. Any
+    session "works" with it: logged in or not is all it checks."""
+    day = 86_400
+
+    def post(code, days_ago, kind="image", **extra):
+        return {"shortcode": code, "ts": ts - days_ago * day, "caption": f"{code[-3:]} from the demo", "kind": kind,
+                **extra}
+    profile = {
+        "id": 7100, "name": "Demo Reels", "bio": "invented: posts, reels, stories, highlights and tags",
+        "posts": [post(f"DEMOpost{i:03d}", i * 20, "video" if i % 3 == 0 else "image") for i in range(1, 9)],
+        "reels": [post(f"DEMOreel{i:03d}", i * 25 + 3, "video") for i in range(1, 5)],
+        "tagged": [post("DEMOtagd001", 12,
+                        owner={"username": "mossy.trails", "id": "9001", "full_name": "Mossy Trails"})],
+        "stories": [{"id": 3100000000000000000 + i, "ts": ts - i * 3600, "video": i == 2} for i in range(1, 4)],
+        "highlights": [{"title": "Kilns", "items": [{"id": 3200000000000000001, "ts": ts - 90 * day,
+                                                     "video": False}]}],
+    }
+    data = os.path.join(root, "fake_instaloader.json")
+    with open(data, "w") as f:
+        json.dump({"profiles": {"demo.reels": profile}, "fail": None, "delay": 0}, f, indent=1)
+    exe = os.path.join(root, "bin", "instaloader")
+    os.makedirs(os.path.dirname(exe), exist_ok=True)
+    with open(exe, "w") as f:
+        f.write(f"#!{sys.executable}\nimport os, sys\nos.environ.setdefault('FAKE_INSTALOADER', {data!r})\n"
+                f"os.environ.setdefault('FAKE_INSTALOADER_SESSION', '1')\n"
+                f"sys.path.insert(0, {os.path.abspath(TESTS)!r})\nimport fake_instaloader\n"
+                f"sys.exit(fake_instaloader.main(sys.argv[1:]))\n")
+    os.chmod(exe, 0o755)
+    return exe
+
+
+def seed_sources(data, media):
+    """A source with options, so the Sources page shows one: demo_skies'
+    media tab, images only, nothing before 2023-11-01."""
+    out = os.path.join(data, "userdata", "sources.json")
+    if os.path.exists(out):
+        return
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    options = {"full_history": False, "session": None, "content": ["media"], "media": "images",
+               "since": "2023-11-01", "first_posts": None}
+    with open(out, "w") as f:
+        json.dump({"version": 1, "rows": [{
+            "tool": "gallery-dl", "target": "https://x.com/demo_skies", "platform": "twitter", "author_id": None,
+            "person": None, "folder": os.path.join(media, "twitter", "demo_skies"), "options": json.dumps(options),
+            "created_at": 1_700_000_000, "last_sync_at": None, "last_result": None}]}, f)
 
 
 def add_old_yt_dlp_sync(media, root, ts):
@@ -400,6 +456,7 @@ def main():
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     seed_tags(os.path.join(root, "data"), tagged)
+    seed_sources(os.path.join(root, "data"), media)
     tools = add_fake_tools(root, ts)
     with open(os.path.join(root, "config.json"), "w") as f:
         json.dump({"data_directory": os.path.join(root, "data"), "media_roots": [media], "tools": tools}, f, indent=2)

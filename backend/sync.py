@@ -52,6 +52,65 @@ gallery-dl and yt-dlp (archives.py):
   cookies yt-dlp copies into them (info_cookies.py), before the folder is
   indexed.
 
+What a source downloads (its options, sources.parse_options):
+
+- content: instaloader ``--reels --stories --highlights --tagged``, and
+  ``--no-posts`` without posts; gallery-dl ``-o include=…`` (a profile's
+  own page only: its user extractor dispatches to one per kind). yt-dlp
+  has none: the link picks (a YouTube tab).
+- media: instaloader ``--post-filter`` (and ``--storyitem-filter``)
+  ``is_video`` / ``not is_video``, plus ``--no-videos
+  --no-video-thumbnails`` for images (a carousel's videos). Post by post:
+  a carousel is not a video post, so "videos" leaves carousels out.
+  gallery-dl, file by file: ``--filter "extension in exts_video"`` /
+  ``exts_image``.
+- since (a floor): instaloader ``date_utc >= datetime(Y, M, D)`` in the
+  same filters; gallery-dl ``--date-after`` (it stops at the first older
+  post) where a profile lists newest first with nothing pinned in front
+  (DATE_AFTER_STOPS), else ``date >= datetime(Y, M, D)`` in ``--filter``;
+  yt-dlp ``--dateafter``, plus ``--break-match-filters`` to stop at the
+  first older video where it may stop at all (as for --break-on-existing).
+- first_posts (the first sync's newest N): gallery-dl ``--post-range
+  1-N`` (each kind's extractor has its own: N per kind), yt-dlp
+  ``--playlist-items 1:N`` (each level: a YouTube channel's page gets N
+  per tab). instaloader has no way to (``--count`` is not for
+  profiles): refused when the source is saved.
+
+The filters instaloader and gallery-dl evaluate as Python are fixed text
+and the three numbers of a date checked by sources.py (a ``%d`` each),
+nothing else: no text a user typed ever reaches them.
+
+How they meet the stopping points:
+
+- instaloader keeps a stamp per kind: ``post-timestamp``,
+  ``reels-timestamp``, ``tagged-timestamp``, ``story-timestamp``;
+  highlights have none (walked, files there skipped). A kind turned on
+  later has no stamp yet, so its first sync walks it all: nothing is
+  missed. --fast-update stays off then (it is only for a first sync of
+  posts, see below), and off with reels at all: reels are walked before
+  posts, and a reel on the grid is the same file, so the posts would stop
+  at it.
+- a floor raises each of those stamps, when missing or older, to just
+  before it, after the first-sync seed (_floor_stamps), so the walk stops
+  there; the filter still drops anything older that comes through (a
+  pinned post). Raising the floor later just filters; lowering it, or
+  widening media, does not bring back what the stamps passed: that is
+  what full history is for (it drops the post, reels and tagged stamps,
+  then walks back to the floor).
+- "last N" is for the first sync only: set back to null once a sync
+  succeeds (like full history), and the API refuses setting it on a
+  source that has synced without it. Options cannot change while a sync
+  is queued or running, as its end sets these two back. gallery-dl and
+  yt-dlp still seed their archive
+  first, so posts already indexed are skipped within those N. The day of
+  the oldest post it added (today at the latest) becomes the source's
+  floor (unless it has a later one): the archive alone would not keep the next sync from going on
+  to the older posts (gallery-dl stops at 5 files in a row it has, fewer
+  than N may be; TikTok and a YouTube channel's page never stop early).
+- stories, highlights and tagged posts need a logged-in session (Instagram
+  shows them to logged-in viewers only): refused when the source is saved
+  without one, and again at sync time (the setting can change since).
+
 How it went is read from the output (login required, private, not found,
 rate limited) and stored on the source. Two syncs of one tool pause between
 them (config ``<tool>.pause``).
@@ -62,7 +121,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 import archives
@@ -186,6 +245,11 @@ def config_flags(tool, cfg=None):
     return [IGNORE_CONFIG[tool]] if tool_settings(tool, cfg)["ignore_config"] else []
 
 
+def session_of(tool, options, cfg=None):
+    """The session a sync of a source uses: its own, else the tool's setting."""
+    return options["session"] or (settings(cfg) if tool == "instaloader" else tool_settings(tool, cfg))["session"]
+
+
 def stamps_path(cfg=None):
     return os.path.join((cfg or config.load())["data_directory"], "instaloader", "stamps.ini")
 
@@ -257,7 +321,10 @@ def _build(params):
     except OSError as e:
         raise jobs.BadRequest(f"cannot create the source's folder: {e.strerror or e}")
     options = _options(src)
-    session = options["session"] or settings(cfg)["session"]
+    session = session_of("instaloader", options, cfg)
+    refused = sources.login_refused(options, src["platform"], session)
+    if refused:
+        raise jobs.BadRequest(refused)
     pattern, _ = detect_pattern(folder)
     stamps = configparser.ConfigParser(interpolation=None)
     stamps.read(stamps_path(cfg), encoding="utf-8")
@@ -268,16 +335,63 @@ def _build(params):
         "--dirname-pattern", _escape(folder),
         "--filename-pattern", pattern,
         "--title-pattern", TITLE,
+        *content_flags(options),
         *session_flags(session),
         "--", target,
     ]}
 
 
+def _content(options, tool="instaloader", platform="instagram"):
+    return options["content"] or sources.DEFAULT_CONTENT.get((tool, platform), ())
+
+
 def fast_update(stamps, target, options):
     """Whether a sync passes --fast-update: only when the profile has no
     stamp yet (a first sync) and walks only what is new (no full history,
-    which goes past the posts already there too)."""
-    return not options["full_history"] and not stamps.has_option(target, "post-timestamp")
+    which goes past the posts already there too), for posts, and not with
+    reels: those walked first would stop the posts at the first reel of
+    the grid, its file just written."""
+    content = _content(options)
+    return not options["full_history"] and "posts" in content and "reels" not in content \
+        and not stamps.has_option(target, "post-timestamp")
+
+
+# instaloader flags per content kind (posts are on unless --no-posts).
+CONTENT_FLAGS = {"reels": "--reels", "stories": "--stories", "highlights": "--highlights", "tagged": "--tagged"}
+
+
+def _floor(options):
+    """(year, month, day) of options' since, ints, or None."""
+    if options["since"] is None:
+        return None
+    day = datetime.strptime(options["since"], "%Y-%m-%d")
+    return day.year, day.month, day.day
+
+
+def item_filter(options):
+    """The expression for --post-filter and --storyitem-filter (both
+    instaloader.Post and StoryItem have is_video and date_utc), or None.
+    instaloader evaluates it as Python: it is made of fixed text and the
+    three numbers of a checked date only, never of anything a user typed."""
+    terms = {"images": ["not is_video"], "videos": ["is_video"]}.get(options["media"], [])
+    floor = _floor(options)
+    if floor is not None:
+        terms.append("date_utc >= datetime(%d, %d, %d)" % floor)
+    return " and ".join(terms) or None
+
+
+def content_flags(options):
+    """What an instaloader sync fetches (sources.CONTENT), which media and since when."""
+    content = _content(options)
+    expr = item_filter(options)
+    return [
+        *(["--no-posts"] if "posts" not in content else []),
+        *[CONTENT_FLAGS[k] for k in sources.CONTENT[("instaloader", "instagram")] if k in content and k != "posts"],
+        # Images only: video posts are filtered out, a carousel's videos and their thumbnails are not fetched.
+        *(["--no-videos", "--no-video-thumbnails"] if options["media"] == "images" else []),
+        *(["--post-filter", expr] if expr else []),
+        *(["--storyitem-filter", expr] if expr and {"stories", "highlights"} & set(content) else []),
+    ]
 
 
 def _with_stamps(args, stamps, target, options):
@@ -290,13 +404,7 @@ def _with_stamps(args, stamps, target, options):
 
 def _options(src):
     """A stored source's options, checked again (defaults when malformed)."""
-    try:
-        stored = json.loads(src["options"] or "{}")
-    except ValueError:
-        stored = None
-    tool = src["tool"]
-    return sources.clean_options(stored if isinstance(stored, dict) else None, tool=tool) \
-        or sources.clean_options(None, tool=tool)
+    return sources.stored_options(src)
 
 
 def _write_stamps(stamps, path):
@@ -565,6 +673,52 @@ EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _seed_stamp(conn, src, options, note, moved=(), roots=()):
+    """Seed the stamps file on a first sync (see _seed_posts), then raise
+    the stamps of what the source fetches to its floor (see _floor_stamps)."""
+    _seed_posts(conn, src, options, note, moved, roots)
+    _floor_stamps(src, options, note)
+
+
+# The stamps instaloader keeps per profile for what it fetches (LatestStamps'
+# keys); highlights have none (each is walked, files there skipped), and
+# stories are kept a day only.
+STAMP_KEYS = {"posts": "post-timestamp", "reels": "reels-timestamp", "tagged": "tagged-timestamp"}
+
+
+def _floor_stamps(src, options, note):
+    """With a floor (options' since): the stamp of each of posts, reels and
+    tagged posts the source fetches goes up to just before it, when it is
+    missing or older, so the walk stops there instead of going on to the
+    oldest post for the filter to reject. After the seed, so a seed older
+    than the floor (or none) never takes it back. A stamp newer than the
+    floor stays: what is older than it was walked already."""
+    floor = _floor(options)
+    if floor is None:
+        return
+    at = datetime(*floor, tzinfo=timezone.utc) - timedelta(microseconds=1)
+    path = stamps_path()
+    stamps = configparser.ConfigParser(interpolation=None)
+    stamps.read(path, encoding="utf-8")
+    target, raised = src["target"], []
+    for kind in _content(options):
+        key = STAMP_KEYS.get(kind)
+        if key is None:
+            continue
+        try:
+            if datetime.strptime(stamps.get(target, key), STAMP_FORMAT) >= at:
+                continue
+        except (configparser.Error, ValueError):
+            pass
+        if not stamps.has_section(target):
+            stamps.add_section(target)
+        stamps.set(target, key, at.strftime(STAMP_FORMAT))
+        raised.append(kind)
+    if raised:
+        _write_stamps(stamps, path)
+        note(f"{target}: nothing before {options['since']}; {', '.join(raised)} start there")
+
+
+def _seed_posts(conn, src, options, note, moved=(), roots=()):
     """Seed the stamps file on a first sync (no stamp yet). Posts saved one
     by one, not synced, never seed it: those Save added (saved_posts,
     whatever folder they went to), those just moved out of _saved
@@ -578,9 +732,12 @@ def _seed_stamp(conn, src, options, note, moved=(), roots=()):
     stamps.read(path, encoding="utf-8")
     target = src["target"]
     if options["full_history"]:
+        # Every kind with a stamp walks back again (to the floor, if any).
         note(f"{target}: full history, every post not in the folder yet")
-        if stamps.has_option(target, "post-timestamp"):
-            stamps.remove_option(target, "post-timestamp")
+        gone = [key for key in STAMP_KEYS.values() if stamps.has_option(target, key)]
+        for key in gone:
+            stamps.remove_option(target, key)
+        if gone:
             _write_stamps(stamps, path)
         return
     if stamps.has_option(target, "post-timestamp"):
@@ -795,8 +952,11 @@ def _ended(job):
     changed = {"sources"}
     src = sources.row(conn, sid)
     options = _options(src)
-    if job["state"] == "done" and options["full_history"]:
-        sources.update(conn, sid, {**options, "full_history": False})     # once is enough
+    if job["state"] == "done" and (options["full_history"] or options["first_posts"]):
+        since = _first_posts_floor(conn, src, job) if options["first_posts"] else None
+        since = max(filter(None, (since, options["since"])), default=None)
+        sources.update(conn, sid, {**options, "full_history": False, "first_posts": None,     # once is enough
+                                   "since": since})
     if job["state"] in ("done", "failed"):
         roots = config.load()["media_roots"]
         adopted = sources.adopt(conn, sid, roots, job["ended_at"])
@@ -815,6 +975,21 @@ def _ended(job):
                 print(f"[sync] source {sid}: could not update its saved posts: {e}")
     for name in sorted(changed):
         userdata.changed(name)
+
+
+def _first_posts_floor(conn, src, job):
+    """After a "last N" first sync that worked: the day (UTC) of the oldest
+    post it added, else None. It becomes the source's floor: the archive
+    only stops a sync at 5 files in a row it has (gallery-dl), or not at
+    all (TikTok, a YouTube channel's page), so the next sync would go on
+    past those N to the older posts."""
+    prefix = os.path.join(src["folder"], "")
+    oldest = conn.execute("SELECT MIN(posted_at) FROM posts WHERE first_seen >= ? AND posted_at IS NOT NULL "
+                          "AND substr(meta_path, 1, ?) = ?", (job["started_at"], len(prefix), prefix)).fetchone()[0]
+    if oldest is None:
+        return None
+    # Not after today: a floor is a day up to today's, in local time.
+    return min(datetime.fromtimestamp(oldest, timezone.utc).date(), date.today()).isoformat()
 
 
 def _forget_saved(conn, src):
@@ -872,16 +1047,53 @@ def _archive_source(params, tool):
     return src, target, folder, cfg
 
 
+# gallery-dl's "include" names for sources.CONTENT's kinds (its user
+# extractors' subcategories), for a profile's own page.
+GALLERY_DL_INCLUDE = {"with_replies": "with-replies"}
+# Platforms where gallery-dl may stop at the first post older than a
+# source's floor (--date-after): those that list a profile newest first with
+# nothing older in front. Instagram and TikTok list pinned posts first
+# (gallery-dl keeps them, on Instagram by default), Bluesky can too: there
+# the floor is a --filter, which skips older files without stopping.
+DATE_AFTER_STOPS = {"twitter"}
+
+
+def gallery_dl_flags(options, platform):
+    """What a gallery-dl sync fetches, which media, since when and how many
+    on a first sync. --filter is evaluated as Python: it is made of fixed
+    text and the numbers of a checked date only."""
+    terms = {"images": ["extension in exts_image"], "videos": ["extension in exts_video"]}.get(options["media"], [])
+    floor = _floor(options)
+    after = []
+    if floor is not None:
+        if platform in DATE_AFTER_STOPS:
+            # It drops a post at the very time given: one second before the day starts.
+            after = ["--date-after", (datetime(*floor) - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S")]
+        else:
+            terms.append("(not date or date >= datetime(%d, %d, %d))" % floor)
+    content = options["content"]
+    return [
+        *(["-o", "include=" + ",".join(GALLERY_DL_INCLUDE.get(k, k) for k in content)] if content else []),
+        *(["--filter", " and ".join(terms)] if terms else []),
+        *after,
+        *(["--post-range", f"1-{int(options['first_posts'])}"] if options["first_posts"] else []),
+    ]
+
+
 def _build_gallery_dl(params):
     src, target, folder, cfg = _archive_source(params, "gallery-dl")
     options = _options(src)
-    session = options["session"] or tool_settings("gallery-dl", cfg)["session"]
+    session = session_of("gallery-dl", options, cfg)
+    refused = sources.login_refused(options, src["platform"], session)
+    if refused:
+        raise jobs.BadRequest(refused)
     return {"tool": "gallery-dl", "rescan": folder, "args": [
         *config_flags("gallery-dl", cfg),
         "--write-metadata",
         "--download-archive", archives.path("gallery-dl", cfg["data_directory"]),
         # Stop after 5 files in a row that are already there; full history goes on to the end.
         "-o", "skip=true" if options["full_history"] else "skip=abort:5",
+        *gallery_dl_flags(options, src["platform"]),
         "-D", folder,
         *cookie_flags(session),
         "--", target,
@@ -908,18 +1120,25 @@ def _youtube_root(target):
 def _build_yt_dlp(params):
     src, target, folder, cfg = _archive_source(params, "yt-dlp")
     options = _options(src)
-    session = options["session"] or tool_settings("yt-dlp", cfg)["session"]
+    session = session_of("yt-dlp", options, cfg)
     longest = yt_dlp.youtube_max_seconds(cfg)
     # A YouTube channel's own page lists its tabs (Videos, then Shorts, …)
     # one after the other: stopping at the first video already there would
     # never reach the next tab. The archive still skips what it lists.
     tabs = src["platform"] == "youtube" and _youtube_root(target)
-    stop = STOPS_AT_ARCHIVED.get(src["platform"], True) and not (options["full_history"] or tabs)
+    ordered = STOPS_AT_ARCHIVED.get(src["platform"], True) and not tabs
+    stop = ordered and not options["full_history"]
+    floor = _floor(options)
+    day = "%04d%02d%02d" % floor if floor else None
     return {"tool": "yt-dlp", "rescan": folder, "args": [
         *config_flags("yt-dlp", cfg),
         "--write-info-json", "--write-thumbnail",
         "--download-archive", archives.path("yt-dlp", cfg["data_directory"]),
         *(["--break-on-existing"] if stop else []),
+        # Nothing older than the floor; where the listing is newest first, stop at the first older video.
+        *(["--dateafter", day] if day else []),
+        *(["--break-match-filters", f"upload_date >=? {day}"] if day and ordered else []),
+        *(["--playlist-items", f"1:{int(options['first_posts'])}"] if options["first_posts"] else []),
         # The output template is %-formatted: a % in the folder is doubled.
         "-o", os.path.join(folder.replace("%", "%%"), YT_DLP_NAME),
         # Long YouTube videos are ChannelVault's; one without a duration (live) is skipped too.
@@ -936,8 +1155,13 @@ def _start_archive(tool):
         src = _queued_source(conn, params, argv)
         data_dir = config.load()["data_directory"]
         os.makedirs(os.path.dirname(archives.path(tool, data_dir)), exist_ok=True)
-        if _options(src)["full_history"]:
+        options = _options(src)
+        if options["full_history"]:
             note("full history: every post not in the archive yet")
+        if options["first_posts"]:
+            note(f"first sync: only the newest {options['first_posts']} posts")
+        if options["since"]:
+            note(f"nothing before {options['since']}")
         if src["last_sync_at"] is not None:
             return
         if src["author_id"] is None:

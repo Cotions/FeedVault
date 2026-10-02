@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { createSource, cancelJob, resolveSource } from "../lib/api";
+import { createSource, cancelJob, resolveSource, updateSource } from "../lib/api";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
 import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
+import {
+  FIRST_POSTS_MAX, MEDIA, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin, optionsOf, optionsSummary,
+  today,
+} from "../lib/sourceOptions";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
 
@@ -66,9 +70,12 @@ export function ToolBadge({ tool }) {
   return <span className={`chip tool-chip tool-chip-${tool}`} title={`Synced with ${tool}`}>{tool}</span>;
 }
 
-/* One source: its profile, tool, folder, last sync, Sync and Remove. */
-export function SourceRow({ source: s, job, onSync, onRemove }) {
+/* One source: its profile, what it downloads, tool, folder, last sync,
+   Options, Sync and Remove. ``onSaved``: after its options changed. */
+export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
+  const [editing, setEditing] = useState(false);
   const url = safeUrl(s.url);
+  const summary = optionsSummary(s);
   return (
     <li className="source-row">
       <span className="chip platform-chip" title={platformLabel(s.platform)}>{platformShort(s.platform)}</span>
@@ -77,6 +84,7 @@ export function SourceRow({ source: s, job, onSync, onRemove }) {
           {sourceName(s)}
           {s.person && !s.account && <span className="creator-sub"> · first sync not done yet</span>}
         </span>
+        {summary && <span className="source-summary" title="What it downloads">{summary}</span>}
         <code className="source-folder" title={s.folder}>{s.folder}</code>
       </span>
       <ToolBadge tool={s.tool} />
@@ -89,12 +97,144 @@ export function SourceRow({ source: s, job, onSync, onRemove }) {
         </a>
       )}
       {job && <Link to="/jobs" className="btn-ghost">Log</Link>}
+      <button type="button" className="btn-ghost" disabled={!!job} onClick={() => setEditing(true)}
+              title={job ? "Its sync is queued or running" : "What this source downloads"}>
+        Options
+      </button>
       <SyncButton source={s} job={job} onSync={onSync} />
       <button type="button" className="btn-ghost" disabled={!!job} onClick={() => onRemove(s)}
               title={job ? "Cancel its sync first" : "Forget this source; files and posts stay"}>
         Remove
       </button>
+      {editing && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
     </li>
+  );
+}
+
+/* What a source downloads, as far as its tool and platform let it choose:
+   content kinds, images or videos, a date floor and the first sync. Each
+   with what it does in one line. ``firstSync``: the source has not synced
+   yet (last N posts is for its first sync only). */
+export function SourceOptions({ tool, platform, choices, session, form, onChange, firstSync = true }) {
+  const id = useId();
+  const set = patch => onChange({ ...form, ...patch });
+  const login = needsLogin(form, choices, session);
+  const toggle = k => set({ content: form.content.includes(k) ? form.content.filter(x => x !== k) : [...form.content, k] });
+  return (
+    <div className="source-options">
+      {choices.content.length > 0 && (
+        <fieldset className="source-opt">
+          <legend>Download</legend>
+          {choices.content.map(k => (
+            <label key={k} className="source-opt-line">
+              <input type="checkbox" checked={form.content.includes(k)} onChange={() => toggle(k)} />
+              <b>{kindLabel(platform, k)}</b>
+              <span className="dim">{kindEffect(platform, k)}{choices.login.includes(k) && " · needs a login"}</span>
+            </label>
+          ))}
+          {login.length > 0 && (
+            <div className="msg err source-msg" role="alert">
+              {login.map(k => kindLabel(platform, k)).join(", ")} need a logged-in session: set one in{" "}
+              <Link to="/settings#sync" className="text-link">Settings → Sync</Link>.
+            </div>
+          )}
+        </fieldset>
+      )}
+      {choices.media && (
+        <fieldset className="source-opt">
+          <legend>Media</legend>
+          {MEDIA.map(([v, label]) => (
+            <label key={v} className="source-opt-line">
+              <input type="radio" name={`${id}-media`} checked={form.media === v} onChange={() => set({ media: v })} />
+              <b>{label}</b><span className="dim">{mediaEffect(tool, v)}</span>
+            </label>
+          ))}
+        </fieldset>
+      )}
+      <fieldset className="source-opt">
+        <legend>Not older than</legend>
+        <label className="source-opt-line">
+          <input type="date" min="1970-01-01" max={today()} value={form.since} aria-label="Not older than"
+                 onChange={e => set({ since: e.target.value })} />
+          <span className="dim">{form.since ? "posts from before this day are never downloaded" : "no limit"}</span>
+          {form.since && <button type="button" className="btn-link" onClick={() => set({ since: "" })}>Clear</button>}
+        </label>
+      </fieldset>
+      <fieldset className="source-opt">
+        <legend>{firstSync ? "First sync" : "Next sync"}</legend>
+        <label className="source-opt-line">
+          <input type="radio" name={`${id}-first`} checked={form.first === "new"} onChange={() => set({ first: "new" })} />
+          <b>new posts</b>
+          <span className="dim">stops at the newest post FeedVault already has from this profile</span>
+        </label>
+        <label className="source-opt-line">
+          <input type="radio" name={`${id}-first`} checked={form.first === "full"} onChange={() => set({ first: "full" })} />
+          <b>full history</b><span className="dim">walks the whole profile, once</span>
+        </label>
+        {firstSync && choices.first_posts && (
+          <label className="source-opt-line">
+            <input type="radio" name={`${id}-first`} checked={form.first === "last"}
+                   onChange={() => set({ first: "last", count: form.count || "50" })} />
+            <b>only the last</b>
+            <input type="number" min="1" max={FIRST_POSTS_MAX} step="1" className="source-opt-count"
+                   aria-label="Number of posts" value={form.count}
+                   onChange={e => set({ first: "last", count: e.target.value })} />
+            <b>posts</b>
+            <span className="dim">
+              {form.content.length > 1 && "of each kind; "}later syncs only fetch newer ones
+            </span>
+          </label>
+        )}
+      </fieldset>
+    </div>
+  );
+}
+
+/* Edit what a source downloads. ``s.session``: the session its sync
+   would use, for the login hint. Last N stays open until a first sync
+   with it has worked. */
+export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
+  const toast = useToast();
+  const [form, setForm] = useState(() => formOf(s.options, s.choices));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const firstSync = !s.last_sync_at || s.options.first_posts != null;
+  const problem = formError(form, s.choices);
+  const focus = useRef(null);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await updateSource(s.id, optionsOf(form, s.choices, firstSync));
+      if (!r?.ok) { setError(r?.error || "Could not save."); return; }
+      toast(`${sourceName(s)}: options saved.`);
+      onSaved?.(r.source);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ConfirmDialog
+      open
+      title={`What ${sourceName(s)} downloads`}
+      confirmLabel="Save"
+      busy={busy}
+      error={error || problem}
+      confirmDisabled={!!problem || needsLogin(form, s.choices, s.session).length > 0}
+      onConfirm={save}
+      onCancel={onClose}
+      initialFocus={focus}
+    >
+      <div ref={focus} tabIndex={-1}>
+        <SourceOptions tool={s.tool} platform={s.platform} choices={s.choices} session={s.session} form={form}
+                       onChange={setForm} firstSync={firstSync} />
+      </div>
+    </ConfirmDialog>
   );
 }
 
@@ -147,10 +287,10 @@ function useResolved(text) {
   // Kept with the text it answers, so a stale answer is never shown.
   const [resolved, setResolved] = useState({ text: null, r: null });
   useEffect(() => {
-    if (!text || isHandle(text)) return undefined;
+    if (!text) return undefined;
     const ctl = new AbortController();
     const t = setTimeout(() => {
-      resolveSource(text, { signal: ctl.signal })
+      resolveSource(text, { signal: ctl.signal }, isHandle(text) ? "instaloader" : undefined)
         .then(r => setResolved({ text, r }))
         .catch(err => { if (err.name !== "AbortError") setResolved({ text, r: { ok: false, error: err.message } }); });
     }, 250);
@@ -160,29 +300,35 @@ function useResolved(text) {
 }
 
 /* Paste a profile link (the tool comes from Settings → Link routing), or an
-   Instagram name. Before saving it shows the tool, platform and folder. */
+   Instagram name. Before saving it shows the tool, platform and folder,
+   and what the source can download. */
 export function AddSource({ person = null, onAdded }) {
   const toast = useToast();
   const [target, setTarget] = useState("");
-  const [full,   setFull]   = useState(false);
+  const [forms,  setForms]  = useState({});      // the options picked, by tool and platform
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState(null);
   const text = target.trim();
   const resolved = useResolved(text);
+  const kind = resolved?.ok ? `${resolved.tool}:${resolved.platform}:${resolved.choices.content.join(",")}` : null;
+  const form = kind && (forms[kind] || formOf(null, resolved.choices));
+  const problem = form && formError(form, resolved.choices);
+  const login = form ? needsLogin(form, resolved.choices, resolved.session) : [];
 
   async function add(e) {
     e.preventDefault();
+    if (!form) return;
     setBusy(true);
     setError(null);
     try {
-      const body = { target: text, options: { full_history: full } };
+      const body = { target: text, options: optionsOf(form, resolved.choices) };
       if (isHandle(text)) body.tool = "instaloader";
       if (person != null) body.person = person;
       const r = await createSource(body);
       if (!r?.ok) { setError(r?.error || "Could not add the source."); return; }
       toast(`${sourceName(r.source)} added. Sync it to download its posts.`);
       setTarget("");
-      setFull(false);
+      setForms({});
       onAdded?.(r.source);
     } catch (err) {
       setError(err.message);
@@ -202,18 +348,10 @@ export function AddSource({ person = null, onAdded }) {
         value={target}
         onChange={e => { setTarget(e.target.value); setError(null); }}
       />
-      <label className="source-check" title="The first sync fetches the whole profile, not only what is newer than the posts FeedVault already has">
-        <input type="checkbox" checked={full} onChange={e => setFull(e.target.checked)} />
-        Full history
-      </label>
-      <button type="submit" className="btn-secondary" disabled={busy || !text || resolved?.ok === false || resolved?.source != null}>
+      <button type="submit" className="btn-secondary"
+              disabled={busy || !form || resolved.source != null || !!problem || login.length > 0}>
         <Icon name="plus" size={13} />Add source
       </button>
-      {text && isHandle(text) && (
-        <div className="source-resolved" role="status">
-          <ToolBadge tool="instaloader" /><span>Instagram profile <b>@{text.replace(/^@/, "")}</b></span>
-        </div>
-      )}
       {resolved?.ok && (
         <div className="source-resolved" role="status">
           <ToolBadge tool={resolved.tool} />
@@ -224,8 +362,13 @@ export function AddSource({ person = null, onAdded }) {
           {resolved.source != null && <span className="is-err">already a source</span>}
         </div>
       )}
-      {(error || resolved?.ok === false) && (
-        <div className="msg err source-msg" role="alert">{error || resolved.error}</div>
+      {form && resolved.source == null && (
+        <SourceOptions tool={resolved.tool} platform={resolved.platform} choices={resolved.choices}
+                       session={resolved.session} form={form}
+                       onChange={f => { setForms(fs => ({ ...fs, [kind]: f })); setError(null); }} />
+      )}
+      {(error || problem || resolved?.ok === false) && (
+        <div className="msg err source-msg" role="alert">{error || problem || resolved.error}</div>
       )}
     </form>
   );

@@ -209,7 +209,8 @@ export default function PersonPage() {
         ) : (
           <ul className="source-list">
             {mine.map(s => (
-              <SourceRow key={s.id} source={s} job={sources.jobOf(s)} onSync={sources.sync} onRemove={setRemoving} />
+              <SourceRow key={s.id} source={s} job={sources.jobOf(s)} onSync={sources.sync} onRemove={setRemoving}
+                         onSaved={sources.reload} />
             ))}
           </ul>
         )}

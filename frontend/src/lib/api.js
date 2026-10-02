@@ -244,13 +244,14 @@ export function checkDownloaders() { return post("/api/downloaders/check"); }
 
 // { sources: [source], suggestions: [suggestion] }
 export function getSources() { return get("/api/sources"); }
-// What adding a pasted link would make: { ok, tool, platform, target, folder, source }
+// What adding a pasted link (or, with tool "instaloader", a profile name) would make:
+// { ok, tool, platform, target, folder, source, choices, session }
 // or { ok: false, error } (a link that is not accepted, see docs/API.md "Link routing").
-export function resolveSource(url, opts) { return get(`/api/sources/resolve${qs({ url })}`, opts); }
+export function resolveSource(url, opts, tool) { return get(`/api/sources/resolve${qs({ url, tool })}`, opts); }
 // { tool?, target (a profile link, or an Instagram name with tool "instaloader"), folder?, person?,
 //   account?, options? } → { ok, source }
 export function createSource(body) { return post("/api/sources", body); }
-// options: { full_history?, session? } → { ok, source }
+// options: { full_history?, session?, content?, media?, since?, first_posts? } → { ok, source }
 export function updateSource(id, options) { return post(`/api/sources/${id}`, { options }); }
 // The folder, files and posts stay → { ok }; 409 while its sync is queued or running
 export async function deleteSource(id) {

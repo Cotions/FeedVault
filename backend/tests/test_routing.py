@@ -113,7 +113,9 @@ def test_folder_names():
 def test_resolve_endpoint(env, client):
     r = get(client, "/api/sources/resolve?url=https://www.tiktok.com/@someone")
     assert r == {"ok": True, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone",
-                 "folder": str(env["media"] / "tiktok" / "someone"), "source": None}
+                 "folder": str(env["media"] / "tiktok" / "someone"), "source": None,
+                 "choices": sources.choices("yt-dlp", "tiktok", "https://tiktok.com/@someone"),
+                 "session": {"mode": "none"}}
     r = get(client, "/api/sources/resolve?url=x.com/someone/media")
     assert (r["tool"], r["platform"], r["target"]) == ("gallery-dl", "twitter", "https://x.com/someone/media")
     r = get(client, "/api/sources/resolve?url=https://instagram.com/Some.Body/")

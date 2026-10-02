@@ -170,9 +170,18 @@ you restore it).
 
 For Instagram, only new posts are fetched: FeedVault keeps instaloader's `--latest-stamps` file in
 its data directory, and a first sync starts after the newest post already
-indexed (tick "Full history" to fetch everything). **Creators** offers your
+indexed (pick "full history" to fetch everything). **Creators** offers your
 existing instaloader folders as sources to confirm, and **Sync all** runs
 every source one after another with a pause between them.
+
+Each source has **options** for what it downloads, shown when you add it and
+under **Options** later, as far as its tool and platform allow: which parts
+of the profile (Instagram posts, reels, stories, highlights, tagged posts; an
+X profile's timeline, Media, Posts or Replies tab; and so on), images only or
+videos only, nothing older than a date, and for gallery-dl and yt-dlp a first
+sync that fetches only the last N posts. Stories, highlights and tagged posts
+need an Instagram login (**Settings → Sync**). The source shows a summary
+such as "posts, reels · since 2024-01-01".
 
 When a sync adds posts, a notice says so ("12 new posts from @name") and
 links to them. Posts indexed since you last pressed **Mark all seen** are
