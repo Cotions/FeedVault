@@ -890,7 +890,7 @@ no person yet.
     (`last_sync_at` set) without it, or after it worked, it cannot be set
     (while a first sync with it has only failed, it can still change). Set
     back to `null` once a sync succeeds, like `full_history`, and `since`
-    set to the day of the oldest post that sync added (see
+    set to the day of the oldest post that sync added or listed (see
     [What a source downloads](#what-a-source-downloads)).
   - Any other key, or a value outside the above, is a 400 naming the
     option; a stored value that is not valid (sources.json edited by hand)
@@ -1254,8 +1254,10 @@ stored value that is not valid counts as the default (no flag).
   each level: a YouTube channel's own page gets N per tab; TikTok's pinned
   videos (listed first) count among them. gallery-dl applies it per kind
   of `content`. `first_posts` is set back to `null` once a sync succeeds,
-  and `since` becomes the day (UTC) of the oldest post that sync added
-  (today at the latest), unless it is later already: the archive alone
+  and `since` becomes the day (UTC) of the oldest post that sync added or
+  its archive skipped as already there (the N newest may all be indexed
+  already: nothing added), today at the latest, unless it is later already.
+  A sync that did neither keeps `first_posts` for the next run: the archive alone
   would not keep the next sync from going on to older posts (gallery-dl
   stops only at 5 files in a row it has; TikTok and a YouTube channel's
   page are walked to the end).

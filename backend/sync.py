@@ -106,10 +106,13 @@ How they meet the stopping points:
   is queued or running, as its end sets these two back. gallery-dl and
   yt-dlp still seed their archive
   first, so posts already indexed are skipped within those N. The day of
-  the oldest post it added (today at the latest) becomes the source's
-  floor (unless it has a later one): the archive alone would not keep the next sync from going on
-  to the older posts (gallery-dl stops at 5 files in a row it has, fewer
-  than N may be; TikTok and a YouTube channel's page never stop early).
+  the oldest post it added or its archive skipped (today at the latest)
+  becomes the source's floor (unless it has a later one): the archive
+  alone would not keep the next sync from going on to the older posts
+  (gallery-dl stops at 5 files in a row it has, fewer than N may be;
+  TikTok and a YouTube channel's page never stop early). A sync that
+  neither added nor listed a post FeedVault knows keeps "last N" for the
+  next run instead.
 - stories, highlights and tagged posts need a logged-in session (Instagram
   shows them to logged-in viewers only): refused when the source is saved
   without one, and again at sync time (the setting can change since).
@@ -890,6 +893,8 @@ def _owner(params):
 
 
 def _outcome(params, code, lines, index, note=None, tool="instaloader"):
+    if tool != "instaloader":
+        _note_listed(params, tool, lines)
     added = index["added"] if index else 0
     if tool == "instaloader" and index:
         added = max(0, added - len(_retrash(params, note)))
@@ -947,6 +952,7 @@ def _ended(job):
     # could not start). FeedVault stopped it: the file stays, for resume().
     _take_trashed(sid, keep_file=job["state"] == "interrupted" or waits)
     _info_before.pop(sid, None)
+    listed = _listed.pop(sid, None)
     r = job["result"] or {}
     conn = db.connect()
     src = sources.row(conn, sid)
@@ -961,10 +967,11 @@ def _ended(job):
     src = sources.row(conn, sid)
     options = _options(src)
     if job["state"] == "done" and (options["full_history"] or options["first_posts"]):
-        since = _first_posts_floor(conn, src, job) if options["first_posts"] else None
-        since = max(filter(None, (since, options["since"])), default=None)
-        sources.update(conn, sid, {**options, "full_history": False, "first_posts": None,     # once is enough
-                                   "since": since})
+        floor = _first_posts_floor(conn, src, job, listed) if options["first_posts"] else None
+        since = max(filter(None, (floor, options["since"])), default=None)
+        # Once is enough; "last N" stays for the next run when there is no floor to stop it.
+        sources.update(conn, sid, {**options, "full_history": False, "since": since,
+                                   "first_posts": options["first_posts"] if floor is None else None})
     if job["state"] in ("done", "failed"):
         roots = config.load()["media_roots"]
         adopted = sources.adopt(conn, sid, roots, job["ended_at"])
@@ -985,19 +992,59 @@ def _ended(job):
         userdata.changed(name)
 
 
-def _first_posts_floor(conn, src, job):
+def _first_posts_floor(conn, src, job, listed=None):
     """After a "last N" first sync that worked: the day (UTC) of the oldest
-    post it added, else None. It becomes the source's floor: the archive
-    only stops a sync at 5 files in a row it has (gallery-dl), or not at
-    all (TikTok, a YouTube channel's page), so the next sync would go on
-    past those N to the older posts."""
+    post it added or listed (``listed``: the oldest posted_at of the posts
+    its archive skipped, see _note_listed), else None (it listed nothing
+    FeedVault knows). It becomes the source's floor: the archive only stops
+    a sync at 5 files in a row it has (gallery-dl), or not at all (TikTok,
+    a YouTube channel's page), so the next sync would go on past those N to
+    the older posts, also when the N were all there already (a seeded
+    archive: nothing added)."""
     prefix = os.path.join(src["folder"], "")
-    oldest = conn.execute("SELECT MIN(posted_at) FROM posts WHERE first_seen >= ? AND posted_at IS NOT NULL "
-                          "AND substr(meta_path, 1, ?) = ?", (job["started_at"], len(prefix), prefix)).fetchone()[0]
+    added = conn.execute("SELECT MIN(posted_at) FROM posts WHERE first_seen >= ? AND posted_at IS NOT NULL "
+                         "AND substr(meta_path, 1, ?) = ?", (job["started_at"], len(prefix), prefix)).fetchone()[0]
+    oldest = min(filter(None, (added, listed)), default=None)
     if oldest is None:
         return None
     # Not after today: a floor is a day up to today's, in local time.
     return min(datetime.fromtimestamp(oldest, timezone.utc).date(), date.today()).isoformat()
+
+
+# What the archive skipped, as each tool says it: gallery-dl prints a file it
+# has as "# <path>", yt-dlp "[download] <id>: has already been recorded in the archive".
+_GALLERY_DL_SKIPPED = re.compile(r"# (/.+)")
+_YT_DLP_SKIPPED = re.compile(r"\[download\] (\S+): has already been recorded in the archive")
+_listed = {}                                   # source id -> oldest posted_at its "last N" sync's archive skipped
+
+
+def _note_listed(params, tool, lines):
+    """For a "last N" sync: the oldest post among those its archive skipped
+    (indexed already, so the sync added nothing for them), kept for _ended
+    (see _first_posts_floor). A failure here only loses that fallback."""
+    try:
+        conn = db.connect()
+        src = sources.row(conn, _source_id(params))
+        if src is None or not _options(src)["first_posts"]:
+            return
+        pattern = _GALLERY_DL_SKIPPED if tool == "gallery-dl" else _YT_DLP_SKIPPED
+        found = sorted({m.group(1) for _, t in lines for m in [pattern.fullmatch(t.strip())] if m})
+        oldest = None
+        for i in range(0, len(found), 500):
+            part = found[i:i + 500]
+            marks = ",".join("?" * len(part))
+            if tool == "gallery-dl":
+                q = (f"SELECT MIN(p.posted_at) FROM media m JOIN posts p ON p.id = m.post_id "
+                     f"WHERE m.path IN ({marks})", part)
+            else:
+                q = (f"SELECT MIN(posted_at) FROM posts WHERE platform = ? AND post_id IN ({marks})",
+                     [src["platform"], *part])
+            v = conn.execute(*q).fetchone()[0]
+            oldest = v if oldest is None or (v is not None and v < oldest) else oldest
+        if oldest is not None:
+            _listed[src["id"]] = oldest
+    except Exception as e:                     # the sync still ends as it went
+        print(f"[sync] source {params.get('source')}: could not read the posts it listed: {e}")
 
 
 def _forget_saved(conn, src):

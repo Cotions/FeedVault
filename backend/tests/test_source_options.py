@@ -445,6 +445,50 @@ def test_last_n_is_for_the_first_sync_and_the_next_stops_there(env, client, tool
     assert tweet_ids(client) == ["3", "4", "5"]                  # the older two never come
 
 
+def yt_account(url, videos):
+    if "tiktok" in url:
+        return {"extractor_key": "TikTok", "uploader_id": "6800000000000000009", "uploader": "someone",
+                "channel": "Some One", "uploader_url": "https://www.tiktok.com/@someone", "videos": videos}
+    return {"extractor_key": "Youtube", "uploader_id": "@somechannel", "uploader": "somechannel",
+            "channel": "somechannel", "channel_id": "UCexampleChannelAAAAAAA1",
+            "uploader_url": "https://www.youtube.com/@somechannel", "videos": videos}
+
+
+@pytest.mark.parametrize("url", [TIKTOK, YOUTUBE])
+def test_last_n_over_a_seeded_archive_still_sets_a_floor(env, client, tools, url):
+    import fake_downloaders
+    import scanner
+    videos = [{"id": f"VIDEO{i + 10:06d}", "ts": TS + i * DAY, "title": f"video {i}", "duration": 30}
+              for i in range(-5, 1)]
+    # The 3 newest were downloaded before, into the folder the source uses.
+    folder = os.path.join(env["roots"][0], "tiktok" if "tiktok" in url else "youtube",
+                          "someone" if "tiktok" in url else "somechannel")
+    tools["dl"].write_text(json.dumps({"accounts": {url: yt_account(url, videos[3:])}, "fail": None}))
+    assert fake_downloaders.yt_dlp_main(["--write-info-json", "-o", os.path.join(folder, sync.YT_DLP_NAME), url]) == 0
+    scanner.run(env["roots"])
+    tools["dl"].write_text(json.dumps({"accounts": {url: yt_account(url, videos)}, "fail": None}))
+    s = add(client, url, first_posts=3)
+    assert s["folder"] == folder and s["account"] is not None
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done" and job["result"]["added"] == 0, job["message"]
+    s = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    # Nothing added, but the N it listed were indexed: the oldest of them is the floor.
+    assert (s["options"]["first_posts"], s["options"]["since"]) == (None, "2024-05-30")
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done" and job["result"]["added"] == 0
+    assert after(job["argv"], "--dateafter") == "20240530" and "--playlist-items" not in job["argv"]
+    r = client.get(f"/api/posts?platform={s['platform']}&limit=100", headers=H).get_json()
+    assert sorted(p["post_id"] for p in r["posts"]) == [v["id"] for v in videos[3:]]     # nothing older
+
+
+def test_last_n_that_lists_nothing_known_keeps_it(env, client, tools):
+    tools["dl"].write_text(json.dumps({"accounts": {TIKTOK: yt_account(TIKTOK, [])}, "fail": None}))
+    s = add(client, TIKTOK, first_posts=3)
+    assert sync_now(client, s["id"])["state"] == "done"
+    s = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert (s["options"]["first_posts"], s["options"]["since"]) == (3, None)
+
+
 def test_last_n_failed_first_sync_keeps_it(env, client, tools):
     tools["dl"].write_text(json.dumps({"accounts": {X: x_account()}, "fail": "429"}))
     s = add(client, X, first_posts=2)
