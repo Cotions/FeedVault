@@ -32,6 +32,9 @@ instaloader:
   older filename-only posts.
 - ``--filename-pattern`` as the folder's files are already named, so new
   files sit beside the old ones and a post already there is recognised.
+- ``--sanitize-paths`` when the folder is on exFAT, FAT or NTFS (statfs,
+  see windows_names): tagged posts and highlights have a ``:`` in their
+  names otherwise, which those refuse.
 
 gallery-dl and yt-dlp (archives.py):
 
@@ -288,6 +291,64 @@ def detect_pattern(folder):
     return best, counts[best] >= CLEAN_SHARE * len(names)
 
 
+# Filesystems that refuse ":" and the other characters Windows does in a
+# name, by statfs f_type: instaloader names tagged posts ``<profile>/:tagged``
+# and highlights after their title, so a sync there fails without
+# --sanitize-paths. FUSE (ntfs-3g, exfat-fuse) only says "fuse": its mount
+# type in /proc/self/mounts tells (fuseblk: a block device, NTFS or exFAT).
+WINDOWS_NAMES = {0x2011BAB0: "exfat", 0x4D44: "vfat", 0x5346544E: "ntfs", 0x7366746E: "ntfs3"}
+FUSE_MAGIC = 0x65735546
+FUSE_WINDOWS = {"fuseblk", "fuse.exfat", "fuse.exfat-fuse", "fuse.ntfs-3g"}
+MOUNTS = "/proc/self/mounts"
+
+
+def fs_magic(path):
+    """statfs(2) f_type of the filesystem ``path`` is on, or None (not
+    Linux, or the call failed)."""
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        buf = ctypes.create_string_buffer(512)             # struct statfs, f_type first
+        if libc.statfs(os.fsencode(path), buf) != 0:
+            return None
+    except (OSError, AttributeError):
+        return None
+    return ctypes.c_long.from_buffer(buf).value & 0xFFFFFFFF
+
+
+def mount_type(path):
+    """The type /proc/self/mounts gives the mount ``path`` is on, or None."""
+    real, best = os.path.realpath(path), (None, None)
+    try:
+        with open(MOUNTS, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                # Spaces and the like are octal escapes there (\040).
+                point = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), parts[1])
+                inside = real == point or real.startswith(point.rstrip("/") + "/")
+                if inside and (best[0] is None or len(point) >= len(best[0])):
+                    best = (point, parts[2])
+    except OSError:
+        return None
+    return best[1]
+
+
+def windows_names(folder):
+    """Whether ``folder`` is on a filesystem that refuses Windows' reserved
+    characters (exFAT, FAT, NTFS): instaloader then gets --sanitize-paths,
+    which makes its names valid there (the ``:`` of ``:tagged`` and of a
+    highlight's title becomes a full-width colon, U+FF1A). It changes nothing FeedVault reads: the parser
+    reads a synced post from its metadata, whatever its file's name, and
+    detect_pattern only looks at the files right in the folder (tagged
+    posts and highlights go in a subfolder named after the profile)."""
+    magic = fs_magic(folder)
+    if magic in WINDOWS_NAMES:
+        return True
+    return magic == FUSE_MAGIC and mount_type(folder) in FUSE_WINDOWS
+
+
 def _escape(path):
     """A folder for --dirname-pattern, which instaloader runs through str.format."""
     return path.replace("{", "{{").replace("}", "}}")
@@ -341,6 +402,7 @@ def _build(params):
         "--dirname-pattern", _escape(folder),
         "--filename-pattern", pattern,
         "--title-pattern", TITLE,
+        *(["--sanitize-paths"] if windows_names(folder) else []),
         *content_flags(options),
         *session_flags(session),
         "--", target,
@@ -1214,7 +1276,10 @@ def _start_archive(tool):
         if options["full_history"]:
             note("full history: every post not in the archive yet")
         if options["first_posts"]:
-            note(f"first sync: only the newest {options['first_posts']} posts")
+            # gallery-dl's --post-range applies to each kind's extractor, yt-dlp's to each tab of a channel.
+            each = (" of each kind" if tool == "gallery-dl" and len(options["content"] or ()) > 1
+                    else " of each tab" if src["platform"] == "youtube" and _youtube_root(src["target"]) else "")
+            note(f"first sync: only the newest {options['first_posts']} posts{each}")
         if options["since"]:
             note(f"nothing before {options['since']}")
         if src["last_sync_at"] is not None:

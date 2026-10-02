@@ -103,21 +103,44 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
   );
 }
 
-// An account card's sources have no row of their own: Options per source here.
-function CardOptionsButtons({ sync, onEdit }) {
+// An account card's sources have no row of their own: one Options icon
+// here, which opens the source's options, or with several sources a menu
+// to pick one, so the card's name keeps its room.
+function CardOptionsButton({ sync, onEdit }) {
+  const [open, setOpen] = useState(false);
   if (!sync) return null;
-  return sync.sources.map(s => {
+  const label = s => `${sourceName(s)} (${s.tool})`;
+  const title = s => {
+    if (!sync.idle.includes(s)) return `${label(s)}: its sync is queued or running`;
     const summary = optionsSummary(s);
-    const busy = !sync.idle.includes(s);         // its sync's end would undo what changes now
-    return (
-      <button key={s.id} type="button" className="icon-btn creator-opts" disabled={busy} onClick={() => onEdit(s)}
-              title={busy ? "Its sync is queued or running"
-                : `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}`}
-              aria-label={`Options of ${sourceName(s)} (${s.tool})`}>
+    return `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}`;
+  };
+  const one = sync.sources.length === 1 ? sync.sources[0] : null;
+  return (
+    <span className="creator-opts-wrap"
+          onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}
+          onKeyDown={e => { if (e.key === "Escape") setOpen(false); }}>
+      <button type="button" className="icon-btn creator-opts"
+              // Its sync's end would undo what changes now.
+              disabled={one ? !sync.idle.includes(one) : !sync.idle.length}
+              onClick={() => (one ? onEdit(one) : setOpen(o => !o))}
+              title={one ? title(one) : `Options of its ${sync.sources.length} sources`}
+              aria-label={one ? `Options of ${label(one)}` : "Options of its sources"}
+              aria-haspopup={one ? undefined : "menu"} aria-expanded={one ? undefined : open}>
         <Icon name="settings" size={15} />
       </button>
-    );
-  });
+      {open && (
+        <span className="creator-opts-menu" role="menu">
+          {sync.sources.map(s => (
+            <button key={s.id} type="button" role="menuitem" className="btn-ghost" disabled={!sync.idle.includes(s)}
+                    title={title(s)} onClick={() => { setOpen(false); onEdit(s); }}>
+              {label(s)}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
+  );
 }
 
 function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh }) {
@@ -163,7 +186,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
           >
             <Icon name="review" size={15} />
           </Link>
-          <CardOptionsButtons sync={sync} onEdit={onEdit} />
+          <CardOptionsButton sync={sync} onEdit={onEdit} />
         </span>
       )}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}

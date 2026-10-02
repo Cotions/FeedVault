@@ -394,6 +394,53 @@ def test_videos_only_keeps_a_carousels_videos(env, client, tools):
     assert carousel["kind"] == "carousel"
 
 
+def test_windows_names_by_statfs(env, monkeypatch, tmp_path):
+    assert isinstance(sync.fs_magic(str(tmp_path)), int)          # Linux: a real statfs
+    for magic, mount, want in [(0x2011BAB0, None, True), (0x4D44, None, True), (0x5346544E, None, True),
+                               (0xEF53, None, False), (sync.FUSE_MAGIC, "fuseblk", True),
+                               (sync.FUSE_MAGIC, "fuse.sshfs", False), (None, None, False)]:
+        monkeypatch.setattr(sync, "fs_magic", lambda path: magic)
+        monkeypatch.setattr(sync, "mount_type", lambda path: mount)
+        assert sync.windows_names(str(tmp_path)) is want, (magic, mount)
+
+
+def test_mount_type_takes_the_longest_mount(env, monkeypatch, tmp_path):
+    mounts = tmp_path / "mounts"
+    mounts.write_text("/dev/sda1 / ext4 rw 0 0\n/dev/sde1 /mnt/my\\040disk fuseblk rw 0 0\n"
+                      "/dev/sdf1 /mnt/my\\040disk/inner vfat rw 0 0\n")
+    monkeypatch.setattr(sync, "MOUNTS", str(mounts))
+    assert sync.mount_type("/mnt/my disk/instaloader/x") == "fuseblk"
+    assert sync.mount_type("/mnt/my disk/inner") == "vfat"
+    assert sync.mount_type("/mnt/my diskette") == "ext4"
+    monkeypatch.setattr(sync, "MOUNTS", str(tmp_path / "none"))
+    assert sync.mount_type("/") is None
+
+
+def test_tagged_and_highlights_on_exfat(env, client, tools, monkeypatch):
+    data = ig_profile()
+    data["profiles"]["carol.cooks"]["highlights"][0]["title"] = "Trips: 2024"
+    tools["ig"].write_text(json.dumps(data))
+    monkeypatch.setenv("FAKE_INSTALOADER_WINDOWS_NAMES", "1")     # the fake writes as exFAT would
+    s = add(client, "carol.cooks", "instaloader", content=["posts", "tagged", "highlights"], session=LOGIN)
+    # Without --sanitize-paths, ":tagged" cannot be created there.
+    monkeypatch.setattr(sync, "windows_names", lambda folder: False)
+    job = sync_now(client, s["id"])
+    assert job["state"] == "failed" and "--sanitize-paths" not in job["argv"]
+    assert any("Invalid argument" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+    monkeypatch.setattr(sync, "windows_names", lambda folder: True)
+    post(client, f"/api/sources/{s['id']}", {"options": {"full_history": True}})
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done", job["message"]
+    assert job["argv"].index("--sanitize-paths") == job["argv"].index(sync.TITLE) + 1
+    assert shortcodes(client, "888") == ["CTAGGED0001"]          # the tagged post, read from its metadata
+    sub = env["media"] / "carol.cooks" / "carol.cooks"
+    assert any(n.startswith("\uff1atagged-") for n in os.listdir(sub))
+    assert any(n.startswith("Trips\uff1a 2024-") for n in os.listdir(sub))
+    assert shortcodes(client, "777") == ["3200000000000000001", "COLDPOST001", "CPOSTIMG001", "CPOSTIMG002",
+                                         "CPOSTVID001"]
+    assert sync.detect_pattern(str(env["media"] / "carol.cooks")) == (sync.DATED, True)
+
+
 def x_account():
     def tweet(i, days, **extra):
         return {"id": str(1800000000000000000 + i), "ts": TS + days * DAY, "text": f"tweet {i}", "files": 1, **extra}

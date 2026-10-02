@@ -48,6 +48,12 @@ export function mediaEffect(tool, media) {
 
 export const FIRST_POSTS_MAX = 10000;
 
+// "Last N" is per kind with gallery-dl (each kind is its own extractor,
+// each with its --post-range): the first sync gets up to N of each.
+export function firstPostsEach(tool, content) {
+  return tool === "gallery-dl" && content?.length > 1 ? " of each kind" : "";
+}
+
 export const kindLabel = (platform, k) => KINDS[platform]?.[k]?.[0] || k;
 export const kindEffect = (platform, k) => KINDS[platform]?.[k]?.[1] || "";
 
@@ -115,7 +121,7 @@ export function optionsSummary(s) {
   if (o.content) parts.push(o.content.map(k => kindLabel(s.platform, k)).join(", "));
   if (o.media && o.media !== "all") parts.push(`${o.media} only`);
   if (o.since) parts.push(`since ${o.since}`);
-  if (o.first_posts) parts.push(`first sync: last ${o.first_posts} posts`);
+  if (o.first_posts) parts.push(`first sync: last ${o.first_posts} posts${firstPostsEach(s.tool, o.content)}`);
   else if (o.full_history) parts.push("full history");
   return parts.join(" · ");
 }

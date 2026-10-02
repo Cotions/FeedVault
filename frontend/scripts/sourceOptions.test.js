@@ -51,6 +51,13 @@ test("summary", () => {
   assert.equal(optionsSummary({ platform: "twitter", options: { content: ["media", "with_replies"], media: "images",
                                                                  first_posts: 30 } }),
                "media, replies · images only · first sync: last 30 posts");
+  // gallery-dl's --post-range is per kind.
+  assert.equal(optionsSummary({ tool: "gallery-dl", platform: "twitter",
+                                options: { content: ["media", "with_replies"], media: "all", first_posts: 30 } }),
+               "media, replies · first sync: last 30 posts of each kind");
+  assert.equal(optionsSummary({ tool: "gallery-dl", platform: "twitter",
+                                options: { content: ["media"], media: "all", first_posts: 30 } }),
+               "media · first sync: last 30 posts");
   assert.equal(optionsSummary({ platform: "youtube", options: { media: "all", full_history: false } }), "");
 });
 

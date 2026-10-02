@@ -6,7 +6,7 @@ import { useJobs } from "../lib/jobs";
 import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import {
-  FIRST_POSTS_MAX, MEDIA, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin, optionsOf, optionsSummary,
+  FIRST_POSTS_MAX, MEDIA, firstPostsEach, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin, optionsOf, optionsSummary,
   today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
@@ -181,7 +181,8 @@ export function SourceOptions({ tool, platform, choices, session, form, onChange
                    onChange={e => set({ first: "last", count: e.target.value })} />
             <b>posts</b>
             <span className="dim">
-              {form.content.length > 1 && "of each kind; "}later syncs only fetch newer ones
+              {firstPostsEach(tool, form.content) && `of each kind (up to ${form.content.length} × the number); `}
+              later syncs only fetch newer ones
             </span>
           </label>
         )}

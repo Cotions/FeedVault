@@ -1795,6 +1795,14 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .creator-tools { display: flex; flex-direction: column; gap: 2px; margin-right: 10px; flex-shrink: 0; }
 .creator-tools .creator-review { margin-right: 0; }
 .creator-tools .icon-btn { width: 26px; height: 26px; }
+.creator-opts-wrap { position: relative; display: inline-flex; }
+.creator-opts-menu {
+  position: absolute; top: 100%; right: 0; z-index: 20; margin-top: 4px; min-width: 200px;
+  display: flex; flex-direction: column; padding: 4px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+}
+.creator-opts-menu .btn-ghost { justify-content: flex-start; text-align: left; white-space: nowrap; font-size: 12px; }
 
 /* ── Trash card ─────────────────────────────────────────── */
 .trash-total { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; font-size: 13px; }
