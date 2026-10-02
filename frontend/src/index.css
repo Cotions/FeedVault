@@ -1447,6 +1447,92 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .info-cookies { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
 .info-cookies .page-lede { margin-bottom: 0; }
 .scan-running { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+
+/* Appearance: theme cards (orb + sample button + highlight digits). */
+.theme-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.theme-section-head .card-title { margin-bottom: 0; }
+.theme-section-head .btn-secondary { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.card-title-mine { margin: 20px 0 12px; }
+.theme-note { margin: 14px 0 0; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.theme-card {
+  display: flex; flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  outline: none;
+}
+.theme-card:hover { border-color: var(--muted); }
+.theme-card:focus-visible { box-shadow: var(--ring); }
+.theme-card.active { border-color: var(--glow); box-shadow: 0 0 0 1px var(--glow), 0 0 22px -8px var(--glow); }
+.theme-card-art { display: flex; align-items: center; justify-content: center; gap: 12px; height: 78px; }
+.theme-orb {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #ffffffcc 0, var(--orb-a) 30%, var(--orb-b) 78%, #05070b 120%);
+  box-shadow: 0 6px 22px -8px var(--orb-a);
+}
+.theme-sample { padding: 6px 11px; border-radius: 8px; font-size: 12px; font-weight: 700; line-height: 1; }
+.theme-sample-text { font-family: var(--mono); font-size: 14px; font-weight: 700; }
+.theme-card-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 6px 6px 6px 12px;
+  border-top: 1px solid var(--border-soft);
+}
+.theme-card-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.theme-card-actions { display: flex; gap: 2px; }
+.icon-btn-sm {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+.icon-btn-sm:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.icon-btn-sm.danger:hover { color: #ffb3b5; background: rgba(229, 72, 77, 0.12); }
+
+/* Theme editor: one row per colour role, live preview underneath. */
+.theme-editor { display: flex; flex-direction: column; gap: 8px; }
+.theme-editor-head input { width: 100%; }
+.theme-role {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.theme-role.pinned { border-color: rgba(var(--glow-rgb), 0.35); }
+.theme-role-swatch {
+  position: relative; flex-shrink: 0;
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) inset;
+  cursor: pointer;
+}
+.theme-role-swatch:focus-within { box-shadow: var(--ring); }
+.theme-role-swatch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.theme-role-label { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.theme-role-label span { font-size: 13px; font-weight: 600; }
+.theme-role-label small { font-size: 11px; color: var(--muted); }
+.theme-role-auto { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 0 10px; }
+.theme-preview {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 14px;
+  margin-top: 4px; padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+.theme-preview .btn-primary { pointer-events: none; }
+.theme-preview .side-badge { margin-left: 0; }
+.theme-preview-play {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding-left: 2px;
+  border-radius: 50%;
+  color: var(--on-glow);
+  background: rgba(var(--glow-rgb), 0.9);
+  box-shadow: 0 0 20px -4px rgba(var(--glow-rgb), 0.75);
+}
+.theme-editor-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .scan-counts {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

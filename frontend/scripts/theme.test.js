@@ -1,0 +1,101 @@
+// Checks for lib/theme.js: the palette derivation, the contrast pick of the
+// text on fills and glow, and what survives a malformed localStorage.
+// Run with `npm test` (node's own test runner, no extra dependency).
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  PRESETS, PHOSPHOR, DEFAULT_THEME_ID, contrast, palette, getCustomThemes, getActiveTheme, saveCustomThemes,
+} from "../src/lib/theme.js";
+
+const HEX = /^#[0-9a-f]{6}$/;
+const RGB = /^\d{1,3}, \d{1,3}, \d{1,3}$/;
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const near = (a, b, tol) => hexRgb(a).every((v, i) => Math.abs(v - hexRgb(b)[i]) <= tol);
+// Button text is judged against the middle of the hover→fill gradient.
+const mid = p => hexRgb(p["--accent"]).map((v, i) => Math.round((v + hexRgb(p["--accent-hover"])[i]) / 2));
+
+// A Map-backed stand-in for the browser's localStorage.
+function storage(entries = {}) {
+  const m = new Map(Object.entries(entries));
+  globalThis.localStorage = {
+    getItem: k => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)),
+  };
+  return m;
+}
+
+test("every preset derives a complete, well-formed palette", () => {
+  for (const t of PRESETS) {
+    const p = palette(t);
+    assert.deepEqual(Object.keys(p).sort(), Object.keys(PHOSPHOR).sort(), t.id);
+    for (const [k, v] of Object.entries(p)) assert.match(v, k.endsWith("-rgb") ? RGB : HEX, `${t.id} ${k}`);
+  }
+});
+
+test("Phosphor's derivation lands close to index.css's hand-tuned green", () => {
+  const p = palette(PRESETS[0]);
+  for (const k of ["--accent", "--accent-hover", "--glow", "--accent-text"]) {
+    assert.ok(near(p[k], PHOSPHOR[k], 12), `${k}: ${p[k]} vs ${PHOSPHOR[k]}`);
+  }
+});
+
+test("text on fills and on glow is the more readable of dark ink and near-white", () => {
+  const light = "#f5f7fb";
+  for (const base of [...PRESETS.map(t => t.base), "#1e3a8a", "#7f1d1d", "#ffff00", "#808080", "#000000", "#ffffff"]) {
+    const p = palette({ base });
+    const on = p["--on-accent"], onGlow = p["--on-glow"];
+    // Dark ink is only picked when it beats near-white.
+    assert.ok(contrast(on, mid(p)) >= contrast(light, mid(p)) - 1e-9, `${base}: on-accent ${on}`);
+    assert.ok(contrast(onGlow, p["--glow"]) >= contrast(light, p["--glow"]) - 1e-9, `${base}: on-glow ${onGlow}`);
+    assert.ok(contrast(onGlow, p["--glow"]) >= 3, `${base}: on-glow ${onGlow} on ${p["--glow"]}`);
+  }
+  // Every preset's button text is readable (WCAG AA for large/bold text).
+  for (const t of PRESETS) assert.ok(contrast(palette(t)["--on-accent"], mid(palette(t))) >= 3, t.id);
+});
+
+test("a dark fill gets light text, a light fill dark text", () => {
+  assert.equal(palette({ base: "#000000", fill: "#101820" })["--on-accent"], "#f5f7fb");
+  assert.notEqual(palette({ base: "#000000", fill: "#f0f0f0" })["--on-accent"], "#f5f7fb");
+});
+
+test("pinned roles win, invalid pins and bases are ignored", () => {
+  const p = palette({ base: "#60a5fa", fill: "#123456", buttonText: "#abcdef", glow: "#00ff00", glowText: "#111111", highlight: "#fedcba" });
+  assert.equal(p["--accent"], "#123456");
+  assert.equal(p["--on-accent"], "#abcdef");
+  assert.equal(p["--glow"], "#00ff00");
+  assert.equal(p["--glow-rgb"], "0, 255, 0");
+  assert.equal(p["--on-glow"], "#111111");
+  assert.equal(p["--accent-text"], "#fedcba");
+  const q = palette({ base: "#60a5fa", fill: "red", glow: "url(x)", buttonText: "#12345" });
+  assert.deepEqual(q, palette({ base: "#60a5fa" }));
+  assert.deepEqual(palette({ base: "javascript:1" }), palette(PRESETS[0]));
+});
+
+test("malformed localStorage falls back to Phosphor", () => {
+  for (const bad of ["{", "null", "42", '"x"', "{}", '[null, 1, "a", {"id": 3}]', '[{"id": "ocean", "base": "#000000"}]']) {
+    storage({ "fv:themes": bad, "fv:theme": "c-1" });
+    assert.deepEqual(getCustomThemes(), [], bad);
+    assert.equal(getActiveTheme().id, DEFAULT_THEME_ID, bad);
+  }
+  storage({ "fv:theme": "nope" });
+  assert.equal(getActiveTheme().id, DEFAULT_THEME_ID);
+  globalThis.localStorage = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } };
+  assert.equal(getActiveTheme().id, DEFAULT_THEME_ID);
+  saveCustomThemes([{ id: "c-1", name: "x", base: "#000000" }]);
+});
+
+test("stored custom themes keep only known fields with valid colours", () => {
+  storage({
+    "fv:theme": "c-1",
+    "fv:themes": JSON.stringify([
+      { id: "c-1", name: { evil: 1 }, base: "#a78bfa", fill: "#123456", glow: "red; background: url(x)", extra: "<b>" },
+      { id: "c-1", name: "duplicate", base: "#000000" },
+      { id: "c-2", name: "  Mine  ", base: "#22D3EE" },
+    ]),
+  });
+  assert.deepEqual(getCustomThemes(), [
+    { id: "c-1", name: "Custom", base: "#a78bfa", fill: "#123456" },
+    { id: "c-2", name: "Mine", base: "#22D3EE" },
+  ]);
+  assert.equal(getActiveTheme().id, "c-1");
+});

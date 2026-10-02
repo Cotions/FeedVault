@@ -9,6 +9,7 @@ import { JobLog } from "./Jobs";
 import { fmtAgo, fmtBytes, fmtFullDate, plural } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import AppearanceSettings from "../components/AppearanceSettings";
 
 function sameList(a, b) {
   return a.length === b.length && a.every((x, i) => x === b[i]);
@@ -906,6 +907,7 @@ export default function Settings() {
           <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} />
           <TrashCard />
           <LastScan />
+          <AppearanceSettings />
           <div className="card">
             <div className="card-title">About</div>
             <div className="kv-row">
