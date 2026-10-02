@@ -299,7 +299,7 @@ FIRST_POSTS_MAX = 10000
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts")
 LOGIN_REFUSED = ("{kinds} need a logged-in session: choose one for this source, or set one in "
-                 "Settings → Downloaders")
+                 "Settings → Sync")
 
 
 def choices(tool, platform, target):

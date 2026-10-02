@@ -115,7 +115,7 @@ def test_options_content_media_since_first_posts():
     # Only stories, highlights and tagged posts on Instagram need a login.
     opts = clean({"content": ["posts", "reels", "stories", "tagged"]}, **ig)[0]
     assert sources.login_refused(opts, "instagram", {"mode": "none"}) == \
-        "Stories, tagged need a logged-in session: choose one for this source, or set one in Settings → Downloaders"
+        "Stories, tagged need a logged-in session: choose one for this source, or set one in Settings → Sync"
     assert sources.login_refused(opts, "instagram", {"mode": "login", "user": "me"}) is None
     assert sources.login_refused(clean({"content": ["reels"]}, **ig)[0], "instagram", {"mode": "none"}) is None
     tt = clean({"content": ["stories"]}, tool="gallery-dl", platform="tiktok", target="https://tiktok.com/@a")[0]
