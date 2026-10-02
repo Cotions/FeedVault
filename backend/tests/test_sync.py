@@ -63,6 +63,7 @@ def fake(env, monkeypatch):
     monkeypatch.setattr(jobs, "_active", collections.OrderedDict())
     monkeypatch.setattr(jobs, "_closing", False)
     monkeypatch.setattr(jobs, "_cool", {})
+    monkeypatch.setattr(jobs, "_wake", None)
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     monkeypatch.setattr(sync, "_batch", None)
     bin_dir = env["tmp"] / "bin"
@@ -459,7 +460,7 @@ def test_trashed_posts_newer_than_the_stamp_go_back_to_the_trash(env, client, fa
     job = sync_now(client, s["id"])
     assert job["result"]["added"] == 0
     assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == ["instagram:CPOSTB00001"]
-    assert sync._trashed_before == {}
+    assert sync._trashed_before == {} and not os.listdir(sync._retrash_dir())
 
 
 def test_trashed_post_brought_back_by_a_cancelled_sync_goes_back_too(env, client, fake):
@@ -473,6 +474,81 @@ def test_trashed_post_brought_back_by_a_cancelled_sync_goes_back_too(env, client
     scanner.scan(env["roots"])
     assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
     assert sync._trashed_before == {}
+
+
+def _brought_back(env, folder):
+    """B is back in the trash and nowhere else, and no list is left."""
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
+    assert not any("CPOSTB00001" in n for n in os.listdir(folder))
+    assert "instagram:CPOSTB00001" in sync._in_trash(env["roots"])
+    scanner.scan(env["roots"])
+    assert db.saved_ids(db.connect(), ["instagram:CPOSTB00001"]) == []
+    assert sync._trashed_before == {} and not os.listdir(sync._retrash_dir())
+
+
+def test_trashed_post_brought_back_before_quitting_goes_back_at_the_next_start(env, client, fake, monkeypatch):
+    s, folder = _trashed_between(env, client, fake, delay=0.4)
+    job = post(client, f"/api/sources/{s['id']}/sync")["job"]
+    wait_for(lambda: any("CPOSTB00001" in n for n in os.listdir(folder)))
+    jobs.shutdown()                                        # Quit: no indexing on the way out
+    for t in threading.enumerate():
+        if t.name == f"job-{job['id']}":
+            t.join(10)
+    assert jobs.get(job["id"])["state"] == "interrupted"
+    assert os.listdir(sync._retrash_dir()) == [f"{s['id']}.json"]
+    # The next start.
+    monkeypatch.setattr(jobs, "_closing", False)
+    sync._trashed_before.clear()
+    jobs.recover()
+    sync.resume()
+    _brought_back(env, folder)
+
+
+# A FeedVault that starts a sync, then dies once instaloader has brought B back.
+CRASHER = """
+import os, signal, sys
+sys.path[:0] = [{backend!r}, {tests!r}]
+import config, db, jobs, save, sync
+db.init(config.db_path(config.load()))
+job = sync.sync({sid})
+while not any("CPOSTB00001" in n for n in os.listdir({folder!r})):
+    pass
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+
+def test_trashed_post_brought_back_before_a_crash_goes_back_at_the_next_start(env, client, fake):
+    import subprocess
+    s, folder = _trashed_between(env, client, fake, delay=0.5)
+    backend = os.path.dirname(TESTS)
+    crasher = subprocess.run([sys.executable, "-c", CRASHER.format(
+        backend=backend, tests=TESTS, sid=s["id"], folder=str(folder))], timeout=30)
+    assert crasher.returncode == -9
+    [row] = db.connect().execute("SELECT id, state, pid FROM jobs WHERE state = 'running'").fetchall()
+    try:
+        assert os.listdir(sync._retrash_dir()) == [f"{s['id']}.json"]
+        jobs.recover()                                     # the next start: the orphan instaloader is stopped,
+        sync.resume()                                      # then B goes back
+        assert jobs.get(row["id"])["state"] == "interrupted"
+        _brought_back(env, folder)
+    finally:
+        try:
+            os.killpg(row["pid"], 9)
+        except ProcessLookupError:
+            pass
+
+
+def test_resume_waits_for_an_offline_folder_and_drops_a_gone_source(env, client, fake):
+    s, folder = _trashed_between(env, client, fake)
+    sync._keep_trashed(s["id"], {"instagram:CPOSTB00001"})
+    sync._keep_trashed(999, {"instagram:CPOSTB00001"})
+    sync._trashed_before.clear()
+    os.rename(folder, str(folder) + ".away")
+    sync.resume()
+    assert os.listdir(sync._retrash_dir()) == [f"{s['id']}.json"]   # 999 is no source
+    os.rename(str(folder) + ".away", folder)
+    sync.resume()
+    assert not os.listdir(sync._retrash_dir())
 
 
 def test_detect_pattern(env, tmp_path):

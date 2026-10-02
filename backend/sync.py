@@ -12,7 +12,9 @@ instaloader:
   media, so it stops at it whatever files exist (trashed posts stay gone).
   It keeps no list of deleted posts: a trashed post newer than the stamp
   (deleted before the sync that passed it) comes back, and goes straight
-  back to the trash after the sync (retrash), with a line in its log.
+  back to the trash after the sync (retrash), with a line in its log. The
+  list it checks is kept in ``<data_dir>/instaloader/retrash/`` while the
+  sync runs, so a sync FeedVault stopped is re-trashed at the next start.
 - ``--fast-update`` (stop at the first post whose files exist) only for a
   first sync with no stamp, where it is the only stopping point. With a
   stamp it would stop at a post saved on its own (the userscript's Save, a
@@ -361,7 +363,7 @@ def _start(params, note, argv=None):
     roots = config.load()["media_roots"]
     moved = save.gather(conn, src, roots, note)
     _seed_stamp(conn, src, options, note, moved, roots)
-    _trashed_before[src["id"]] = _trashed(conn, roots)
+    _keep_trashed(src["id"], _trashed(conn, roots))
     if not argv:
         return None
     stamps = configparser.ConfigParser(interpolation=None)
@@ -370,6 +372,61 @@ def _start(params, note, argv=None):
 
 
 _trashed_before = {}                           # source id -> trashed posts not in the index when its sync starts
+
+
+def _retrash_dir():
+    return os.path.join(config.load()["data_directory"], "instaloader", "retrash")
+
+
+def _retrash_path(sid):
+    """Where a sync's _trashed_before is kept while it runs, for the next
+    start when FeedVault stops before the sync ends (see resume)."""
+    return os.path.join(_retrash_dir(), f"{int(sid)}.json")
+
+
+def _keep_trashed(sid, ids):
+    _trashed_before[sid] = ids
+    path = _retrash_path(sid)
+    if not ids:
+        try:
+            os.remove(path)                    # one a crash left, already done with
+        except FileNotFoundError:
+            pass
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "posts": sorted(ids)}, f)
+    os.replace(tmp, path)
+
+
+def _kept_trashed(sid):
+    """Whether a list is kept for the sync of source ``sid``."""
+    return bool(_trashed_before.get(sid)) or os.path.exists(_retrash_path(sid))
+
+
+def _take_trashed(sid, keep_file=False):
+    """The list kept for the sync of source ``sid`` (from memory, else from
+    its file after a restart), forgotten. ``keep_file``: the file stays,
+    for the next start."""
+    ids = _trashed_before.pop(sid, None)
+    path = _retrash_path(sid)
+    if keep_file:
+        return ids
+    if ids is None:
+        try:
+            with open(path, encoding="utf-8") as f:
+                posts = json.load(f)["posts"]
+            ids = {i for i in posts if isinstance(i, str)} if isinstance(posts, list) else None
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            print(f"[sync] source {sid}: unreadable {path}, ignored: {e}")
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    return ids
 
 
 def _in_trash(roots):
@@ -403,32 +460,52 @@ def _retrash(params, note):
         src = sources.row(db.connect(), sid)
         return retrash(sid, src["folder"] if src else None, note or print)
     except Exception as e:                     # the sync still ends as it went
-        _trashed_before.pop(sid, None)
+        if sid is not None:
+            _take_trashed(sid)
         (note or print)(f"could not put the trashed posts it brought back in the trash: {e}")
         return []
 
 
 def _retrash_cancelled(sid):
-    """A sync cancelled while instaloader ran: its folder is not indexed, so
-    a trashed post it brought back would be new at the next scan. Index the
-    folder (what the next scan would do) and put those back in the trash."""
+    """A sync cancelled while instaloader ran, or that FeedVault stopped
+    (at the next start, resume): its folder is not indexed, so a trashed post it brought
+    back would be new at the next scan. Index the folder (what the next scan
+    would do) and put those back in the trash."""
     def note(text):
         print(f"[sync] source {sid}: {text}")
     try:
         src = sources.row(db.connect(), sid)
-        if src is None or src["tool"] != "instaloader" or not os.path.isdir(src["folder"]):
+        if src is None or src["tool"] != "instaloader":
+            _take_trashed(sid)
             return
+        if not os.path.isdir(src["folder"]):
+            return                             # its root is offline: the list waits for the next start
         scanner.index_dirs(config.load()["media_roots"], [src["folder"]], new=True)
         retrash(sid, src["folder"], note)
     except Exception as e:                     # the next scan indexes them, as before
         note(f"could not put the trashed posts it brought back in the trash: {e}")
 
 
+def resume():
+    """At startup, after jobs.recover: the syncs FeedVault stopped (quit or
+    killed) while instaloader ran left their lists (_keep_trashed). Each is
+    done as for a cancelled sync, then forgotten."""
+    try:
+        names = sorted(os.listdir(_retrash_dir()))
+    except FileNotFoundError:
+        return
+    for name in names:
+        sid = name[:-len(".json")]
+        if name.endswith(".json") and sid.isascii() and sid.isdigit() and len(sid) < 16:
+            print(f"[sync] source {sid}: its sync was interrupted, checking for trashed posts it brought back")
+            _retrash_cancelled(int(sid))
+
+
 def retrash(sid, folder, note):
     """Put back in the trash the posts the sync of source ``sid`` brought
     back: in the trash and not in the index when it started, in its folder
     now, and still in the trash (not restored meanwhile). Returns their ids."""
-    before = _trashed_before.pop(sid, None)
+    before = _take_trashed(sid)
     if not before or not folder:
         return []
     cfg = config.load()
@@ -668,11 +745,11 @@ def _ended(job):
     if job["started_at"] is None:
         return                                 # cancelled while queued: it never ran
     sid = _source_id(job["params"])
-    if job["state"] == "cancelled" and _trashed_before.get(sid):
+    if job["state"] == "cancelled" and _kept_trashed(sid):
         _retrash_cancelled(sid)
-    # Left when the run ended before its outcome or after hook (cancelled,
-    # or the tool could not start).
-    _trashed_before.pop(sid, None)
+    # Left when the run ended before its outcome or after hook (the tool
+    # could not start). FeedVault stopped it: the file stays, for resume().
+    _take_trashed(sid, keep_file=job["state"] == "interrupted")
     _info_before.pop(sid, None)
     r = job["result"] or {}
     conn = db.connect()

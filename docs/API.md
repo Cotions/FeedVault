@@ -211,7 +211,14 @@ That sync puts it straight back in the trash once its folder is indexed
 in the source's folder after it, and still in the trash), says so in its
 log (`1 trashed post came back with this sync …: back in the trash`) and
 does not count it in `added`. A sync cancelled while instaloader ran has
-its folder indexed when it ends, for the same check. The post then has
+its folder indexed when it ends, for the same check. The list of trashed
+posts it checks against is kept in
+`<data_directory>/instaloader/retrash/<source id>.json` while the sync
+runs, so a sync that FeedVault stopped (Quit, or killed) gets the same
+check at the next start: its folder is indexed and the posts it brought
+back go back to the trash (the server log says so), then the file goes.
+A file whose source is gone is dropped; one whose folder is missing
+(its media root offline) waits for a later start. The post then has
 two entries in the trash: the one it was deleted with and the one the
 sync's copy went to; restoring it brings back the latest.
 

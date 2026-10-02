@@ -565,11 +565,12 @@ def cancel(job_id):
 def shutdown():
     """Stop every job before the app exits, the same way as cancel, waiting
     at most KILL_AFTER. Ended jobs are recorded as interrupted."""
-    global _closing
+    global _closing, _wake
     with _lock:
         _closing = True
         if _wake:
             _wake[1].cancel()
+            _wake = None
         jobs = list(_active.values())
         for job in jobs:
             job.interrupted = True

@@ -79,6 +79,7 @@ def layout(env, monkeypatch):
     monkeypatch.setattr(jobs, "_active", jobs.collections.OrderedDict())
     monkeypatch.setattr(jobs, "_closing", False)
     monkeypatch.setattr(jobs, "_cool", {})     # no pause left over from another test
+    monkeypatch.setattr(jobs, "_wake", None)
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     yield {"bin": bin_dir, "venv": venv, "pipx_venv": pipx_venv, "tmp": tmp}
     jobs.shutdown()

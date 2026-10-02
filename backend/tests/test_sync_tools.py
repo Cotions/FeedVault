@@ -87,6 +87,7 @@ def fake(env, monkeypatch):
     monkeypatch.setattr(jobs, "_active", collections.OrderedDict())
     monkeypatch.setattr(jobs, "_closing", False)
     monkeypatch.setattr(jobs, "_cool", {})
+    monkeypatch.setattr(jobs, "_wake", None)
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     bin_dir = env["tmp"] / "bin"
     bin_dir.mkdir()

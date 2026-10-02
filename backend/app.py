@@ -1202,6 +1202,7 @@ def main():
     userdata.restore_all(db.connect(), cfg["data_directory"])
     news.ensure(db.connect())
     jobs.recover()
+    sync.resume()
     # Ctrl+C and SIGTERM still write the last few seconds of user data, after
     # stopping running jobs (atexit runs the last registered first).
     atexit.register(userdata.flush)
