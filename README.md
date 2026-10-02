@@ -123,7 +123,12 @@ yt-dlp --write-info-json --write-thumbnail \
 
 Install [Tampermonkey](https://www.tampermonkey.net/), then open
 <http://localhost:3380/userscript/feedvault.user.js>. On Instagram, saved posts
-get a green "saved" badge in grids, and a post page shows an "in FeedVault" link.
+get a green "saved" badge in grids, and a post page shows an "In FeedVault" link.
+A post FeedVault does not have gets a **Save to FeedVault** button instead (on
+the post page and in the dialog a grid opens): it downloads that one post with
+instaloader, into its owner's folder (or `_saved/` in your first media root),
+and turns into the link once it is indexed. It shows Queued, Saving… and, when
+it fails, why.
 
 ## Jobs and tools
 

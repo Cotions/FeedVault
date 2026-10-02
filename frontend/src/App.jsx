@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { getScan, startScan, getJobs, quitApp, onConnectionChange } from "./lib/api";
 import { ScanContext } from "./lib/scan";
-import { JobsContext, ENDED } from "./lib/jobs";
+import { JobsContext, ENDED, SAVE_KIND } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
 import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SYNC_KINDS, batchKey } from "./lib/sources";
@@ -157,6 +157,7 @@ export default function App() {
       if (j.result?.added || j.result?.updated) changed = true;
       if (inBatch.has(j.id)) continue;            // one summary once the batch is over
       if (SYNC_KINDS.has(j.kind)) { syncToast(toast, j); continue; }
+      if (j.kind === SAVE_KIND) { saveToast(toast, j); continue; }
       // Which tool or source, for jobs that name one ("Done, yt-dlp: 2024.08.06").
       // A source sync names its profile in its label, not its params (an id).
       const what = j.params?.source ? j.label : Object.values(j.params || {}).join(" ");
@@ -445,6 +446,18 @@ function syncToast(toast, j) {
     toast(`${who}: no new posts`);
   } else {
     toast(`${j.label}: ${j.message}`);
+  }
+}
+
+/* A post saved from the userscript: one click from it, or from what to fix. */
+function saveToast(toast, j) {
+  const code = j.params?.shortcode;
+  if (j.state === "done" && j.result?.post) {
+    toast(`Saved post ${code}`, "ok", { to: `/p/instagram/${encodeURIComponent(code)}`, label: "Show" });
+  } else if (j.state === "failed" && ["missing", "login_required"].includes(j.result?.error)) {
+    toast(`Saving ${code} failed: ${j.message}`, "err", { to: "/settings", label: "Settings" });
+  } else {
+    toast(`${j.label}: ${j.message}`, j.state === "failed" ? "err" : undefined);
   }
 }
 
