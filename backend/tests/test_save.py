@@ -5,7 +5,7 @@ import pytest
 
 from conftest import H
 from fakes import owner, write_post
-from test_sync import DAY, TS, add_source, carol_archive, ended, fake, post, set_config  # noqa: F401
+from test_sync import DAY, TS, add_source, carol_archive, ended, fake, get, post, set_config, sync_now  # noqa: F401
 
 import config
 import db
@@ -263,3 +263,181 @@ def test_queue_cap_default_and_bad_values(env):
     for bad in (0, -1, 501, "5", True, 2.5, None):
         assert save.queue_max({"save_queue_max": bad}) == 20
     assert save.queue_max({"save_queue_max": 1}) == 1
+
+
+# ---------------------------------------------------------------------------
+# Out of _saved once the owner has a source (#38)
+# ---------------------------------------------------------------------------
+
+def stranger(saved=CODE, older=2, newer=1):
+    """@stranger's profile: the saved post, ``older`` posts before it and ``newer`` after."""
+    posts = [{"shortcode": saved, "ts": TS + 10 * DAY, "caption": "saved from the browser", "kind": "carousel",
+              "slides": 2}]
+    posts += [{"shortcode": f"COLDER0000{i}", "ts": TS + i * DAY, "caption": f"older {i}"} for i in range(older)]
+    posts += [{"shortcode": f"CNEWER0000{i}", "ts": TS + (20 + i) * DAY, "caption": f"newer {i}"}
+              for i in range(newer)]
+    return {"stranger": {"id": 4242, "name": "Stranger", "posts": posts}}
+
+
+def saved_with_user_data(client, fake):
+    """CODE saved to _saved, tagged, kept in Review and in a collection."""
+    fake.set(stranger())
+    assert save_now(client)["result"]["folder"].endswith("_saved")
+    post(client, "/api/tags/apply", {"posts": [f"instagram:{CODE}"], "add": ["keeper"], "remove": []})
+    db.set_decision(db.connect(), [f"instagram:{CODE}"], "keep", 7)
+    cid = post(client, "/api/collections", {"name": "Saved ones"})["collection"]["id"]
+    post(client, f"/api/collections/{cid}/add", {"posts": [f"instagram:{CODE}"]})
+    return db.connect().execute("SELECT first_seen FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()[0]
+
+
+def test_saved_post_moves_into_the_new_source_before_its_sync(env, client, fake):
+    first_seen = saved_with_user_data(client, fake)
+    saved = env["media"] / "_saved"
+    s = add_source(client, target="stranger")
+    job = ended(post(client, f"/api/sources/{s['id']}/sync")["job"]["id"])
+    assert job["state"] == "done", job
+    folder = env["media"] / "stranger"
+    # Moved whole, named as the sync names its files (the target), nothing left behind.
+    for suffix in ("_1.jpg", "_2.jpg", ".json", ".txt"):
+        assert (folder / f"stranger-2024-06-11-{CODE}{suffix}").is_file()
+    assert not [n for n in os.listdir(saved) if CODE in n]
+    log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert any("1 saved post moved from _saved into" in t for t in log)
+    # The sync walked the whole profile (a stamp before every post), skipped
+    # the saved post's files and downloaded the others only.
+    assert "--fast-update" not in job["argv"]
+    assert any(f"{CODE}.jpg exists" in t for t in log)
+    assert job["result"]["added"] == 3
+    conn = db.connect()
+    p = db.get_post(conn, "instagram", CODE)
+    meta = conn.execute("SELECT meta_path FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()[0]
+    assert meta == str(folder / f"stranger-2024-06-11-{CODE}.json")
+    paths = [r[0] for r in conn.execute("SELECT path FROM media WHERE post_id = ?", (f"instagram:{CODE}",))]
+    assert p["media_count"] == 2 and all(path.startswith(str(folder)) for path in paths)
+    # Same post id: first_seen, tags, Review decision and collections stay with it.
+    row = conn.execute("SELECT first_seen FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()
+    assert row[0] == first_seen
+    assert p["tags"] == ["keeper"] and p["decision"] == "keep"
+    assert [c["name"] for c in p["collections"]] == ["Saved ones"]
+    assert conn.execute("SELECT COUNT(*) FROM posts WHERE meta_path LIKE ?", (f"{saved}%",)).fetchone()[0] == 0
+    # The source has its account now, and the next sync finds nothing new.
+    assert get(client, f"/api/sources/{s['id']}")["account"] == {"platform": "instagram", "id": "4242"}
+    assert sync_now(client, s["id"])["result"]["added"] == 0
+
+
+def test_saved_post_moves_when_the_source_has_older_posts(env, client, fake):
+    """An archive folder already there: the stamp is its newest synced post,
+    not the saved one, so the posts between them are still fetched."""
+    fake.set(stranger(newer=0))
+    save_now(client)                           # no folder yet: into _saved
+    folder = env["media"] / "stranger"
+    write_post(folder, "COLDER00001", TS + DAY, owner("stranger", "4242"))
+    scanner.scan(env["roots"])
+    profile = stranger(newer=0)
+    profile["stranger"]["posts"].append({"shortcode": "CBETWEEN001", "ts": TS + 5 * DAY, "caption": "between"})
+    fake.set(profile)
+    s = add_source(client, target="stranger")
+    job = sync_now(client, s["id"])
+    log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert any("starting after its newest indexed post, 2024-06-02" in t for t in log)
+    # The folder's layout ({date_utc}_UTC), and the post in between downloaded.
+    assert (folder / "2024-06-11_12-00-00_UTC.json").is_file()
+    assert (folder / "2024-06-06_12-00-00_UTC.json").is_file()
+    assert job["result"]["added"] == 1
+    assert db.saved_ids(db.connect(), ["instagram:CBETWEEN001"]) == ["instagram:CBETWEEN001"]
+
+
+def test_saved_post_is_never_moved_over_a_file(env, client, fake):
+    fake.set(stranger())
+    save_now(client)
+    folder = env["media"] / "stranger"
+    folder.mkdir()
+    taken = folder / f"stranger-2024-06-11-{CODE}_1.jpg"
+    taken.write_bytes(b"mine")
+    s = add_source(client, target="stranger")
+    job = sync_now(client, s["id"])
+    assert taken.read_bytes() == b"mine"
+    # Left whole where it was: not split between the folders.
+    assert len([n for n in os.listdir(env["media"] / "_saved") if CODE in n]) == 4
+    assert not (folder / f"stranger-2024-06-11-{CODE}.json").exists()
+    assert any("1 saved post left in _saved" in ln["text"] for ln in jobs.log(job["id"])["lines"])
+
+
+def test_saved_post_move_rolls_back_on_failure(env, client, fake, monkeypatch):
+    fake.set(stranger())
+    save_now(client)
+    real = save.shutil.move
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(src)
+        if len(calls) == 3:
+            raise PermissionError(13, "Permission denied")
+        return real(src, dst)
+    monkeypatch.setattr(save.shutil, "move", flaky)
+    conn = db.connect()
+    src = {"tool": "instaloader", "platform": "instagram", "author_id": "4242", "target": "stranger",
+           "folder": str(env["media"] / "stranger")}
+    notes = []
+    assert save.gather(conn, src, env["roots"], notes.append) == []
+    assert len([n for n in os.listdir(env["media"] / "_saved") if CODE in n]) == 4
+    assert os.listdir(env["media"] / "stranger") == []
+    assert any("Permission denied" in n for n in notes)
+
+
+def test_only_the_accounts_posts_and_only_from_saved(env, client, fake):
+    """Another owner's saved post stays; so does a post of the account in another folder."""
+    profiles = {**stranger(), **profile(code="COTHER00001", handle="other.person", uid=5151)}
+    fake.set(profiles)
+    save_now(client)
+    save_now(client, "COTHER00001")
+    elsewhere = env["media"] / "Stranger (old)"
+    write_post(elsewhere, "CELSEWHERE1", TS, owner("stranger", "4242"))
+    scanner.scan(env["roots"])
+    conn = db.connect()
+    src = {"tool": "instaloader", "platform": "instagram", "author_id": "4242", "target": "stranger",
+           "folder": str(env["media"] / "stranger")}
+    assert save.gather(conn, src, env["roots"], lambda t: None) == [f"instagram:{CODE}"]
+    assert any("COTHER00001" in n for n in os.listdir(env["media"] / "_saved"))
+    meta = conn.execute("SELECT meta_path FROM posts WHERE id = 'instagram:CELSEWHERE1'").fetchone()[0]
+    assert meta.startswith(str(elsewhere))
+    # Not for other tools, nor into _saved itself.
+    assert save.gather(conn, {**src, "tool": "gallery-dl"}, env["roots"], lambda t: None) == []
+    assert save.gather(conn, {**src, "author_id": "5151", "folder": str(env["media"] / "_saved")},
+                       env["roots"], lambda t: None) == []
+
+
+def test_saved_symlink_is_moved_as_a_link(env, client, fake, tmp_path):
+    """A file in _saved that is a symlink moves as the link: what it points at is never touched."""
+    fake.set(stranger())
+    save_now(client)
+    saved = env["media"] / "_saved"
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"outside")
+    link = saved / f"stranger-2024-06-11-{CODE}_2.jpg"
+    link.unlink()
+    link.symlink_to(outside)
+    scanner.scan(env["roots"])
+    src = {"tool": "instaloader", "platform": "instagram", "author_id": "4242", "target": "stranger",
+           "folder": str(env["media"] / "stranger")}
+    assert save.gather(db.connect(), src, env["roots"], lambda t: None) == [f"instagram:{CODE}"]
+    moved = env["media"] / "stranger" / f"stranger-2024-06-11-{CODE}_2.jpg"
+    assert moved.is_symlink() and os.readlink(moved) == str(outside)
+    assert outside.read_bytes() == b"outside"
+
+
+def test_saved_post_moves_once_the_first_sync_finds_the_account(env, client, fake):
+    """Saved under an older handle: the source's target names no account
+    before its first sync, which then finds it (adopt); the saved post
+    (gone from the profile since) moves into the folder after it."""
+    fake.set({"oldname": {"id": 4242, "posts": [{"shortcode": CODE, "ts": TS + 10 * DAY}]}})
+    save_now(client)
+    fake.set({"newname": {"id": 4242, "posts": [{"shortcode": "CNEWNAME001", "ts": TS + 20 * DAY}]}})
+    s = add_source(client, target="newname")
+    job = sync_now(client, s["id"])
+    assert job["result"]["added"] == 1
+    folder = env["media"] / "newname"
+    assert (folder / f"newname-2024-06-11-{CODE}.json").is_file()
+    assert not [n for n in os.listdir(env["media"] / "_saved") if CODE in n]
+    meta = db.connect().execute("SELECT meta_path FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()[0]
+    assert meta.startswith(str(folder))

@@ -962,7 +962,7 @@ time), params `{ "source": "<id>" }` and nothing else. The argument list
 comes from the stored source:
 
 ```
-instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-update
+instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-update]
             --no-compress-json --dirname-pattern <folder> --filename-pattern <pattern>
             --title-pattern {date_utc}_UTC_{typename} [session flags] -- <target>
 ```
@@ -970,8 +970,25 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
 - **Incremental.** `--latest-stamps` keeps, per profile, the time of the
   newest post downloaded, in FeedVault's data directory, not next to the
   media: instaloader stops at it whatever files exist (trashed posts are
-  not downloaded again). `--fast-update` also stops at the first file that
-  exists.
+  not downloaded again), and skips the files that already exist one by one.
+- **`--fast-update` only without a stamp.** It stops at the first post
+  whose files exist, so with a stamp it would stop at a post saved on its
+  own (the userscript's Save) newer than the stamp, and the posts between
+  them would never be fetched. It is passed only when `stamps.ini` has no
+  entry for the target (a first sync that could not be seeded, and not
+  with `full_history`); decided from that file when the job is queued and
+  again right before it starts, after seeding (the job's `argv` shows what
+  ran).
+- **Saved posts join the folder.** Right before each sync, the posts of
+  the source's account (its account, else the one account whose handle,
+  any it had, is the target) that the Save button put in `_saved/` move
+  into the source's folder, renamed as the sync names its files, so the
+  sync finds them and does not download them again. A post moves whole or
+  not at all, never over a file already there (it then stays in `_saved/`).
+  Both folders are indexed again: the posts keep their ids, so their
+  `first_seen`, tags, decisions and collections stay with them. A source
+  whose account is found only by its first sync (adopted) gets them after
+  that sync. The job log says how many moved.
 - **First sync.** When `stamps.ini` has no entry for the target yet, it is
   seeded with the newest trustworthy `posted_at` FeedVault has for the
   source's account (and the account's numeric id, when it has one), so the
@@ -982,7 +999,10 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini --fast-updat
   name without a date (`{target} - {shortcode}`) only has the file's mtime,
   which a copy may have made later than posts never downloaded: such posts
   are left out, and an account with nothing else gets no seed (the job log
-  says `first sync: no reliable date, fetching full history`).
+  says `first sync: no reliable date, fetching full history`). Posts just
+  moved out of `_saved/` never seed it; when they are all the account has,
+  the stamp is set before every post (1970), so the first sync walks the
+  whole profile, skipping them, and a retry does the same.
 - **Metadata on.** `--no-compress-json` writes each post's JSON beside its
   media, so new posts get captions, stats and the account's numeric id.
   The folder's name becomes an alias of that id (see [People](#people)),

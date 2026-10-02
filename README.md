@@ -126,7 +126,8 @@ Install [Tampermonkey](https://www.tampermonkey.net/), then open
 get a green "saved" badge in grids, and a post page shows an "In FeedVault" link.
 A post FeedVault does not have gets a **Save to FeedVault** button instead (on
 the post page and in the dialog a grid opens): it downloads that one post with
-instaloader, into its owner's folder (or `_saved/` in your first media root),
+instaloader, into its owner's folder (or `_saved/` in your first media root,
+until the owner gets a source: its next sync moves them into its folder),
 and turns into the link once it is indexed. It shows Queued, Saving… and, when
 it fails, why. A profile page gets a **Sync profile** button: it syncs the
 profile's source, or first adds one (it asks, in the button itself), and

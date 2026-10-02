@@ -284,17 +284,20 @@ FILENAMES = "instaloader (filenames)"           # parsers.instaloader's tool for
 DAY = 86400
 
 
-def trusted_newest(conn, platform, author_id):
+def trusted_newest(conn, platform, author_id, skip=()):
     """The newest post time of an account (aliases included) that can seed
     instaloader's stamp, or None. A post with metadata has its real time; a
     post rebuilt from a dated file name counts until the end of that day
     (its mtime only within it); one from a name without a date (``{target} -
     {shortcode}``) has only its mtime, which a copy that did not keep it
-    makes the copy's date, later than posts never downloaded: not counted."""
+    makes the copy's date, later than posts never downloaded: not counted.
+    Posts in ``skip`` (ids) do not count either."""
     clause, args = db.post_filter(platform=platform, author=author_id)
     newest = None
-    for tool, path, posted in conn.execute(
-            f"SELECT p.tool, p.meta_path, p.posted_at {db._FROM} {clause} AND p.posted_at IS NOT NULL", args):
+    for pid, tool, path, posted in conn.execute(
+            f"SELECT p.id, p.tool, p.meta_path, p.posted_at {db._FROM} {clause} AND p.posted_at IS NOT NULL", args):
+        if pid in skip:
+            continue
         if tool == FILENAMES:
             m = _NAME_RE.fullmatch(os.path.basename(path))
             day = _day_start(m["date"]) if m else None
@@ -324,10 +327,12 @@ def _start(params, note, argv=None):
     """Right before instaloader starts (no other instaloader runs): seed the
     stamps file on a source's first sync. Returns the argument list with
     --fast-update as the stamps file now says (see fast_update)."""
+    import save                                # it imports this module
     conn = db.connect()
     src = _queued_source(conn, params, argv)
     options = _options(src)
-    _seed_stamp(conn, src, options, note)
+    moved = save.gather(conn, src, config.load()["media_roots"], note)
+    _seed_stamp(conn, src, options, note, moved)
     if not argv:
         return None
     stamps = configparser.ConfigParser(interpolation=None)
@@ -335,7 +340,17 @@ def _start(params, note, argv=None):
     return _with_stamps(argv[1:], stamps, src["target"], options)
 
 
-def _seed_stamp(conn, src, options, note):
+# A stamp before every post: the sync walks the whole profile, without
+# --fast-update, and skips the files already there one by one.
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _seed_stamp(conn, src, options, note, moved=()):
+    """Seed the stamps file on a first sync (no stamp yet). Posts just moved
+    out of _saved (``moved``) were saved one by one, not synced: they never
+    seed it. When they are all there is, the stamp goes before every post
+    (EPOCH), so the walk passes them and goes on to the older posts; it is
+    in the file before instaloader runs, so a retry does the same."""
     path = stamps_path()
     stamps = configparser.ConfigParser(interpolation=None)
     stamps.read(path, encoding="utf-8")
@@ -353,10 +368,18 @@ def _seed_stamp(conn, src, options, note):
         key = people.canonical(conn, src["platform"], src["author_id"])
         a = db.accounts(conn).get(key)
         if a and a["newest"] is not None:
-            newest = trusted_newest(conn, *key)
-            if newest is None:
+            newest = trusted_newest(conn, *key, skip=set(moved))
+            if newest is None and not moved:
                 note("first sync: no reliable date, fetching full history")
                 return
+    if newest is None and moved:
+        if not stamps.has_section(target):
+            stamps.add_section(target)
+        stamps.set(target, "post-timestamp", EPOCH.strftime(STAMP_FORMAT))
+        _write_stamps(stamps, path)
+        note(f"first sync of {target}: downloading everything but the "
+             f"{len(moved)} post{'' if len(moved) == 1 else 's'} saved already")
+        return
     if newest is None:
         note(f"first sync of {target}: no post indexed yet, downloading everything")
         return
@@ -534,7 +557,13 @@ def _ended(job):
     if job["state"] == "done" and options["full_history"]:
         sources.update(conn, sid, {**options, "full_history": False})     # once is enough
     if job["state"] in ("done", "failed"):
-        changed.update(sources.adopt(conn, sid, config.load()["media_roots"], job["ended_at"]))
+        roots = config.load()["media_roots"]
+        adopted = sources.adopt(conn, sid, roots, job["ended_at"])
+        changed.update(adopted)
+        if adopted and src["tool"] == "instaloader":
+            import save                        # it imports this module
+            # Its account is known only now: its saved posts join the folder.
+            save.gather(conn, sources.row(conn, sid), roots, lambda text: print(f"[sync] source {sid}: {text}"))
     for name in sorted(changed):
         userdata.changed(name)
 
