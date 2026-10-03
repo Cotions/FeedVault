@@ -152,7 +152,23 @@ RECORDED = {
     "gallery-dl": [
         ("[twitter][error] HttpError: '429 Too Many Requests' for 'https://x.com/i/api/graphql'", "rate_limited"),
         ("[twitter][error] AuthorizationError: someone's Tweets are protected", "private"),
-        ("[twitter][error] AuthRequired: 'auth_token' cookie needed", "login_required"),
+        ("[twitter][error] AuthRequired: authenticated cookies needed to access this timeline", "login_required"),
+        ("[twitter][error] AuthRequired: NSFW Tweet", "login_required"),
+        ("[twitter][error] AuthorizationError: HTTP redirect to login page ('https://x.com/login')",
+         "login_required"),
+        ("[twitter][error] 'Could not authenticate you.'", "login_required"),
+        ("[tiktok][error] https://www.tiktok.com/@someone: Login required to access this profile",
+         "login_required"),
+        ("[twitter][error] Rate limit exceeded", "rate_limited"),
+        ("[twitter][error] Rate limit exceeded (3/3)", "rate_limited"),
+        ("[twitter][info] Waiting for 14 minutes until 12:30:00 (rate limit)", "error"),   # it waits: no failure
+        ("[twitter][error] NotFoundError: User is suspended", "not_found"),
+        ("[tiktok][error] https://www.tiktok.com/@someone: User account could not be found", "not_found"),
+        ("[tiktok][error] ExtractionError: https://www.tiktok.com/@someone: could not extract rehydration data",
+         "error"),
+        ("[tiktok][error] https://www.tiktok.com/@someone: Region locked - Try downloading with a VPN/proxy "
+         "connection", "error"),
+        ("[twitter][error] Unable to retrieve Tweets from this timeline", "error"),
         ("[instagram][error] AuthenticationError: Invalid or missing login credentials", "login_required"),
         ("[pixiv][error] AuthorizationError: Insufficient privileges to access the specified resource",
          "login_required"),
@@ -345,6 +361,11 @@ def test_login_lines():
     assert login("gallery-dl", [(1, "[cookies][info] Extracted 0 cookies from Firefox")], cookies, "ok")["found"] is False
     assert login("gallery-dl", [(1, "[cookies][info] Extracted 9 cookies from Firefox")], cookies, "private") == \
         {"mode": "cookies", "found": True, "accepted": True}
+    assert login("gallery-dl", [(1, "[twitter][warning] cookies: Unable to find Firefox cookies database")],
+                 cookies, "error") == {"mode": "cookies", "found": False, "accepted": False}
+    assert login("gallery-dl", [(1, "[cookies][info] Extracted 9 cookies from Firefox"),
+                                (2, "[twitter][error] 'Could not authenticate you.'")], cookies, "login_required") == \
+        {"mode": "cookies", "found": True, "accepted": False}
     # Nothing said: unknown.
     assert login("gallery-dl", [(1, "x")], cookies, "ok") == {"mode": "cookies", "found": None, "accepted": None}
 

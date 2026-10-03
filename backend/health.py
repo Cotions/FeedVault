@@ -38,17 +38,29 @@ instaloadercontext.py, __main__.py)::
     renamed         "Profile <old> has changed its name to <new>." (check_profile_id, after "Trying to
                      find profile <old> using its unique ID <id>.": the profile id --latest-stamps keeps)
 
-gallery-dl: not installed where this was written; its log format
-``[<category>][error] <Exception>: <message>`` and the exception names are
-those of gallery-dl 1.30 (gallery_dl/exception.py), the messages those its
-twitter extractor raises::
+gallery-dl 1.32.14, read from its source (exception.py, job.py, output.py,
+cookies.py, extractor/common.py, twitter.py, tiktok.py); lines are
+``[<category>][<level>] <message>`` (output.LOG_FORMAT). An exception that
+ends the run is logged ``[<category>][error] <Exception>: <message>``
+(job.py), except AbortExtraction: its message alone::
 
-    rate_limited    "[twitter][error] HttpError: '429 Too Many Requests' for '<url>'"
+    rate_limited    "[<category>][error] HttpError: '429 Too Many Requests' for '<url>'" (common.py,
+                     once its retries are spent)
+                    "[twitter][error] Rate limit exceeded" (AbortExtraction, with the user's
+                     ratelimit=abort; else twitter waits: "[twitter][info] Waiting for …")
     private         "[twitter][error] AuthorizationError: <name>'s Tweets are protected"
-    login_required  "[<category>][error] AuthRequired: '<what>' needed …"
+    login_required  "[<category>][error] AuthRequired: authenticated cookies needed to access this
+                     timeline" (AuthRequired: "<auth> needed to access this <resource>", or its
+                     message alone: "NSFW Tweet")
                     "[<category>][error] AuthenticationError: …"
-                    "[<category>][error] AuthorizationError: …" (any other)
+                    "[<category>][error] AuthorizationError: …" (any other: "HTTP redirect to login
+                     page", "<name> blocked your account", "Account temporarily locked")
+                    "[twitter][error] 'Could not authenticate you.'" (AbortExtraction: cookies refused)
+                    "[tiktok][error] <url>: Login required to access this profile" (logged, then an
+                     ExtractionError no pattern knows)
     not_found       "[<category>][error] NotFoundError: Requested user could not be found"
+                    "[twitter][error] NotFoundError: <X's reason>" (UserUnavailable: "User is suspended")
+                    "[tiktok][error] <url>: User account could not be found"
     renamed         nothing: gallery-dl never names a profile's new handle
 
 yt-dlp 2026.08.19, read from its installed zipapp (networking/exceptions.py,
@@ -86,7 +98,9 @@ request of FeedVault's::
                                  successfully logged in." (accepted), "Not logged in. Are you logged
                                  in successfully in <browser>?" (refused)
     instaloader, either         "Redirected to login page. You've been logged out, …" (refused)
-    gallery-dl (1.30, as above) "[cookies][info] Extracted <n> cookies from <Browser>" (found; 0: missing)
+    gallery-dl (as above)       "[cookies][info] Extracted <n> cookies from <Browser>" (found; 0: missing,
+                                 as "[<category>][warning] cookies: Unable to find <Browser> cookies
+                                 database"), "[twitter][error] 'Could not authenticate you.'" (refused)
     yt-dlp                      "Extracted <n> cookies from <browser>" (found; 0: missing),
                                 "could not find <browser> cookies database …", "failed to load
                                  cookies" (missing)
@@ -150,9 +164,13 @@ INSTALOADER = _table([
 ])
 GALLERY_DL = _table([
     ("rate_limited", r"\]\[error\] HttpError: '429 Too Many Requests'"),
+    ("rate_limited", r"^\[twitter\]\[error\] Rate limit exceeded\b"),
     ("private", r"\]\[error\] AuthorizationError: .*'s Tweets are protected"),
     ("login_required", r"\]\[error\] (?:AuthRequired|AuthenticationError|AuthorizationError): "),
+    ("login_required", r"^\[twitter\]\[error\] 'Could not authenticate you"),
+    ("login_required", r"^\[tiktok\]\[error\] \S+: Login required to access this profile\b"),
     ("not_found", r"\]\[error\] NotFoundError: "),
+    ("not_found", r"^\[tiktok\]\[error\] \S+: User account could not be found$"),
 ])
 YT_DLP = _table([
     ("rate_limited", r"HTTP Error 429: Too Many Requests"),
@@ -193,6 +211,8 @@ LOGIN = {
     "gallery-dl": _table([
         ("found", r"^\[cookies\]\[info\] Extracted [1-9]\d* cookies from "),
         ("missing", r"^\[cookies\]\[info\] Extracted 0 cookies from "),
+        ("missing", r"^\[[\w:-]+\]\[warning\] cookies: Unable to find \w+ cookies database"),
+        ("refused", r"^\[twitter\]\[error\] 'Could not authenticate you"),
     ]),
     "yt-dlp": _table([
         ("found", r"^Extracted [1-9]\d* cookies from "),

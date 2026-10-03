@@ -110,7 +110,7 @@ def _log(tool, argv):
 
 GALLERY_DL_FAIL = {
     "429": ("HttpError", "'429 Too Many Requests' for 'https://api.x.com/graphql'", 4),
-    "login": ("AuthRequired", "'cookies' needed to access this timeline", 16),
+    "login": ("AuthRequired", "authenticated cookies needed to access this timeline", 16),
     "private": ("AuthorizationError", "{name}'s Tweets are protected", 16),
     "notfound": ("NotFoundError", "Requested user could not be found", 4),
     "odd": ("HttpError", "'500 Internal Server Error' for 'https://api.x.com/graphql'", 4),   # no state: an error

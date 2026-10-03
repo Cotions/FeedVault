@@ -1350,15 +1350,15 @@ this order:
 
 | state | instaloader | gallery-dl | yt-dlp |
 |---|---|---|---|
-| `rate_limited` | `429 Too Many Requests`, `Please wait a few minutes` | `HttpError: '429 …'` | `HTTP Error 429` |
+| `rate_limited` | `429 Too Many Requests`, `Please wait a few minutes` | `HttpError: '429 …'`, X `Rate limit exceeded` | `HTTP Error 429` |
 | `private` | `Private but not followed`, `private but not followed` | `AuthorizationError: … Tweets are protected` | TikTok `This user's account is (likely either) private`, YouTube `Private video` |
-| `login_required` | `Login required`, `requires login`, `Redirected to login page`, `Session file does not exist yet`, `Login error:`, `No cookies found for Instagram`, `Not logged in.`, `403 Forbidden` | `AuthRequired:`, `AuthenticationError:`, other `AuthorizationError:` | `Sign in to confirm you're not a bot`, `Sign in to confirm your age`, `TikTok is requiring login`, `Use --cookies-from-browser or --cookies for the authentication` |
-| `not_found` | `Profile … does not exist.` | `NotFoundError:` | `The channel/playlist does not exist`, `HTTP Error 404`, `Video unavailable`, `YouTube said: This channel does not exist` / `This account has been terminated` |
+| `login_required` | `Login required`, `requires login`, `Redirected to login page`, `Session file does not exist yet`, `Login error:`, `No cookies found for Instagram`, `Not logged in.`, `403 Forbidden` | `AuthRequired:`, `AuthenticationError:`, other `AuthorizationError:`, X `'Could not authenticate you`, TikTok `…: Login required to access this profile` | `Sign in to confirm you're not a bot`, `Sign in to confirm your age`, `TikTok is requiring login`, `Use --cookies-from-browser or --cookies for the authentication` |
+| `not_found` | `Profile … does not exist.` | `NotFoundError:`, TikTok `…: User account could not be found` | `The channel/playlist does not exist`, `HTTP Error 404`, `Video unavailable`, `YouTube said: This channel does not exist` / `This account has been terminated` |
 
 Anything else is `error`, with its line. A TikTok user that does not exist
 only gives yt-dlp's `Unable to extract secondary user ID`, which a private
-account can give too: it stays an `error`. gallery-dl was not installed
-where the table was written; its strings are those of its 1.30 source.
+account can give too: it stays an `error`. gallery-dl's strings are
+those of its 1.32.14 source.
 
 `renamed`: the sync worked, and the tool said the profile now has another
 name. Only instaloader says so: with `--latest-stamps` it keeps each
@@ -1378,8 +1378,10 @@ Instagram` (missing), `Logged in as …` / `… has been successfully logged
 in.` (accepted: instaloader checks the session itself before saying so),
 `Not logged in.` / `Redirected to login page. You've been logged out`
 (refused); gallery-dl's `[cookies][info] Extracted <n> cookies from …` and
-yt-dlp's `Extracted <n> cookies from …` (found; 0 is missing), yt-dlp's
-`could not find … cookies database` / `failed to load cookies` (missing).
+yt-dlp's `Extracted <n> cookies from …` (found; 0 is missing), gallery-dl's
+`cookies: Unable to find … cookies database`, yt-dlp's
+`could not find … cookies database` / `failed to load cookies` (missing),
+gallery-dl's X `'Could not authenticate you` (refused).
 Then a sync that ended `login_required` had its session refused, and one
 that ended otherwise (`ok`, `renamed`, `private`, `not_found`) with its
 session found had it accepted.
