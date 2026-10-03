@@ -338,6 +338,34 @@ def test_placeholders_are_replaced_in_their_element_once(client, folder, runner,
                                          "{root}", "--", "{root}{root}"]
 
 
+@pytest.mark.parametrize("name, root, want", [
+    ("instaloader-profile", "/m/{old}", "/m/{{old}}"),
+    ("yt-dlp-video", "/m/50% clips", "/m/50%% clips/" + sync.YT_DLP_NAME),
+])
+def test_a_folder_in_an_option_its_tool_formats_is_escaped(env, name, root, want):
+    """As the tool's own sync escapes it (sync._escape, _build_yt_dlp)."""
+    script = scripts.get("builtin:" + name)
+    vals = scripts.values(script, config.load(), root, "carol.cooks", "https://example.com/v")
+    argv = scripts.command(script, vals)
+    option = "--dirname-pattern" if name.startswith("instaloader") else "-o"
+    assert argv[argv.index(option) + 1] == want
+    # Anywhere else a value stays as it is.
+    assert all("{{" not in a and "%%" not in a for a in scripts.command(
+        {**script, "argv": [script["tool"], "{root}", "--", "{root}"]}, vals))
+
+
+def test_a_folder_with_a_dollar_is_refused_to_gallery_dl_and_yt_dlp(client, folder, runner, env):
+    write(folder, "gdl.json", {"needs": "url", "argv": ["gallery-dl", "-D", "{root}", "--", "{url}"]})
+    error = run(client, "gdl", status=400, url="https://example.com/a", folder=f"{env['media']}/a$HOME")["error"]
+    assert "holds a $" in error and runner.runs() == []
+
+
+def test_the_cookie_sweep_waits_for_any_yt_dlp_run(client, monkeypatch):
+    monkeypatch.setattr(jobs, "active", lambda: [{"kind": "script-sync", "group": "yt-dlp", "state": "running"}])
+    r = client.post("/api/yt-dlp/info-json-cookies", json={"apply": True}, headers=H)
+    assert r.status_code == 409 and "yt-dlp is running" in r.get_json()["error"]
+
+
 def test_a_shell_script_gets_its_inputs_as_env_values_only(client, folder, runner, env, monkeypatch):
     monkeypatch.setenv("FAKE_SECRET", "kept out")
     out = env["tmp"] / "out.txt"
@@ -409,7 +437,10 @@ def test_refused_scripts_are_never_run(client, folder, runner, env, tmp_path, mo
     real = os.getuid()
     write(folder, "theirs.json", good)
     monkeypatch.setattr(scripts.os, "getuid", lambda: real + 1)
-    assert run(client, "theirs", status=404, target="x")["ok"] is False     # its folder is refused
+    # Its folder is refused: that is the reason given, never "no such script".
+    assert "the scripts folder belongs to another user" in run(client, "theirs", status=400, target="x")["error"]
+    got = client.get("/api/scripts/theirs", headers=H)
+    assert got.status_code == 404 and "the scripts folder belongs to another user" in got.get_json()["error"]
     monkeypatch.setattr(scripts, "_folder_refused", lambda *a, **k: None)
     assert "belongs to another user" in run(client, "theirs", status=400, target="x")["error"]
     assert runner.runs() == [] and jobs.active() == []
@@ -690,6 +721,53 @@ def test_a_refused_folder_is_the_reason_given(client, folder, runner, source):
         folder.chmod(0o755)
     assert job["state"] == "failed" and "the scripts folder is writable by group or others" in job["message"]
     assert "no script" not in job["message"] and runner.runs() == []
+
+
+def test_attaching_under_a_refused_folder_gives_its_reason(client, folder, runner, source):
+    folder.chmod(0o777)
+    try:
+        error = attach(client, source["id"], "mine", status=400)["error"]
+    finally:
+        folder.chmod(0o755)
+    assert "the scripts folder is writable by group or others" in error and "no script" not in error
+
+
+def test_a_script_sync_whose_source_is_gone_is_cancelled(client, folder, runner, source, env, monkeypatch):
+    gate = env["tmp"] / "gate"
+    os.mkfifo(gate)
+    monkeypatch.setenv("RECORDER_GATE", str(gate))
+    cfg = config.load()
+    cfg["instaloader"] = {"pause": 0}
+    config.save(cfg)
+    attach(client, source["id"], "mine")
+    write(folder, "insta-hold.json", {"needs": "none", "argv": ["instaloader", "--hold"]})
+    blocker = run(client, "insta-hold")["job"]
+    wait_for(lambda: runner.runs())
+    queued = sync_now(client, source["id"])["job"]
+    # The API refuses while it is queued: gone as when the database is replaced.
+    assert sources.delete(db.connect(), source["id"])
+    with open(gate, "w") as f:
+        f.write("go\n")
+    ended(blocker["id"])
+    job = ended(queued["id"])
+    assert job["state"] == "cancelled" and "no longer exists" in job["message"]
+    assert len(runner.runs()) == 1             # the blocker only
+
+
+def test_a_script_unreadable_at_build_never_runs_its_fallback(client, folder, runner, source, monkeypatch):
+    """Readable when its SHA-256 was taken, not when the command is built:
+    the job's params lose the SHA-256, so its start fails, whatever the
+    file is by then."""
+    attach(client, source["id"], "mine")
+    params = {"source": str(source["id"]), **scripts.sync_params("mine", sources.row(db.connect(), source["id"]))}
+    assert "sha256" in params
+    (folder / "mine.json").chmod(0o666)
+    spec = scripts._sync_build(params)
+    assert "sha256" not in params and "writable by group or others" in params["why"]
+    (folder / "mine.json").chmod(0o644)
+    with pytest.raises(jobs.BadRequest, match="it can run now"):
+        scripts._sync_check(params, lambda text: None)
+    assert spec["args"] == []
 
 
 def test_attaching_checks_the_script(client, folder, runner, source):

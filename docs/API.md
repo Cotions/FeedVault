@@ -1700,7 +1700,7 @@ synced before this:
 (with `apply`, cleaned); `failed`: the first 20 `{ path, error }` (a file
 or folder that could not be read, a file that could not be rewritten),
 `failures` how many in all. `400` for an
-`apply` that is not a boolean, `409` while a yt-dlp sync runs or another
+`apply` that is not a boolean, `409` while yt-dlp runs (a sync, a yt-dlp source's script sync, or a script running it: its lock group) or another
 check is under way. Settings counts first (`apply` false), then asks to
 confirm.
 
@@ -2254,8 +2254,8 @@ by then, fails the job.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/scripts` | `{ "dir": "/home/me/.config/feedvault/scripts", "dir_refused": null, "scripts": [script, …] }`, built-ins first, then the files by name |
-| GET | `/api/scripts/<id>` | script with `content` (the file's text, or the built-in's JSON), or 404 |
-| POST | `/api/scripts/<id>/run` | body `{ "target"?, "url"?, "folder"? }` → `{ "ok": true, "job": {…} }`; 400 bad input or refused script; 403 from another origin (see below); 404 unknown id |
+| GET | `/api/scripts/<id>` | script with `content` (the file's text, or the built-in's JSON), or 404 (its `error` the scripts folder's refusal when it is refused) |
+| POST | `/api/scripts/<id>/run` | body `{ "target"?, "url"?, "folder"? }` → `{ "ok": true, "job": {…} }`; 400 bad input, refused script or refused scripts folder (its reason); 403 from another origin (see below); 404 unknown id |
 
 A script:
 

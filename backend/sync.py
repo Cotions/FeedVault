@@ -1422,23 +1422,24 @@ def _start_archive(tool):
 
 
 _seed_yt_dlp = _start_archive("yt-dlp")
-_info_before = {}                              # source id -> its folder's info JSONs right before yt-dlp starts
+_info_before = {}                              # source id -> (its folder, the info JSONs in it) right before yt-dlp starts
 
 
 def _start_yt_dlp(params, note, argv=None):
     _seed_yt_dlp(params, note, argv)
     src = sources.row(db.connect(), _source_id(params))
-    _info_before[src["id"]] = info_cookies.listing(src["folder"])
+    _info_before[src["id"]] = (src["folder"], info_cookies.listing(src["folder"]))
 
 
 def _strip_cookies(job, note):
     """After a yt-dlp run: take the cookies out of the info JSONs it wrote,
     whether they came from FeedVault's setting (--cookies-from-browser) or
     the user's own yt-dlp config. A failure is logged; the sync goes on."""
-    before = _info_before.pop(int(job["params"]["source"]), None)
-    if before is None or not job["rescan"]:
+    listed = _info_before.pop(int(job["params"]["source"]), None)
+    if listed is None or not job["rescan"]:
         return                                 # it never got to start
-    cleaned, failed = info_cookies.after_sync(job["rescan"], before)
+    # The folder listed at start: a script's sync may rescan another one.
+    cleaned, failed = info_cookies.after_sync(*listed)
     if cleaned:
         note(f"cookies removed from {cleaned} info JSON{'' if cleaned == 1 else 's'}")
     for path, error in failed:
@@ -1492,10 +1493,6 @@ class Refused(Exception):
 
 
 SCRIPT_REFUSED = "this source runs a script, which only FeedVault's own dashboard can start"
-
-
-def has_script(src):
-    return _options(src)["script"] is not None
 
 
 def _job(src, scheduled=False, scripts_ok=True):

@@ -46,7 +46,7 @@ DIR_NAME = "scripts"
 SIZE_MAX = 64 * 1024                           # bytes of a script file
 BUILTIN = "builtin:"
 FILE_RE = re.compile(r"([a-z0-9_-]{1,64})\.(json|sh)")
-ID_RE = re.compile(r"(?:builtin:)?[a-z0-9_-]{1,64}")
+ID_RE = sources.SCRIPT_ID_RE
 KINDS = {"json": "command", "sh": "shell"}
 NEEDS = ("target", "url", "none")
 PLACEHOLDERS = ("target", "url", "root", "data_dir", "archive")
@@ -63,7 +63,7 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # Read-only templates, from what downloaders.py and sync.py run (their
 # flags that depend on a source's options left out). Placeholders other
 # than FeedVault's ({profile}, %(id)s) are the tool's own.
-YT_DLP_NAME = "{root}/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"
+YT_DLP_NAME = "{root}/" + sync.YT_DLP_NAME
 BUILTINS = {
     "instaloader-profile": {
         "name": "instaloader: a profile",
@@ -354,26 +354,37 @@ def listing():
             "scripts": [_builtin(n) for n in BUILTINS] + [s for s, _ in found]}
 
 
-def get(sid, content=False):
-    """One script by id, read now, or None. ``content``: with its text
-    (the file's, or a built-in's JSON as a file would hold it)."""
+def lookup(sid, content=False):
+    """(one script by id, read now, or None; the scripts folder's refusal
+    or None). ``content``: with its text (the file's, or a built-in's JSON
+    as a file would hold it)."""
     if not isinstance(sid, str) or not ID_RE.fullmatch(sid):
-        return None
+        return None, None
     if sid.startswith(BUILTIN):
         name = sid[len(BUILTIN):]
         if name not in BUILTINS:
-            return None
+            return None, None
         out = _builtin(name)
         if content:
             out["content"] = template(name)
-        return out
-    _, found = _files()
+        return out, None
+    refused, found = _files()
     for s, raw in found:
         if s["id"] == sid and s["kind"] is not None:
             if content:
                 s["content"] = raw.decode("utf-8", "replace") if raw is not None else None
-            return s
-    return None
+            return s, None
+    return None, refused
+
+
+def get(sid, content=False):
+    """One script by id, read now, or None (see lookup)."""
+    return lookup(sid, content)[0]
+
+
+def missing(sid, refused):
+    """Why there is no script ``sid``: its folder's refusal, else that it is not there."""
+    return f"{refused}, so nothing in it runs" if refused else f"no script {sid} (in {scripts_dir()})"
 
 
 def template(name):
@@ -480,10 +491,28 @@ def _rescan(script, vals, roots):
     return inside
 
 
+# The options whose value a tool formats (instaloader: str.format, yt-dlp:
+# %), and how a value put in one is escaped, as sync.py does for its own.
+FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern"), sync._escape),
+             "yt-dlp": (("-o", "--output"), lambda v: v.replace("%", "%%"))}
+
+
+def command(script, vals):
+    """A command's argument list, its placeholders filled in: escaped in
+    the value of an option its tool formats."""
+    options, escape = FORMATTED.get(script["tool"], ((), None))
+    escaped = {k: escape(v) for k, v in vals.items()} if escape else vals
+    argv, formatted = [], False
+    for a in script["argv"]:
+        argv.append(substitute(a, escaped if formatted else vals))
+        formatted = a in options
+    return argv
+
+
 def _spec(script, vals, cfg, rescan):
     cwd = os.path.join(cfg["data_directory"], DIR_NAME)
     if script["kind"] == "command":
-        argv = [substitute(a, vals) for a in script["argv"]]
+        argv = command(script, vals)
         return {"tool": argv[0], "args": argv[1:], "cwd": cwd, "rescan": rescan, "group": group(script)}
     return {"tool": script["path"], "args": [], "env": shell_env(vals), "cwd": cwd, "rescan": rescan,
             "group": group(script)}
@@ -492,11 +521,14 @@ def _spec(script, vals, cfg, rescan):
 def runnable(sid, sha256=None):
     """The script ``sid``, read now, when it may run (and is still the one
     whose SHA-256 is ``sha256``, when given). Raises jobs.BadRequest."""
-    script = get(sid)
+    script, refused = lookup(sid)
     if script is None:
-        refused = None if sid.startswith(BUILTIN) else _files()[0]
-        raise jobs.BadRequest(f"{refused}, so nothing in it runs" if refused
-                              else f"no script {sid} (in {scripts_dir()})")
+        raise jobs.BadRequest(missing(sid, refused))
+    return _usable(script, sha256)
+
+
+def _usable(script, sha256=None):
+    """``script`` (read already) when it may run, else jobs.BadRequest."""
     if script["refused"]:
         raise jobs.BadRequest(f"{script['file'] or script['id']} is refused: {script['refused']}")
     if script["kind"] == "shell" and script["builtin"]:
@@ -556,7 +588,11 @@ def _inputs(script, params):
 
 def _vals(script, params, cfg):
     target, url = _inputs(script, params)
-    return values(script, cfg, _root(params.get("folder"), cfg), target, url)
+    root = _root(params.get("folder"), cfg)
+    # Both expand $NAME in the folder they are given (as sync._archive_source says).
+    if script["tool"] in ("gallery-dl", "yt-dlp") and "$" in root:
+        raise jobs.BadRequest(f"the folder holds a $, which {script['tool']} would expand")
+    return values(script, cfg, root, target, url)
 
 
 def _build(params):
@@ -578,13 +614,17 @@ def _check(params, note):
     _say(script, _vals(script, params, config.load()), note)
 
 
+def _tool_pause(tool):
+    """The pause after a sync of ``tool``; none for another program."""
+    if tool == "instaloader":
+        return sync.settings()["pause"]
+    return sync.tool_settings(tool)["pause"] if tool in sources.TOOLS else 0
+
+
 def _pause(params):
     """A downloader's command pauses as that tool's syncs do."""
     try:
-        tool = (get(params["script"]) or {}).get("tool")
-        if tool == "instaloader":
-            return sync.settings()["pause"]
-        return sync.tool_settings(tool)["pause"] if tool in sources.TOOLS else 0
+        return _tool_pause((get(params["script"]) or {}).get("tool"))
     except Exception:                          # reads files: never left holding the queue
         return 0
 
@@ -593,10 +633,12 @@ def run(sid, inputs):
     """Queue a run of script ``sid`` with ``inputs`` ({target, url, folder},
     each optional): the job's public dict. Raises LookupError for an
     unknown id, jobs.BadRequest for a refused script or bad inputs."""
-    script = get(sid)
+    script, refused = lookup(sid)
     if script is None:
+        if refused:
+            raise jobs.BadRequest(missing(sid, refused))
         raise LookupError(sid)
-    runnable(sid)
+    _usable(script)
     params = {"script": sid, **{k: inputs[k] for k in INPUTS if inputs.get(k) not in (None, "")}}
     if script["sha256"]:
         params["sha256"] = script["sha256"]
@@ -657,19 +699,20 @@ def _sync_build(params):
     script missing or refused is not an error here: the run fails with
     the reason (_sync_check), so the source and its schedule see it."""
     src = _source(params)
-    cfg = config.load()
-    roots = cfg["media_roots"]
-    if src["tool"] == "instaloader":
-        target = sources.parse_target("instaloader", src["target"])
+    if src["tool"] != "instaloader":
+        # gallery-dl's and yt-dlp's checks are their sync's own (a $ in the folder too).
+        src, _, folder, cfg = sync._archive_source(params, src["tool"])
     else:
-        target = sources.check_target(src["tool"], src["target"], sources.routes(cfg))
-    if target is None or target != src["target"]:
-        raise jobs.BadRequest("the source's target is not one its tool takes")
-    folder = sources.inside_root(src["folder"], roots)
-    if folder is None:
-        raise jobs.BadRequest("the source's folder is not inside a media root")
-    if sources.in_saved(folder, roots):
-        raise jobs.BadRequest(sources.SAVED_REFUSED.format(folder=folder))
+        cfg = config.load()
+        target = sources.parse_target("instaloader", src["target"])
+        if target is None or target != src["target"]:
+            raise jobs.BadRequest("the source's target is not a profile name")
+        folder = sources.inside_root(src["folder"], cfg["media_roots"])
+        if folder is None:
+            raise jobs.BadRequest("the source's folder is not inside a media root")
+        if sources.in_saved(folder, cfg["media_roots"]):
+            raise jobs.BadRequest(sources.SAVED_REFUSED.format(folder=folder))
+    roots = cfg["media_roots"]
     try:
         os.makedirs(folder, exist_ok=True)
         os.makedirs(os.path.join(cfg["data_directory"], DIR_NAME), exist_ok=True)
@@ -679,7 +722,11 @@ def _sync_build(params):
         if "sha256" not in params:             # it could not run when queued: that run fails
             raise jobs.BadRequest(params.get("why"))
         script = runnable(params["script"], params["sha256"])
-    except jobs.BadRequest:
+    except jobs.BadRequest as e:
+        # The run fails at _sync_check, which sees no sha256: never this spec's program.
+        if "sha256" in params:
+            del params["sha256"]
+            params["why"] = health.scrub(str(e))[:WHY_MAX]
         return {"tool": params["script"], "args": [], "rescan": folder, "group": src["tool"]}
     vals = _source_values(script, src, cfg)
     spec = _spec(script, vals, cfg, _rescan(script, vals, roots) or folder)
@@ -690,6 +737,8 @@ def _sync_check(params, note):
     """Right before it starts: the script is read again; missing, refused
     or changed since it was queued, the run fails and says why. Never the
     tool's own command instead."""
+    # Gone, or its id names another source now: cancelled, as a tool's sync is.
+    src = sync._queued_source(db.connect(), params, None)
     try:
         if "sha256" not in params:
             # Why it could not run when queued; if that is fixed by now, it says so.
@@ -697,7 +746,6 @@ def _sync_check(params, note):
             why = params.get("why") or "it could not be run"
             raise jobs.BadRequest(f"{why}; that was when the sync was queued, it can run now: sync again")
         script = runnable(params["script"], params["sha256"])
-        src = _source(params)
     except jobs.BadRequest as e:
         message = f"the source's script: {e}"
         note(message)
@@ -727,8 +775,7 @@ def _sync_start(params, note, argv=None):
 
 
 def _sync_pause(params):
-    tool = _tool(params)
-    return sync.settings()["pause"] if tool == "instaloader" else sync.tool_settings(tool)["pause"]
+    return _tool_pause(_tool(params))
 
 
 jobs.register(SYNC_KIND, label="Sync with a script",

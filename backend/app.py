@@ -988,11 +988,10 @@ def _script_refused(options):
         return None
     if _foreign_origin():
         return FOREIGN, 403
-    script = scripts.get(sid)
-    if script is None:
-        return f"no script {sid} in {scripts.scripts_dir()}", 400
-    if script["refused"]:
-        return f"{script['file']} is refused: {script['refused']}", 400
+    try:
+        scripts.runnable(sid)
+    except jobs.BadRequest as e:
+        return str(e), 400
     return None
 
 
@@ -1286,8 +1285,9 @@ def clean_info_json_cookies():
     apply = body.get("apply", False)
     if not isinstance(apply, bool):
         return jsonify({"ok": False, "error": "apply must be true or false"}), 400
-    if any(j["kind"] == sync.KINDS["yt-dlp"] and j["state"] == "running" for j in jobs.active()):
-        return jsonify({"ok": False, "error": "a yt-dlp sync is running; try again once it ends"}), 409
+    # A yt-dlp sync, a yt-dlp source's script sync or a script running yt-dlp: all in its lock group.
+    if any(j["group"] == "yt-dlp" and j["state"] == "running" for j in jobs.active()):
+        return jsonify({"ok": False, "error": "yt-dlp is running (a sync or a script); try again once it ends"}), 409
     try:
         r = info_cookies.sweep(_roots(), apply)
     except info_cookies.Busy as e:
@@ -1397,9 +1397,10 @@ def list_scripts():
 def get_script(sid):
     if _foreign_origin():
         return jsonify({"ok": False, "error": FOREIGN}), 403
-    s = scripts.get(sid, content=True)
+    s, refused = scripts.lookup(sid, content=True)
     if s is None:
-        return jsonify({"ok": False, "error": "no such script"}), 404
+        # A refused folder lists nothing: its reason, not "no such script".
+        return jsonify({"ok": False, "error": scripts.missing(sid, refused) if refused else "no such script"}), 404
     return jsonify(s)
 
 
