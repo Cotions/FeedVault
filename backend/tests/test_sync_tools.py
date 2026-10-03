@@ -305,6 +305,27 @@ def test_yt_dlp_that_cannot_start_leaves_nothing_behind(env, fake, client, monke
     assert sync._info_before == {}
 
 
+def test_yt_dlp_start_failure_drops_the_listing_even_if_an_ended_step_fails(env, fake, client, monkeypatch):
+    """#31: the listing goes before anything else the ended hook does."""
+    fake.put(TT, tt_account(1))
+    s = add(client, TT)
+    real = subprocess.Popen
+
+    def popen(argv, *a, **kw):
+        if os.path.basename(argv[0]) == "yt-dlp":
+            assert sync._info_before                # the start listed the folder
+            raise PermissionError(13, "Permission denied")
+        return real(argv, *a, **kw)
+
+    def broken(job):
+        raise OSError("disk gone")
+    monkeypatch.setattr(jobs.subprocess, "Popen", popen)
+    monkeypatch.setattr(sync, "_mark_muted", broken)
+    job = run_sync(client, s["id"])
+    assert job["state"] == "failed" and job["message"] == "yt-dlp could not start: Permission denied"
+    assert sync._info_before == {}
+
+
 def test_yt_dlp_break_on_existing(env, fake, client):
     shorts = "https://youtube.com/@somechannel/shorts"
     fake.put(shorts, yt_account((1, 30), (2, 30)))

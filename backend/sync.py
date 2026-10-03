@@ -1054,6 +1054,9 @@ def _failures(src, state):
 
 def _ended(job):
     """Store how it went on the source, and let a new source adopt its account."""
+    # First: the folder listing yt-dlp's start took goes, whatever fails
+    # below (its after hook never ran when the tool could not start).
+    _info_before.pop(int(job["params"]["source"]), None)
     if job["state"] in ("done", "failed"):
         _mark_muted(job)
     _tally(job)
@@ -1064,7 +1067,6 @@ def _ended(job):
     # Left when the run ended before its outcome or after hook (the tool
     # could not start). FeedVault stopped it: the file stays, for resume().
     _take_trashed(sid, keep_file=job["state"] == "interrupted" or waits)
-    _info_before.pop(sid, None)
     listed = _listed.pop(sid, None)
     r = job["result"] or {}
     conn = db.connect()
