@@ -27,11 +27,13 @@ executable. Two files with one id are both refused. Built-in templates (``builti
 are the commands downloaders.py and sync.py run, written as such a file
 would be: read-only, runnable, to copy.
 """
+import contextlib
 import hashlib
 import json
 import os
 import re
 import stat
+import threading
 from urllib.parse import urlsplit
 
 import archives
@@ -346,6 +348,34 @@ def _files():
     return None, found
 
 
+_once = threading.local()                      # .found: [] or [(refusal, files)] while read_once holds
+
+
+@contextlib.contextmanager
+def read_once():
+    """Within it, this thread reads the scripts folder at most once, and
+    every lookup gets that read (Sync all: one for all its sources). A
+    script sync's start, in its job's thread, still reads it again."""
+    if getattr(_once, "found", None) is not None:
+        yield
+        return
+    _once.found = []
+    try:
+        yield
+    finally:
+        _once.found = None
+
+
+def _read_folder():
+    """_files(), or the read already made under read_once."""
+    found = getattr(_once, "found", None)
+    if found is None:
+        return _files()
+    if not found:
+        found.append(_files())
+    return found[0]
+
+
 def listing():
     """{dir, dir_refused, shell_template, scripts}: the built-ins, then the
     files by name."""
@@ -368,7 +398,7 @@ def lookup(sid, content=False):
         if content:
             out["content"] = template(name)
         return out, None
-    refused, found = _files()
+    refused, found = _read_folder()
     for s, raw in found:
         if s["id"] == sid and s["kind"] is not None:
             if content:

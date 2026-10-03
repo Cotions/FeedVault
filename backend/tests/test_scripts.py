@@ -852,6 +852,47 @@ def test_the_userscripts_origin_cannot_run_a_script(client, folder, runner, sour
     ended(job["id"])
 
 
+def test_sync_all_reads_the_scripts_folder_once(client, folder, runner, source, monkeypatch):
+    """#59: once per request, however many sources have a script; each start still checks its SHA-256."""
+    cfg = config.load()                        # no pause between the instaloader runs
+    cfg["instaloader"] = {"pause": 0}
+    config.save(cfg)
+    write(folder, "other.json", {**INSTA, "name": "Other"})
+    ids = [source["id"]] + [add_source(client, t).get_json()["source"]["id"] for t in ("dana.draws", "eve.eats")]
+    for sid, script in zip(ids, ("mine", "other", "mine")):
+        attach(client, sid, script)
+    reads, files = [], scripts._files
+    monkeypatch.setattr(scripts, "_files", lambda: reads.append(1) or files())
+    pump, held = jobs._pump, [True]
+    monkeypatch.setattr(jobs, "_pump", lambda: None if held[0] else pump())   # no start reads it meanwhile
+    r = client.post("/api/sources/sync-all", headers=H).get_json()
+    assert len(r["jobs"]) == 3 and r["errors"] == [] and len(reads) == 1
+    assert all(j["kind"] == "script-sync" and "sha256" in j["params"] for j in r["jobs"])
+    held[0] = False
+    jobs._pump()
+    for j in r["jobs"]:
+        assert ended(j["id"])["state"] == "done"
+    assert len(reads) == 4                     # each start read it again (_sync_check)
+    # One source's Sync: read once too.
+    reads.clear()
+    ended(sync_now(client, ids[1])["job"]["id"])
+    assert len(reads) == 2                     # queued, then started
+
+
+def test_a_script_changed_between_sync_all_and_its_start_does_not_run(client, folder, runner, source, monkeypatch):
+    """The one read at Sync all gives the SHA-256; the start compares it with the file then."""
+    attach(client, source["id"], "mine")
+    pump, held = jobs._pump, [True]
+    monkeypatch.setattr(jobs, "_pump", lambda: None if held[0] else pump())   # nothing starts yet
+    job = client.post("/api/sources/sync-all", headers=H).get_json()["jobs"][0]
+    write(folder, "mine.json", {**INSTA, "argv": [*INSTA["argv"], "--extra"]})
+    held[0] = False
+    jobs._pump()
+    done = ended(job["id"])
+    assert done["state"] == "failed" and "changed since it was queued" in done["message"]
+    assert runner.runs() == []
+
+
 def test_the_userscript_gains_nothing(client):
     text = open(os.path.join(os.path.dirname(TESTS), "..", "userscript", "feedvault.user.js")).read()
     assert "/api/scripts" not in text and "script-sync" not in text and '"script"' not in text

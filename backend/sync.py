@@ -1515,7 +1515,8 @@ def sync(sid, scheduled=False, scripts_ok=True):
     """Queue one source's sync: the job's public dict. Raises Busy, Refused
     (see _job), or jobs.BadRequest when the source cannot be synced.
     ``scheduled``: the scheduler's (notify.py)."""
-    with _submitting:
+    import scripts                             # it imports this module
+    with _submitting, scripts.read_once():     # its script read once, for its params and its build
         if sid in active():
             raise Busy("its sync is already queued or running")
         src = sources.row(db.connect(), sid)
@@ -1532,8 +1533,10 @@ def sync_all(only=None, scripts_ok=True):
     ``scripts_ok``). The jobs queued become the batch (see batch), or join
     it while it still runs."""
     global _batch
+    import scripts                             # it imports this module
     queued, skipped, errors = [], 0, []
-    with _submitting:
+    # The scripts folder read once for every source that has a script.
+    with _submitting, scripts.read_once():
         busy = active()
         for src in db.connect().execute("SELECT * FROM sources ORDER BY target, id").fetchall():
             sid = src["id"]
