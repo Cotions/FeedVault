@@ -701,7 +701,7 @@ its person and one feed.
 Posts rebuilt from file names have no id: their author id is the profile
 folder's name. That folder name becomes an **alias** of the account's id
 when instaloader's id file in the folder (`<folder>/id`, or `<folder>_id`
-beside it) names the id, or else when the same folder also holds posts with
+beside it; not in a folder of another tool's posts) names the id, or else when the same folder also holds posts with
 metadata whose handle is that name or one in its file names (exactly one
 account). Aliases are derived on every scan, not stored as user data. An account and its aliases read as one: one row in `/api/authors` and
 Storage, one link (linking or unlinking an alias acts on the account), and
@@ -716,7 +716,9 @@ with it, so a folder renamed later (instaloader renames a profile's folder
 after a rename) keeps nobody from their person. A link to an account no
 post has any more moves too, when exactly one account on its platform had
 that handle (the same account, its folder renamed), and never to an account
-linked to someone else.
+linked to someone else: two folders naming one id, linked to two people,
+stay apart until the user merges them. A media root not found on a scan
+keeps its id files, as its posts stay.
 
 An **account** (`/api/authors` rows, a person's `accounts`):
 
@@ -784,10 +786,12 @@ A **person**:
 - `profiles` (at most 20): profile links, or Instagram names, each made a
   [source](#sources) of the new person, as `POST /api/sources` with
   `person` would, with default options. Nothing is downloaded until a sync,
-  and no folder is made. A profile whose account is indexed already (its
-  folder holds posts) links that account too when it has no person. All
-  or nothing: a link that is not a profile in the routing table, or that
-  already has a source, is a 400 naming it, and nothing is created.
+  and no folder is made; two links to one profile make one source. A
+  profile whose account is indexed already (its folder holds posts) links
+  that account too. All or nothing: a link that is not a profile in the
+  routing table, that already has a source, or whose account is another
+  person's (and not in `accounts`) is a 400 naming it, and nothing is
+  created or moved.
 - Sync on a person queues its sources (those shown with it, see
   [Sources](#sources)) through the normal [job](#jobs) queue: one at a
   time per tool, the tool's pause between two, a source already queued or

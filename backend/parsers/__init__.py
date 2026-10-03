@@ -6,6 +6,7 @@ a whole directory listing and decides which files it understands.
 
 A parser never touches the network and never writes to the media folder.
 """
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -126,4 +127,8 @@ def parse_dir(root, dirpath, names):
         result.skipped.extend(r.skipped)
         result.account_files.extend(r.account_files)
         remaining = [n for n in remaining if n not in r.claimed]
+    if any(not p.tool.startswith(instaloader.TOOL) for p in result.posts):
+        # An "id" file in another tool's folder is not instaloader's note.
+        result.claimed -= {os.path.basename(a.path) for a in result.account_files}
+        result.account_files = []
     return result

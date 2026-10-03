@@ -674,12 +674,14 @@ def save_profiles(conn, found, prune):
 
 def save_account_files(conn, found, prune, dirs=()):
     """Record the id files found (parsers.AccountFile). ``prune`` (a full
-    scan): ``found`` is all there is; else ``dirs`` were read again, and an
-    id file no longer in them is gone."""
+    scan): the media roots read, and ``found`` is all there is under them
+    (a root not found keeps its files, as its posts stay); else ``dirs``
+    were read again, and an id file no longer in them is gone."""
     rows = {a.path: (a.path, a.platform, a.author_id, a.handle, a.at) for a in found}
     have = {r[0]: tuple(r) for r in conn.execute("SELECT path, platform, author_id, handle, at FROM account_files")}
     if prune:
-        gone = [p for p in have if p not in rows]
+        under = tuple(r.rstrip(os.sep) + os.sep for r in prune)
+        gone = [p for p in have if p not in rows and p.startswith(under)]
     else:
         gone = [p for p in have if os.path.dirname(p) in dirs and p not in rows]
     rows = [r for p, r in rows.items() if have.get(p) != r]
@@ -1203,17 +1205,31 @@ def stats(conn, person=None):
     """Counts over every post, or one person's (``person``, an id: the same
     filter as /api/posts). Unmatched files belong to nobody: always all."""
     one = lambda sql, args=(): conn.execute(sql, args).fetchone()[0]  # noqa: E731
+    if person is None:                         # the whole archive: plain counts, a third faster than the joins
+        return {
+            "posts": one("SELECT COUNT(*) FROM posts"),
+            "media": one("SELECT COUNT(*) FROM media"),
+            "authors": one("SELECT COUNT(DISTINCT platform || ':' || author_id) FROM posts "
+                           "WHERE author_id IS NOT NULL"),
+            "bytes": one("SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0"),
+            "missing": one("SELECT COUNT(*) FROM posts WHERE missing = 1"),
+            "kept": one("SELECT COUNT(*) FROM decisions d JOIN posts p ON p.id = d.post_id "
+                        "WHERE d.decision = 'keep'"),
+            "unreviewed": one("SELECT COUNT(*) FROM posts p LEFT JOIN decisions d ON d.post_id = p.id "
+                              "WHERE d.post_id IS NULL"),
+            "unmatched": one("SELECT COUNT(*) FROM unmatched"),
+            "by_platform": dict(conn.execute("SELECT platform, COUNT(*) FROM posts GROUP BY platform").fetchall()),
+            "by_kind": dict(conn.execute("SELECT kind, COUNT(*) FROM posts GROUP BY kind").fetchall()),
+        }
     clause, args = post_filter(person=person)
     where = clause.replace("WHERE", "AND", 1)
     posts = f"SELECT p.id {_FROM} {clause}"
     return {
         "posts": one(f"SELECT COUNT(*) {_FROM} {clause}", args),
-        "media": one(f"SELECT COUNT(*) FROM media WHERE post_id IN ({posts})", args) if person is not None
-        else one("SELECT COUNT(*) FROM media"),
+        "media": one(f"SELECT COUNT(*) FROM media WHERE post_id IN ({posts})", args),
         "authors": one(f"SELECT COUNT(DISTINCT p.platform || ':' || p.author_id) {_FROM} "
                        f"WHERE p.author_id IS NOT NULL {where}", args),
-        "bytes": one(f"SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0 AND post_id IN ({posts})", args)
-        if person is not None else one("SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0"),
+        "bytes": one(f"SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0 AND post_id IN ({posts})", args),
         "missing": one(f"SELECT COUNT(*) {_FROM} WHERE p.missing = 1 {where}", args),
         "kept": one(f"SELECT COUNT(*) {_FROM} WHERE d.decision = 'keep' {where}", args),
         "unreviewed": one(f"SELECT COUNT(*) {_FROM} WHERE d.post_id IS NULL {where}", args),

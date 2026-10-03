@@ -745,14 +745,15 @@ def rename(conn, sid, old, new, now):
     src = row(conn, sid)
     key = people.canonical(conn, src["platform"], src["author_id"]) if src and src["author_id"] else None
     with conn:
-        if key and src["target"] == old:
-            conn.execute("INSERT OR REPLACE INTO handle_renames(platform, author_id, old, new, at) "
-                         "VALUES (?, ?, ?, ?, ?)", (*key, old.lower(), new.lower(), now))
-        return conn.execute(
+        done = conn.execute(
             "UPDATE sources SET target = ?, last_result = CASE WHEN json_valid(last_result) "
             "AND json_type(last_result) = 'object' THEN json_set(json_remove(last_result, '$.rename'), "
             f"'$.resumed', json('true'){_ANSWERED}) ELSE last_result END WHERE id = ? AND target = ?",
             (new, sid, old)).rowcount > 0
+        if done and key:                       # only a rename that happened goes in the history
+            conn.execute("INSERT OR REPLACE INTO handle_renames(platform, author_id, old, new, at) "
+                         "VALUES (?, ?, ?, ?, ?)", (*key, old.lower(), new.lower(), now))
+        return done
 
 
 def resume(conn, sid):

@@ -110,10 +110,12 @@ def _scan(roots):
     profiles = []                              # parsers.Profile, see db.save_profiles
     account_files = []                         # parsers.AccountFile, see db.save_account_files
 
+    read = []                                  # the roots walked
     for root in roots:
         if not os.path.isdir(root):
             report["errors"].append({"path": root, "error": "media root not found"})
             continue
+        read.append(root)
         for dirpath, dirnames, filenames in os.walk(root):
             if "pyvenv.cfg" in filenames:     # a Python virtualenv parked in the folder
                 dirnames[:] = []
@@ -144,7 +146,7 @@ def _scan(roots):
     report["missing"] = _mark_missing(conn, seen_meta)
     db.save_copies(conn, copies, started, prune=True)
     db.save_profiles(conn, profiles, prune=True)
-    db.save_account_files(conn, account_files, prune=True)
+    db.save_account_files(conn, account_files, prune=read)
     changed = people.refresh_aliases(conn)
     conn.execute("DELETE FROM unmatched")
     conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",

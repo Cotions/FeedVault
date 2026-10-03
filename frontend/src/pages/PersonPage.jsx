@@ -100,6 +100,7 @@ export default function PersonPage() {
       toast(message);
       reload();
       suggestApi.reload();
+      sources.reload();                        // a source shows with its account's person
     } catch (err) {
       toast(err.message, "err");
     } finally {

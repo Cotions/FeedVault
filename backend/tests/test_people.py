@@ -226,6 +226,34 @@ def test_a_gone_link_never_moves_to_two_candidates_or_another_person(env, client
     assert get(client, f"/api/people/{pid}")["count"] == 0
 
 
+def test_two_folders_of_one_id_linked_to_two_people_stay_apart(env, client):
+    for h, code in (("foo.a", "FFFFFFFFFF1"), ("foo.b", "FFFFFFFFFF2")):
+        filename_posts(env["media"] / h, h, code)
+        (env["media"] / h / "id").write_text("777")
+    scanner.scan(env["roots"])
+    create(client, "A", account(client, "instagram", "foo.a"))
+    create(client, "B", account(client, "instagram", "foo.b"))
+    write_post(env["media"] / "foo.c", "F3", TS, owner("foo.c", 777), "image")
+    scanner.scan(env["roots"])                                  # no IntegrityError
+    assert sorted(links()) == [("A", "instagram", "777"), ("B", "instagram", "foo.b")]
+
+
+def test_id_files_count_in_instaloader_folders_only_and_stay_while_a_root_is_offline(env):
+    gallery_dl_case("twitter/photo", env["media"] / "twitter" / "example_user1")
+    (env["media"] / "twitter" / "example_user1" / "id").write_text("12")
+    filename_posts(env["media"] / "hal", "hal", "HHHHHHHHHH1")
+    (env["media"] / "hal" / "id").write_text("34")
+    scanner.scan(env["roots"])
+    rows = lambda: [r[0] for r in db.connect().execute("SELECT author_id FROM account_files")]  # noqa: E731
+    assert rows() == ["34"]
+    other = env["media"].parent / "gone_root"
+    scanner.scan(env["roots"] + [str(other)])                  # a root not found prunes nothing of it
+    assert rows() == ["34"]
+    os.rename(env["media"], other)
+    scanner.scan([str(env["media"])])
+    assert rows() == ["34"]
+
+
 # ---------------------------------------------------------------------------
 # Create, link, unlink, merge, delete
 # ---------------------------------------------------------------------------
@@ -473,6 +501,13 @@ def test_handles_from_id_files_and_accepted_renames(env, client):
     write_post(env["media"] / "gina.now", "G2", TS + 20, owner("gina.again", 555, "Gina"), "image")
     scanner.scan(env["roots"])
     assert get(client, "/api/authors")[0]["handle"] == "gina.again"
+    # a rename refused (the target changed meanwhile) leaves no trace
+    import sources
+    src = post(client, "/api/sources", {"target": "https://www.instagram.com/gina.now/"})["source"]
+    sid = src["id"]
+    assert src["account"] == {"platform": "instagram", "id": "555"}
+    assert sources.rename(conn, sid, "someone.else", "gina.wrong", TS + 30) is False
+    assert "gina.wrong" not in {h["handle"] for h in get(client, "/api/authors")[0]["handles"]}
 
 
 def test_a_rebuild_keeps_links_dismissals_and_handles(env, client):
@@ -649,9 +684,9 @@ def test_handle_and_link_normalizing():
     assert people.handle_parts("ab1") == (None, "1")
     assert people.norm_name("Zoé  Smith!") == "zoe smith" and people.norm_name("Al ✨") is None
     assert people.profile_links("x.com/Foo_bar. https://www.instagram.com/p/abc/ tiktok.com/@baz "
-                                "tiktok.com/nope instagram.com/holly.x twitch.tv/z youtube.com/@Tube.Me "
+                                "tiktok.com/nope instagram.com/holly.x twitch.tv/z youtube.com/@Tube.Me youtube.com/@jane-doe "
                                 "youtube.com/watch?v=abc youtube.com/channel/UC1") == [
-        ("twitter", "foo_bar"), ("tiktok", "baz"), ("instagram", "holly.x"), ("youtube", "tube.me")]
+        ("twitter", "foo_bar"), ("tiktok", "baz"), ("instagram", "holly.x"), ("youtube", "tube.me"), ("youtube", "jane-doe")]
     # other domains that end like one
     assert people.profile_links("https://www.dropbox.com/s/abc netflix.com/title mytiktok.com/@z") == []
 
@@ -750,3 +785,18 @@ def test_add_a_person_by_hand_with_profile_links(env, client, monkeypatch):
         assert r["error"]
     assert len(get(client, "/api/people")) == n
     assert len(get(client, "/api/sources")["sources"]) == 3
+    # two links to one profile make one source
+    r = post(client, "/api/people", {"name": "Two", "profiles": ["new.two", "https://instagram.com/new.two"]})
+    assert [s["target"] for s in r["sources"]] == ["new.two"]
+    # an account someone else has: refused, and undoing it takes nothing from anyone
+    alice = account(client, "instagram", "alice.example")
+    pid = create(client, "Alice", alice)["person"]["id"]
+    n = len(get(client, "/api/people"))
+    for body in ({"name": "Al", "profiles": ["https://www.instagram.com/alice.example/"]},
+                 {"name": "Al", "accounts": [ref(account(client, "twitter", "example_user1"))],
+                  "profiles": ["https://www.instagram.com/alice.example/"]}):
+        assert "Alice's already" in post(client, "/api/people", body, 400)["error"]
+        assert [a["id"] for a in get(client, f"/api/people/{pid}")["accounts"]] == [alice["id"]]
+        assert account(client, "twitter", "example_user1")["person"] is None
+    assert len(get(client, "/api/people")) == n
+    assert len(get(client, "/api/sources")["sources"]) == 4

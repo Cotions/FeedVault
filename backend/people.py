@@ -156,7 +156,10 @@ def _move_links(conn, found, links):
     for p, f, t in moves:
         pid = links.get((p, f))
         if pid is not None:
-            if links.get((p, t)) == pid:
+            theirs = links.get((p, t))
+            if theirs is not None and theirs != pid:
+                continue                       # two folders of one id, linked to two people: the user's call
+            if theirs == pid:
                 conn.execute("DELETE FROM person_accounts WHERE platform = ? AND author_id = ?", (p, f))
             else:
                 conn.execute("UPDATE person_accounts SET author_id = ? WHERE platform = ? AND author_id = ?",
@@ -374,7 +377,7 @@ _PREFIXES = ("the", "real", "its", "official")
 _SUFFIXES = ("official",)
 _LINK_RE = re.compile(r"(?<![\w.-])(?:https?://)?(?:www\.|m\.|mobile\.)?(instagram\.com|x\.com|twitter\.com|tiktok\.com|"
                       r"youtube\.com)"
-                      r"/(@?[A-Za-z0-9._]{1,30})", re.IGNORECASE)
+                      r"/(@?[A-Za-z0-9._-]{1,30})", re.IGNORECASE)
 _LINK_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com": "twitter", "tiktok.com": "tiktok",
                    "youtube.com": "youtube"}
 # First path parts that are pages, not profiles.

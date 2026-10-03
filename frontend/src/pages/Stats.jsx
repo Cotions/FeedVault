@@ -6,7 +6,7 @@ import { useScan } from "../lib/scan";
 import { fmtBytes, fmtInt, platformLabel } from "../lib/fmt";
 import Bars from "../components/Bars";
 import StatsHero from "../components/StatsHero";
-import CreatorPicker from "../components/CreatorPicker";
+import PersonScopeHead from "../components/PersonScopeHead";
 
 export default function Stats() {
   const { refreshKey } = useScan();
@@ -15,31 +15,13 @@ export default function Stats() {
   const load = useCallback(() => getStats(person || undefined), [person]);
   const { data: s, error } = useApi(load, refreshKey);
   const people = useApi(getPeople, refreshKey);
-  const who = person ? (people.data || []).find(p => String(p.id) === person) : null;
   // Links into the Feed and Review keep the person.
   const scoped = (path, more = {}) => {
     const q = new URLSearchParams({ ...(person ? { person } : {}), ...more }).toString();
     return q ? `${path}?${q}` : path;
   };
 
-  const head = (
-    <div className="page-head page-head-bare">
-      <h2 className="page-title">Stats</h2>
-      {person && <span className="page-count">{who ? who.name : `person ${person}`}</span>}
-      <div className="page-head-spacer" />
-      {(people.data?.length > 0 || person) && (
-        <CreatorPicker
-          className="storage-person"
-          label="Person"
-          allLabel="Everyone"
-          placeholder="Search people…"
-          people={people.data || []}
-          value={person ? { person } : null}
-          onChange={c => setParams(c ? { person: String(c.person.id) } : {}, { replace: true })}
-        />
-      )}
-    </div>
-  );
+  const head = <PersonScopeHead title="Stats" person={person} people={people.data} setParams={setParams} />;
 
   if (!s) {
     return (

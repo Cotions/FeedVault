@@ -609,14 +609,14 @@ MAX_PROFILES = 20                              # profile links per new person
 
 
 def _profiles(value, conn, cfg):
-    """[resolved source] for a new person's profile links (sources.resolve,
-    or an Instagram name), or raises sources.Refused naming the one that is
-    not right."""
+    """([resolved source], routing table) for a new person's profile links
+    (sources.resolve, or an Instagram name; two links to one profile count
+    once), or raises sources.Refused naming the one that is not right."""
     if value is None:
-        return []
+        return [], None
     if not isinstance(value, list) or len(value) > MAX_PROFILES or not all(isinstance(v, str) for v in value):
         raise sources.Refused(f"profiles must be a list of at most {MAX_PROFILES} profile links")
-    out, table = [], sources.routes(cfg)
+    out, seen, table = [], set(), sources.routes(cfg)
     for text in dict.fromkeys(v.strip() for v in value if v.strip()):
         try:
             r = sources.resolve(text, table, cfg["media_roots"])
@@ -625,11 +625,14 @@ def _profiles(value, conn, cfg):
                 r = sources.resolve_name(text, cfg["media_roots"])
             except sources.Refused:
                 raise sources.Refused(f"{text[:200]}: {e}")
+        if (r["tool"], r["target"]) in seen:
+            continue                           # two links to one profile
+        seen.add((r["tool"], r["target"]))
         folder = sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]
         if sources.existing(conn, r["tool"], r["target"], folder) is not None:
             raise sources.Refused(f"{text[:200]}: there is already a source for it; link its account instead")
         out.append(r)
-    return out
+    return out, table
 
 
 @app.post("/api/people")
@@ -644,28 +647,40 @@ def create_person():
         return jsonify({"ok": False, "error": _BAD_ACCOUNTS}), 400
     conn, cfg, now = db.connect(), config.load(), int(time.time())
     try:
-        profiles = _profiles(body.get("profiles"), conn, cfg)
+        profiles, table = _profiles(body.get("profiles"), conn, cfg)
         if profiles and not cfg["media_roots"]:
             raise sources.Refused("add a media root in Settings first")
-        p = people.create(conn, name, accounts, now)
+        p = people.create(conn, name, [] if profiles else accounts, now)
     except (people.Refused, sources.Refused) as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     made = []
-    try:
-        for r in profiles:
-            options = sources.clean_options(None, tool=r["tool"], platform=r["platform"], target=r["target"])
-            made.append(sources.create(conn, cfg["media_roots"], r["tool"], r["target"], None, p["id"], None,
-                                       options, now, sources.routes(cfg)))
-    except sources.Refused as e:
-        with conn:                             # all or nothing
-            conn.executemany("DELETE FROM sources WHERE id = ?", [(sid,) for sid in made])
-        people.delete(conn, p["id"])
-        return jsonify({"ok": False, "error": str(e)}), 400
-    # A profile whose account is indexed already: that account is theirs too.
-    found = [(r["platform"], r["author_id"]) for r in (sources.row(conn, sid) for sid in made) if r["author_id"]]
-    free = [k for k in found if not db.accounts(conn).get(people.canonical(conn, *k), {}).get("person")]
-    if free:
-        p = people.link(conn, p["id"], free, [], now)["person"]
+    if profiles:
+        # The person is made empty, its accounts linked last: undoing it
+        # (all or nothing) takes nobody's account away from them.
+        try:
+            for r in profiles:
+                options = sources.clean_options(None, tool=r["tool"], platform=r["platform"], target=r["target"])
+                made.append(sources.create(conn, cfg["media_roots"], r["tool"], r["target"], None, p["id"], None,
+                                           options, now, table))
+            # A profile whose account is indexed already: that account is
+            # theirs too, unless it is someone else's (the source would
+            # show under them).
+            owners, given = db.accounts(conn), {people.canonical(conn, *a) for a in accounts}
+            free = []
+            for r in (sources.row(conn, sid) for sid in made):
+                if r["author_id"]:
+                    key = people.canonical(conn, r["platform"], r["author_id"])
+                    other = (owners.get(key) or {}).get("person")
+                    if other and key not in given:
+                        raise sources.Refused(f"{r['target']}: that account is {other['name']}'s already; "
+                                              "add the profile there, or merge the two people")
+                    free.append(key)
+            p = people.link(conn, p["id"], accounts + free, [], now)["person"]
+        except (people.Refused, sources.Refused) as e:
+            with conn:                         # all or nothing
+                conn.executemany("DELETE FROM sources WHERE id = ?", [(sid,) for sid in made])
+            people.delete(conn, p["id"])
+            return jsonify({"ok": False, "error": str(e)}), 400
     _people_changed(names=True)
     if made:
         userdata.changed("sources")
