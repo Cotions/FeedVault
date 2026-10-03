@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { getPosts, getPost, getAuthors, getPeople, getTags, getCollections, applyTags, deleteItems, setDecision, restorePosts } from "../lib/api";
+import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, platformShort, authorFeedPath } from "../lib/fmt";
@@ -135,6 +136,7 @@ function ReviewSession({ scope, scopeControls }) {
   const [collecting, setCollecting] = useState(false);
   const [tagsOf, setTagsOf] = useState({});      // id -> tags changed this session
   const tagsApi = useApi(getTags, 0);
+  useEffect(() => { if (tagsApi.data) setTagColors(tagsApi.data); }, [tagsApi.data]);
   const busyRef     = useRef(false);
   const fetchingRef = useRef(false);
   const requested   = useRef(new Set());

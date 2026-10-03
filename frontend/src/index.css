@@ -2587,7 +2587,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .tool-chip { text-transform: none; flex-shrink: 0; font-family: var(--mono); font-size: 10.5px; }
 .tool-chip-gallery-dl { color: #c4b5fd; border-color: rgba(196, 181, 253, 0.35); }
 .tool-chip-yt-dlp { color: #fca5a5; border-color: rgba(252, 165, 165, 0.35); }
-.source-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.source-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; }
 .sources-panel .source-list { margin-bottom: 0; }
 .source-row {
   display: flex; align-items: center; gap: 10px;

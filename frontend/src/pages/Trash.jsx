@@ -465,10 +465,11 @@ export default function Trash() {
         onCancel={() => { setConfirm(false); setBulk(null); }}
       >
         <p>
-          This <strong>permanently deletes {plural(bulk ? bulk.files : selFiles, "file")} ({fmtBytes(bulk ? bulk.bytes : selBytes)})</strong> of{" "}
+          This <strong>permanently deletes {bulk ? "up to " : ""}{plural(bulk ? bulk.files : selFiles, "file")} ({fmtBytes(bulk ? bulk.bytes : selBytes)})</strong> of{" "}
           {plural(bulk ? bulk.total : sel.count, "trashed entry", "trashed entries")}
           {bulk ? `, every one the filters match (${filterText(result?.authors, author, when, shownPerson)})` : ""} from
           disk. They do not go to the system trash, and this cannot be undone.
+          {bulk ? " Entries off the page count as last measured: a file removed by hand since is not freed again." : ""}
         </p>
       </ConfirmDialog>
     </div>

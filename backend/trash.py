@@ -319,6 +319,7 @@ _cache_lock = threading.Lock()
 
 
 _last_stamp = None              # the highest at_ms written or read; None until a manifest is read
+_stamp_lock = threading.Lock()  # readers raise _last_stamp too: never let one lower it
 
 
 def _stamp(line):
@@ -338,8 +339,9 @@ def _next_stamp(roots, now):
     if _last_stamp is None:
         for root in roots:
             _load(root)                        # sets _last_stamp from what is there
-    _last_stamp = max(int(now * 1000), (_last_stamp or 0) + 1)
-    return _last_stamp
+    with _stamp_lock:
+        _last_stamp = max(int(now * 1000), (_last_stamp or 0) + 1)
+        return _last_stamp
 
 
 def _manifest_path(root):
@@ -370,6 +372,14 @@ def _load(root):
     is not parsed whole after every delete."""
     global _last_stamp
     path = _manifest_path(root)
+    with _cache_lock:
+        hit = _cache.get(path)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return [], [], {}
+    if hit and hit[0] == (st.st_mtime_ns, st.st_size, st.st_ino):
+        return hit[1:4]                        # unchanged: not even read
     try:
         with open(path, "rb") as f:
             data = f.read()
@@ -378,8 +388,6 @@ def _load(root):
         return [], [], {}
     end = data.rfind(b"\n") + 1                # a line being appended is read next time
     sig = (st.st_mtime_ns, len(data), st.st_ino)
-    with _cache_lock:
-        hit = _cache.get(path)
     if hit and hit[0] == sig:
         return hit[1:4]
     view = memoryview(data)
@@ -394,7 +402,8 @@ def _load(root):
         h = hashlib.sha1(view[:end])
     digest = h.digest()
     by_key = {g["key"]: g for g in entries}
-    _last_stamp = max(_last_stamp or 0, max((g["stamp"] for g in entries), default=0))
+    with _stamp_lock:
+        _last_stamp = max(_last_stamp or 0, max((g["stamp"] for g in entries), default=0))
     with _cache_lock:
         _cache[path] = (sig, lines, entries, by_key, end, digest)
     return lines, entries, by_key
@@ -576,7 +585,7 @@ def _forget_measures(entries):
     """Drop the measures of entries no longer in the trash."""
     if len(_measured) > len(entries) + 1000:
         alive = {g["key"] for g in entries}
-        for key in [k for k in _measured if k not in alive]:
+        for key in [k for k in list(_measured) if k not in alive]:   # list(): others add meanwhile
             _measured.pop(key, None)
 
 

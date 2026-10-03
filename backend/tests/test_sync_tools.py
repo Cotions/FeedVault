@@ -835,6 +835,17 @@ def test_files_without_metadata_point_at_the_users_config(env, fake, client):
                                                     "knows beside it)"
 
 
+def test_a_file_written_now_with_an_old_mtime_counts_as_written(tmp_path):
+    """gallery-dl sets a file's mtime from Last-Modified: the ctime says it is new."""
+    f = tmp_path / "a.jpg"
+    f.write_bytes(b"x")
+    since = time.time() - 5
+    os.utime(f, (since - 10**7, since - 10**7))
+    assert scanner._written_since(str(f), since)
+    assert not scanner._written_since(str(f), time.time() + 60)
+    assert not scanner._written_since(str(tmp_path / "gone.jpg"), since)
+
+
 def test_pause_between_two_syncs_of_one_tool(env, fake, client):
     fake.put(TT, tt_account(1))
     fake.put(X, x_account((1, 1)))

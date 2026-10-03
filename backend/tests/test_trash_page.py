@@ -555,3 +555,10 @@ def test_a_grown_manifest_is_read_from_where_it_stopped(env, client, monkeypatch
         assert items(client)["total"] == r["total"]
         f.write(whole[40:])
     assert items(client)["total"] == r["total"] + 1
+    # Unchanged since: not even opened.
+    opened = []
+    real_open = open
+    monkeypatch.setattr("builtins.open", lambda p, *a, **k: (opened.append(str(p)), real_open(p, *a, **k))[1])
+    items(client)
+    monkeypatch.undo()
+    assert not [p for p in opened if p.endswith(".manifest.jsonl")]

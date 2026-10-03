@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { getPosts, getPostsSummary, getAuthors, getPeople, getTags, getCollections, deleteItems, setDecision, markSeen } from "../lib/api";
+import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
@@ -240,6 +241,7 @@ export default function Feed() {
   const authorsApi = useApi(getAuthors, refreshKey);
   const peopleApi  = useApi(getPeople, refreshKey);
   const tagsApi    = useApi(getTags, refreshKey);
+  useEffect(() => { if (tagsApi.data) setTagColors(tagsApi.data); }, [tagsApi.data]);
   const allTags    = tagsApi.data || [];
   const collectionsApi = useApi(getCollections, refreshKey);
   const collections = collectionsApi.data || [];

@@ -174,6 +174,17 @@ def nothing_under(conn, root):
                         (prefix, prefix[:-1] + chr(ord(os.sep) + 1))).fetchone() is None
 
 
+def _written_since(path, since):
+    """Whether the file was written at ``since`` or later. Its ctime too, not
+    only its mtime: gallery-dl (and yt-dlp with --mtime) set the mtime to the
+    server's Last-Modified, which can be years old for a file just written."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return max(st.st_mtime, st.st_ctime) >= since
+
+
 def _size_mtime(path):
     mtime, size = _stat(path)
     return size, mtime
@@ -259,7 +270,7 @@ def index_dirs(roots, dirs, new=False, since=None):
             unmatched.extend((path, *_size_mtime(path), reason) for path, reason in result.skipped)
             if since is not None:
                 report["unread"] += sum(1 for n in names if n not in result.claimed and parsers.is_media(n)
-                                        and (_size_mtime(os.path.join(d, n))[1] or 0) >= since)
+                                        and _written_since(os.path.join(d, n), since))
         # A copy that is back keeps its "duplicate of" line; one that became
         # the post (the first copy was trashed) is no longer a copy.
         conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
