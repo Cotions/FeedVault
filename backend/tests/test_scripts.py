@@ -1,11 +1,16 @@
 """Scripts (#5): built-in templates, files on disk read strictly, runs."""
+import collections
 import json
 import os
+import sys
+import time
 
 import pytest
 
 from conftest import H
 
+import db
+import jobs
 import scripts
 
 
@@ -213,3 +218,305 @@ def test_a_symlinked_or_open_folder_is_refused(client, env, tmp_path):
         assert "parent folder" in client.get("/api/scripts", headers=H).get_json()["dir_refused"]
     finally:
         os.chmod(env["tmp"], 0o700)
+
+
+# ---------------------------------------------------------------------------
+# Running (step 4)
+# ---------------------------------------------------------------------------
+
+TESTS = os.path.dirname(os.path.abspath(__file__))
+# A program that writes down what it was given: its arguments and its
+# environment's FV_* and FAKE_SECRET, one JSON line per run; with
+# --post <folder>, an Instagram post there (fakes.write_post).
+RECORDER = f"""#!{sys.executable}
+import json, os, sys
+sys.path.insert(0, {TESTS!r})
+args = sys.argv[1:]
+with open(os.environ["RECORDER_LOG"], "a") as f:
+    f.write(json.dumps({{"args": args, "env": {{k: v for k, v in os.environ.items()
+                                             if k.startswith("FV_") or k == "FAKE_SECRET"}}}}) + "\\n")
+if "--post" in args:
+    import fakes
+    fakes.write_post(args[args.index("--post") + 1], "CSCRIPT0001", 1717243200, fakes.owner("carol.cooks", "1001"))
+print("recorded", len(args), "arguments")
+sys.exit(int(os.environ.get("RECORDER_EXIT", "0")))
+"""
+
+
+class Recorder:
+    def __init__(self, tmp):
+        self.bin = tmp / "bin"
+        self.bin.mkdir(exist_ok=True)
+        self.log = tmp / "recorder.log"
+        self.path = self.bin / "recorder"
+        self.path.write_text(RECORDER)
+        self.path.chmod(0o755)
+
+    def install_as(self, tool):
+        exe = self.bin / tool
+        exe.write_text(RECORDER)
+        exe.chmod(0o755)
+
+    def runs(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+
+
+@pytest.fixture
+def runner(env, folder, monkeypatch):
+    monkeypatch.setattr(jobs, "_active", collections.OrderedDict())
+    monkeypatch.setattr(jobs, "_closing", False)
+    monkeypatch.setattr(jobs, "_cool", {})
+    monkeypatch.setattr(jobs, "_wake", None)
+    monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
+    rec = Recorder(env["tmp"])
+    monkeypatch.setenv("PATH", f"{rec.bin}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("RECORDER_LOG", str(rec.log))
+    return rec
+
+
+def wait_for(pred, timeout=10):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        v = pred()
+        if v:
+            return v
+        time.sleep(0.02)
+    raise AssertionError("timed out")
+
+
+def ended(job_id, timeout=10):
+    wait_for(lambda: job_id not in jobs._active and jobs.get(job_id)["state"] not in ("queued", "running"), timeout)
+    return jobs.get(job_id)
+
+
+def run(client, sid, status=200, headers=None, **inputs):
+    r = client.post(f"/api/scripts/{sid}/run", json=inputs, headers={**H, **(headers or {})})
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+def log_of(client, job_id):
+    return [ln["text"] for ln in client.get(f"/api/jobs/{job_id}/log", headers=H).get_json()["lines"]]
+
+
+def command(rec, *args, needs="target", rescan=None):
+    return {"needs": needs, "rescan": rescan, "argv": [str(rec.path), *args]}
+
+
+def test_a_target_reaches_the_program_as_one_literal_argument(client, folder, runner, env):
+    write(folder, "rec.json", command(runner, "--flag", "--", "{target}"))
+    job = run(client, "rec", target="x; rm -rf ~")["job"]
+    assert ended(job["id"])["state"] == "done"
+    assert runner.runs()[-1]["args"] == ["--flag", "--", "x; rm -rf ~"]
+
+
+def test_a_url_with_shell_syntax_reaches_the_program_as_one_argument(client, folder, runner):
+    url = "https://example.com/$(echo pwned)/`id`/a b?x=1;y=$HOME"
+    write(folder, "rec.json", command(runner, "--url={url}", "{url}", needs="url"))
+    assert run(client, "rec", status=400, url=url)["error"].startswith("url must be")    # a space
+    url = url.replace(" ", "%20")
+    job = run(client, "rec", url=url)["job"]
+    assert ended(job["id"])["state"] == "done"
+    assert runner.runs()[-1]["args"] == ["--url=" + url, url]
+
+
+def test_placeholders_are_replaced_in_their_element_once(client, folder, runner, env):
+    write(folder, "rec.json", command(runner, "{root}/x", "{data_dir}", "{archive}", "{profile}", "{target}",
+                                      "--", "{target}{target}"))
+    job = run(client, "rec", target="{root}")["job"]
+    assert ended(job["id"])["state"] == "done"
+    data = str(env["tmp"] / "data")
+    assert runner.runs()[-1]["args"] == [f"{env['media']}/x", data, f"{data}/scripts/rec.archive", "{profile}",
+                                         "{root}", "--", "{root}{root}"]
+
+
+def test_a_shell_script_gets_its_inputs_as_env_values_only(client, folder, runner, env, monkeypatch):
+    monkeypatch.setenv("FAKE_SECRET", "kept out")
+    out = env["tmp"] / "out.txt"
+    # Shell builtins only (the guard cannot see what /bin/sh starts).
+    write(folder, "env.sh", "#!/bin/sh\n# needs: url\n"
+                            f"printf '%s\\n' \"$FV_URL\" \"$FV_ROOT\" \"$FV_DATA_DIR\" > {out}\n"
+                            f"export -p >> {out}\n"
+                            "echo \"$FV_URL\" | while read -r line; do echo \"got: $line\"; done\n", 0o755)
+    url = "https://example.com/$(echo${IFS}pwned>pwned)/`echo${IFS}pwned2>pwned2`;echo${IFS}pwned3>pwned3"
+    job = run(client, "env", url=url)["job"]
+    assert ended(job["id"])["state"] == "done"
+    lines = out.read_text().splitlines()
+    assert lines[:3] == [url, str(env["media"]), str(env["tmp"] / "data")]
+    exported = "\n".join(lines[3:])
+    assert "FAKE_SECRET" not in exported and "FEEDVAULT_CONFIG" not in exported and "RECORDER_LOG" not in exported
+    assert "FV_TARGET" in exported and "HOME" in exported
+    assert not list(env["tmp"].rglob("pwned*"))
+    shown = client.get(f"/api/jobs/{job['id']}", headers=H).get_json()
+    assert shown["argv"] == [str(folder / "env.sh")] and shown["kind"] == "script"
+    log = log_of(client, job["id"])
+    assert any(t.startswith(f"[feedvault] script {folder / 'env.sh'} (sha256 ") for t in log)
+    assert f"[feedvault] FV_URL={url}" in log and f"got: {url}" in log
+
+
+def test_a_shell_target_is_one_env_value(client, folder, runner, env):
+    out = env["tmp"] / "out.txt"
+    write(folder, "t.sh", f"#!/bin/sh\n# needs: target\nprintf '%s' \"$FV_TARGET\" > {out}\n", 0o755)
+    target = "x; echo pwned > pwned; `echo pwned2 > pwned2` $(echo pwned3 > pwned3)"
+    assert ended(run(client, "t", target=target)["job"]["id"])["state"] == "done"
+    assert out.read_text() == target
+    assert not list(env["tmp"].rglob("pwned*"))
+
+
+@pytest.mark.parametrize("sid, inputs, error", [
+    ("rec", {}, "target must be"),
+    ("rec", {"target": "-rf"}, "not starting with -"),
+    ("rec", {"target": "a\nb"}, "target must be"),
+    ("rec", {"target": "x", "url": "https://x.com/a"}, "takes no url"),
+    ("rec", {"target": "x", "folder": "/etc"}, "inside a media root"),
+    ("insta", {"target": "x; rm -rf ~"}, "profile name"),
+    ("insta", {"target": "-x"}, "profile name"),
+    ("ytdlp", {"target": "notalink"}, "http(s) link"),
+    ("urlonly", {"url": "ftp://x.com/a"}, "url must be"),
+    ("urlonly", {"url": "javascript:alert(1)"}, "url must be"),
+    ("urlonly", {"url": "https://" + "a" * 600}, "url must be"),
+])
+def test_bad_inputs_are_refused_and_nothing_runs(client, folder, runner, sid, inputs, error):
+    write(folder, "rec.json", command(runner, "{target}"))
+    write(folder, "insta.json", {"needs": "target", "argv": ["instaloader", "--", "{target}"]})
+    write(folder, "ytdlp.json", {"needs": "target", "argv": ["yt-dlp", "--", "{target}"]})
+    write(folder, "urlonly.json", command(runner, "{url}", needs="url"))
+    assert error in run(client, sid, status=400, **inputs)["error"]
+    assert runner.runs() == [] and jobs.active() == []
+
+
+def test_refused_scripts_are_never_run(client, folder, runner, env, tmp_path, monkeypatch):
+    good = command(runner, "{target}")
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(json.dumps(good))
+    (folder / "link.json").symlink_to(elsewhere)
+    write(folder, "open.json", good, 0o666)
+    write(folder, "noexec.sh", f"#!{runner.path}\n# needs: target\n", 0o644)
+    for sid in ("link", "open", "noexec"):
+        assert "is refused" in run(client, sid, status=400, target="x")["error"]
+    for sid in ("Link", "builtin:nope", "builtin:..", ".."):
+        assert run(client, sid, status=404, target="x")["ok"] is False
+    # %2F is a / to the router: no route has a path in it.
+    assert client.post("/api/scripts/..%2Felsewhere/run", json={"target": "x"}, headers=H).status_code in (404, 405)
+    real = os.getuid()
+    write(folder, "theirs.json", good)
+    monkeypatch.setattr(scripts.os, "getuid", lambda: real + 1)
+    assert run(client, "theirs", status=404, target="x")["ok"] is False     # its folder is refused
+    monkeypatch.setattr(scripts, "_folder_refused", lambda *a, **k: None)
+    assert "belongs to another user" in run(client, "theirs", status=400, target="x")["error"]
+    assert runner.runs() == [] and jobs.active() == []
+
+
+def test_a_script_changed_after_it_was_queued_does_not_run(client, folder, runner, env):
+    gate = env["tmp"] / "gate"
+    os.mkfifo(gate)
+    # Holds the "scripts" group (builtins only: read blocks on the fifo).
+    write(folder, "hold.sh", f"#!/bin/sh\n# needs: none\nread -r x < {gate}\n", 0o755)
+    path = write(folder, "rec.json", command(runner, "{target}"))
+    holder = run(client, "hold")["job"]
+    wait_for(lambda: jobs.get(holder["id"])["state"] == "running")
+    queued = run(client, "rec", target="x")["job"]
+    assert queued["state"] == "queued"
+    path.write_text(json.dumps(command(runner, "--evil", "{target}")))
+    with open(gate, "w") as f:
+        f.write("go\n")
+    assert ended(holder["id"])["state"] == "done"
+    job = ended(queued["id"])
+    assert job["state"] == "failed" and "changed since it was queued" in job["message"]
+    assert runner.runs() == []
+    assert any("changed since it was queued" in t for t in log_of(client, queued["id"]))
+
+
+def test_a_downloaders_command_shares_its_lock_group(client, folder, runner):
+    runner.install_as("instaloader")
+    write(folder, "mine.json", {"needs": "target", "argv": ["instaloader", "--", "{target}"]})
+    job = run(client, "mine", target="carol.cooks")["job"]
+    assert job["group"] == "instaloader"
+    assert ended(job["id"])["state"] == "done"
+    assert runner.runs()[-1]["args"] == ["--", "carol.cooks"]
+
+
+def test_a_builtin_runs_with_its_tools_found_as_in_settings(client, env, runner):
+    runner.install_as("yt-dlp")
+    job = run(client, "builtin:yt-dlp-video", url="https://www.youtube.com/watch?v=abc")["job"]
+    assert ended(job["id"])["state"] == "done"
+    assert runner.runs()[-1]["args"] == ["--write-info-json", "--write-thumbnail", "--no-playlist", "-o",
+                                         f"{env['media']}/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s",
+                                         "--", "https://www.youtube.com/watch?v=abc"]
+
+
+def test_the_declared_folder_is_indexed_after(client, folder, runner, env):
+    write(folder, "post.json", command(runner, "--post", "{root}/carol.cooks", needs="none",
+                                       rescan="{root}/carol.cooks"))
+    job = ended(run(client, "post")["job"]["id"])
+    assert job["state"] == "done" and job["rescan"] == str(env["media"] / "carol.cooks")
+    assert job["result"]["added"] == 1
+    sub = env["media"] / "inbox"
+    sub.mkdir()
+    job = ended(run(client, "post", folder=str(sub))["job"]["id"])
+    # The same post again, in another folder: indexed there (the scanner keeps the first copy's id).
+    assert job["state"] == "done" and job["rescan"] == str(sub / "carol.cooks")
+    assert (sub / "carol.cooks").is_dir() and job["result"] is not None
+
+
+def test_a_rescan_folder_outside_the_roots_is_refused(client, folder, runner):
+    write(folder, "out.json", command(runner, needs="none", rescan="{data_dir}"))
+    assert "not inside a media root" in run(client, "out", status=400)["error"]
+
+
+def test_a_failing_script_fails_with_its_last_line(client, folder, runner, monkeypatch):
+    monkeypatch.setenv("RECORDER_EXIT", "3")
+    write(folder, "rec.json", command(runner, needs="none"))
+    job = ended(run(client, "rec")["job"]["id"])
+    assert job["state"] == "failed" and job["message"] == "recorded 0 arguments"
+
+
+def test_argv_and_params_are_shown_scrubbed(client, folder, runner):
+    url = "https://example.com/a?access_token=SECRETVALUE1234"
+    write(folder, "rec.json", command(runner, "{url}", needs="url"))
+    job = ended(run(client, "rec", url=url)["job"]["id"])
+    assert runner.runs()[-1]["args"] == [url]                  # as given to the program
+    assert "SECRETVALUE" not in json.dumps(job)
+    assert job["argv"][-1] == "https://example.com/a?access_token=…"
+    assert job["params"]["url"] == "https://example.com/a?access_token=…"
+    listed_jobs = client.get("/api/jobs", headers=H).get_json()["jobs"]
+    assert "SECRETVALUE" not in json.dumps(listed_jobs)
+    row = db.connect().execute("SELECT params, argv FROM jobs WHERE id = ?", (job["id"],)).fetchone()
+    assert "SECRETVALUE" not in row["params"] + row["argv"]
+
+
+def test_cancel_stops_a_running_script(client, folder, runner, env):
+    gate = env["tmp"] / "gate"
+    os.mkfifo(gate)
+    write(folder, "hold.sh", f"#!/bin/sh\n# needs: none\nread -r x < {gate}\n", 0o755)
+    job = run(client, "hold")["job"]
+    wait_for(lambda: jobs.get(job["id"])["state"] == "running" and jobs._active[job["id"]].proc)
+    assert client.post(f"/api/jobs/{job['id']}/cancel", headers=H).status_code == 200
+    assert ended(job["id"])["state"] == "cancelled"
+
+
+def test_post_api_jobs_cannot_start_a_script(client, folder, runner):
+    write(folder, "rec.json", command(runner, "{target}"))
+    for kind in scripts.JOB_KINDS:
+        r = client.post("/api/jobs", json={"kind": kind, "params": {"script": "rec", "target": "x"}}, headers=H)
+        assert r.status_code == 400
+    assert runner.runs() == []
+
+
+@pytest.mark.parametrize("headers", [{"Origin": "https://www.instagram.com"}, {"Origin": "null"},
+                                     {"Sec-Fetch-Site": "cross-site"}, {"Origin": "https://localhost:3380"}])
+def test_another_origin_cannot_list_or_run_scripts(client, folder, runner, headers):
+    write(folder, "rec.json", command(runner, "{target}"))
+    assert client.get("/api/scripts", headers={**H, **headers}).status_code == 403
+    assert client.get("/api/scripts/rec", headers={**H, **headers}).status_code == 403
+    run(client, "rec", status=403, headers=headers, target="x")
+    assert runner.runs() == []
+    # Without the header nothing at all, as for every /api request.
+    assert client.post("/api/scripts/rec/run", json={"target": "x"}).status_code == 403
+
+
+def test_the_dashboard_and_the_dev_server_can(client, folder, runner):
+    write(folder, "rec.json", command(runner, "{target}"))
+    for headers in ({"Origin": "http://localhost:3380", "Sec-Fetch-Site": "same-origin"},
+                    {"Origin": "http://localhost:5173"}, {}):
+        assert ended(run(client, "rec", headers=headers, target="x")["job"]["id"])["state"] == "done"

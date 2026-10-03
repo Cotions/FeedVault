@@ -32,9 +32,13 @@ import json
 import os
 import re
 import stat
+from urllib.parse import urlsplit
 
+import archives
 import config
 import jobs
+import sources
+import sync
 
 DIR_NAME = "scripts"
 SIZE_MAX = 64 * 1024                           # bytes of a script file
@@ -372,3 +376,234 @@ def get(sid, content=False):
 def template(name):
     """A built-in as the JSON file to create from it."""
     return json.dumps(BUILTINS[name], indent=2) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Inputs and values
+# ---------------------------------------------------------------------------
+
+URL_MAX = 500
+TEXT_MAX = 200
+# instaloader's: a profile name, or a post's shortcode (the built-in passes -<shortcode>).
+_INSTALOADER_TARGET = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._-]{0,39}")
+_URL_TEXT = re.compile(r"[^\s\x00-\x1f\x7f]+")
+
+
+def check_url(value):
+    """``value`` when it is an http(s) link of at most URL_MAX characters
+    without spaces or control characters, else None. Anything else in it
+    ($, backticks, ;) is passed on as it is: it is never read by a shell."""
+    if not isinstance(value, str) or len(value) > URL_MAX or not _URL_TEXT.fullmatch(value):
+        return None
+    try:
+        parts = urlsplit(value)
+        host = parts.hostname
+    except ValueError:
+        return None
+    return value if parts.scheme.lower() in ("http", "https") and host else None
+
+
+def check_target(script, value):
+    """(target, None) when ``value`` is one for the program the script runs
+    (instaloader: a profile name or shortcode; gallery-dl and yt-dlp: a
+    link; anything else: text without control characters), else (None,
+    why). Never starting with "-": no target reads as an option."""
+    tool = script["tool"]
+    if tool == "instaloader":
+        if isinstance(value, str) and _INSTALOADER_TARGET.fullmatch(value):
+            return value, None
+        return None, "target must be a profile name or a post's shortcode (letters, digits, . _ -)"
+    if tool in ("gallery-dl", "yt-dlp"):
+        if check_url(value):
+            return value, None
+        return None, f"target must be an http(s) link for {tool}"
+    if isinstance(value, str) and 1 <= len(value) <= TEXT_MAX and not _CONTROL.search(value) \
+            and not value.startswith("-"):
+        return value, None
+    return None, f"target must be text of 1 to {TEXT_MAX} characters on one line, not starting with -"
+
+
+def archive(script, data_dir):
+    """{archive}: the file the tool keeps what it has in, FeedVault's own."""
+    if script["tool"] == "instaloader":
+        return sync.stamps_path({"data_directory": data_dir})
+    if script["tool"] in ("gallery-dl", "yt-dlp"):
+        return archives.path(script["tool"], data_dir)
+    return os.path.join(data_dir, DIR_NAME, script["id"].replace(BUILTIN, "") + ".archive")
+
+
+def values(script, cfg, root, target=None, url=None):
+    """The placeholders' values, each one text."""
+    return {"target": target or "", "url": url or "", "root": root, "data_dir": cfg["data_directory"],
+            "archive": archive(script, cfg["data_directory"])}
+
+
+def substitute(text, vals):
+    """``text`` with FeedVault's placeholders replaced, in one pass (a value
+    holding "{root}" stays as it is); every other {…} is left."""
+    return _PLACEHOLDER_RE.sub(lambda m: vals[m.group(1)], text)
+
+
+# What a shell script's environment keeps of FeedVault's, besides its FV_* inputs.
+SHELL_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "USER", "LOGNAME", "TMPDIR",
+             "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME")
+
+
+def shell_env(vals):
+    env = {k: os.environ[k] for k in SHELL_ENV if k in os.environ}
+    env.setdefault("PATH", os.defpath)
+    env.update({"FV_" + k.upper(): v for k, v in vals.items()})
+    return env
+
+
+def group(script):
+    """A downloader's command runs in that tool's lock group (never beside
+    a sync of it); anything else in "scripts"."""
+    return script["tool"] if script["tool"] in jobs.TOOLS else "scripts"
+
+
+def _rescan(script, vals, roots):
+    """The declared folder, filled in and made: inside a media root, else BadRequest."""
+    if script["rescan"] is None:
+        return None
+    folder = substitute(script["rescan"], vals)
+    inside = sources.inside_root(folder, roots)
+    if inside is None:
+        raise jobs.BadRequest(f"the script's rescan folder is not inside a media root: {folder}")
+    try:
+        os.makedirs(inside, exist_ok=True)
+    except OSError as e:
+        raise jobs.BadRequest(f"cannot create {inside}: {e.strerror or e}")
+    return inside
+
+
+def _spec(script, vals, cfg, rescan):
+    cwd = os.path.join(cfg["data_directory"], DIR_NAME)
+    if script["kind"] == "command":
+        argv = [substitute(a, vals) for a in script["argv"]]
+        return {"tool": argv[0], "args": argv[1:], "cwd": cwd, "rescan": rescan, "group": group(script)}
+    return {"tool": script["path"], "args": [], "env": shell_env(vals), "cwd": cwd, "rescan": rescan,
+            "group": group(script)}
+
+
+def runnable(sid, sha256=None):
+    """The script ``sid``, read now, when it may run (and is still the one
+    whose SHA-256 is ``sha256``, when given). Raises jobs.BadRequest."""
+    script = get(sid)
+    if script is None:
+        raise jobs.BadRequest(f"no script {sid} (in {scripts_dir()})")
+    if script["refused"]:
+        raise jobs.BadRequest(f"{script['file'] or script['id']} is refused: {script['refused']}")
+    if script["kind"] == "shell" and script["builtin"]:
+        raise jobs.BadRequest("a template only: copy it into a file to run it")
+    if sha256 is not None and script["sha256"] != sha256:
+        raise jobs.BadRequest(f"{script['file']} changed since it was queued: run it again")
+    return script
+
+
+def _say(script, vals, note):
+    """The log's first lines: what runs, and a shell script's inputs."""
+    if script["builtin"]:
+        note(f"built-in script {script['id']}")
+    else:
+        note(f"script {script['path']} (sha256 {script['sha256'][:16]}…)")
+    if script["kind"] == "shell":
+        for k, v in vals.items():
+            note(f"FV_{k.upper()}={v}")
+
+
+# ---------------------------------------------------------------------------
+# Running one on its own (POST /api/scripts/<id>/run)
+# ---------------------------------------------------------------------------
+
+KIND = "script"
+INPUTS = ("target", "url", "folder")
+
+
+def _root(folder, cfg):
+    roots = cfg["media_roots"]
+    if not roots:
+        raise jobs.BadRequest("add a media root in Settings first")
+    if folder is None:
+        return os.path.normpath(roots[0])
+    inside = sources.inside_root(folder, roots)
+    if inside is None:
+        raise jobs.BadRequest("folder must be an absolute path inside a media root")
+    return inside
+
+
+def _inputs(script, params):
+    """(target, url) from a run's params, checked for the script."""
+    target = url = None
+    for name in ("target", "url"):
+        if params.get(name) is not None and script["needs"] != name:
+            raise jobs.BadRequest(f"this script takes no {name} (it needs {script['needs']})")
+    if script["needs"] == "target":
+        target, error = check_target(script, params.get("target"))
+        if error:
+            raise jobs.BadRequest(error)
+    if script["needs"] == "url":
+        url = check_url(params.get("url"))
+        if url is None:
+            raise jobs.BadRequest(f"url must be an http(s) link of at most {URL_MAX} characters, without spaces")
+    return target, url
+
+
+def _vals(script, params, cfg):
+    target, url = _inputs(script, params)
+    return values(script, cfg, _root(params.get("folder"), cfg), target, url)
+
+
+def _build(params):
+    script = runnable(params["script"], params.get("sha256"))
+    cfg = config.load()
+    vals = _vals(script, params, cfg)
+    os.makedirs(os.path.join(cfg["data_directory"], DIR_NAME), exist_ok=True)
+    return _spec(script, vals, cfg, _rescan(script, vals, cfg["media_roots"]))
+
+
+def _check(params, note):
+    """Right before it starts: the script is read again, and must be the
+    one it was queued with."""
+    try:
+        script = runnable(params["script"], params.get("sha256"))
+    except jobs.BadRequest as e:
+        note(str(e))
+        raise
+    _say(script, _vals(script, params, config.load()), note)
+
+
+def _pause(params):
+    """A downloader's command pauses as that tool's syncs do."""
+    try:
+        tool = (get(params["script"]) or {}).get("tool")
+        if tool == "instaloader":
+            return sync.settings()["pause"]
+        return sync.tool_settings(tool)["pause"] if tool in sources.TOOLS else 0
+    except Exception:                          # reads files: never left holding the queue
+        return 0
+
+
+def run(sid, inputs):
+    """Queue a run of script ``sid`` with ``inputs`` ({target, url, folder},
+    each optional): the job's public dict. Raises LookupError for an
+    unknown id, jobs.BadRequest for a refused script or bad inputs."""
+    script = get(sid)
+    if script is None:
+        raise LookupError(sid)
+    runnable(sid)
+    params = {"script": sid, **{k: inputs[k] for k in INPUTS if inputs.get(k) not in (None, "")}}
+    if script["sha256"]:
+        params["sha256"] = script["sha256"]
+    return jobs.submit(KIND, params)
+
+
+jobs.register(KIND, label="Run a script",
+              params={"script": {"type": "text", "max": 80},
+                      "target": {"type": "text", "max": URL_MAX + 100, "required": False},
+                      "url": {"type": "text", "max": URL_MAX + 100, "required": False},
+                      "folder": {"type": "text", "max": 4096, "required": False},
+                      "sha256": {"type": "text", "max": 64, "required": False}},
+              build=_build, group="scripts", check=_check, pause=_pause, scrub=("argv", "params"),
+              describe=lambda params, argv: f"Script {params.get('script', '')}")
+JOB_KINDS = (KIND,)

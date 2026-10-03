@@ -1300,6 +1300,8 @@ def start_job():
         return jsonify({"ok": False, "error": "send { kind, params }"}), 400
     if body.get("kind") == save.KIND:          # its checks are POST /api/save's
         return jsonify({"ok": False, "error": "start it with POST /api/save"}), 400
+    if body.get("kind") in scripts.JOB_KINDS:  # the origin check is theirs
+        return jsonify({"ok": False, "error": "start it with POST /api/scripts/<id>/run, or a source's Sync"}), 400
     try:
         job = jobs.submit(body.get("kind"), body.get("params"))
     except jobs.BadRequest as e:
@@ -1342,17 +1344,58 @@ def cancel_job(job_id):
 # Scripts (scripts.py: files on disk, listed and run; nothing here writes one)
 # ---------------------------------------------------------------------------
 
+def _foreign_origin():
+    """Whether the request comes from a page that is not FeedVault's: an
+    Origin not on this machine, or a browser saying it is cross-site. The
+    userscript's requests from instagram.com are; the dashboard's are not
+    (nor the Vite dev server's, on another port of this machine). Running
+    scripts is refused to them, on top of the X-FeedVault header."""
+    origin = request.headers.get("Origin")
+    if origin is not None:
+        scheme, _, host = origin.partition("://")
+        if scheme != "http" or _host_only(host) not in ALLOWED_HOSTS:
+            return True
+    return request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
+
+
+FOREIGN = "scripts can only be run from FeedVault's own dashboard"
+
+
 @app.get("/api/scripts")
 def list_scripts():
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": FOREIGN}), 403
     return jsonify(scripts.listing())
 
 
 @app.get("/api/scripts/<sid>")
 def get_script(sid):
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": FOREIGN}), 403
     s = scripts.get(sid, content=True)
     if s is None:
         return jsonify({"ok": False, "error": "no such script"}), 404
     return jsonify(s)
+
+
+@app.post("/api/scripts/<sid>/run")
+def run_script(sid):
+    """A script by id, with its inputs: never a command, a path or its text."""
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": FOREIGN}), 403
+    body = request.get_json(silent=True)
+    body = {} if body is None else body
+    if not isinstance(body, dict) or set(body) - set(scripts.INPUTS) \
+            or not all(v is None or isinstance(v, str) for v in body.values()):
+        return jsonify({"ok": False, "error": "send { target, url, folder }, each text or left out"}), 400
+    try:
+        job = scripts.run(sid, body)
+    except LookupError:
+        return jsonify({"ok": False, "error": "no such script"}), 404
+    except jobs.BadRequest as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    print(f"[jobs] #{job['id']} script {sid} queued")
+    return jsonify({"ok": True, "job": job})
 
 
 @app.get("/api/browse")
