@@ -258,6 +258,9 @@ history). The folder is read again each time, so an edit counts at once.
   Settings) or an absolute path. `{target}`, `{url}`, `{root}`,
   `{data_dir}` and `{archive}` are replaced inside their own element; the
   list is run as it is, without a shell.
+  A placeholder in an option the tool hands to a shell (yt-dlp `--exec`,
+  gallery-dl `--exec`, `-o`, …) is refused: use the tool's own fields
+  (`%(webpage_url)q`, `{_path}`) or a shell script.
 - **A shell script**, `my-script.sh`, executable, with a `#!` line and a
   `# needs: url` (or `target`, `none`) header. It gets its inputs only as
   `FV_TARGET`, `FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE` in a

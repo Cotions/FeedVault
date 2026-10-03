@@ -2316,6 +2316,15 @@ are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
   listed too);
 - two files with the same id;
 - a command whose JSON is malformed;
+- a command with a placeholder in the value of an option its tool hands
+  to a shell, where `/bin/sh` would read it: yt-dlp `--exec`,
+  `--exec-before-download`, `--netrc-cmd`, `--use-postprocessor` (and
+  `--alias` in a command holding any placeholder); gallery-dl `--exec`,
+  `--exec-after`, `-o` / `--option` and `-O` / `--postprocessor-option`
+  (either can set an exec post processor's command). Joined (`--exec=…`,
+  `-o…`) and abbreviated forms count. Use the tool's own fields
+  (`%(webpage_url)q`, `{_path}`), or a shell script and its `FV_*`
+  variables;
 - a shell script that is not executable, has no absolute `#!` or has no
   `needs`.
 
