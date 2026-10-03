@@ -737,8 +737,12 @@ def _sources_active():
 
 def _with_session(s, cfg=None):
     """A source with the session its sync would use (its own, else its
-    tool's), for the form's login hint, and its schedule."""
-    return {**s, "session": sync.session_of(s["tool"], s["options"], cfg), "schedule": scheduler.status(s, cfg)}
+    tool's), for the form's login hint, and its schedule. A saved login
+    says whether its session file exists (only looked for, never opened)."""
+    session = sync.session_of(s["tool"], s["options"], cfg)
+    if session["mode"] == "login":
+        session = {**session, "session_file": downloaders.session_file_exists(session["user"])}
+    return {**s, "session": session, "schedule": scheduler.status(s, cfg)}
 
 
 @app.get("/api/sources")
@@ -857,6 +861,48 @@ def update_source(sid):
     sources.update(conn, sid, options, keys=("schedule",) if set(sent) <= {"schedule"} else None)
     if options["schedule"] != s["options"]["schedule"]:
         scheduler.forget(sid)
+    # A new schedule or session: a source the scheduler stopped is tried again.
+    if options["schedule"] != s["options"]["schedule"] or options["session"] != s["options"]["session"]:
+        sources.resume(conn, sid)
+    userdata.changed("sources")
+    return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
+@app.post("/api/sources/<int:sid>/rename")
+def accept_rename(sid):
+    """Accept the new handle the tool reported: the target changes, never
+    the folder or its files."""
+    conn = db.connect()
+    s = sources.get(conn, sid)
+    if s is None:
+        return jsonify({"ok": False, "error": "no such source"}), 404
+    suggestion = s["health"]["rename"]
+    body = request.get_json(silent=True) or {}
+    if suggestion is None or suggestion["from"] != s["target"].lower():
+        return jsonify({"ok": False, "error": "this source has no rename to accept"}), 400
+    if body.get("to") != suggestion["to"]:
+        return jsonify({"ok": False, "error": f"send the suggested name: {{ to: \"{suggestion['to']}\" }}"}), 400
+    if sid in _sources_active():
+        return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
+    new = sources.parse_target(s["tool"], suggestion["to"])
+    if new is None or new != suggestion["to"]:
+        return jsonify({"ok": False, "error": "the suggested name is not a profile name"}), 400
+    other = sources.existing(conn, s["tool"], new)
+    if other is not None and other != sid:
+        return jsonify({"ok": False, "error": f"there is already a {s['tool']} source for {new}"}), 409
+    if not sources.rename(conn, sid, s["target"], new):
+        return jsonify({"ok": False, "error": "the source's target changed meanwhile"}), 409
+    scheduler.forget(sid)
+    userdata.changed("sources")
+    return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
+@app.delete("/api/sources/<int:sid>/rename")
+def dismiss_rename(sid):
+    conn = db.connect()
+    if sources.row(conn, sid) is None:
+        return jsonify({"ok": False, "error": "no such source"}), 404
+    sources.dismiss_rename(conn, sid)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
 

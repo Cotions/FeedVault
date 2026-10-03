@@ -9,10 +9,11 @@ profiles from the JSON file named by FAKE_INSTALOADER (default
                                "posts": [{"shortcode": "C0FAKE00001", "ts": 1717243200,
                                           "caption": "…", "kind": "image" | "video" | "carousel",
                                           "slides": 3, "video_slides": [2]}]}},
-     "fail": null | "429" | "login" | "private" | "notfound" | "crash",
+     "fail": null | "429" | "login" | "private" | "notfound" | "crash" | "leak",
      "delay": 0}
 
-A profile may also have "reels" and "tagged" (posts as above; a tagged
+A profile may have its own "fail" (one of the same), used when the top
+one is null. A profile may also have "reels" and "tagged" (posts as above; a tagged
 post has its own "owner": {"username", "id", "full_name"?}), "stories" ([{"id", "ts",
 "video": bool}]) and "highlights" ([{"title", "items": [story items]}]).
 
@@ -20,7 +21,10 @@ It behaves like instaloader 4.15 for one profile target (or one post,
 ``-<shortcode>``) with the flags
 FeedVault passes: it honours --latest-stamps (post-timestamp,
 reels-timestamp, tagged-timestamp and story-timestamp of the target's
-section, written back as instaloader does; highlights have none),
+section, written back as instaloader does; highlights have none; a
+target no profile has whose stamped profile-id one has is a renamed
+profile: "Profile <old> has changed its name to <new>.", the section moves
+to the new name and the profile is downloaded, exit 1 as instaloader's),
 --fast-update (stops at the first file that exists), --dirname-pattern and
 --filename-pattern (str.format with target, profile, shortcode, date_utc;
 a tagged post's target is ``<profile>/:tagged``, a highlight's
@@ -29,7 +33,8 @@ and Windows' other reserved characters in those become their full-width
 look-alikes, as instaloader's sanitize_path does), --no-compress-json (metadata
 JSON beside the media, plus the profile's JSON and a caption .txt),
 --no-posts, --reels, --tagged, --stories and --highlights (the last two
-fail with "Login required." without --login or --load-cookies), in
+fail with "Login required." without --login or --load-cookies; with
+either it prints instaloader's lines of a session loaded and accepted), in
 instaloader's order (tagged, reels, highlights, posts, stories),
 --no-videos, --no-video-thumbnails and --no-pictures (no picture of a post
 or carousel slide, nor a video's thumbnail: an image post gets its JSON and
@@ -140,20 +145,36 @@ def one_post(data, args, target):
 
 
 def fail(kind, target):
+    """A failed profile, as instaloader 4.15 prints it: each error on stderr
+    as it happens, repeated under "Errors or warnings occurred:" at the end
+    (context.error with repeat_at_end; the 429 retries are not repeated)."""
+    errors = []
     if kind == "429":
         print("JSON Query to graphql/query: 429 Too Many Requests [retrying; skip with ^C]", file=sys.stderr)
         print('Instagram responded with HTTP error "429 - Too Many Requests". Please do not run multiple\n'
               "instances of Instaloader in parallel or within short sequence.", file=sys.stderr)
-        print(f"{target}: Please wait a few minutes before you try again.", file=sys.stderr)
+        errors.append(f"{target}: Please wait a few minutes before you try again.")
     elif kind == "login":
-        print(f"{target}: Login required.", file=sys.stderr)
+        errors.append(f"{target}: Login required.")
     elif kind == "private":
-        print(f"{target}: Private but not followed.", file=sys.stderr)
+        errors.append(f"{target}: Private but not followed.")
     elif kind == "notfound":
         print(f"Profile {target} does not exist.\nThe most similar profile is: {target}_.", file=sys.stderr)
+        print("\nErrors or warnings occurred:", file=sys.stderr)
+        return 1
     elif kind == "crash":
         raise RuntimeError("fake crash")
+    elif kind == "leak":
+        # Made-up secrets in an error line: FeedVault must never store or show them.
+        print(f"Loaded session from /home/someone/.config/instaloader/session-{target}.")
+        errors.append(f"{target}: JSON Query to api/v1/users: 400 Bad Request - cookie sessionid=FAKE-SECRET-1; "
+                      "csrftoken=FAKE-SECRET-2 [Cookie: ds_user_id=FAKE-SECRET-3] "
+                      "Authorization: Bearer FAKESECRETFAKESECRET4")
+    for e in errors:
+        print(e, file=sys.stderr)
     print("\nErrors or warnings occurred:", file=sys.stderr)
+    for e in errors:
+        print(e, file=sys.stderr)
     return 1
 
 
@@ -335,12 +356,18 @@ def run(argv):
         print(f"Fatal error: {e}", file=sys.stderr)
         return 2
     logged_in = bool(args.login or args.load_cookies)
+    if args.login:
+        print(f"Loaded session from /home/someone/.config/instaloader/session-{args.login}.")
+        print(f"Logged in as {args.login}.")
+    elif args.load_cookies:
+        print(f"Cookies loaded successfully from {args.load_cookies}")
+        print("someone has been successfully logged in.")
     if args.latest_stamps:
         print(f"Using latest stamps from {args.latest_stamps}.")
     status = 0
     for target in args.targets:
-        if data.get("fail"):
-            status = fail(data["fail"], target)
+        if data.get("fail") or (data["profiles"].get(target) or {}).get("fail"):
+            status = fail(data.get("fail") or data["profiles"][target]["fail"], target)
             continue
         if target.startswith("-"):
             if not args.no_compress_json:
@@ -349,6 +376,22 @@ def run(argv):
             status = one_post(data, args, target) or status
             continue
         profile = data["profiles"].get(target)
+        repeat = []
+        if profile is None and args.latest_stamps:
+            # check_profile_id: the profile id --latest-stamps keeps finds a renamed profile.
+            stamps = configparser.ConfigParser()
+            stamps.read(args.latest_stamps)
+            pid = stamps.get(target, "profile-id", fallback=None)
+            new = next((name for name, p in data["profiles"].items() if str(p["id"]) == pid), None)
+            if new is not None:
+                print(f"Trying to find profile {target} using its unique ID {pid}.")
+                repeat.append(f"Profile {target} has changed its name to {new}.")
+                print(repeat[-1], file=sys.stderr)
+                stamps[new] = dict(stamps[target])
+                stamps.remove_section(target)
+                with open(args.latest_stamps, "w") as f:
+                    stamps.write(f)
+                target, profile, status = new, data["profiles"][new], 1
         if profile is None:
             status = fail("notfound", target)
             continue
@@ -403,6 +446,8 @@ def run(argv):
                 stamps.write(f)
         if status:
             print("\nErrors or warnings occurred:", file=sys.stderr)
+            for e in repeat:
+                print(e, file=sys.stderr)
     return status
 
 

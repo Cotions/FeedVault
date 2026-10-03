@@ -362,10 +362,13 @@ def test_failures_per_tool(env, fake, client):
         fake.put(X, x_account((1, 1)), fail=fail)
         fake.put(TT, tt_account(1), fail=fail)
         for s in (g, y):
+            # yt-dlp's TikTok user that does not exist says only that it found no user id,
+            # as for a private profile with embedding off: not a guess, an error (health.py).
+            want = "generic" if (fail, s["tool"]) == ("notfound", "yt-dlp") else error
             job = run_sync(client, s["id"])
             assert job["state"] == "failed", (fail, s["tool"])
-            assert job["result"]["error"] == error, (fail, s["tool"], job["result"])
-            assert get(client, f"/api/sources/{s['id']}")["last_result"]["error"] == error
+            assert job["result"]["error"] == want, (fail, s["tool"], job["result"])
+            assert get(client, f"/api/sources/{s['id']}")["last_result"]["error"] == want
     fake.put(TT, tt_account(1), fail=None)
     assert run_sync(client, y["id"])["state"] == "done"
 
@@ -381,9 +384,10 @@ def test_one_item_failing_is_not_the_profile_failing():
         assert state == "done" and result["error"] is None, lines
         assert message.startswith("3 new posts; 1 item could not be downloaded: "), message
     for tool, lines, error in [
-            ("yt-dlp", ["ERROR: [youtube:tab] @x: This channel does not exist"], "not_found"),
-            ("yt-dlp", ["ERROR: [youtube] A: Private video", "ERROR: [tiktok:user] x: Unable to find user"],
-             "private"),
+            ("yt-dlp", ["ERROR: [youtube:tab] @x: Unable to download webpage: HTTP Error 404: Not Found "
+                        "(caused by <HTTPError 404: Not Found>)"], "not_found"),
+            ("yt-dlp", ["ERROR: [youtube] A: Private video", "ERROR: [tiktok:user] x: This user's account is "
+                        "private. Log into an account that has access"], "private"),
             ("yt-dlp", ["ERROR: [youtube] A: Sign in to confirm you’re not a bot"], "login_required"),
             ("yt-dlp", ["ERROR: [youtube] A: HTTP Error 429: Too Many Requests"], "rate_limited"),
             ("gallery-dl", ["[twitter][error] NotFoundError: Requested user could not be found"], "not_found"),
@@ -405,7 +409,12 @@ def test_classification_lines():
             ("ERROR: [TikTok] 123: HTTP Error 429: Too Many Requests", "rate_limited"),
             ("ERROR: [youtube] abc: Private video. Sign in if you've been granted access", "private"),
             ("ERROR: [youtube] abc: Video unavailable", "not_found"),
-            ("ERROR: [TikTok] someone: Unable to find user", "not_found"),
+            ("ERROR: [youtube:tab] @x: YouTube said: This channel does not exist.", "not_found"),
+            ("ERROR: [youtube:tab] @x: The channel/playlist does not exist and the URL redirected to youtube.com "
+             "home page", "not_found"),
+            ("ERROR: [tiktok:user] x: TikTok is requiring login for access to this content", "login_required"),
+            ("ERROR: [tiktok:user] x: Unable to extract secondary user ID. If you are able to get the channel_id",
+             "generic"),
             ("ERROR: something else broke", "generic")]:
         assert sync.classify([(1, line)], sync.YT_DLP_FAILURES)[0] == error, line
 

@@ -121,7 +121,7 @@ How they meet the stopping points:
   without one, and again at sync time (the setting can change since).
 
 How it went is read from the output (login required, private, not found,
-rate limited) and stored on the source. Two syncs of one tool pause between
+rate limited: health.py's tables) and stored on the source. Two syncs of one tool pause between
 them (config ``<tool>.pause``).
 """
 import configparser
@@ -136,6 +136,7 @@ from urllib.parse import urlsplit
 import archives
 import config
 import db
+import health
 import info_cookies
 import jobs
 import people
@@ -857,18 +858,9 @@ def _seed_posts(conn, src, options, note, moved=(), roots=()):
          f"{datetime.fromtimestamp(newest, timezone.utc):%Y-%m-%d %H:%M} UTC")
 
 
-# What went wrong, from the output: the first kind whose words appear.
-# Rate limiting comes first: Instagram also answers a throttled client with
-# login pages and missing profiles. A 403 is Instagram refusing an anonymous
-# client, after which instaloader says the profile does not exist.
-FAILURES = [(error, re.compile(words, re.I)) for error, words in [
-    ("rate_limited", r"\b429 too many|too many requests|please wait a few minutes|rate limit"),
-    ("private", r"private but not followed|privateprofilenotfollowedexception|profile is private"),
-    ("login_required", r"login required|loginrequiredexception|redirected to login|use --login|"
-                       r"session file does not exist|checkpoint_required|challenge_required|login_required|"
-                       r"login error|not logged in|\b403 forbidden\b"),
-    ("not_found", r"profile \S+ does not exist|profilenotexistsexception|\bnot found\b"),
-]]
+# What went wrong, from the output: one table of fixed patterns per tool,
+# with the exact strings they match, in health.py.
+FAILURES = health.INSTALOADER
 MESSAGES = {
     "rate_limited": "Instagram is limiting requests: wait a while before syncing again",
     "not_found": "Profile not found: renamed, deleted, or blocked",
@@ -878,22 +870,8 @@ MESSAGES = {
 }
 
 
-# gallery-dl logs "[<category>][error] <Exception>: <message>".
-GALLERY_DL_FAILURES = [(error, re.compile(words, re.I)) for error, words in [
-    ("rate_limited", r"\b429 too many|too many requests|rate limit"),
-    ("private", r"tweets are protected|\bprotected\b|private (?:account|profile)|account is private"),
-    ("login_required", r"authrequired|authorizationerror|authenticationerror|login required|"
-                       r"credentials required|insufficient privileges|requires? (?:a )?login|\b401 unauthorized\b"),
-    ("not_found", r"notfounderror|could not be found|\b404 not found\b|does not exist|account (?:is )?suspended"),
-]]
-YT_DLP_FAILURES = [(error, re.compile(words, re.I)) for error, words in [
-    ("rate_limited", r"http error 429|too many requests|rate[- ]limit"),
-    ("private", r"private video|account is private|is a private|private account"),
-    ("login_required", r"sign in to confirm|login required|log in for access|requires authentication|"
-                       r"use --cookies|age-restricted|members-only|\b401 unauthorized\b"),
-    ("not_found", r"http error 404|\bnot found\b|video unavailable|does not exist|unable to find|"
-                  r"account (?:has been )?(?:banned|terminated|suspended)"),
-]]
+GALLERY_DL_FAILURES = health.GALLERY_DL
+YT_DLP_FAILURES = health.YT_DLP
 TOOL_MESSAGES = {
     "rate_limited": "The site is limiting requests: wait a while before syncing again",
     "not_found": "Profile not found: renamed, deleted, or blocked",
@@ -903,14 +881,12 @@ TOOL_MESSAGES = {
 
 
 def classify(lines, failures=None):
-    """(error, line): what the output of a failed run says went wrong, and
-    the line that says it (else the last line of output)."""
-    texts = [t for _, t in lines if t.strip() and not t.startswith("[feedvault]")]
-    for error, words in failures or FAILURES:
-        for t in reversed(texts):
-            if words.search(t):
-                return error, t.strip()[:500]
-    return "generic", texts[-1].strip()[:500] if texts else None
+    """(error, line): what the output of a failed run says went wrong
+    (health.classify with the tool's table, FAILURES by default), and the
+    line that says it (else the last line of output); "generic" for
+    output no pattern knows. The line is raw: health.scrub it."""
+    state, line = health.classify(lines, failures or FAILURES)
+    return ("generic" if state == "error" else state), line
 
 
 # An error line about one item, not the profile: yt-dlp names the video's
@@ -955,6 +931,16 @@ def _owner(params):
 
 
 def _outcome(params, code, lines, index, note=None, tool="instaloader"):
+    state, result, message = _ended_as(params, code, lines, index, note, tool)
+    # The session it used, as the output tells (health.login); a source's
+    # options do not change while it syncs (app.update_source).
+    src = sources.row(db.connect(), _source_id(params)) if "source" in params else None
+    if src is not None:
+        result["login"] = health.login(tool, lines, session_of(tool, _options(src)), _said(state, result))
+    return state, result, message
+
+
+def _ended_as(params, code, lines, index, note, tool):
     if tool != "instaloader":
         _note_listed(params, tool, lines)
     added = index["added"] if index else 0
@@ -963,7 +949,12 @@ def _outcome(params, code, lines, index, note=None, tool="instaloader"):
     result = {"added": added, "updated": index["updated"] if index else 0, "error": None, "line": None,
               **_owner(params)}
     new = f"{added} new post{'' if added == 1 else 's'}"
-    if code == 0 or (tool == "yt-dlp" and code == BREAK_ON_EXISTING):
+    rename = health.renamed(tool, lines)
+    if rename:
+        result["rename"] = rename
+    if code == 0 or (tool == "yt-dlp" and code == BREAK_ON_EXISTING) or health.only_renamed(tool, lines):
+        if rename:
+            new += f"; the profile is now called {rename[1]} (accept the new name on the source)"
         return "done", result, new
     if tool != "instaloader":
         # One video or file that could not be had is not the profile failing.
@@ -971,9 +962,9 @@ def _outcome(params, code, lines, index, note=None, tool="instaloader"):
         # Not a rate limit or a login wall: those stop every item, not one.
         if items and classify([(0, t) for t in items], GALLERY_DL_FAILURES if tool == "gallery-dl"
                               else YT_DLP_FAILURES)[0] in ("private", "not_found", "generic"):
-            result["line"] = items[-1][:500]
+            result["line"] = health.scrub(items[-1])
             skipped = f"{len(items)} item{'' if len(items) == 1 else 's'}"
-            return "done", result, f"{new}; {skipped} could not be downloaded: {items[-1][:200]}"
+            return "done", result, f"{new}; {skipped} could not be downloaded: {health.scrub(items[-1], 200)}"
     if tool == "instaloader":
         result["error"], result["line"] = classify(lines)
         message = MESSAGES[result["error"]]
@@ -981,6 +972,8 @@ def _outcome(params, code, lines, index, note=None, tool="instaloader"):
         result["error"], result["line"] = classify(
             lines, GALLERY_DL_FAILURES if tool == "gallery-dl" else YT_DLP_FAILURES)
         message = TOOL_MESSAGES.get(result["error"], f"{tool} failed")
+    # Tool output is untrusted text: no cookie, token or session path is kept (health.scrub).
+    result["line"] = health.scrub(result["line"])
     if result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"
     if added:
@@ -1001,6 +994,30 @@ def _outdated(tool):
     except Exception as e:                     # a failed sync still ends as it went
         print(f"[sync] could not tell whether {tool} is out of date: {e}")
         return None
+
+
+def _stored_result(src):
+    """A source row's last_result as stored, or None (none, or not JSON)."""
+    try:
+        return json.loads(src["last_result"]) if src is not None and src["last_result"] else None
+    except ValueError:
+        return None
+
+
+def _health_state(job):
+    """What a sync's output said, as health.STATES: ok when it worked (renamed
+    when the tool found the profile under a new name), the
+    error it was classified as when it failed ("generic" and a missing tool
+    are "error"), None when it never got that far (cancelled, interrupted)."""
+    return _said(job["state"], job["result"] or {})
+
+
+def _said(state, result):
+    if state == "done":
+        return "renamed" if result.get("rename") else "ok"
+    if state != "failed":
+        return None
+    return result.get("error") if result.get("error") in health.STATES else "error"
 
 
 def _failures(src, state):
@@ -1031,10 +1048,14 @@ def _ended(job):
     src = sources.row(conn, sid)
     if src is not None and job["argv"] and src["target"] != job["argv"][-1]:
         return                                 # the id names another source now (database replaced)
-    if not sources.record(conn, sid, job["id"], job["ended_at"] or int(time.time()), {
+    ended_at = job["ended_at"] or int(time.time())
+    before = _stored_result(src)
+    if not sources.record(conn, sid, job["id"], ended_at, {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
-            "line": r.get("line"), "added": r.get("added", 0), "job": job["id"],
-            "outdated": r.get("outdated", False), "failures": _failures(src, job["state"])}):
+            "line": health.scrub(r.get("line")), "added": r.get("added", 0), "job": job["id"],
+            "outdated": r.get("outdated", False), "failures": _failures(src, job["state"]),
+            **health.record(before, _health_state(job), job["state"], ended_at, src["target"] if src else None,
+                            r.get("rename"), r.get("login") if job["state"] in ("done", "failed") else None)}):
         return
     changed = {"sources"}
     src = sources.row(conn, sid)

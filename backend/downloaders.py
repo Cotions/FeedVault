@@ -54,6 +54,7 @@ import urllib.error
 import urllib.request
 
 import config
+import health
 import jobs
 import sync
 
@@ -316,6 +317,11 @@ def session_files(user):
     return [os.path.join(config_dir, "session-" + user), legacy]
 
 
+def session_file_exists(user):
+    """Whether instaloader's session file for ``user`` is there (looked for, never opened)."""
+    return any(os.path.exists(p) for p in session_files(user))
+
+
 def login(tool, cfg=None):
     """The session a sync of ``tool`` uses, from the settings: {"mode":
     "none" | "cookies" (+ "browser") | "login" (+ "user", "session_file":
@@ -325,7 +331,7 @@ def login(tool, cfg=None):
     if tool == "instaloader":
         session = dict(sync.settings(cfg)["session"])
         if session["mode"] == "login":
-            session["session_file"] = any(os.path.exists(p) for p in session_files(session["user"]))
+            session["session_file"] = session_file_exists(session["user"])
         return session
     if tool in sync.KINDS:
         return dict(sync.tool_settings(tool, cfg)["session"])
@@ -374,6 +380,7 @@ def _test_outcome(params, code, lines, index, note=None):
     if code == 0:
         return "done", {"ok": True, "error": None, "line": None}, "Works"
     error, line = sync.classify(lines, TEST_FAILURES[params["tool"]])
+    line = health.scrub(line)
     message = TEST_MESSAGES[error]
     if error == "generic" and line:
         message = f"{message}: {line[:200]}"

@@ -16,6 +16,7 @@ import {
 } from "../components/Sources";
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
 import { optionsSummary } from "../lib/sourceOptions";
+import { warnings } from "../lib/health";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -70,6 +71,19 @@ function NewBadge({ count }) {
   return <span className="side-badge new-badge" title="New since you last marked everything seen">{fmtInt(count)} new</span>;
 }
 
+// A source of the card needs a look: its account is not found, it needs a
+// login, or 3+ syncs failed in a row. The title says which and why.
+function WarnBadge({ sync }) {
+  const why = warnings(sync?.sources, sourceName);
+  if (!why.length) return null;
+  return (
+    <span className="side-badge warn-badge" title={why.join("\n")} role="img"
+          aria-label={`Needs a look: ${why.join("; ")}`}>
+      <Icon name="warn" size={11} />{why.length > 1 ? fmtInt(why.length) : "check"}
+    </span>
+  );
+}
+
 function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh }) {
   const body = (
     <>
@@ -90,6 +104,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
         <span className="creator-count">{fmtInt(p.count)}</span>
         <span className="creator-sub">{fmtBytes(p.bytes)}</span>
         <NewBadge count={fresh} />
+        <WarnBadge sync={sync} />
       </span>
     </>
   );
@@ -176,6 +191,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
       <span className="person-stats">
         <span className="creator-count">{a.count}</span>
         <NewBadge count={fresh} />
+        <WarnBadge sync={sync} />
       </span>
     </>
   );
@@ -363,7 +379,8 @@ export default function Creators() {
 
   // Sources by the card that shows them: a person's (theirs or their
   // accounts'), else an unlinked account's. The rest (no posts yet, no
-  // person) are listed on their own.
+  // person) are listed on their own, and so is one with a new name to
+  // accept or dismiss (a card has no room for that).
   const sourceList = useMemo(() => sources.data?.sources || [], [sources.data]);
   const cardSources = useMemo(() => {
     const m = new Map();
@@ -374,7 +391,8 @@ export default function Creators() {
     return m;
   }, [sourceList]);
   const shownAccounts = useMemo(() => new Set((data || []).map(accountKey)), [data]);
-  const loose = sourceList.filter(src => !src.person && !(src.account && shownAccounts.has(accountKey(src.account))));
+  const loose = sourceList.filter(src => src.health?.rename
+    || (!src.person && !(src.account && shownAccounts.has(accountKey(src.account)))));
   const syncOf = k => cardSync(cardSources.get(k), sources.jobOf);
 
   async function addSuggested(list) {

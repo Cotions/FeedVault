@@ -849,10 +849,14 @@ no person yet.
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait before syncing again",
                    "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false,
-                   "failures": 1 },
+                   "failures": 1, "health": "rate_limited", "ok_at": 1727420000 },
+  "health": { "state": "rate_limited", "result": "failed", "ok_at": 1727420000, "last_sync_at": 1727503600,
+              "line": "…429 Too Many Requests…", "failures": 1, "rename": null,
+              "login": { "mode": "login", "found": true, "accepted": null } },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
-  "session": { "mode": "login", "user": "me" },
-  "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "failures": 1 } }
+  "session": { "mode": "login", "user": "me", "session_file": true },
+  "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "stopped": null,
+                "failures": 1 } }
 ```
 
 - `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
@@ -941,15 +945,61 @@ no person yet.
   - `failures`: failed syncs in a row (a failure adds one, a sync that
     worked sets it to 0, a cancelled or interrupted one leaves it), for the
     scheduler's back-off
+  - `health` and `ok_at`: see `health` below (stored here, with the
+    sync's outcome, not with the options)
+  - `line` and `message` are scrubbed before they are stored: see `health.line`
+- `health`: how the source's syncs have been going (account health), read
+  from `last_result` and `last_sync_at`; every key `null` (`failures` 0)
+  before the first sync, and for a `last_result` that is missing or not
+  what it should be (sources.json edited by hand, or stored before this):
+  - `state`: what the last sync's output said: `ok` (it worked), `error`
+    (it failed and the output says nothing known: `line` is what it said),
+    or a detected state (see [Account health](#account-health)). A
+    cancelled or interrupted sync keeps the state before it. A
+    `last_result` stored before this has its `error` read instead.
+  - `result`: the last sync's job state (`done`, `failed`, `cancelled`,
+    `interrupted`)
+  - `ok_at`: when the last sync that worked ended (kept while later ones
+    fail); `last_sync_at`: when the last one ended, any outcome
+  - `line`: the output line behind a state other than `ok`, one line, at
+    most 300 characters, **scrubbed** before it is stored (in the job's
+    `result` and `message` too): escape codes and control characters are
+    removed; the values of cookies, session ids, tokens, passwords and
+    `Authorization` headers, a `Cookie:` header's whole value and any
+    opaque string of 40 characters or more become `…`; a path under a
+    browser profile or a session or cookie folder becomes
+    `<private path>`. Tool output is untrusted text: the page shows it as
+    text only.
+  - `failures`: as `last_result.failures`
+  - `paused`: `"account not found"` or `"login required"` while the
+    scheduler no longer syncs it (see [Schedules](#schedules)), else `null`
+  - `warning`: why the Creators list warns about it: a blocking state
+    (as `paused`, also when its schedule is off) or `"3 failed syncs in a
+    row"` (3 or more), else `null`
+  - `rename`: `{ "from": "old.name", "to": "new.name", "at": 1727503600 }`
+    when the tool reported that the profile `target` names is now called
+    `to` (instaloader only, see [Account health](#account-health)), else
+    `null`. Stored as `last_result.rename`; shown while `from` is still the
+    target. FeedVault never renames on its own: the user accepts it
+    (`POST /api/sources/<id>/rename`) or dismisses it.
+  - `login`: the session the last sync used, as its output told
+    (`last_result.login`): `mode` (`none`, `cookies`, `login`), `found`
+    (the session file or the browser's cookies were there) and `accepted`
+    (the site took them), each `true`, `false` or `null` when the output
+    did not say; `null` before a sync. Never from a request of FeedVault's.
 - `job`: the source's sync while it is queued or running (`waits_until`,
   see [Jobs](#jobs)), else `null`.
 - `session`: the session its sync would use (`options.session`, else the
-  tool's setting), for the form's login hint.
+  tool's setting), for the form's login hint. A saved login
+  (`"mode": "login"`) has `session_file`: whether instaloader's session
+  file for that user exists (only looked for, never opened).
 - `schedule`: its schedule, see [Schedules](#schedules): `every` (as
   `options.schedule`), `next_at` (UTC seconds; in the past, or `0`, when it
   is due; `null` when `every` is `"off"`), `paused` (`schedules_paused` is
   on), `skipped` (why the scheduler did not queue it when it was due, or
-  `null`), `failures` (as `last_result.failures`, `0` when none).
+  `null`), `stopped` (`"paused: account not found"` or `"paused: login
+  required"` while the scheduler no longer syncs it, `next_at` then
+  `null`; else `null`), `failures` (as `last_result.failures`, `0` when none).
 
 | Method | Path | Returns |
 |---|---|---|
@@ -959,6 +1009,8 @@ no person yet.
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
+| POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target |
+| DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back) |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |
 
@@ -1279,6 +1331,54 @@ stored value that is not valid counts as the default (no flag).
   page are walked to the end).
 - The job log says when a floor or "last N" applies.
 
+### Account health
+
+A source's `health` (see [Sources](#sources)) is kept with its sync state:
+in `last_result`, written when a sync ends, so it goes into sources.json
+with the rest of the outcome and a rebuilt index gets it back. Nothing is
+fetched to know it: it is what the tool printed during the last sync.
+
+`health.state`, read from the tool's output by fixed patterns (one table
+per tool in `backend/health.py`, whose docstring lists the exact strings
+and the tool version they were seen on). The first state found wins, in
+this order:
+
+| state | instaloader | gallery-dl | yt-dlp |
+|---|---|---|---|
+| `rate_limited` | `429 Too Many Requests`, `Please wait a few minutes` | `HttpError: '429 …'` | `HTTP Error 429` |
+| `private` | `Private but not followed`, `private but not followed` | `AuthorizationError: … Tweets are protected` | TikTok `This user's account is (likely either) private`, YouTube `Private video` |
+| `login_required` | `Login required`, `requires login`, `Redirected to login page`, `Session file does not exist yet`, `Login error:`, `No cookies found for Instagram`, `Not logged in.`, `403 Forbidden` | `AuthRequired:`, `AuthenticationError:`, other `AuthorizationError:` | `Sign in to confirm you're not a bot`, `Sign in to confirm your age`, `TikTok is requiring login`, `Use --cookies-from-browser or --cookies for the authentication` |
+| `not_found` | `Profile … does not exist.` | `NotFoundError:` | `The channel/playlist does not exist`, `HTTP Error 404`, `Video unavailable`, `YouTube said: This channel does not exist` / `This account has been terminated` |
+
+Anything else is `error`, with its line. A TikTok user that does not exist
+only gives yt-dlp's `Unable to extract secondary user ID`, which a private
+account can give too: it stays an `error`. gallery-dl was not installed
+where the table was written; its strings are those of its 1.30 source.
+
+`renamed`: the sync worked, and the tool said the profile now has another
+name. Only instaloader says so: with `--latest-stamps` it keeps each
+profile's id, and when the name is gone it looks the id up and prints
+`Profile <old> has changed its name to <new>.` (it exits 1 for that line
+alone; FeedVault counts that run as done). It moves the stamps to the new
+name but not the files (that is only without `--latest-stamps`). The new
+name is kept as `health.rename`, a suggestion: accepting it changes the
+source's target only. Until then each sync finds the profile by its id
+again. gallery-dl and yt-dlp print nothing that names a new handle: a
+renamed X, TikTok or YouTube profile is `not_found` (or `error`).
+
+`login` comes from the lines each tool prints about its session:
+instaloader's `Loaded session from …` / `Cookies loaded successfully from
+…` (found), `Session file does not exist yet` / `No cookies found for
+Instagram` (missing), `Logged in as …` / `… has been successfully logged
+in.` (accepted: instaloader checks the session itself before saying so),
+`Not logged in.` / `Redirected to login page. You've been logged out`
+(refused); gallery-dl's `[cookies][info] Extracted <n> cookies from …` and
+yt-dlp's `Extracted <n> cookies from …` (found; 0 is missing), yt-dlp's
+`could not find … cookies database` / `failed to load cookies` (missing).
+Then a sync that ended `login_required` had its session refused, and one
+that ended otherwise (`ok`, `renamed`, `private`, `not_found`) with its
+session found had it accepted.
+
 ### Schedules
 
 A source whose `options.schedule` is `"hourly"`, `"daily"` or `"weekly"`
@@ -1298,6 +1398,15 @@ running is never queued again).
 - At most one source per platform is queued at a time, the most overdue
   first, and only when no sync of that platform is queued or running and
   the scheduler queued the last one 5 minutes ago or more.
+- A source whose last sync ended `not_found` or `login_required` (see
+  [Account health](#account-health)) is no longer synced on its own:
+  trying again would not change that. `schedule.stopped` says so. It is
+  scheduled again once a sync of it works (Sync clicked), or when its
+  schedule or its session changes or a rename is accepted
+  (`last_result.resumed` is set until a sync of it ends `done` or
+  `failed`). Only a state read by these tables stops it: a `last_result`
+  stored before them (an `error` only) keeps the back-off. `rate_limited` is not stopped: the back-off
+  above applies.
 - A due source is skipped, with `schedule.skipped` saying why, while its
   tool is not found (as [Downloaders](#downloaders) looks for it) or the
   media root holding its folder is offline (missing, or empty while posts

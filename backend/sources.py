@@ -24,6 +24,7 @@ from datetime import date
 from urllib.parse import urlsplit
 
 import db
+import health
 import people
 
 TOOLS = ("instaloader", "gallery-dl", "yt-dlp")
@@ -483,6 +484,10 @@ def _owner(conn, row, accounts):
 
 def _public(conn, row, accounts, active):
     key, person = _owner(conn, row, accounts)
+    try:
+        result = json.loads(row["last_result"]) if row["last_result"] else None
+    except ValueError:                         # sources.json edited by hand
+        result = None
     job = active.get(row["id"])
     return {
         "id": row["id"], "tool": row["tool"], "platform": row["platform"], "target": row["target"],
@@ -494,7 +499,8 @@ def _public(conn, row, accounts, active):
         "choices": choices(row["tool"], row["platform"], row["target"]),
         "created_at": row["created_at"], "last_sync_at": row["last_sync_at"],
         "last_job_id": row["last_job_id"],
-        "last_result": json.loads(row["last_result"]) if row["last_result"] else None,
+        "last_result": result,
+        "health": health.public(result, row["last_sync_at"], failures(result), row["target"]),
         "job": job,
     }
 
@@ -708,6 +714,41 @@ def failures(result):
     """Failed syncs in a row in a stored last_result (any value), else 0."""
     n = result.get("failures") if isinstance(result, dict) else None
     return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+
+
+# A run that reported a new name worked: once the suggestion is answered its state is ok.
+_ANSWERED = (", '$.health', CASE WHEN json_extract(last_result, '$.health') = 'renamed' THEN 'ok' "
+             "ELSE json_extract(last_result, '$.health') END")
+
+
+def rename(conn, sid, old, new):
+    """Accept a rename suggestion: the source's target becomes ``new`` (its
+    folder and files stay as they are) and the suggestion goes. False when
+    the target is no longer ``old`` (changed meanwhile). A source the
+    scheduler had stopped (account not found) is scheduled again."""
+    with conn:
+        return conn.execute(
+            "UPDATE sources SET target = ?, last_result = CASE WHEN json_valid(last_result) "
+            "AND json_type(last_result) = 'object' THEN json_set(json_remove(last_result, '$.rename'), "
+            f"'$.resumed', json('true'){_ANSWERED}) ELSE last_result END WHERE id = ? AND target = ?",
+            (new, sid, old)).rowcount > 0
+
+
+def resume(conn, sid):
+    """Schedule again a source the scheduler stopped (health.paused): its
+    schedule changed. Its next sync's result replaces the mark."""
+    with conn:
+        conn.execute(
+            "UPDATE sources SET last_result = json_set(last_result, '$.resumed', json('true')) "
+            "WHERE id = ? AND json_valid(last_result) AND json_type(last_result) = 'object'", (sid,))
+
+
+def dismiss_rename(conn, sid):
+    """Forget a source's rename suggestion; the next one the tool reports comes back."""
+    with conn:
+        conn.execute(
+            f"UPDATE sources SET last_result = json_set(json_remove(last_result, '$.rename'){_ANSWERED}) "
+            "WHERE id = ? AND json_valid(last_result) AND json_type(last_result) = 'object'", (sid,))
 
 
 def delete(conn, sid):
