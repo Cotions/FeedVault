@@ -175,6 +175,33 @@ def test_a_media_root_just_added_is_not_new(env, client):
     assert ids(client, new="1") == ["instagram:NEWCAROL0001", "instagram:NEWDANA0001"]
 
 
+def test_a_root_added_while_stopped_is_not_new_whichever_scan_reads_it(env, client):
+    """#13 audit: a root put in config.json by hand is first read by the
+    Rescan button or by a job's full scan (scanner.run), not by the config
+    endpoint. Either way its first scan builds its part of the index."""
+    archive(env)
+    scanner.scan(env["roots"])
+    conn = db.connect()
+    news.ensure(conn)
+    set_seen(conn, int(time.time()) - 10)
+    added = []
+    for name, scan in (("media2", lambda roots: client.post("/api/scan", headers=H)),
+                       ("media3", scanner.run)):
+        root = env["tmp"] / name
+        write_post(root / f"{name}.user", f"OLD{name.upper()}01", TS, owner(f"{name}.user", 900 + len(added)))
+        added.append(str(root))
+        cfg = config.load()
+        cfg["media_roots"] = [*env["roots"], *added]
+        config.save(cfg)
+        scan(cfg["media_roots"])
+        deadline = time.monotonic() + 10
+        while scanner.status()["running"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        assert scanner.status()["last"]["added"] == 1
+    assert new_count(client)["count"] == 0
+
+
 def test_posts_indexed_after_the_mark_are_new(env, client):
     archive(env)
     archive(env, 1, "dana.draws", 888)
