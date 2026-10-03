@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { acceptRename, createSource, cancelJob, dismissRename, resolveSource, updateSource } from "../lib/api";
+import { acceptRename, createSource, cancelJob, dismissRename, getScripts, resolveSource, updateSource } from "../lib/api";
+import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
 import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
@@ -263,6 +264,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
           </label>
         )}
       </fieldset>
+      <ScriptPicker tool={tool} value={form.script} onChange={script => set({ script })} />
       <fieldset className="source-opt">
         <legend>Schedule</legend>
         {SCHEDULES.map(([v, label, effect]) => (
@@ -273,6 +275,43 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
         ))}
       </fieldset>
     </div>
+  );
+}
+
+/* Which command a sync runs: the tool's own (the choices above), or a
+   script from the Scripts page. A refused one shows why and cannot be
+   picked; one gone from disk stays shown, so the sync's failure is not a
+   surprise. */
+function ScriptPicker({ tool, value, onChange }) {
+  const { data, error } = useApi(getScripts);
+  const scripts = data?.scripts || [];
+  const current = scripts.find(sc => sc.id === value);
+  return (
+    <fieldset className="source-opt">
+      <legend>Command</legend>
+      <label className="source-opt-line">
+        <select className="sort-select script-pick" value={value} onChange={e => onChange(e.target.value)}
+                aria-label="Command a sync runs" disabled={!data && !value}>
+          <option value="">{tool}&rsquo;s own command, with the choices above</option>
+          {value && !current && <option value={value}>{value} (not found)</option>}
+          {scripts.map(sc => (
+            <option key={sc.id} value={sc.id} disabled={!!sc.refused}>
+              {`${sc.id}${sc.name && sc.name !== sc.id ? ` · ${sc.name}` : ""}${sc.tool && sc.tool !== tool ? ` (${sc.tool})` : ""}`
+                + (sc.refused ? ` · refused: ${sc.refused}` : "")}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && <div className="msg err source-msg" role="alert">Could not list the scripts: {error.message}</div>}
+      {value && (
+        <span className="dim">
+          {current?.refused ? <span className="dl-warn">refused: {current.refused}. Its syncs fail. </span>
+            : !current && data ? <span className="dl-warn">no such script now: its syncs fail. </span> : null}
+          A sync runs this script instead, with the source&rsquo;s target and folder; the choices above are not
+          used, the schedule is. See <Link to="/scripts" className="text-link">Scripts</Link>.
+        </span>
+      )}
+    </fieldset>
   );
 }
 

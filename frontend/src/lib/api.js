@@ -264,6 +264,16 @@ export function saveToolPaths(tools) { return post("/api/config", { tools }); }
 export function getDownloaders()   { return get("/api/downloaders"); }
 export function checkDownloaders() { return post("/api/downloaders/check"); }
 
+/* ── Scripts (see docs/API.md "Scripts") ─────────────────── */
+
+// Files on disk, read-only here: nothing in the API writes one.
+// { dir, dir_refused, shell_template, scripts: [script] }, built-ins first
+export function getScripts() { return get("/api/scripts"); }
+// script with its content (the file's text, or a built-in's JSON)
+export function getScript(id) { return get(`/api/scripts/${encodeURIComponent(id)}`); }
+// { target?, url?, folder? } → { ok, job } or { ok: false, error }
+export function runScript(id, inputs) { return post(`/api/scripts/${encodeURIComponent(id)}/run`, inputs); }
+
 /* ── Sources (see docs/API.md "Sources") ─────────────────── */
 
 // { sources: [source], suggestions: [suggestion] }
