@@ -27,11 +27,13 @@ executable. Two files with one id are both refused. Built-in templates (``builti
 are the commands downloaders.py and sync.py run, written as such a file
 would be: read-only, runnable, to copy.
 """
+import contextlib
 import hashlib
 import json
 import os
 import re
 import stat
+import threading
 from urllib.parse import urlsplit
 
 import archives
@@ -346,6 +348,34 @@ def _files():
     return None, found
 
 
+_once = threading.local()                      # .found: [] or [(refusal, files)] while read_once holds
+
+
+@contextlib.contextmanager
+def read_once():
+    """Within it, this thread reads the scripts folder at most once, and
+    every lookup gets that read (Sync all: one for all its sources). A
+    script sync's start, in its job's thread, still reads it again."""
+    if getattr(_once, "found", None) is not None:
+        yield
+        return
+    _once.found = []
+    try:
+        yield
+    finally:
+        _once.found = None
+
+
+def _read_folder():
+    """_files(), or the read already made under read_once."""
+    found = getattr(_once, "found", None)
+    if found is None:
+        return _files()
+    if not found:
+        found.append(_files())
+    return found[0]
+
+
 def listing():
     """{dir, dir_refused, shell_template, scripts}: the built-ins, then the
     files by name."""
@@ -368,9 +398,10 @@ def lookup(sid, content=False):
         if content:
             out["content"] = template(name)
         return out, None
-    refused, found = _files()
+    refused, found = _read_folder()
     for s, raw in found:
         if s["id"] == sid and s["kind"] is not None:
+            s = dict(s)                        # its own: the read may be read_once's, shared
             if content:
                 s["content"] = raw.decode("utf-8", "replace") if raw is not None else None
             return s, None
@@ -493,19 +524,43 @@ def _rescan(script, vals, roots):
 
 # The options whose value a tool formats (instaloader: str.format, yt-dlp:
 # %), and how a value put in one is escaped, as sync.py does for its own.
-FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern"), sync._escape),
-             "yt-dlp": (("-o", "--output"), lambda v: v.replace("%", "%%"))}
+# The value is the next item, or in the same one: after "=" for a long
+# option (--output=…), right after a short one (-o…; -o=… is the value "=…").
+# instaloader (argparse) also takes a long option's unique prefix (--dirname);
+# yt-dlp's are never unique (--output-na-placeholder, --exec-before-download).
+FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern", "--title-pattern"), (), True,
+                             sync._escape),
+             "yt-dlp": (("--output", "--exec"), ("-o",), False, lambda v: v.replace("%", "%%"))}
+
+
+def _formatted(a, longs, shorts, prefixes):
+    """(the option part of ``a``, its value or None when the value is the
+    next item) when ``a`` names an option its tool formats, else None."""
+    name, eq, value = a.partition("=")
+    if len(name) > 2 and name.startswith("--") \
+            and any(o == name or (prefixes and o.startswith(name)) for o in longs):
+        return name + eq, value if eq else None
+    for o in shorts:
+        if a.startswith(o):
+            return o, a[len(o):] or None
+    return None
 
 
 def command(script, vals):
     """A command's argument list, its placeholders filled in: escaped in
     the value of an option its tool formats."""
-    options, escape = FORMATTED.get(script["tool"], ((), None))
+    longs, shorts, prefixes, escape = FORMATTED.get(script["tool"], ((), (), False, None))
     escaped = {k: escape(v) for k, v in vals.items()} if escape else vals
     argv, formatted = [], False
     for a in script["argv"]:
-        argv.append(substitute(a, escaped if formatted else vals))
-        formatted = a in options
+        option = None if formatted else _formatted(a, longs, shorts, prefixes)
+        if formatted:
+            argv.append(substitute(a, escaped))
+        elif option and option[1] is not None:
+            argv.append(option[0] + substitute(option[1], escaped))
+        else:
+            argv.append(substitute(a, vals))
+        formatted = option is not None and option[1] is None
     return argv
 
 

@@ -305,6 +305,35 @@ def test_yt_dlp_that_cannot_start_leaves_nothing_behind(env, fake, client, monke
     assert sync._info_before == {}
 
 
+def test_yt_dlp_start_failure_drops_the_listing_even_if_an_ended_step_fails(env, fake, client, monkeypatch):
+    """#31: the listing goes before anything else the ended hook does."""
+    fake.put(TT, tt_account(1))
+    s = add(client, TT)
+    real = subprocess.Popen
+
+    def popen(argv, *a, **kw):
+        if os.path.basename(argv[0]) == "yt-dlp":
+            assert sync._info_before                # the start listed the folder
+            raise PermissionError(13, "Permission denied")
+        return real(argv, *a, **kw)
+
+    def broken(job):
+        raise OSError("disk gone")
+    monkeypatch.setattr(jobs.subprocess, "Popen", popen)
+    monkeypatch.setattr(sync, "_mark_muted", broken)
+    job = run_sync(client, s["id"])
+    assert job["state"] == "failed" and job["message"] == "yt-dlp could not start: Permission denied"
+    assert sync._info_before == {}
+
+
+def test_a_sync_cancelled_while_queued_keeps_the_running_ones_listing(env, monkeypatch):
+    """Only a job that ran drops the listing: one cancelled in the queue leaves its running sibling's."""
+    monkeypatch.setattr(sync, "_info_before", {7: ("/m/someone", {})})
+    sync._ended({"id": 99, "state": "cancelled", "started_at": None, "params": {"source": "7"},
+                 "result": None, "label": "Sync"})
+    assert sync._info_before == {7: ("/m/someone", {})}
+
+
 def test_yt_dlp_break_on_existing(env, fake, client):
     shorts = "https://youtube.com/@somechannel/shorts"
     fake.put(shorts, yt_account((1, 30), (2, 30)))

@@ -127,6 +127,7 @@ rate limited: health.py's tables) and stored on the source. Two syncs of one too
 them (config ``<tool>.pause``).
 """
 import configparser
+import contextlib
 import json
 import os
 import re
@@ -1054,6 +1055,12 @@ def _failures(src, state):
 
 def _ended(job):
     """Store how it went on the source, and let a new source adopt its account."""
+    if job["started_at"] is not None:
+        # First: the folder listing yt-dlp's start took goes, whatever fails
+        # below (its after hook never ran when the tool could not start).
+        # Not for a job that never ran: the listing would be a running sync's.
+        with contextlib.suppress(jobs.BadRequest):
+            _info_before.pop(_source_id(job["params"]), None)
     if job["state"] in ("done", "failed"):
         _mark_muted(job)
     _tally(job)
@@ -1064,7 +1071,6 @@ def _ended(job):
     # Left when the run ended before its outcome or after hook (the tool
     # could not start). FeedVault stopped it: the file stays, for resume().
     _take_trashed(sid, keep_file=job["state"] == "interrupted" or waits)
-    _info_before.pop(sid, None)
     listed = _listed.pop(sid, None)
     r = job["result"] or {}
     conn = db.connect()
@@ -1515,7 +1521,8 @@ def sync(sid, scheduled=False, scripts_ok=True):
     """Queue one source's sync: the job's public dict. Raises Busy, Refused
     (see _job), or jobs.BadRequest when the source cannot be synced.
     ``scheduled``: the scheduler's (notify.py)."""
-    with _submitting:
+    import scripts                             # it imports this module
+    with _submitting, scripts.read_once():     # its script read once, for its params and its build
         if sid in active():
             raise Busy("its sync is already queued or running")
         src = sources.row(db.connect(), sid)
@@ -1532,8 +1539,10 @@ def sync_all(only=None, scripts_ok=True):
     ``scripts_ok``). The jobs queued become the batch (see batch), or join
     it while it still runs."""
     global _batch
+    import scripts                             # it imports this module
     queued, skipped, errors = [], 0, []
-    with _submitting:
+    # The scripts folder read once for every source that has a script.
+    with _submitting, scripts.read_once():
         busy = active()
         for src in db.connect().execute("SELECT * FROM sources ORDER BY target, id").fetchall():
             sid = src["id"]
