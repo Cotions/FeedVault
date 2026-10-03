@@ -200,6 +200,8 @@ links to them. Posts indexed since you last pressed **Mark all seen** are
 person and account has, the Feed's "New since last visit" chip (or `is:new`
 in the search box) shows only those, and Review can go through just them.
 What was already in the archive is never new, whenever it was posted.
+**Mark seen** on a Creators card or a person's page does the same for that
+person (or that account, when it is linked to nobody) only.
 
 By default syncs run without a login (public profiles only). **Settings → Sync →
 Instagram sync** can make instaloader use your browser's Instagram cookies

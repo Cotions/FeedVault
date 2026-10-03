@@ -2,7 +2,7 @@
 
 The index is derived from the media folders and rebuilds from a rescan. A few
 tables are not: review decisions, tags, collections, people, sources, the
-handles the user accepted for an account, the "new posts" mark, the posts
+handles the user accepted for an account, the "new posts" marks, the posts
 the Save button added. Each one is
 registered here once, and gets the same treatment:
 
@@ -112,6 +112,8 @@ register("handle_renames", "handle_renames", ("platform", "author_id", "old", "n
 
 # "Mark all seen" (news.py): one row, the time before which posts are not new.
 register("seen_at", "seen_at", ("id", "at"), "id")
+# "Mark seen" on a person or an account: a mark per account, by platform and id.
+register("seen_marks", "seen_marks", ("platform", "author_id", "at"), ("platform", "author_id"))
 # Posts the Save button added (save.py): they never seed a sync's stamp.
 register("saved_posts", "saved_posts", ("post_id", "saved_at"), "post_id")
 

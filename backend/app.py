@@ -146,15 +146,40 @@ def new_posts():
     return jsonify(news.summary(db.connect()))
 
 
+def _whom(body):
+    """The person (an id) or account ((platform, id)) a body names, as
+    ``person`` or ``account``: (person, account, error)."""
+    person, account = body.get("person"), body.get("account")
+    if person is not None and account is not None:
+        return None, None, "send person or account, not both"
+    if person is not None and (not isinstance(person, int) or isinstance(person, bool)
+                               or not people.exists(db.connect(), person)):
+        return None, None, "no such person"
+    if account is not None:
+        found = people.clean_accounts([account])
+        if not found or people.canonical(db.connect(), *found[0]) not in db.accounts(db.connect()):
+            return None, None, "account must be an indexed { platform, id }"
+        account = found[0]
+    return person, account, None
+
+
 @app.post("/api/new/seen")
 def mark_seen():
     body = request.get_json(silent=True)
     body = {} if body is None else body
     at = body.get("at") if isinstance(body, dict) else None
-    if not isinstance(body, dict) or (at is not None and (not isinstance(at, int) or isinstance(at, bool)
-                                                          or not 0 <= at < 2**53)):
-        return jsonify({"ok": False, "error": "send { at } (unix seconds), or nothing for now"}), 400
-    return jsonify({"ok": True, "since": news.mark_seen(db.connect(), at)})
+    if not isinstance(body, dict) or set(body) - {"at", "person", "account"} \
+            or (at is not None and (not isinstance(at, int) or isinstance(at, bool) or not 0 <= at < 2**53)):
+        return jsonify({"ok": False, "error": "send { at } (unix seconds), or nothing for now, "
+                                              "and person or account for theirs only"}), 400
+    person, account, error = _whom(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    if person is None and account is None:
+        return jsonify({"ok": True, "since": news.mark_seen(conn, at)})
+    mark = news.mark_seen(conn, at, person=person, account=account)
+    return jsonify({"ok": True, "since": news.seen_at(conn), "at": mark})
 
 
 @app.get("/api/posts/<platform>/<post_id>")

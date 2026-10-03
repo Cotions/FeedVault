@@ -89,7 +89,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
 | GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
-| POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`, see [New posts](#new-posts) |
+| POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`; with `"person": 3` or `"account": { "platform", "id" }`, theirs only; see [New posts](#new-posts) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
 | GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing. `?person=<id>`: counts over that person's posts only, as `/api/posts?person=` (`unmatched` stays the whole archive's: those files belong to nobody) |
@@ -130,14 +130,24 @@ new.
   time of the upgrade, and a new one with nothing to restore at its first
   start, so an existing archive is never all new.
 - Strictly after: a post indexed in the same second as the mark is not new.
+- **Per person.** "Mark seen" on a person, or on an account linked to
+  nobody (it counts as its own), gives each of its accounts a mark of its
+  own (folder-name aliases included): a post is new when it came after the
+  global mark *and* after its account's mark. These marks are user data
+  too: table `seen_marks`, keyed by platform and account id, written to
+  `userdata/seen_marks.json` (`{"rows": [{"platform": "instagram",
+  "author_id": "123456", "at": 1727503600}]}`), so a rebuilt index keeps
+  them. An account linked to a person later keeps the mark it had until
+  the person's next "Mark seen". A global "Mark all seen" drops the marks it
+  has passed (they no longer change anything).
 
 `GET /api/new`:
 
 ```json
 { "count": 12, "since": 1727500000,
-  "by_person": [{ "id": 3, "name": "Some Body", "count": 9 }],
-  "by_account": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "person": 3, "count": 9 },
-                 { "platform": "tiktok", "id": "6900000000000000777", "handle": "demo.clips", "person": null, "count": 3 }] }
+  "by_person": [{ "id": 3, "name": "Some Body", "count": 9, "until": 1727503600 }],
+  "by_account": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "person": 3, "count": 9, "until": 1727503600 },
+                 { "platform": "tiktok", "id": "6900000000000000777", "handle": "demo.clips", "person": null, "count": 3, "until": 1727502000 }] }
 ```
 
 - `count`: every new post, those without an author included; `since`: the
@@ -145,11 +155,19 @@ new.
 - `by_account`: accounts as on the Creators page (folder-name aliases count
   for the id they stand for), `person` the id of the person linked, else
   `null`; `by_person`: the same added up per person. Most new posts first.
+  `until`: the newest of those posts' `first_seen`, to send as `at` with a
+  "Mark seen" of that person or account.
 
 `POST /api/new/seen` marks everything seen: `at` (Unix seconds, optional,
 default now) becomes the mark, unless the mark is already later: it never
-moves backwards, nor past now. `{ "ok": true, "since": <the mark> }`; a
-body that is not `{}`, `{ "at": <whole seconds> }` or empty is a 400.
+moves backwards, nor past now. `{ "ok": true, "since": <the mark> }`.
+
+With `"person": <id>` or `"account": { "platform": "instagram", "id":
+"123456" }` (an indexed account, or a folder-name alias of one), only that
+person's or account's posts are marked seen, up to `at` the same way:
+`{ "ok": true, "since": <the global mark>, "at": <the mark set> }`. A body
+that is not `{}`, empty, or made of `at` and one of `person` or `account`
+is a 400, and so is a person or account that does not exist.
 The dashboard's **Mark all seen** sends `new_until` from `GET /api/jobs` (the
 newest new post's `first_seen` when it counted them), so a post indexed
 since, which it has not shown, stays new. A full scan stamps `first_seen`

@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getAuthors, getPerson, getSuggestions, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson } from "../lib/api";
+import { getAuthors, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
+import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
-import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, platformLabel, platformShort, safeUrl } from "../lib/fmt";
+import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, platformLabel, platformShort, plural, safeUrl } from "../lib/fmt";
 import { accountKey, accountRef } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -68,6 +69,9 @@ export default function PersonPage() {
   const { data: p, error, reload } = useApi(load, refreshKey);
   const { data: authors } = useApi(getAuthors, refreshKey);
   const suggestApi = useApi(getSuggestions, refreshKey);
+  // Their new posts, again whenever the jobs poll's total moves.
+  const { newCount, started } = useJobs();
+  const newApi = useApi(getNew, `${refreshKey}:${newCount}`);
   const [busy,     setBusy]     = useState(false);
   const [editName, setEditName] = useState(null);     // the name being typed, null when not renaming
   const [notes,    setNotes]    = useState(null);     // edited notes, null when untouched
@@ -143,6 +147,22 @@ export default function PersonPage() {
     }
   }
 
+  // Up to the newest one counted: a post indexed since stays new.
+  async function markMineSeen(fresh) {
+    setBusy(true);
+    try {
+      const r = await markSeen(fresh.until, { person: p.id });
+      if (!r?.ok) { toast(r?.error || "Could not mark them seen.", "err"); return; }
+      toast(`${plural(fresh.count, "new post")} of ${p.name} marked seen.`);
+      newApi.reload();
+      started();                               // the sidebar's count, now
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function dismiss(s) {
     setBusy(true);
     try {
@@ -172,6 +192,7 @@ export default function PersonPage() {
   const suggested = (suggestApi.data?.suggestions || []).filter(s => s.person?.id === p.id);
   const scoped = path => `${path}?${new URLSearchParams({ person: p.id })}`;
   const notesValue = notes ?? p.notes;
+  const fresh = (newApi.data?.by_person || []).find(r => r.id === p.id);
 
   return (
     <div className="card person-page">
@@ -215,6 +236,19 @@ export default function PersonPage() {
         <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
         <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
       </nav>
+
+      {fresh?.count > 0 && (
+        <div className="person-new">
+          <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
+                title="Their posts indexed since you last marked them seen">
+            {fmtInt(fresh.count)} new
+          </Link>
+          <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
+                  title="Their new posts stop being new; everyone else's stay">
+            <Icon name="check" size={14} /> Mark seen
+          </button>
+        </div>
+      )}
 
       <section className="person-section">
         <h3 className="card-title">Accounts <span className="page-count">{p.accounts.length}</span></h3>

@@ -1802,6 +1802,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .creator-card { padding: 0; gap: 0; }
 .creator-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 11px 10px 11px 14px; }
 .creator-review { margin-right: 10px; flex-shrink: 0; }
+.creator-seen { margin-right: 6px; flex-shrink: 0; }
 /* Review with a source's Options under it, so the name keeps its room. */
 .creator-tools { display: flex; flex-direction: column; gap: 2px; margin-right: 10px; flex-shrink: 0; }
 .creator-tools .creator-review { margin-right: 0; }
@@ -2378,6 +2379,8 @@ a.btn-primary { color: var(--on-accent); }
 }
 .side-new:hover { background: rgba(var(--accent-rgb), 0.26); }
 .new-badge { margin-left: 0; align-self: flex-end; white-space: nowrap; }
+.side-new-inline { margin-left: 0; text-decoration: none; }
+.side-new-inline:hover { background: rgba(var(--accent-rgb), 0.26); }
 .jobs-page { display: flex; flex-direction: column; gap: 18px; }
 .job-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .job-row {
@@ -2522,6 +2525,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-rename { display: flex; align-items: center; gap: 6px; }
 .person-delete:hover:not(:disabled) { color: #ffb3b5; }
 .person-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 20px; }
+.person-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -8px 0 20px; }
 .person-section { margin-bottom: 22px; }
 .person-section .card-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
 .person-section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
