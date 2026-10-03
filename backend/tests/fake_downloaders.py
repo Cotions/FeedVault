@@ -59,6 +59,12 @@ the flags FeedVault passes, newest post first:
   does ("[cookies][info] Extracted 12 cookies from Firefox", "Extracted 12
   cookies from firefox"), unless the "cookies" fail says it could not.
 
+A link to one post (gallery-dl ``https://x.com/i/web/status/<id>``, yt-dlp
+``https://www.tiktok.com/@<name>/video/<id>``, as Save passes them) gets
+that post from whichever account has it, alone; one no account has fails as
+the tools do for a removed post ("NotFoundError: Requested Tweet could not
+be found", "Video not available, status code 10204").
+
 Every run appends {"tool", "argv", "at"} as one JSON line to
 FAKE_DOWNLOADS_LOG, when set.
 """
@@ -216,6 +222,10 @@ def gallery_dl_main(argv):
         if args.simulate and not data.get("fail"):
             print(f"# {url.rsplit('/', 1)[-1]}_1.jpg")      # the test item: nothing written
             continue
+        one = re.fullmatch(r"https://x\.com/i/web/status/(\d+)", url)
+        if one and account is None:
+            status |= _gallery_dl_post(data, one.group(1), args)
+            continue
         fail = data.get("fail") or (account or {}).get("fail")
         if fail or account is None:
             exc, msg, code = GALLERY_DL_FAIL[fail or "notfound"]
@@ -238,6 +248,37 @@ def gallery_dl_main(argv):
             if archive:
                 archive.close()
     return status
+
+
+def _single(data, key, pid):
+    """(account, post) of the account whose ``key`` list has a post ``pid``."""
+    for account in data["accounts"].values():
+        for post in account.get(key) or ():
+            if post["id"] == pid:
+                return account, post
+    return None, None
+
+
+def _gallery_dl_post(data, pid, args):
+    """One tweet by its id, as gallery-dl's tweet extractor saves it."""
+    account, post = _single(data, "posts", pid)
+    fail = data.get("fail") or (account or {}).get("fail")
+    if fail or account is None or account["category"] != "twitter":
+        exc, msg, code = GALLERY_DL_FAIL[fail] if fail else ("NotFoundError", "Requested Tweet could not be found", 4)
+        print(f"[twitter][error] {exc}: {msg.format(name=account['user']['name'] if account else 'someone')}",
+              file=sys.stderr)
+        return code
+    folder = args.D or os.path.join("gallery-dl", "twitter", account["user"]["name"])
+    os.makedirs(folder, exist_ok=True)
+    for name, d in _gallery_dl_files(account, post):
+        d["subcategory"] = "tweet"
+        path = os.path.join(folder, name)
+        (mp4 if d["extension"] == "mp4" else lambda p: png(p, colour(name)))(path)
+        if args.write_metadata and not _config_drops_metadata(args.config_ignore):
+            with open(path + ".json", "w", encoding="utf-8") as f:
+                json.dump(d, f, indent=4)
+        print(path)
+    return 0
 
 
 def _gallery_dl_child(posts, account, folder, archive, args, abort, keep, after, last):
@@ -361,6 +402,18 @@ def yt_dlp_main(argv):
             print(f"[youtube] Extracting URL: {url}\n[youtube] {vid}: Downloading webpage\n"
                   f"[info] {vid}: Downloading 1 format(s): 18")
             continue
+        one = re.fullmatch(r"https://www\.tiktok\.com/@[A-Za-z0-9._]+/video/(\d+)", url)
+        if one and account is None:
+            account, video = _single(data, "videos", one.group(1))
+            fail = data.get("fail") or (account or {}).get("fail")
+            if fail or account is None:
+                line = YT_DLP_FAIL[fail] if fail else "ERROR: [{ie}] {id}: Video not available, status code 10204"
+                line = line.get(None) if isinstance(line, dict) else line
+                print(line.format(ie="TikTok", id=one.group(1), browser=args.cookies_from_browser or "firefox"),
+                      file=sys.stderr)
+                status = 1
+                continue
+            account = {**account, "videos": [video], "pinned": []}
         fail = data.get("fail") or (account or {}).get("fail")
         if fail or account is None:
             # A profile's errors come from its list extractor, as yt-dlp's do.

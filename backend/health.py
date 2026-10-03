@@ -182,6 +182,7 @@ YT_DLP = _table([
     ("not_found", r"The channel/playlist does not exist and the URL redirected to youtube\.com home page"),
     ("not_found", r"HTTP Error 404: Not Found"),
     ("not_found", r"\bVideo unavailable\b"),
+    ("not_found", r"\bVideo not available, status code \d+"),     # TikTok: removed, or never was
     ("not_found", r"YouTube said: This (?:channel does not exist|account has been terminated)"),
 ])
 TABLES = {"instaloader": INSTALOADER, "gallery-dl": GALLERY_DL, "yt-dlp": YT_DLP}
