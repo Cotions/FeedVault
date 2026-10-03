@@ -388,6 +388,7 @@ def _run(job):
             _note(job, f"[feedvault] indexing {job.rescan}")
             result = _index(job)
             result.pop("unread")                   # for an outcome hook to read
+            result.pop("seen")
             n = result["added"]
             _finish(job, "done", result=result, message=f"{n} new post{'' if n == 1 else 's'}")
         elif _kinds[job.kind].summarize:
@@ -429,12 +430,16 @@ def _record_process(job, pid):
 
 
 def _index(job):
+    """{added, updated, unread, seen: (from, to)}: ``seen`` bounds the
+    first_seen of the posts it added (an outcome hook's to keep)."""
     roots = config.load()["media_roots"]
+    began = int(time.time())
     if job.full_scan:
         report = scanner.run(roots)            # every root: a scan of one would mark the others missing
     else:
         report = scanner.index_dirs(roots, list(scanner.folders(job.rescan)), new=True, since=job.began)
-    return {"added": report["added"], "updated": report["updated"], "unread": report.get("unread", 0)}
+    return {"added": report["added"], "updated": report["updated"], "unread": report.get("unread", 0),
+            "seen": (began, int(time.time()))}
 
 
 PROGRESS_EVERY = 1.0                           # seconds between two kept progress redraws
@@ -645,6 +650,21 @@ def _set_args(job, args):
     conn = db.connect()
     conn.execute("UPDATE jobs SET argv = ? WHERE id = ?", (json.dumps(job.argv), job.id))
     conn.commit()
+
+
+def amend(job_id, keys):
+    """Add ``keys`` to an ended job's result, stored and live: for an ended
+    hook, which runs after the result was saved."""
+    with _lock:
+        job = _active.get(job_id)
+        if job is not None:
+            job.result = {**(job.result or {}), **keys}
+    conn = db.connect()
+    with conn:
+        row = conn.execute("SELECT result FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is not None:
+            conn.execute("UPDATE jobs SET result = ? WHERE id = ?",
+                         (json.dumps({**(json.loads(row["result"]) if row["result"] else {}), **keys}), job_id))
 
 
 def _save(job, tail=None):

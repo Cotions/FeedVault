@@ -85,11 +85,13 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&person=&collection=&kind=&tag=&untagged=&new=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&person=&collection=&kind=&tag=&untagged=&new=&notification=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=&notification=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
 | POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`; with `"person": 3` or `"account": { "platform", "id" }`, theirs only; see [New posts](#new-posts) |
+| GET | `/api/notifications` | syncs that brought new posts or failed, see [Notifications](#notifications) |
+| POST | `/api/notifications/read` | body `{ "upto": 41 }` or nothing (all) → `{ "ok": true, "read": 3 }`, see [Notifications](#notifications) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
 | GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing. `?person=<id>`: counts over that person's posts only, as `/api/posts?person=` (`unmatched` stays the whole archive's: those files belong to nobody) |
@@ -173,6 +175,57 @@ newest new post's `first_seen` when it counted them), so a post indexed
 since, which it has not shown, stays new. A full scan stamps `first_seen`
 folder by folder, so a mark set while it runs leaves the folders it commits
 afterwards new.
+
+## Notifications
+
+Each sync, started by hand, by "Sync all" or by the scheduler, that brought
+new posts or failed leaves an entry: "12 new posts from Some Body", "@name:
+account not found". A sync that brought nothing leaves none, and neither
+does a cancelled or interrupted one. A **scheduled** sync that fails in the
+same [health state](#account-health) as the source's sync before it leaves
+none either: a source the scheduler retries while it stays rate limited is
+one entry, not one per retry. Another state, a sync by hand, or a sync that
+worked in between makes the next failure an entry again.
+
+Entries are kept in the database (table `notifications`), the newest 200;
+older ones are dropped as new ones come. They are not user data (not
+exported): like the jobs list, they say what happened.
+
+`GET /api/notifications`:
+
+```json
+{ "unread": 1, "latest": 42,
+  "entries": [{ "id": 42, "at": 1727503600, "kind": "new", "text": "3 new posts from Some Body",
+                "job_id": 118, "source_id": 5, "person_id": 3,
+                "account": { "platform": "instagram", "id": "123456" },
+                "state": "ok", "count": 3, "scheduled": true, "read": false },
+              { "id": 41, "at": 1727500000, "kind": "failed", "text": "x.com/someone: rate limited",
+                "job_id": 117, "source_id": 6, "person_id": null, "account": null,
+                "state": "rate_limited", "count": 0, "scheduled": false, "read": true }] }
+```
+
+- `kind`: `new` or `failed`; `state`: the sync's health state (`ok`,
+  `renamed`, `rate_limited`, `private`, `login_required`, `not_found`,
+  `error`).
+- `text` names the source by its person, else `@handle` (instaloader) or its
+  link without `https://`; a failure the health states do not name gives the
+  job's message. It is built from handles and tool output, so it is
+  scrubbed (as the [sync log](#log): no cookie, token or session path, no
+  control character, at most 200 characters) and the dashboard shows it as
+  text, never as HTML.
+- `GET /api/posts?notification=<id>` (and `/api/posts/summary`) gives the
+  posts that entry's sync brought: those first indexed by it, under the
+  source's folder, whether or not they were marked seen since. An unknown
+  id, or a failure's, matches nothing.
+- The entry's id is in its job's `result` as `notification` (the
+  dashboard's toast links to it).
+
+`POST /api/notifications/read` marks the entries up to `upto` (an id) read,
+or all of them with an empty body; `read` says how many were unread. Any
+other body is a 400.
+
+`GET /api/jobs` carries `"notifications": { "unread": 1, "latest": 42 }`
+for the sidebar's bell.
 
 ## Deleting
 
@@ -1813,7 +1866,7 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000 }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts), for the sidebar, which polls this |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "notifications": { "unread": 1, "latest": 42 } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
 | GET | `/api/jobs/<id>` | job, or 404 |
@@ -1829,11 +1882,11 @@ Built-in kinds:
 | Kind | Params | Runs | Group |
 |---|---|---|---|
 | `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
-| `instaloader-sync` | `source`: a source id | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line" }` | `instaloader` |
-| `gallery-dl-sync` | `source`: a source id | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
+| `instaloader-sync` | `source`: a source id; `scheduled`: `"1"` when the scheduler queued it (optional, see [Notifications](#notifications)) | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line", "seen", "notification" }` (`seen`: the `first_seen` range of the posts it added; `notification`: its entry's id, or absent) | `instaloader` |
+| `gallery-dl-sync` | `source`, `scheduled` as above | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
 | `tool-test` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | the tool once on a fixed public item, see [Downloaders](#downloaders); `result` `{ "ok", "error", "line" }` | the tool's name |
 | `tool-update` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | pip or pipx, picked from how the tool is installed, see [Downloaders](#downloaders) | the tool's name |
-| `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
+| `yt-dlp-sync` | `source`, `scheduled` as above | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 | `instaloader-post` | `shortcode` | instaloader for one post, see [How a save runs](#how-a-save-runs); started by `POST /api/save` only | `instaloader` |
 
 ### Sync all

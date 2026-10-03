@@ -114,6 +114,11 @@ export function getNew()       { return get("/api/new"); }
 // at: unix seconds, posts first seen after it stay new; default now.
 // whom: {} for every post, { person: id } or { account: { platform, id } } for theirs only.
 export function markSeen(at, whom = {}) { return post("/api/new/seen", at == null ? whom : { at, ...whom }); }
+// Syncs that brought new posts or failed (docs/API.md "Notifications"):
+// { unread, latest, entries: newest first }.
+export function getNotifications() { return get("/api/notifications"); }
+// upto: an entry's id, those up to it are read; default all.
+export function readNotifications(upto) { return post("/api/notifications/read", upto == null ? {} : { upto }); }
 export function getStats(person) { return get(`/api/stats${qs({ person })}`); }
 // { totals, by_author, by_kind, by_year, largest, trash }, see docs/API.md "Storage".
 // person: an id, to cover that person's posts only.

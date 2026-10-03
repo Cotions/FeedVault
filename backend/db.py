@@ -442,11 +442,39 @@ def _migrate_18(conn):
         ) WITHOUT ROWID""")
 
 
+def _migrate_19(conn):
+    """The notifications list (notify.py): one entry for a sync that brought
+    new posts or failed. Operational, like jobs: not user data, pruned to
+    the newest notify.KEPT. ``text`` is scrubbed tool output and handles,
+    shown as text. A "new" entry opens the posts its sync indexed: those of
+    ``folder`` first seen from ``seen_from`` to ``seen_to``."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            at        INTEGER NOT NULL,
+            kind      TEXT NOT NULL,
+            text      TEXT NOT NULL,
+            job_id    INTEGER,
+            source_id INTEGER,
+            person_id INTEGER,
+            platform  TEXT,
+            author_id TEXT,
+            state     TEXT,
+            count     INTEGER NOT NULL DEFAULT 0,
+            folder    TEXT,
+            seen_from INTEGER,
+            seen_to   INTEGER,
+            scheduled INTEGER NOT NULL DEFAULT 0,
+            read      INTEGER NOT NULL DEFAULT 0
+        )""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
-              _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18]
+              _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
+              _migrate_19]
 
 BACKUPS_KEPT = 3
 
@@ -883,8 +911,16 @@ NEW = ("p.first_seen > COALESCE((SELECT at FROM seen_at WHERE id = 1), 922337203
        "WHERE s.platform = p.platform AND s.author_id = p.author_id), 0)")
 
 
+# A notification's posts: first seen in its range (posts_first_seen), under
+# its folder. substr, not LIKE: a folder name may hold % or _.
+NOTIFIED = ("p.first_seen BETWEEN (SELECT seen_from FROM notifications WHERE id = ?) "
+            "AND (SELECT seen_to FROM notifications WHERE id = ?) "
+            "AND substr(p.meta_path, 1, length((SELECT folder FROM notifications WHERE id = ?)) + 1) "
+            "= (SELECT folder FROM notifications WHERE id = ?) || '/'")
+
+
 def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
-                person=None, new=False, collection=None):
+                person=None, new=False, collection=None, notification=None):
     """WHERE clause and arguments for the /api/posts filters, over _FROM.
     None when the search text can match nothing. Shared by list_posts,
     post_summary and storage so a count and its size can never disagree.
@@ -923,6 +959,9 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
         args.append(collection)
     if new:
         where.append(NEW)
+    if notification is not None:
+        where.append(NOTIFIED)
+        args += [notification] * 4
     if platform:
         where.append("p.platform = ?")
         args.append(platform)
@@ -948,15 +987,15 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
 
 def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted",
                offset=0, limit=60, review=None, order="desc", tags=(), untagged=False, person=None, new=False,
-               collection=None):
-    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection)
+               collection=None, notification=None):
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection, notification)
     if f is None:
         return 0, []
     clause, args = f
     direction = "ASC" if order == "asc" else "DESC"
     first, second = ("saved_at", "posted_at") if sort == "saved" else ("posted_at", "saved_at")
     order_by = f"p.{first} {direction}, p.{second} {direction}, p.id {direction}"
-    if untagged and not (q or platform or author or kind or person is not None or new):
+    if untagged and not (q or platform or author or kind or person is not None or new or notification is not None):
         total = _untagged_count(conn, review, tags, collection)
     else:
         total = conn.execute(f"SELECT COUNT(*) {_FROM if review else _POSTS} {clause}", args).fetchone()[0]
@@ -983,9 +1022,9 @@ def _untagged_count(conn, review, tags, collection):
 
 
 def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
-                 person=None, new=False, collection=None):
+                 person=None, new=False, collection=None, notification=None):
     """Posts, media and bytes matched by the /api/posts filters, all pages."""
-    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection)
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection, notification)
     if f is None:
         return {"posts": 0, "media": 0, "bytes": 0}
     clause, args = f

@@ -195,7 +195,7 @@ def tick(now=None):
         if _stop is not None and _stop.is_set():
             break                              # FeedVault is stopping: its jobs too
         try:
-            job = sync.sync(sid)
+            job = sync.sync(sid, scheduled=True)
         except sync.Busy:
             continue
         except jobs.BadRequest as e:

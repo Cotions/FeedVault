@@ -9,6 +9,7 @@ import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
 import Icon            from "./components/Icon";
 import CyberBackground from "./components/CyberBackground";
+import Notifications   from "./components/Notifications";
 import ScrollManager   from "./components/ScrollManager";
 import Feed            from "./pages/Feed";
 import PostPage        from "./pages/PostPage";
@@ -316,6 +317,8 @@ export default function App() {
               </span>
             )}
           </NavLink>
+          <Notifications unread={jobList?.notifications?.unread ?? 0} latest={jobList?.notifications?.latest ?? null}
+                         onRead={jobStarted} />
           <NavLink to="/settings" className="side-link"><Icon name="settings" />Settings</NavLink>
           <div className="side-sep" />
           <button
@@ -439,8 +442,10 @@ function syncToast(toast, j) {
     const to = j.result?.person ? personPath(j.result.person) : "/creators";
     toast(`Sync of ${who} failed: ${j.message}`, "err", { to, label: "Source" });
   } else if (j.state === "done" && added > 0) {
+    // Exactly the posts it brought: its notifications entry (notify.py).
     const a = j.result.account;
-    const to = `/?${new URLSearchParams({ new: "1", ...(a ? { platform: a.platform, author: a.id } : {}) })}`;
+    const to = j.result.notification ? `/?notification=${j.result.notification}`
+      : `/?${new URLSearchParams({ new: "1", ...(a ? { platform: a.platform, author: a.id } : {}) })}`;
     toast(`${plural(added, "new post")} from ${who}`, "ok", { to, label: "Show" });
   } else if (j.state === "done") {
     toast(`${who}: no new posts`);

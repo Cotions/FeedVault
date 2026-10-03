@@ -24,6 +24,7 @@ import hashing
 import info_cookies
 import jobs
 import news
+import notify
 import organize
 import people
 import save
@@ -115,6 +116,7 @@ def _post_filters():
         person=_person_arg(),
         new=request.args.get("new") == "1",
         collection=_person_arg("collection"),
+        notification=_person_arg("notification"),
     )
 
 
@@ -180,6 +182,26 @@ def mark_seen():
         return jsonify({"ok": True, "since": news.mark_seen(conn, at)})
     mark = news.mark_seen(conn, at, person=person, account=account)
     return jsonify({"ok": True, "since": news.seen_at(conn), "at": mark})
+
+
+# ---------------------------------------------------------------------------
+# Notifications (notify.py)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notifications")
+def notifications():
+    return jsonify(notify.listing(db.connect()))
+
+
+@app.post("/api/notifications/read")
+def notifications_read():
+    body = request.get_json(silent=True)
+    body = {} if body is None else body
+    upto = body.get("upto") if isinstance(body, dict) else None
+    if not isinstance(body, dict) or set(body) - {"upto"} \
+            or (upto is not None and (not isinstance(upto, int) or isinstance(upto, bool) or not 0 <= upto < 2**53)):
+        return jsonify({"ok": False, "error": "send { upto } (an entry's id), or nothing for all"}), 400
+    return jsonify({"ok": True, "read": notify.read(db.connect(), upto)})
 
 
 @app.get("/api/posts/<platform>/<post_id>")
@@ -1229,7 +1251,9 @@ def clean_info_json_cookies():
 def list_jobs():
     # The sidebar's "New" count rides along with the poll (news.py).
     new, new_until = news.count(db.connect())
-    return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until})
+    unread, latest = notify.unread(db.connect())
+    return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until,
+                    "notifications": {"unread": unread, "latest": latest}})
 
 
 @app.get("/api/jobs/kinds")

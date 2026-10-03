@@ -141,6 +141,7 @@ import db
 import health
 import info_cookies
 import jobs
+import notify
 import people
 import scanner
 import sources
@@ -950,6 +951,8 @@ def _ended_as(params, code, lines, index, note, tool):
         added = max(0, added - len(_retrash(params, note)))
     result = {"added": added, "updated": index["updated"] if index else 0, "error": None, "line": None,
               **_owner(params)}
+    if index and index.get("seen"):
+        result["seen"] = list(index["seen"])   # the first_seen range of what it added (notify.py)
     new = f"{added} new post{'' if added == 1 else 's'}"
     rename = health.renamed(tool, lines)
     if rename:
@@ -1065,6 +1068,7 @@ def _ended(job):
                             r.get("rename"), r.get("login") if job["state"] in ("done", "failed") else None)}):
         return
     changed = {"sources"}
+    _notify(conn, job, sid, before)
     src = sources.row(conn, sid)
     options = _options(src)
     if job["state"] == "done" and (options["full_history"] or options["first_posts"]):
@@ -1092,6 +1096,46 @@ def _ended(job):
                 print(f"[sync] source {sid}: could not update its saved posts: {e}")
     for name in sorted(changed):
         userdata.changed(name)
+
+
+def _who(src):
+    """How an entry names a source: its person, else @handle (instaloader)
+    or the link without https://."""
+    if src["person"]:
+        return src["person"]["name"]
+    return f"@{src['target']}" if src["tool"] == "instaloader" else src["target"].removeprefix("https://")
+
+
+def _notify(conn, job, sid, before):
+    """The notifications entry of a sync that brought posts or failed
+    (notify.py). A scheduled one that failed as the sync before it did adds
+    none. Its id goes in the job's result (``notification``)."""
+    state, r = job["state"], job["result"] or {}
+    said = _said(state, r)
+    if not ((state == "done" and r.get("added")) or state == "failed"):
+        return
+    scheduled = job["params"].get("scheduled") == "1"
+    if state == "failed" and scheduled and health.state_of(before) == said:
+        return
+    try:
+        src = sources.get(conn, sid)
+        account = src["account"] or r.get("account")
+        who = _who(src)
+        if state == "done":
+            seen = r.get("seen")
+            nid = notify.add(conn, "new", notify.new_text(r["added"], who), job=job["id"], source=sid,
+                             person=src["person"] and src["person"]["id"],
+                             account=account and (account["platform"], account["id"]), state=said,
+                             count=r["added"], folder=job["rescan"], seen=tuple(seen) if seen else None,
+                             scheduled=scheduled)
+        else:
+            nid = notify.add(conn, "failed", notify.failed_text(who, said, job["message"]), job=job["id"],
+                             source=sid, person=src["person"] and src["person"]["id"],
+                             account=account and (account["platform"], account["id"]), state=said,
+                             scheduled=scheduled)
+        jobs.amend(job["id"], {"notification": nid})
+    except Exception as e:                     # only the list misses it: the sync ended as it went
+        print(f"[sync] source {sid}: no notification: {e}")
 
 
 def _first_posts_floor(conn, src, job, listed=None):
@@ -1165,7 +1209,10 @@ def _forget_saved(conn, src):
     save.forget_synced(conn, *people.canonical(conn, src["platform"], src["author_id"]), stamp)
 
 
-jobs.register(KIND, label="Sync from Instagram", params={"source": {"type": "text", "max": 15}},
+# ``scheduled``: queued by the scheduler (notify.py: a failure it repeats adds no entry).
+PARAMS = {"source": {"type": "text", "max": 15}, "scheduled": {"type": "choice", "choices": ["1"], "required": False}}
+
+jobs.register(KIND, label="Sync from Instagram", params=PARAMS,
               build=_build, group=GROUP, start=_start, outcome=_outcome, ended=_ended,
               pause=lambda params: settings()["pause"],
               describe=lambda params, argv: f"Sync @{argv[-1]}" if argv else "Sync from Instagram")
@@ -1376,12 +1423,12 @@ def _describe(label):
     return describe
 
 
-jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source": {"type": "text", "max": 15}},
+jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params=PARAMS,
               build=_build_gallery_dl, group="gallery-dl", start=_start_archive("gallery-dl"),
               outcome=lambda p, code, lines, index, note: _outcome(p, code, lines, index, note, "gallery-dl"),
               ended=_ended, pause=lambda params: tool_settings("gallery-dl")["pause"],
               describe=_describe("Sync with gallery-dl"))
-jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
+jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params=PARAMS,
               build=_build_yt_dlp, group="yt-dlp", start=_start_yt_dlp, after=_strip_cookies,
               outcome=lambda p, code, lines, index, note: _outcome(p, code, lines, index, note, "yt-dlp"),
               ended=_ended, pause=lambda params: tool_settings("yt-dlp")["pause"],
@@ -1419,13 +1466,14 @@ def _kind(sid):
     return KINDS[src["tool"]]
 
 
-def sync(sid):
+def sync(sid, scheduled=False):
     """Queue one source's sync: the job's public dict. Raises Busy, or
-    jobs.BadRequest when the source cannot be synced."""
+    jobs.BadRequest when the source cannot be synced. ``scheduled``: the
+    scheduler's (notify.py)."""
     with _submitting:
         if sid in active():
             raise Busy("its sync is already queued or running")
-        return jobs.submit(_kind(sid), {"source": str(sid)})
+        return jobs.submit(_kind(sid), {"source": str(sid), **({"scheduled": "1"} if scheduled else {})})
 
 
 def sync_all(only=None):
