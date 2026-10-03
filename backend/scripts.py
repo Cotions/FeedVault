@@ -168,6 +168,78 @@ def _check_needs(meta, texts):
     return None
 
 
+# The options whose value a tool hands to a shell, from their source
+# (yt-dlp 2026.08.19, gallery-dl's master): a FeedVault placeholder in one
+# would be read by /bin/sh, so a command holding one is refused. yt-dlp:
+# --exec, --exec-before-download, --netrc-cmd (Popen(shell=True)) and
+# --use-postprocessor (its Exec post processor runs exec_cmd the same way).
+# gallery-dl: --exec, --exec-after, and -o / -O, whose KEY=VALUE can set
+# an exec post processor's command (a string runs in a shell). Not in it:
+# yt-dlp's --downloader-args and --postprocessor-args (shlex.split, then a
+# program's argv), --downloader (a program's name or path).
+# Both take a long option's unique prefix (optparse, argparse): any prefix
+# counts, unless it is another option's whole name (yt-dlp's --netrc,
+# gallery-dl's --postprocessor). gallery-dl's -o and -O may follow its
+# flags in one item (-qo…), their value after them or in the next item.
+SHELL_RUN = {
+    "yt-dlp": (("--exec", "--exec-before-download", "--netrc-cmd", "--use-postprocessor"), ("--netrc",),
+               "", "", "yt-dlp's own fields (%(webpage_url)q, %(filepath)q)"),
+    "gallery-dl": (("--exec", "--exec-after", "--option", "--postprocessor-option"), ("--postprocessor",),
+                   "oO", "hqwvgGjJsEK46", "gallery-dl's own fields ({_path}, {_directory}), -D {root}"),
+}
+# yt-dlp's --alias puts what follows it into the options it expands to (--exec too).
+ALIAS = "--alias"
+
+
+def _shell_option(a, longs, others, shorts, flags):
+    """(the option ``a`` names, its value or None when the value is the
+    next item) when ``a`` names an option its tool hands to a shell, else None."""
+    if a.startswith("--"):
+        name, eq, value = a.partition("=")
+        if len(name) > 2 and name not in others:
+            for o in longs:
+                if o.startswith(name):
+                    return o, value if eq else None
+        return None
+    if a.startswith("-"):
+        for i, c in enumerate(a[1:], 1):
+            if c in shorts:
+                return "-" + c, a[i + 1:] or None
+            if c not in flags:
+                return None
+    return None
+
+
+def _check_shell(argv):
+    """Why a FeedVault placeholder would reach a shell through one of the
+    tool's options, else None."""
+    if argv[0] not in SHELL_RUN:
+        return None
+    longs, others, shorts, flags, fields = SHELL_RUN[argv[0]]
+    why = ("can reach a shell, so it may not hold a FeedVault placeholder: use "
+           f"{fields}, or a shell script (its inputs are FV_* variables)")
+    pending = None
+    for a in argv[1:]:
+        name = a.partition("=")[0]
+        if argv[0] == "yt-dlp" and len(name) > 2 and ALIAS.startswith(name) and _used(argv):
+            return (f"{ALIAS} carries what follows it into the options it expands to, a shell's too: "
+                    "not in a command with a FeedVault placeholder (use a shell script)")
+        if pending:
+            option, value, pending = pending, a, None
+        else:
+            found = _shell_option(a, longs, others, shorts, flags)
+            if found is None:
+                continue
+            option, value = found
+            if value is None:
+                pending = option
+                continue
+        used = _used([value])
+        if used:
+            return f"{option}'s value {why}; found {{{sorted(used)[0]}}} in {value!r}"
+    return None
+
+
 def parse_command(text):
     """(fields, None) of a command's JSON text, or (None, why it is refused)."""
     try:
@@ -187,7 +259,7 @@ def parse_command(text):
     if tool not in jobs.TOOLS and not (os.path.isabs(tool) and not _used([tool])):
         return None, (f"argv[0] must be one of {', '.join(jobs.TOOLS)} (found as in Settings → Downloaders), "
                       "or an absolute path to a program")
-    error = _check_common(data) or _check_needs(data, [*argv, data.get("rescan")])
+    error = _check_common(data) or _check_needs(data, [*argv, data.get("rescan")]) or _check_shell(argv)
     if error:
         return None, error
     return {"name": data.get("name"), "description": data.get("description"), "needs": data["needs"],
