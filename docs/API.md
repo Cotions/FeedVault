@@ -166,8 +166,8 @@ Only **Empty trash** and **purge** (below) remove files for good.
 | Method | Path | Returns |
 |---|---|---|
 | POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
-| GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }` |
-| POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }` |
+| GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }`: the trash as `GET /api/trash/items` counts it (`trash` there), from the manifests, without looking at any trashed file (see [Trash contents](#trash-contents)) |
+| POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }`: every file that was in them, counted on disk right before |
 | GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=&upto=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
 | POST | `/api/trash/check` | looks at every trashed file now → `{ "ok": true, "entries": 7, "files": 21, "bytes": 52428800, "missing": 1 }`, see [Trash contents](#trash-contents) |
 | POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "person": …, "since": …, "before": …, "upto": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
@@ -1719,7 +1719,12 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
   for a video with neither a poster file nor ffmpeg to grab a frame. Trash one
   with `POST /api/delete` and `{ "media": [media_id] }`.
 - `trash`: what is waiting in the trash folders (the totals of `GET
-  /api/trash`). It still takes disk space until the trash is emptied.
+  /api/trash`). It still takes disk space until the trash is emptied. Read
+  from the manifests and the Trash list's last looks, never from the files
+  (no `lstat` per trashed file): a file moved out of the trash by hand still
+  counts until **Check for missing files**. The manifests are read once in
+  the background at startup, and again only when one changes (a delete
+  reads just the lines it added).
 - `?person=<id>`: everything above but `trash` covers that person's posts
   only, filtered as `/api/posts?person=` does, so `totals` equals
   `/api/posts/summary?person=`.
@@ -1729,12 +1734,12 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
 Every size is the `size` the scanner recorded for a media file (the photo or
 video itself), and media items marked missing are skipped. Poster images,
 thumbnails, metadata JSON, caption and other side files are not counted, so
-deleting a post frees a little more than its `bytes`, and the trash total is
-measured on disk instead.
+deleting a post frees a little more than its `bytes`, and the trash total
+counts every trashed file by the size it had when it was trashed.
 
 `/api/storage`, `/api/authors` and `/api/posts/summary` are computed in SQL
-from the index, never by walking the media folders (only the trash total is
-read from disk). Their answers are cached until anything in the index changes
+from the index, never by walking the media folders (the trash total comes
+from the trash manifests). Their answers are cached until anything in the index changes
 (a scan, a delete, a restore, a review decision, a tag change).
 
 ## Jobs
