@@ -370,3 +370,79 @@ def test_owner_folder_order(env, client, fake):
         == os.path.join(root, "twitter", "other")
     assert USER["id"] == 900
 
+
+# ---------------------------------------------------------------------------
+# Sync profile, from the userscript's origin
+# ---------------------------------------------------------------------------
+
+# What the userscript's requests carry on x.com and tiktok.com.
+FROM_X = {**H, "Origin": "https://x.com", "Sec-Fetch-Site": "cross-site"}
+FROM_TIKTOK = {**H, "Origin": "https://www.tiktok.com", "Sec-Fetch-Site": "cross-site"}
+
+
+def as_page(client, method, url, headers, body=None, status=200):
+    r = client.open(url, method=method, json=body, headers=headers)
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+@pytest.mark.parametrize("profile,link,tool,headers,account", [
+    ("https://x.com/someone", "https://x.com/someone", "gallery-dl", FROM_X, x_account((1, 1), (2, 2))),
+    ("https://www.tiktok.com/@someone", "https://tiktok.com/@someone", "yt-dlp", FROM_TIKTOK, tt_account(1, 2)),
+])
+def test_sync_profile_from_the_page(env, client, fake, profile, link, tool, headers, account):
+    """The button's path: resolve the profile's link (is there a source?),
+    add one after the user confirms, sync it; then resolve finds it."""
+    fake.put(link, account)
+    r = as_page(client, "GET", f"/api/sources/resolve?url={profile}", headers)
+    assert r["ok"] and r["tool"] == tool and r["target"] == link and r["source"] is None
+    src = as_page(client, "POST", "/api/sources", headers, {"target": profile})["source"]
+    assert src["tool"] == tool and src["target"] == link
+    job = as_page(client, "POST", f"/api/sources/{src['id']}/sync", headers)["job"]
+    assert job["kind"] == f"{tool}-sync"
+    done = ended(job["id"])
+    assert done["state"] == "done" and done["result"]["added"] == 2, done
+    assert as_page(client, "GET", f"/api/sources/resolve?url={profile}", headers)["source"] == src["id"]
+    got = as_page(client, "GET", f"/api/sources/{src['id']}", headers)
+    assert got["account"] is not None and got["options"]["script"] is None
+    # Busy while queued (held by its tool's pause): 409, and the source says which job.
+    jobs._cool[tool] = 2e9                     # the fake fixture's own dict
+    set_config(**{tool: {"pause": 60}})
+    again = as_page(client, "POST", f"/api/sources/{src['id']}/sync", headers)["job"]
+    assert as_page(client, "POST", f"/api/sources/{src['id']}/sync", headers, status=409)["ok"] is False
+    assert as_page(client, "GET", f"/api/sources/{src['id']}", headers)["job"]["id"] == again["id"]
+
+
+@pytest.mark.parametrize("profile,link,script,headers", [
+    ("https://x.com/someone", "https://x.com/someone", "builtin:gallery-dl-user", FROM_X),
+    ("https://www.tiktok.com/@someone", "https://tiktok.com/@someone", "builtin:yt-dlp-channel", FROM_TIKTOK),
+])
+def test_a_source_with_a_script_stays_refused_to_the_page(env, client, fake, profile, link, script, headers):
+    """#58: from x.com or tiktok.com a source's script is never run, set or
+    listed; the dashboard still can. The page sees why (403)."""
+    fake.put(link, x_account((1, 1)) if "x.com" in link else tt_account(1))
+    src = as_page(client, "POST", "/api/sources", headers, {"target": profile})["source"]
+    as_page(client, "POST", f"/api/sources/{src['id']}", headers, {"options": {"script": script}}, status=403)
+    assert as_page(client, "POST", "/api/sources", headers,
+                   {"target": profile.replace("someone", "other"), "options": {"script": script}},
+                   status=403)["ok"] is False
+    as_page(client, "POST", f"/api/sources/{src['id']}", H, {"options": {"script": script}})
+    r = as_page(client, "POST", f"/api/sources/{src['id']}/sync", headers, status=403)
+    assert "only FeedVault's own dashboard" in r["error"]
+    assert as_page(client, "GET", f"/api/sources/{src['id']}", headers)["options"]["script"] == script
+    for method, url in [("GET", "/api/scripts"), ("GET", f"/api/scripts/{script}"),
+                        ("POST", f"/api/scripts/{script}/run")]:
+        as_page(client, method, url, headers, {"url": link} if method == "POST" else None, status=403)
+    assert fake.runs() == [] and jobs.active() == []
+    # The dashboard (same origin) runs it.
+    job = as_page(client, "POST", f"/api/sources/{src['id']}/sync",
+                  {**H, "Origin": "http://localhost:3380", "Sec-Fetch-Site": "same-origin"})["job"]
+    assert job["kind"] == "script-sync"
+    ended(job["id"])
+
+
+def test_saving_from_the_page_works_as_from_anywhere(env, client, fake):
+    fake.put(X_PROFILE, x_account((1, 1)))
+    r = as_page(client, "POST", "/api/save", FROM_X, {"url": X_LINK})
+    assert ended(r["job"]["id"])["state"] == "done"
+    assert as_page(client, "POST", "/api/saved", FROM_X, {"ids": [f"twitter:{X_ID}"]})["saved"] == [f"twitter:{X_ID}"]
