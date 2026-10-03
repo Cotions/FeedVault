@@ -1153,6 +1153,7 @@ def _notify(conn, job, sid, before):
                              account=account and (account["platform"], account["id"]), state=said,
                              scheduled=scheduled)
         jobs.amend(job["id"], {"notification": nid})
+        notify.desktop(conn.execute("SELECT text FROM notifications WHERE id = ?", (nid,)).fetchone()[0])
     except Exception as e:                     # only the list misses it: the sync ended as it went
         print(f"[sync] source {sid}: no notification: {e}")
 

@@ -1161,7 +1161,8 @@ def _public_config(cfg):
             "gallery-dl": sync.tool_settings("gallery-dl", cfg), "yt-dlp": sync.tool_settings("yt-dlp", cfg),
             "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg),
             "check_updates": cfg.get("check_updates") is True,
-            "schedules_paused": cfg.get("schedules_paused") is True}
+            "schedules_paused": cfg.get("schedules_paused") is True,
+            "desktop_notifications": notify.enabled(cfg)}
 
 
 @app.get("/api/config")
@@ -1197,6 +1198,10 @@ def set_config():
         if not isinstance(body["schedules_paused"], bool):
             return jsonify({"ok": False, "error": "schedules_paused must be true or false"})
         changes["schedules_paused"] = body["schedules_paused"]
+    if "desktop_notifications" in body:
+        if not isinstance(body["desktop_notifications"], bool):
+            return jsonify({"ok": False, "error": "desktop_notifications must be true or false"})
+        changes["desktop_notifications"] = body["desktop_notifications"]
     sessions = {t: sync.session_of(t, {"session": None}, cfg) for t in sync.KINDS if t in body}
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
@@ -1271,8 +1276,11 @@ def list_jobs():
     # The sidebar's "New" count rides along with the poll (news.py).
     new, new_until = news.count(db.connect())
     unread, latest = notify.unread(db.connect())
+    # A tab that shows desktop notifications itself says so: notify-send waits.
+    if request.args.get("desktop") == "1":
+        notify.tab_shows()
     return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until,
-                    "notifications": {"unread": unread, "latest": latest}})
+                    "notifications": {"unread": unread, "latest": latest, "desktop": notify.enabled()}})
 
 
 @app.get("/api/jobs/kinds")

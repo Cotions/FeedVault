@@ -2,15 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { getNotifications, readNotifications } from "../lib/api";
 import { fmtAgo, fmtInt } from "../lib/fmt";
-import { personPath } from "../lib/people";
+import { notificationPath } from "../lib/notify";
 import Icon from "./Icon";
-
-/* Where an entry leads: the posts its sync brought, or the source that
-   failed (its person's page, else Creators). */
-function notificationPath(e) {
-  if (e.kind === "new") return `/?notification=${e.id}`;
-  return e.person_id ? personPath(e.person_id) : "/creators";
-}
 
 /* The sidebar's bell: the unread count, and the list of syncs that brought
    new posts or failed (docs/API.md "Notifications"). Opening it marks

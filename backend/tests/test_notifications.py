@@ -1,6 +1,7 @@
 """Notifications (notify.py): an entry for each sync that brought new posts
 or failed, with the fake tools; a scheduled failure repeated adds none."""
 import json
+import sys
 
 from conftest import H
 from test_schedules import NOW, HOUR, sched                                          # noqa: F401
@@ -46,7 +47,7 @@ def test_a_sync_with_new_posts_leaves_an_entry_that_opens_them(env, client, tool
     assert len(entries(client)["entries"]) == 1
     assert posts_of(client, 999)[0] == 0 and posts_of(client, "x")[0] == 0
     # The poll carries the unread count; reading them clears it.
-    assert client.get("/api/jobs", headers=H).get_json()["notifications"] == {"unread": 1, "latest": e["id"]}
+    assert client.get("/api/jobs", headers=H).get_json()["notifications"] == {"unread": 1, "latest": e["id"], "desktop": False}
     assert post(client, "/api/notifications/read", {"upto": e["id"]})["read"] == 1
     assert entries(client)["unread"] == 0
 
@@ -149,3 +150,34 @@ def test_a_muted_one_makes_no_entry_and_no_count(env, client, tools):
     post(client, "/api/new/mute", {"account": account, "muted": False})
     sync_now(client, s["id"])
     assert len(entries(client)["entries"]) == before + 1
+
+
+def test_desktop_notifications_with_notify_send(env, client, monkeypatch, tmp_path):
+    bin_dir, out = tmp_path / "nbin", tmp_path / "sent.json"
+    bin_dir.mkdir()
+    fake = bin_dir / "notify-send"
+    fake.write_text(f"#!{sys.executable}\nimport json, sys\nopen({str(out)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))           # only the fake: never the real one
+    monkeypatch.setattr(notify, "_tab_at", None)
+    text = "-x @carol <b>&</b>: sessionid=abcdef0123456789 \x1b[31m" + "z" * 400
+    assert notify.desktop(text) is None and not out.exists()       # off by default
+    assert client.get("/api/config", headers=H).get_json()["desktop_notifications"] is False
+    r = client.post("/api/config", headers=H, json={"desktop_notifications": "yes"}).get_json()
+    assert r["ok"] is False
+    assert client.post("/api/config", headers=H, json={"desktop_notifications": True}).get_json()["ok"]
+    t = notify.desktop(text)
+    t.join(10)
+    argv = json.loads(out.read_text())
+    assert argv[:3] == ["--app-name=FeedVault", "--", "FeedVault"] and len(argv) == 4
+    body = argv[3]
+    assert "<b>" not in body and "&lt;b&gt;&amp;&lt;/b&gt;" in body and "abcdef0123456789" not in body
+    assert "\x1b" not in body and len(body) < notify.TEXT_MAX + 40
+    # A tab that shows them itself: notify-send waits.
+    client.get("/api/jobs?desktop=1", headers=H)
+    assert notify.desktop("2 new posts from @x") is None
+    monkeypatch.setattr(notify, "_tab_at", None)
+    # No notify-send installed: nothing, quietly.
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert notify.desktop("2 new posts from @x") is None
+    assert len(out.read_text().splitlines()) == 1

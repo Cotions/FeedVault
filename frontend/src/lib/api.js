@@ -246,7 +246,8 @@ export function dismissSuggestion(id) { return post("/api/people/suggestions/dis
 /* ── Jobs (see docs/API.md "Jobs") ───────────────────────── */
 
 // { running, queued, jobs: [job] }, newest first
-export function getJobs() { return get("/api/jobs"); }
+// desktop: this tab shows desktop notifications itself (notify-send waits).
+export function getJobs(desktop = false) { return get(`/api/jobs${desktop ? "?desktop=1" : ""}`); }
 // [{ kind, label, params }]
 export function getJobKinds() { return get("/api/jobs/kinds"); }
 export function getJob(id) { return get(`/api/jobs/${id}`); }

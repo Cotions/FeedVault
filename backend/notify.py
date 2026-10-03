@@ -11,13 +11,28 @@ The text is built from handles and tool output: it is scrubbed
 (health.scrub) and the dashboard shows it as text, never HTML. A "new"
 entry opens the posts its sync indexed (db.NOTIFIED), whatever was marked
 seen since.
+
+Desktop notifications (off by default, ``desktop_notifications`` in the
+config): an open dashboard tab shows each new entry with the browser's
+Notification API, and says so on its jobs poll (``tab_shows``). When none
+has for TAB_QUIET seconds, a new entry goes to ``notify-send`` instead,
+when it is installed (else nothing, quietly): a fixed argument list, no
+shell, the text one argument, scrubbed, markup escaped and length-capped,
+in a thread that gives it SEND_TIMEOUT seconds.
 """
+import os
+import shutil
+import subprocess
+import threading
 import time
 
+import config
 import health
 
 KEPT = 200
 TEXT_MAX = 200
+TAB_QUIET = 150                                # seconds without a tab showing them before notify-send does
+SEND_TIMEOUT = 5
 FAILED = {"rate_limited": "rate limited", "private": "private profile", **health.BLOCKING}
 _COLUMNS = ("id", "at", "kind", "text", "job_id", "source_id", "person_id", "platform", "author_id", "state",
             "count", "scheduled", "read")
@@ -79,3 +94,49 @@ def read(conn, upto=None):
     with conn:
         return conn.execute("UPDATE notifications SET read = 1 WHERE read = 0 AND id <= ?",
                             (2**63 - 1 if upto is None else upto,)).rowcount
+
+
+# ---------------------------------------------------------------------------
+# Desktop notifications
+# ---------------------------------------------------------------------------
+
+_tab_at = None                                 # time.monotonic() a tab last said it shows them
+
+
+def tab_shows():
+    """A dashboard tab shows desktop notifications itself (its jobs poll)."""
+    global _tab_at
+    _tab_at = time.monotonic()
+
+
+def enabled(cfg=None):
+    return (cfg or config.load()).get("desktop_notifications") is True
+
+
+def _escape(text):
+    # notify-send bodies may be read as markup by the notification server.
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def desktop(text):
+    """Show an entry's text with notify-send when the setting is on, no tab
+    has shown them lately and notify-send is installed. Returns the thread
+    started, or None."""
+    if not enabled() or (_tab_at is not None and time.monotonic() - _tab_at < TAB_QUIET):
+        return None
+    exe = shutil.which("notify-send")
+    body = health.scrub(text, TEXT_MAX)
+    if not exe or not body:
+        return None
+    argv = [exe, "--app-name=FeedVault", "--", "FeedVault", _escape(body)]
+    t = threading.Thread(target=_send, args=(argv,), name="notify-send", daemon=True)
+    t.start()
+    return t
+
+
+def _send(argv):
+    try:
+        subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=SEND_TIMEOUT, check=False, env=os.environ.copy())
+    except (OSError, subprocess.SubprocessError) as e:      # only a desktop popup is missed
+        print(f"[notify] notify-send: {type(e).__name__}")
