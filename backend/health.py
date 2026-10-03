@@ -297,8 +297,20 @@ _PRIVATE_PATH = re.compile(r"(?i)cookie|session|\.mozilla|firefox|librewolf|chro
 
 
 def _path(m):
+    """A path dropped whole when private, else kept with only a segment
+    long and opaque enough to be a token replaced: a media folder's path
+    runs past 40 characters with no dot, and a log names one per file."""
     p = m.group(0)
-    return "<private path>" if _PRIVATE_PATH.search(p) else p
+    return "<private path>" if _PRIVATE_PATH.search(p) else "/".join(_OPAQUE.sub("…", s) for s in p.split("/"))
+
+
+def _opaque(t):
+    """_OPAQUE replaced outside paths, _path() in them."""
+    out, at = [], 0
+    for m in _PATH.finditer(t):
+        out += [_OPAQUE.sub("…", t[at:m.start()]), _path(m)]
+        at = m.end()
+    return "".join(out) + _OPAQUE.sub("…", t[at:])
 
 
 def scrub(text, limit=LINE_MAX):
@@ -314,8 +326,7 @@ def scrub(text, limit=LINE_MAX):
     t = _COOKIE_HEADER.sub(lambda m: f"{m.group(1)}: …", t)
     t = _BEARER.sub(lambda m: f"{m.group(1)} …", t)
     t = _SECRET_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}…", t)
-    t = _PATH.sub(_path, t)
-    t = _OPAQUE.sub("…", t)
+    t = _opaque(t)
     t = " ".join(t.split())
     if len(t) > limit:
         t = t[:limit - 1].rstrip() + "…"

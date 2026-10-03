@@ -14,7 +14,10 @@ reaches everything it started. When a job that downloads into a media root
 exits cleanly, that folder is indexed and the job reports its new posts.
 
 Jobs are kept in the ``jobs`` table: the queue, and the last HISTORY_KEPT
-ended jobs with the tail of their output. Jobs a stopped FeedVault left
+ended jobs with the tail of their output. Output is untrusted text: each
+line is scrubbed (health.scrub: no cookie, token or session path) as it is
+read, before it is kept, shown or stored; only a kind's hooks see it as the
+tool printed it (they parse it), and what they return is theirs to scrub. Jobs a stopped FeedVault left
 queued or running are marked interrupted on the next start (recover), and a
 process a killed FeedVault left running is stopped, when its pid, start time
 and executable all still match.
@@ -30,6 +33,7 @@ import time
 
 import config
 import db
+import health
 import scanner
 
 TOOLS = ("instaloader", "gallery-dl", "yt-dlp", "ffmpeg")
@@ -87,7 +91,7 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
                thread once its process has exited, cancelled or not, before
                the rescan; an exception is noted in its log and changes
                nothing else
-    outcome:   optional, (params, exit code, output lines, index result or
+    outcome:   optional, (params, exit code, output lines as printed, index result or
                None, note) -> (state, result, message) for a job whose process
                exited and was not cancelled. With it, the rescan folder is
                indexed whatever the exit code (what a download got before it
@@ -148,7 +152,7 @@ def version_line(texts):
 
 def _first_line(lines):
     """tool-version: the version is the first line."""
-    version = version_line(t for _, t in lines)
+    version = health.scrub(version_line(t for _, t in lines), LINE_MAX) or ""
     return {"version": version}, version or "no version printed"
 
 
@@ -172,7 +176,8 @@ class Job:
         self.state = "queued"
         self.created_at, self.started_at, self.ended_at = now, None, None
         self.exit_code, self.result, self.message = None, None, None
-        self.lines = collections.deque(maxlen=LOG_LINES)    # (n, text)
+        self.lines = collections.deque(maxlen=LOG_LINES)    # (n, text scrubbed): kept, shown, stored
+        self.raw = collections.deque(maxlen=LOG_LINES)      # (n, text as printed): for the kind's hooks only
         self.n = 0
         self.proc = None
         self.cancelled = False
@@ -369,7 +374,7 @@ def _run(job):
             if job.rescan:
                 _note(job, f"[feedvault] indexing {job.rescan}")
                 index = _index(job)
-            state, result, message = kind.outcome(job.params, code, list(job.lines), index,
+            state, result, message = kind.outcome(job.params, code, list(job.raw), index,
                                                   lambda text: _note(job, f"[feedvault] {text}"))
             _finish(job, state, result=result, message=message)
         elif code != 0:
@@ -380,7 +385,7 @@ def _run(job):
             n = result["added"]
             _finish(job, "done", result=result, message=f"{n} new post{'' if n == 1 else 's'}")
         elif _kinds[job.kind].summarize:
-            result, message = _kinds[job.kind].summarize(list(job.lines))
+            result, message = _kinds[job.kind].summarize(list(job.raw))
             _finish(job, "done", result=result, message=message)
         else:
             _finish(job, "done", message="finished")
@@ -472,9 +477,13 @@ def _decode(raw):
 
 
 def _note(job, text):
+    """One line of output (or a [feedvault] note): kept scrubbed, one line
+    for one line (an empty one stays, empty), and as printed for the hooks."""
+    shown = health.scrub(text, LINE_MAX) or ""
     with _lock:
         job.n += 1
-        job.lines.append((job.n, text))
+        job.lines.append((job.n, shown))
+        job.raw.append((job.n, text))
 
 
 def _last_line(job):
@@ -509,6 +518,7 @@ def _finish(job, state, result=None, message=None):
     with _lock:
         _active.pop(job.id, None)
         job.lines.clear()
+        job.raw.clear()
     _prune()
     _pump()
 

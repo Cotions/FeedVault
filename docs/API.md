@@ -1764,6 +1764,17 @@ without a `\n` for minutes: such a redraw is kept at most once a second, so
 the live log moves without filling up; a line ended by `\n` is always kept.
 Lines FeedVault adds itself start with `[feedvault]`.
 
+Every line is **scrubbed** as it is read, before it is kept, shown or
+stored (live, in the kept tail, and in the job's `message`), as
+`health.line` is (see [Sources](#sources)): cookie, session id, token and
+password values, a `Cookie:` header's value, `Authorization` values and
+opaque strings of 40 characters or more become `…`, a path under a browser
+profile or a session or cookie folder `<private path>`, escape codes and
+control characters go and runs of spaces become one. One line stays one
+line (an empty one stays, empty), so the numbering is the tool's. Only
+FeedVault's own parsing of a run's outcome sees the output as printed; it
+is never stored.
+
 - While the job is queued or running: the last 5000 lines. Poll with
   `after` set to the previous `next`. At most 1000 lines per answer; `more`
   says there are others after them.

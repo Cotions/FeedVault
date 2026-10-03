@@ -37,6 +37,10 @@ def test_scrub():
     # What is not a secret stays.
     assert s("Profile carol.cooks does not exist.") == "Profile carol.cooks does not exist."
     assert s("[feedvault] indexing /mnt/archive/carol") == "[feedvault] indexing /mnt/archive/carol"
+    # A long path is a path (a log names one per file): only a segment that could be a token goes.
+    long = "/mnt/archive/Instagram/carol_cooks_and_friends/carol_cooks-2024-06-11-C0FAKE00001.jpg"
+    assert s(f"{long} exists") == f"{long} exists"
+    assert s(f"/mnt/x/{'a1' * 30}/y.jpg") == "/mnt/x/…/y.jpg"
     assert s(None) is None and s("   ") is None and s(5) is None
 
 
@@ -76,6 +80,7 @@ def test_error_lines_are_scrubbed_before_they_are_stored(env, client, fake):
         json.dumps(get(client, "/api/sources")),
         json.dumps({k: job[k] for k in ("result", "message")}),
         json.dumps(get(client, f"/api/jobs/{job['id']}")["result"]),
+        json.dumps(get(client, f"/api/jobs/{job['id']}/log")),         # its output, kept scrubbed
         db.connect().execute("SELECT last_result FROM sources").fetchone()[0],
         open(userdata.path(config.load()["data_directory"], "sources"), encoding="utf-8").read(),
     ]
