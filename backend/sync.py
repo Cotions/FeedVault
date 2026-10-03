@@ -48,6 +48,8 @@ gallery-dl and yt-dlp (archives.py):
   indexed for its account.
 - the user's own config files are skipped (``--config-ignore``,
   ``--ignore-config``) when the tool's ``ignore_config`` setting is on.
+  Without it, a sync whose new files no parser can read says the config
+  is the likely cause (_unread).
 - metadata on (``--write-metadata``; ``--write-info-json --write-thumbnail``),
   into the source's folder; YouTube videos longer than ``youtube_max_seconds``
   are not downloaded (ChannelVault's).
@@ -952,10 +954,11 @@ def _ended_as(params, code, lines, index, note, tool):
     rename = health.renamed(tool, lines)
     if rename:
         result["rename"] = rename
+    unread = _unread(tool, index)
     if code == 0 or (tool == "yt-dlp" and code == BREAK_ON_EXISTING) or health.only_renamed(tool, lines):
         if rename:
             new += f"; the profile is now called {rename[1]} (accept the new name on the source)"
-        return "done", result, new
+        return "done", result, new + unread
     if tool != "instaloader":
         # One video or file that could not be had is not the profile failing.
         items = _item_errors(tool, lines)
@@ -964,7 +967,7 @@ def _ended_as(params, code, lines, index, note, tool):
                               else YT_DLP_FAILURES)[0] in ("private", "not_found", "generic"):
             result["line"] = health.scrub(items[-1])
             skipped = f"{len(items)} item{'' if len(items) == 1 else 's'}"
-            return "done", result, f"{new}; {skipped} could not be downloaded: {health.scrub(items[-1], 200)}"
+            return "done", result, f"{new}; {skipped} could not be downloaded: {health.scrub(items[-1], 200)}{unread}"
     if tool == "instaloader":
         result["error"], result["line"] = classify(lines)
         message = MESSAGES[result["error"]]
@@ -978,11 +981,26 @@ def _ended_as(params, code, lines, index, note, tool):
         message = f"{message}: {result['line'][:200]}"
     if added:
         message += f" ({added} new post{'' if added == 1 else 's'} before it stopped)"
+    message += unread
     old = _outdated(tool)
     if old:
         result["outdated"] = True
         message += f". {tool} {old[0]} is out of date ({old[1]} is out): update it in Settings → Downloaders"
     return "failed", result, message
+
+
+def _unread(tool, index):
+    """What to add to a gallery-dl or yt-dlp sync's message when files it
+    wrote could not be read (no metadata beside them, another layout): the
+    user's own config is the likely cause while FeedVault does not skip it."""
+    n = (index or {}).get("unread", 0) if tool != "instaloader" else 0
+    if not n:
+        return ""
+    files = f"{n} file{'' if n == 1 else 's'} it wrote could not be read"
+    if tool_settings(tool)["ignore_config"]:
+        return f"; {files} (no metadata FeedVault knows beside {'it' if n == 1 else 'them'})"
+    return (f"; {files}: your own {tool} config is the likely cause (it can turn metadata off or change "
+            f"the layout); try \"Ignore my {tool} config\" in Settings → Downloaders")
 
 
 def _outdated(tool):

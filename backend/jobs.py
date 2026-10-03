@@ -91,7 +91,8 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
                thread once its process has exited, cancelled or not, before
                the rescan; an exception is noted in its log and changes
                nothing else
-    outcome:   optional, (params, exit code, output lines as printed, index result or
+    outcome:   optional, (params, exit code, output lines as printed, index result ({added, updated,
+               unread: media files changed since the start that no parser read}) or
                None, note) -> (state, result, message) for a job whose process
                exited and was not cancelled. With it, the rescan folder is
                indexed whatever the exit code (what a download got before it
@@ -175,6 +176,7 @@ class Job:
         self.rescan, self.full_scan = rescan, bool(spec.get("full_scan"))
         self.state = "queued"
         self.created_at, self.started_at, self.ended_at = now, None, None
+        self.began = None                          # time.time() right before the process started
         self.exit_code, self.result, self.message = None, None, None
         self.lines = collections.deque(maxlen=LOG_LINES)    # (n, text scrubbed): kept, shown, stored
         # (n, text as printed): for the kind's hooks only, kept when it has one
@@ -339,6 +341,7 @@ def _run(job):
                 _finish(job, "failed", message=str(e) or type(e).__name__)
                 return
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}      # the downloaders are Python: live output
+        job.began = time.time()
         try:
             proc = subprocess.Popen([exe, *job.args], cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -384,6 +387,7 @@ def _run(job):
         elif job.rescan:
             _note(job, f"[feedvault] indexing {job.rescan}")
             result = _index(job)
+            result.pop("unread")                   # for an outcome hook to read
             n = result["added"]
             _finish(job, "done", result=result, message=f"{n} new post{'' if n == 1 else 's'}")
         elif _kinds[job.kind].summarize:
@@ -429,8 +433,8 @@ def _index(job):
     if job.full_scan:
         report = scanner.run(roots)            # every root: a scan of one would mark the others missing
     else:
-        report = scanner.index_dirs(roots, list(scanner.folders(job.rescan)), new=True)
-    return {"added": report["added"], "updated": report["updated"]}
+        report = scanner.index_dirs(roots, list(scanner.folders(job.rescan)), new=True, since=job.began)
+    return {"added": report["added"], "updated": report["updated"], "unread": report.get("unread", 0)}
 
 
 PROGRESS_EVERY = 1.0                           # seconds between two kept progress redraws

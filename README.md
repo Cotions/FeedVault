@@ -97,7 +97,9 @@ single public tweets and TikTok usually do not.
 
 FeedVault's own syncs read your gallery-dl and yt-dlp config files too. If
 something there changes where or how files are saved, turn on "Ignore my
-<tool> config" in that tool's card in Settings → Sync.
+<tool> config" in that tool's card in Settings → Sync. A sync whose new
+files FeedVault cannot read (metadata turned off, another layout) says so
+in its message, and points at that option.
 
 ## Downloading with yt-dlp
 

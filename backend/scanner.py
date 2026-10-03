@@ -226,15 +226,17 @@ def _mark_missing(conn, seen_meta):
     return newly
 
 
-def index_dirs(roots, dirs, new=False):
+def index_dirs(roots, dirs, new=False, since=None):
     """Re-index just these folders, right away: used after a restore from the
     trash, where a full rescan would be far too slow for an undo key, and
-    after a download (``new``: the posts it adds are new)."""
+    after a download (``new``: the posts it adds are new). With ``since`` (a
+    download's start), the report also counts the media files changed since
+    that no parser could read (``unread``)."""
     with db.write_lock:
         conn = db.connect()
         now = int(time.time())
         first_seen = now if new else 0
-        report = {"added": 0, "updated": 0}
+        report = {"added": 0, "updated": 0, "unread": 0}
         unmatched, copies, indexed, profiles, account_files, read = [], [], [], [], [], set()
         for d in sorted(set(dirs)):
             real = os.path.realpath(d)
@@ -255,6 +257,9 @@ def index_dirs(roots, dirs, new=False):
             conn.execute(f"DELETE FROM unmatched WHERE path IN ({', '.join('?' for _ in result.claimed) or 'NULL'})",
                          [os.path.join(d, n) for n in result.claimed])
             unmatched.extend((path, *_size_mtime(path), reason) for path, reason in result.skipped)
+            if since is not None:
+                report["unread"] += sum(1 for n in names if n not in result.claimed and parsers.is_media(n)
+                                        and (_size_mtime(os.path.join(d, n))[1] or 0) >= since)
         # A copy that is back keeps its "duplicate of" line; one that became
         # the post (the first copy was trashed) is no longer a copy.
         conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",

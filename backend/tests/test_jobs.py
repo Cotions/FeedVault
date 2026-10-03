@@ -504,10 +504,10 @@ def test_cancel_while_indexing_is_refused(runner, monkeypatch, client):
     indexing, release = jobs.threading.Event(), jobs.threading.Event()
     real = jobs.scanner.index_dirs
 
-    def slow(roots, dirs, new=False):
+    def slow(roots, dirs, new=False, since=None):
         indexing.set()
         release.wait(10)
-        return real(roots, dirs, new)
+        return real(roots, dirs, new, since)
     monkeypatch.setattr(jobs.scanner, "index_dirs", slow)
     job_id = jobs.submit("dl", {})["id"]
     assert indexing.wait(10)

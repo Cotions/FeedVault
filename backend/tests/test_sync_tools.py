@@ -73,9 +73,10 @@ class Fake:
         self.accounts = {}
         self.data.write_text(json.dumps({"accounts": {}, "fail": None}))
 
-    def put(self, url, account, fail=None, config_cookies=False):
+    def put(self, url, account, fail=None, config_cookies=False, config_no_metadata=False):
         self.accounts[url] = account
-        self.data.write_text(json.dumps({"accounts": self.accounts, "fail": fail, "config_cookies": config_cookies}))
+        self.data.write_text(json.dumps({"accounts": self.accounts, "fail": fail, "config_cookies": config_cookies,
+                                         "config_no_metadata": config_no_metadata}))
 
     def runs(self, tool=None):
         runs = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -809,6 +810,29 @@ def test_ignore_my_config(env, fake, client):
     set_config(**{"gallery-dl": {"ignore_config": True, "pause": 0}})
     job = run_sync(client, x["id"])
     assert job["state"] == "done" and job["argv"][1] == "--config-ignore"
+
+
+def test_files_without_metadata_point_at_the_users_config(env, fake, client):
+    """#31: a sync that wrote files no parser reads says the user's config is the likely cause."""
+    fake.put(X, x_account((1, 2)))
+    fake.put(TT, tt_account(1), config_no_metadata=True)
+    x, t = add(client, X), add(client, TT)
+    job = run_sync(client, x["id"])
+    assert job["state"] == "done" and job["message"].startswith("0 new posts; 2 files it wrote could not be read: "
+                                                                "your own gallery-dl config is the likely cause")
+    assert '"Ignore my gallery-dl config"' in job["message"]
+    job = run_sync(client, t["id"])
+    assert job["state"] == "done" and "your own yt-dlp config is the likely cause" in job["message"]
+    # With the config skipped the files get their metadata; nothing is blamed.
+    for tool in ("gallery-dl", "yt-dlp"):
+        post(client, "/api/config", {tool: {"ignore_config": True}})
+    fake.put(X, x_account((1, 2), (2, 1)), config_no_metadata=True)
+    job = run_sync(client, x["id"])
+    assert (job["state"], job["message"]) == ("done", "1 new post")
+    # Files already there before the sync are not counted again.
+    assert sync._unread("gallery-dl", {"unread": 0}) == "" and sync._unread("instaloader", {"unread": 3}) == ""
+    assert sync._unread("yt-dlp", {"unread": 1}) == "; 1 file it wrote could not be read (no metadata FeedVault " \
+                                                    "knows beside it)"
 
 
 def test_pause_between_two_syncs_of_one_tool(env, fake, client):

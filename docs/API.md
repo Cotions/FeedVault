@@ -1502,7 +1502,12 @@ never holds the other's syncs.
 tool's syncs and its Test skip the user's own config files
 (`--config-ignore` for gallery-dl, `--ignore-config` for yt-dlp), so
 options set there (another output folder, a different archive, cookies)
-do not change what FeedVault runs.
+do not change what FeedVault runs. With `false`, a sync that wrote media
+files no parser could read (changed since the tool started, in the
+source's folder, with no metadata FeedVault knows beside them) says the
+user's config is the likely cause at the end of its `message` (`…; 2 files
+it wrote could not be read: your own gallery-dl config is the likely cause
+…`); with `true`, only that they could not be read.
 
 `youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
 
