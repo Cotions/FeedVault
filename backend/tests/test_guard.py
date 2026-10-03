@@ -8,13 +8,14 @@ import glob
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 
 import pytest
 
 import jobs
-from conftest import ToolGuardError
+from toolguard import ToolGuardError
 from test_sync import add_source, fake, sync_now  # noqa: F401  (fake: the fixture)
 
 
@@ -63,48 +64,76 @@ def test_a_tool_path_set_in_settings_outside_the_fakes_is_refused(env, elsewhere
     assert tool_guard.runs == [] and not (elsewhere / "ran").exists()
 
 
+def refused(guard, run):
+    """What the guard refused while ``run`` ran: in this process (it raised)
+    or in a child (from the guard's log)."""
+    try:
+        run()
+    except ToolGuardError:
+        pass
+    return guard.taken()
+
+
 def test_every_way_to_start_a_program_is_checked(env, elsewhere, tool_guard, monkeypatch):
-    ran = elsewhere / "ran"
-    with pytest.raises(ToolGuardError):
-        subprocess.run([str(elsewhere / "true")])
+    true, ran = str(elsewhere / "true"), elsewhere / "ran"
+    py = sys.executable
+    site, package = str(elsewhere / "site"), elsewhere / "site" / "yt_dlp"     # a downloader's package
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(f"open({str(ran)!r}, 'a').write('yt_dlp')\n")
+    for run, says in [
+        (lambda: subprocess.run([true]), f"run {true}"),
+        (lambda: subprocess.run(["./true"], cwd=elsewhere), "run "),
+        (lambda: subprocess.run(["true"], cwd=elsewhere, env={**os.environ, "PATH": ""}), "run "),
+        (lambda: os.posix_spawn(true, ["true"], os.environ), f"run {true}"),       # os.exec*: the same check
+        (lambda: os.spawnv(os.P_WAIT, true, ["true"]), "[child "),                 # refused in the forked child
+        (lambda: os.system("true"), "os.system('true')"),
+        (lambda: subprocess.run("true", shell=True), "run /bin/sh"),               # sh only as a shebang
+        # A Python the test starts has the same guard: its program, its import, its connection.
+        (lambda: subprocess.run([py, "-c", f"import subprocess; subprocess.run([{true!r}])"]), f"run {true}"),
+        (lambda: subprocess.run([py, "-c", f"import sys; sys.path.insert(0, {site!r}); import yt_dlp"]),
+         "import yt_dlp"),
+        (lambda: subprocess.run([py, "-c", "import socket; socket.create_connection(('192.0.2.1', 80), 1)"]),
+         "look up 192.0.2.1"),
+        (lambda: socket.getaddrinfo("pypi.org", 443), "look up pypi.org"),
+        (lambda: socket.socket().connect(("192.0.2.1", 9)), "connect to 192.0.2.1"),
+    ]:
+        out = refused(tool_guard, run)
+        assert len(out) == 1 and says in out[0], (says, out)
     monkeypatch.setenv("PATH", str(elsewhere))             # by name, through PATH
-    with pytest.raises(ToolGuardError):
-        subprocess.run(["true"])
-    with pytest.raises(ToolGuardError):
-        shutil.which("true")
-    with pytest.raises(ToolGuardError):              # os.exec* is checked the same way
-        os.posix_spawn(str(elsewhere / "true"), ["true"], os.environ)
-    with pytest.raises(ToolGuardError):
-        os.system("true")
+    assert refused(tool_guard, lambda: subprocess.run(["true"])) == [f"run {true}"]
+    assert refused(tool_guard, lambda: shutil.which("true")) == [f"shutil.which('true') found {true}"]
     # A symlink or a script in the tmp dir does not make the program it reaches allowed.
     link = env["tmp"] / "true"
-    link.symlink_to(elsewhere / "true")
+    link.symlink_to(true)
     script = env["tmp"] / "script"
-    script.write_text(f"#!{elsewhere / 'true'}\n")
+    script.write_text(f"#!{true}\n")
     script.chmod(0o755)
     with_env = env["tmp"] / "with-env"
-    with_env.write_text("#!/usr/bin/env true\n")
+    with_env.write_text("#!/usr/bin/env python3\n")       # env is no interpreter of the allowed ones
     with_env.chmod(0o755)
-    for path in (link, script, with_env):
-        with pytest.raises(ToolGuardError):
-            subprocess.run([str(path)])
-    assert len(tool_guard.taken()) == 8 and not ran.exists()
-    with pytest.raises(ToolGuardError, match="import yt_dlp"):
-        import yt_dlp  # noqa: F401
-    assert tool_guard.taken() == ["import yt_dlp"]
+    assert refused(tool_guard, lambda: subprocess.run([str(link)])) == [f"run {link} ({true})"]
+    assert refused(tool_guard, lambda: subprocess.run([str(script)])) == [f"run as an interpreter {true}"]
+    assert refused(tool_guard, lambda: subprocess.run([str(with_env)]))[0].startswith("run as an interpreter")
+    monkeypatch.syspath_prepend(site)
+    assert refused(tool_guard, lambda: __import__("yt_dlp")) == [f"import yt_dlp ({package / '__init__.py'})"]
+    assert not ran.exists()
+    # This machine is fine.
+    server = socket.create_server(("127.0.0.1", 0))
+    with server, socket.create_connection(server.getsockname(), 1):
+        pass
     # What a test writes in its tmp dir runs; another program only once it is allowed, visibly.
     ok = env["tmp"] / "ok"
     ok.write_text(f"#!{sys.executable}\nprint('ok')\n")
     ok.chmod(0o755)
     assert subprocess.run([str(ok)], capture_output=True, text=True).stdout == "ok\n"
-    tool_guard.allow(elsewhere / "true", "this test only: shows what allow() does")
-    assert subprocess.run([str(elsewhere / "true")]).returncode == 0
+    tool_guard.allow(true, "this test only: shows what allow() does")
+    assert subprocess.run([true]).returncode == 0
     assert ran.read_text() == "true\n" and tool_guard.violations == []
 
 
 def test_home_and_xdg_folders_are_the_tests(env, tool_guard):
     import downloaders
-    tmp_dirs = [os.path.realpath(r) for r in tool_guard.roots[:2]]
+    tmp_dirs = [os.path.realpath(env["tmp"]), os.path.realpath(tool_guard.dir)]
 
     def under_tmp(path):
         return any(os.path.realpath(path).startswith(r + os.sep) for r in tmp_dirs)
@@ -121,5 +150,5 @@ def test_home_and_xdg_folders_are_the_tests(env, tool_guard):
     tool.chmod(0o755)
     assert downloaders.run_version(str(tool), "yt-dlp") == ("2026.01.01", None)
     assert all(under_tmp(p) for p in json.loads(seen.read_text()))
-    assert os.environ["PATH"] == os.path.join(tool_guard.roots[1], "bin") and not os.listdir(os.environ["PATH"])
+    assert os.environ["PATH"] == str(tool_guard.dir / "bin") and not os.listdir(os.environ["PATH"])
     assert jobs.tool_path("instaloader") is None

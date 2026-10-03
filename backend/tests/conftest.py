@@ -9,6 +9,8 @@ BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BACKEND)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import toolguard  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # No test reaches a real program (#56)
 # ---------------------------------------------------------------------------
@@ -35,106 +37,27 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # So for every test (tool_guard, autouse): PATH is an empty folder of its
 # own (the fixtures that install a fake put theirs in front; no fake looks
 # anything up on PATH: their shebangs are absolute), HOME, the XDG folders
-# and the temp dir are in its tmp dir, and anything that finds or starts a
-# program outside its tmp dir and the fakes here raises ToolGuardError and
-# fails the test: jobs.tool_path (a path set in Settings too), shutil.which,
-# and, through an audit hook, every Popen, exec, spawn and os.system (a
-# script's shebang is checked as well). Importing a downloader's own Python
-# package raises the same. A test that needs another program says so with
-# tool_guard.allow(path, why).
+# and the temp dir are beside its tmp dir, and toolguard.Guard fails the test
+# on anything that finds or starts a program outside those and the fakes
+# here: jobs.tool_path (a path set in Settings too), shutil.which, and,
+# through an audit hook, every Popen, exec, spawn and os.system, a script's
+# shebang included; on an import of a downloader's or pip's package from
+# anywhere else; on a connection to anything but this machine. Every Python
+# a test starts gets the same guard (guard_site/sitecustomize.py on
+# PYTHONPATH), so a fake or a script cannot go around it either. A test that
+# needs another program says so with tool_guard.allow(path, why).
 TESTS = os.path.dirname(os.path.abspath(__file__))
-# Run by the tests besides what is in their tmp dir, by real path:
-ALLOWED = {
-    os.path.realpath(sys.executable): "this Python: the shebang of every fake (#!sys.executable)",
-    os.path.realpath("/bin/sh"): "the shebang of test_sync_tools' Python wrapper and test_jobs' empty tool",
-}
-EXEC_EVENTS = {"subprocess.Popen", "os.exec", "os.posix_spawn", "os.spawn", "os.system"}
-TOOL_MODULES = {"instaloader", "gallery_dl", "yt_dlp"}
-_which = shutil.which
+# Started by the tests besides what is in their tmp dir, by real path. Each
+# Python a test starts runs under the guard.
+ALLOWED = {sys.executable: "this Python: every fake's shebang (#!sys.executable), and test_jobs' job kinds"}
+# Only as the shebang of a script a test wrote: they run whatever they are given.
+INTERPRETERS = {"/bin/sh": "test_sync_tools' Python wrapper (exec this Python with a PYTHONPATH)"}
 
-
-class ToolGuardError(RuntimeError):
-    """A test found or started a program outside its tmp dir and the fakes."""
-
-
-class Guard:
-    def __init__(self, roots):
-        self.roots = [os.path.realpath(r) for r in roots]
-        self.allowed = dict(ALLOWED)
-        self.runs = []                         # every program started, allowed or not
-        self.violations = []
-
-    def allow(self, path, why):
-        """Let this test run ``path`` too (``why`` is for the reader)."""
-        self.allowed[os.path.realpath(path)] = why
-
-    def allows(self, path):
-        """In the test's tmp dir or the fakes', or allowed, by real path."""
-        real = os.path.realpath(path)
-        return real in self.allowed or any(real == r or real.startswith(r + os.sep) for r in self.roots)
-
-    def refuse(self, what):
-        self.violations.append(what)
-        raise ToolGuardError(f"test guard (#56): {what}")
-
-    def taken(self):
-        """The refusals so far, which then no longer fail the test."""
-        out, self.violations = self.violations, []
-        return out
-
-    def check_run(self, exe, env, depth=0):
-        name = os.fsdecode(exe)
-        path = name if os.sep in name else _which(name, path=os.pathsep.join(os.get_exec_path(env)))
-        if path is None or not os.path.exists(path):
-            return                             # nothing there: it fails as missing, nothing runs
-        real = os.path.realpath(path)
-        if depth == 0:
-            self.runs.append(real)
-        if not self.allows(real):
-            self.refuse(f"run {path}" + (f" ({real})" if real != path else ""))
-        try:
-            with open(real, "rb") as f:
-                first = f.readline(256)
-        except OSError:
-            return
-        words = first[2:].decode("utf-8", "replace").split() if first.startswith(b"#!") else []
-        if words and depth < 3:                # the kernel runs the interpreter: it must pass too
-            self.check_run(words[0], env, depth + 1)
-            rest = [w for w in words[1:] if not w.startswith("-")]
-            if os.path.basename(words[0]) == "env" and rest:
-                self.check_run(rest[0], env, depth + 1)
-
-
-_guard = Guard([TESTS])                        # between tests: nothing but the fakes
-
-
-def _audit(event, args):
-    if event not in EXEC_EVENTS:
-        return
-    if event == "os.system":
-        _guard.refuse(f"os.system({args[0]!r})")
-    elif event == "os.spawn":                  # (mode, path, args, env)
-        _guard.check_run(args[1], args[3])
-    elif event == "subprocess.Popen":          # (executable, args, cwd, env)
-        _guard.check_run(args[0], args[3])
-    else:                                      # (path, args, env)
-        _guard.check_run(args[0], args[2])
-
-
-class _NoToolModules:
-    def find_spec(self, name, path=None, target=None):
-        if name.partition(".")[0] in TOOL_MODULES:
-            _guard.refuse(f"import {name}")
-        return None
-
-
-sys.addaudithook(_audit)                       # cannot be removed: _guard says what it allows
-sys.meta_path.insert(0, _NoToolModules())
+toolguard.install(toolguard.Guard([TESTS], ALLOWED, INTERPRETERS))    # between tests: nothing but the fakes
 
 
 @pytest.fixture(autouse=True)
 def tool_guard(tmp_path, tmp_path_factory, monkeypatch):
-    global _guard
     own = tmp_path_factory.mktemp("guard")    # beside tmp_path: tests list what is in theirs
     home = own / "home"
     for sub in (".config", ".local/share", ".local/state", ".cache"):
@@ -149,14 +72,19 @@ def tool_guard(tmp_path, tmp_path_factory, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(home / ".cache"))
     monkeypatch.setenv("TMPDIR", str(own / "tmp"))
     monkeypatch.setattr(tempfile, "tempdir", str(own / "tmp"))
+    import config
+    monkeypatch.setattr(config, "DEFAULT_DATA", str(home / ".local/share/feedvault"))   # read at import
     # Nothing that points a tool at the user's installs, or a popup at the desktop.
-    for var in ("PIPX_HOME", "PIPX_BIN_DIR", "VIRTUAL_ENV", "PYTHONPATH", "XDG_RUNTIME_DIR",
+    for var in ("PIPX_HOME", "PIPX_BIN_DIR", "VIRTUAL_ENV", "XDG_RUNTIME_DIR",
                 "DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "WAYLAND_DISPLAY"):
         monkeypatch.delenv(var, raising=False)
-    guard = Guard([tmp_path, own, TESTS])
+    monkeypatch.setenv("PYTHONPATH", os.path.join(TESTS, "guard_site"))
+    guard = toolguard.Guard([tmp_path, own, TESTS], ALLOWED, INTERPRETERS, log=str(own / "refused"))
+    guard.dir = own
+    monkeypatch.setenv(toolguard.ENV, guard.settings())
 
     def which(cmd, mode=os.F_OK | os.X_OK, path=None):
-        found = _which(cmd, mode, path)
+        found = toolguard._which(cmd, mode, path)
         if found is not None and not guard.allows(found):
             guard.refuse(f"shutil.which({cmd!r}) found {found}")
         return found
@@ -172,11 +100,21 @@ def tool_guard(tmp_path, tmp_path_factory, monkeypatch):
 
     monkeypatch.setattr(shutil, "which", which)
     monkeypatch.setattr(jobs, "tool_path", guarded_tool_path)
-    _guard = guard
+    between = toolguard.current()
+    toolguard.use(guard)
     yield guard
-    _guard = Guard([TESTS])
+    toolguard.use(between)
     if guard.violations:
-        pytest.fail("reached a program outside the fakes:\n" + "\n".join(guard.violations), pytrace=False)
+        pytest.fail("reached a program or the network outside the fakes:\n" + "\n".join(guard.violations),
+                    pytrace=False)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # Refused outside a test (a thread a test left running, say): the run fails too.
+    stray = toolguard.current().stray
+    if stray:
+        print("\ntest guard (#56), outside any test:\n" + "\n".join(stray))
+        session.exitstatus = 1
 
 
 @pytest.fixture
