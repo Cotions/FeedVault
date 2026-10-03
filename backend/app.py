@@ -30,6 +30,7 @@ import people
 import save
 import scanner
 import scheduler
+import scripts
 import sources
 import sync
 import thumbs
@@ -1335,6 +1336,23 @@ def cancel_job(job_id):
         return jsonify({"ok": False, "error": "the job has already ended"}), 409
     print(f"[jobs] #{job_id} cancelled")
     return jsonify({"ok": True, "job": job})
+
+
+# ---------------------------------------------------------------------------
+# Scripts (scripts.py: files on disk, listed and run; nothing here writes one)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/scripts")
+def list_scripts():
+    return jsonify(scripts.listing())
+
+
+@app.get("/api/scripts/<sid>")
+def get_script(sid):
+    s = scripts.get(sid, content=True)
+    if s is None:
+        return jsonify({"ok": False, "error": "no such script"}), 404
+    return jsonify(s)
 
 
 @app.get("/api/browse")
