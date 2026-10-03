@@ -1033,7 +1033,7 @@ no person yet.
   "account": { "platform": "instagram", "id": "somebody" },
   "person": { "id": 3, "name": "Some Body" },
   "options": { "full_history": false, "session": null, "content": ["posts", "reels"], "media": "all",
-               "since": "2024-01-01", "first_posts": null, "schedule": "daily" },
+               "since": "2024-01-01", "first_posts": null, "script": null, "schedule": "daily" },
   "choices": { "content": ["posts", "reels", "stories", "highlights", "tagged"], "content_default": ["posts"],
                "login": ["stories", "highlights", "tagged"], "media": true, "since": true, "first_posts": false },
   "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
@@ -1529,6 +1529,12 @@ stored value that is not valid counts as the default (no flag).
   stops only at 5 files in a row it has; TikTok and a YouTube channel's
   page are walked to the end).
 - The job log says when a floor or "last N" applies.
+- **`script`**: `null`, or the id of a [script](#scripts) the source's
+  Sync runs instead of the flags above (they then do nothing: the script
+  is the whole command). Set from FeedVault's own dashboard only (403
+  otherwise), and only to a script that exists and is not refused (400).
+  A script that goes missing or is refused later fails the source's next
+  sync, never falling back to the tool's command.
 
 ### Account health
 
@@ -1928,6 +1934,8 @@ Built-in kinds:
 | `tool-update` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | pip or pipx, picked from how the tool is installed, see [Downloaders](#downloaders) | the tool's name |
 | `yt-dlp-sync` | `source`, `scheduled` as above | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 | `instaloader-post` | `shortcode` | instaloader for one post, see [How a save runs](#how-a-save-runs); started by `POST /api/save` only | `instaloader` |
+| `script` | `script`, `target`, `url`, `folder`, `sha256` | a script on its own, see [Scripts](#scripts); started by `POST /api/scripts/<id>/run` only | the tool's name for a downloader's command, else `scripts` |
+| `script-sync` | `source`, `script`, `target`, `sha256`, `scheduled` | a source's script instead of its tool's command, see [Scripts](#scripts); started by the source's Sync (or the scheduler) only; `result` as a sync's | the source's tool |
 
 ### Sync all
 

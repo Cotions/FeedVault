@@ -319,7 +319,9 @@ _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SCHEDULES = ("off", "hourly", "daily", "weekly")
 # Last: stored_options applies the keys in this order, and a stored
 # schedule wins over the one content's stories would pick.
-OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts", "schedule")
+OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts", "script", "schedule")
+# A script's id (scripts.py): a file's name without its suffix, or a built-in's.
+SCRIPT_ID_RE = re.compile(r"(?:builtin:)?[a-z0-9_-]{1,64}")
 LOGIN_REFUSED = ("{kinds} need a logged-in session: choose one for this source, or set one in "
                  "Settings → Sync")
 
@@ -365,11 +367,14 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
     - since: null, or a YYYY-MM-DD date: nothing older is downloaded;
     - first_posts: null, or 1 to 10000: the first sync gets only that many
       of the newest posts (gallery-dl and yt-dlp; not with full_history);
+    - script: null (the tool's own command), else the id of a script its
+      sync runs instead (scripts.py; whether it exists is checked when it
+      runs, and by the API when it is set);
     - schedule: off, hourly, daily or weekly. Stories last 24 h: content
       that turns them on makes an off schedule daily, unless ``value``
       sends a schedule too (``stories_daily`` False: never)."""
     out = {"full_history": False, "session": None, "content": None, "media": "all", "since": None,
-           "first_posts": None, "schedule": "off", **(base or {})}
+           "first_posts": None, "script": None, "schedule": "off", **(base or {})}
     if value is None:
         return out, None
     if not isinstance(value, dict):
@@ -426,6 +431,11 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
             if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= FIRST_POSTS_MAX:
                 return None, f"first_posts must be null or a whole number from 1 to {FIRST_POSTS_MAX}"
         out["first_posts"] = n
+    if "script" in value:
+        if value["script"] is not None and not (isinstance(value["script"], str)
+                                                and SCRIPT_ID_RE.fullmatch(value["script"])):
+            return None, "script must be null or a script's id"
+        out["script"] = value["script"]
     if "schedule" in value:
         if value["schedule"] not in SCHEDULES:
             return None, f"schedule must be one of: {', '.join(SCHEDULES)}"

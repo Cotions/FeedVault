@@ -2,6 +2,7 @@
 import collections
 import json
 import os
+import re
 import sys
 import time
 
@@ -9,9 +10,13 @@ import pytest
 
 from conftest import H
 
+import config
 import db
 import jobs
+import scheduler
 import scripts
+import sources
+import sync
 
 
 @pytest.fixture
@@ -235,10 +240,12 @@ args = sys.argv[1:]
 with open(os.environ["RECORDER_LOG"], "a") as f:
     f.write(json.dumps({{"args": args, "env": {{k: v for k, v in os.environ.items()
                                              if k.startswith("FV_") or k == "FAKE_SECRET"}}}}) + "\\n")
+if "--hold" in args:
+    open(os.environ["RECORDER_GATE"]).read()
 if "--post" in args:
     import fakes
     fakes.write_post(args[args.index("--post") + 1], "CSCRIPT0001", 1717243200, fakes.owner("carol.cooks", "1001"))
-print("recorded", len(args), "arguments")
+print(os.environ.get("RECORDER_SAY") or f"recorded {{len(args)}} arguments")
 sys.exit(int(os.environ.get("RECORDER_EXIT", "0")))
 """
 
@@ -268,6 +275,7 @@ def runner(env, folder, monkeypatch):
     monkeypatch.setattr(jobs, "_cool", {})
     monkeypatch.setattr(jobs, "_wake", None)
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
+    monkeypatch.setattr(sync, "_batch", None)
     rec = Recorder(env["tmp"])
     monkeypatch.setenv("PATH", f"{rec.bin}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setenv("RECORDER_LOG", str(rec.log))
@@ -520,3 +528,262 @@ def test_the_dashboard_and_the_dev_server_can(client, folder, runner):
     for headers in ({"Origin": "http://localhost:3380", "Sec-Fetch-Site": "same-origin"},
                     {"Origin": "http://localhost:5173"}, {}):
         assert ended(run(client, "rec", headers=headers, target="x")["job"]["id"])["state"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# On a source (step 5)
+# ---------------------------------------------------------------------------
+
+INSTA = {"name": "Mine", "needs": "target", "rescan": "{root}",
+         "argv": ["instaloader", "--no-videos", "--latest-stamps", "{archive}", "--dirname-pattern", "{root}",
+                  "--", "{target}"]}
+
+
+def add_source(client, target="carol.cooks", headers=None, **options):
+    r = client.post("/api/sources", json={"tool": "instaloader", "target": target, "options": options},
+                    headers={**H, **(headers or {})})
+    return r
+
+
+def attach(client, sid, script, status=200, headers=None):
+    r = client.post(f"/api/sources/{sid}", json={"options": {"script": script}}, headers={**H, **(headers or {})})
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+def sync_now(client, sid, status=200, headers=None):
+    r = client.post(f"/api/sources/{sid}/sync", headers={**H, **(headers or {})})
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+@pytest.fixture
+def source(client, runner, folder):
+    runner.install_as("instaloader")
+    write(folder, "mine.json", INSTA)
+    return add_source(client).get_json()["source"]
+
+
+def test_a_source_runs_its_script_instead_of_the_command(client, folder, runner, env, source):
+    assert source["options"]["script"] is None
+    got = attach(client, source["id"], "mine")["source"]
+    assert got["options"]["script"] == "mine"
+    job = sync_now(client, source["id"])["job"]
+    assert job["kind"] == "script-sync" and job["group"] == "instaloader"
+    assert job["params"]["script"] == "mine" and job["params"]["target"] == "carol.cooks"
+    done = ended(job["id"])
+    assert done["state"] == "done", done
+    data = env["tmp"] / "data"
+    assert runner.runs()[-1]["args"] == ["--no-videos", "--latest-stamps", f"{data}/instaloader/stamps.ini",
+                                         "--dirname-pattern", source["folder"], "--", "carol.cooks"]
+    assert done["rescan"] == source["folder"] and done["label"] == "Sync carol.cooks with mine"
+    s = client.get(f"/api/sources/{source['id']}", headers=H).get_json()
+    assert s["last_result"]["state"] == "done" and s["last_job_id"] == job["id"] and s["health"]["state"] == "ok"
+    # Detached: the tool's own command again, after instaloader's pause (one group, one pause).
+    attach(client, source["id"], None)
+    job = sync_now(client, source["id"])["job"]
+    assert job["kind"] == "instaloader-sync" and jobs.get(job["id"])["waits_until"] is not None
+    jobs._cool.clear()
+    jobs._pump()
+    job = ended(job["id"])
+    assert job["kind"] == "instaloader-sync" and "--no-videos" not in runner.runs()[-1]["args"]
+
+
+def test_a_source_gives_its_link_as_the_url(client, folder, runner, source, env):
+    out = env["tmp"] / "out.txt"
+    write(folder, "link.sh", f"#!/bin/sh\n# needs: url\nprintf '%s|%s|%s' \"$FV_URL\" \"$FV_TARGET\" \"$FV_ROOT\" > {out}\n",
+          0o755)
+    attach(client, source["id"], "link")
+    assert ended(sync_now(client, source["id"])["job"]["id"])["state"] == "done"
+    assert out.read_text() == f"https://www.instagram.com/carol.cooks/|carol.cooks|{source['folder']}"
+
+
+def test_a_source_script_failure_is_read_as_the_tools(client, folder, runner, source, monkeypatch):
+    attach(client, source["id"], "mine")
+    monkeypatch.setenv("RECORDER_EXIT", "1")
+    monkeypatch.setenv("RECORDER_SAY", "JSON Query to graphql/query: 429 Too Many Requests [retrying; skip with ^C]")
+    job = ended(sync_now(client, source["id"])["job"]["id"])
+    assert job["state"] == "failed" and job["result"]["error"] == "rate_limited"
+    s = client.get(f"/api/sources/{source['id']}", headers=H).get_json()
+    assert s["health"]["state"] == "rate_limited" and s["last_result"]["failures"] == 1
+
+
+@pytest.mark.parametrize("breakage", ["removed", "refused", "changed-to-bad"])
+def test_a_missing_or_refused_script_fails_the_run_never_falls_back(client, folder, runner, source, breakage):
+    attach(client, source["id"], "mine")
+    path = folder / "mine.json"
+    if breakage == "removed":
+        path.unlink()
+    elif breakage == "refused":
+        path.chmod(0o666)
+    else:
+        path.write_text("{")
+    job = ended(sync_now(client, source["id"])["job"]["id"])
+    assert job["state"] == "failed" and job["kind"] == "script-sync"
+    assert job["message"].startswith("the source's script: ")
+    assert any("the source's script" in t for t in log_of(client, job["id"]))
+    assert runner.runs() == []                 # neither the script nor instaloader's own command
+    s = client.get(f"/api/sources/{source['id']}", headers=H).get_json()
+    assert s["last_result"]["state"] == "failed" and s["last_result"]["message"] == job["message"]
+    assert s["health"]["state"] == "error"
+
+
+def test_a_script_broken_after_its_sync_was_queued_fails_it(client, folder, runner, source, env, monkeypatch):
+    gate = env["tmp"] / "gate"
+    os.mkfifo(gate)
+    monkeypatch.setenv("RECORDER_GATE", str(gate))
+    cfg = config.load()                        # no pause between the two instaloader runs
+    cfg["instaloader"] = {"pause": 0}
+    config.save(cfg)
+    attach(client, source["id"], "mine")
+    # The instaloader group held by a run that waits on the fifo.
+    write(folder, "insta-hold.json", {"needs": "none", "argv": ["instaloader", "--hold"]})
+    blocker = run(client, "insta-hold")["job"]
+    wait_for(lambda: runner.runs())
+    queued = sync_now(client, source["id"])["job"]
+    assert jobs.get(queued["id"])["state"] == "queued"
+    (folder / "mine.json").write_text(json.dumps({**INSTA, "argv": [*INSTA["argv"], "--extra"]}))
+    with open(gate, "w") as f:
+        f.write("go\n")
+    ended(blocker["id"])
+    job = ended(queued["id"])
+    assert job["state"] == "failed" and "changed since it was queued" in job["message"]
+    assert all("--extra" not in r["args"] for r in runner.runs())
+
+
+def test_attaching_checks_the_script(client, folder, runner, source):
+    assert "no script nope" in attach(client, source["id"], "nope", status=400)["error"]
+    write(folder, "open.json", INSTA, 0o666)
+    assert "is refused" in attach(client, source["id"], "open", status=400)["error"]
+    assert "script must be" in attach(client, source["id"], "../x", status=400)["error"]
+    attach(client, source["id"], "builtin:instaloader-profile")
+    r = add_source(client, "dana.draws", script="nope")
+    assert r.status_code == 400
+    r = add_source(client, "dana.draws", script="mine")
+    assert r.status_code == 200 and r.get_json()["source"]["options"]["script"] == "mine"
+
+
+def test_a_builtin_on_a_source(client, runner, source, env):
+    attach(client, source["id"], "builtin:instaloader-profile")
+    job = ended(sync_now(client, source["id"])["job"]["id"])
+    assert job["state"] == "done"
+    assert runner.runs()[-1]["args"][-2:] == ["--", "carol.cooks"]
+
+
+def test_the_script_is_user_data(client, runner, source, env):
+    import userdata
+    attach(client, source["id"], "mine")
+    userdata.flush()
+    rows = json.loads((env["tmp"] / "data" / "userdata" / "sources.json").read_text())["rows"]
+    options = rows[0]["options"]
+    assert (json.loads(options) if isinstance(options, str) else options)["script"] == "mine"
+
+
+def test_the_scheduler_runs_the_script(client, runner, source):
+    attach(client, source["id"], "mine")
+    client.post(f"/api/sources/{source['id']}", json={"options": {"schedule": "hourly"}}, headers=H)
+    assert len(scheduler.tick()) == 1
+    job = next(j for j in jobs.listing()["jobs"] if j["kind"] == "script-sync")
+    assert job["params"]["scheduled"] == "1"
+    assert ended(job["id"])["state"] == "done"
+    assert "--no-videos" in runner.runs()[-1]["args"]
+
+
+FOREIGN = [{"Origin": "https://www.instagram.com"}, {"Sec-Fetch-Site": "cross-site"}]
+
+
+@pytest.mark.parametrize("headers", FOREIGN)
+def test_the_userscripts_origin_cannot_run_a_script(client, folder, runner, source, headers):
+    """The userscript (instagram.com) can sync and add sources as before,
+    and nothing more: no script set, none run through a source."""
+    assert add_source(client, "dana.draws", headers=headers, script="mine").status_code == 403
+    attach(client, source["id"], "mine", status=403, headers=headers)
+    attach(client, source["id"], "mine")
+    assert "only FeedVault's own dashboard" in sync_now(client, source["id"], status=403, headers=headers)["error"]
+    r = client.post("/api/sources/sync-all", headers={**H, **headers}).get_json()
+    assert r["jobs"] == [] and r["errors"][0]["source"] == source["id"]
+    assert runner.runs() == [] and jobs.active() == []
+    # A source without a script still syncs from there, as before.
+    other = add_source(client, "dana.draws", headers=headers).get_json()["source"]
+    job = sync_now(client, other["id"], headers=headers)["job"]
+    assert job["kind"] == "instaloader-sync"
+    ended(job["id"])
+
+
+def test_the_userscript_gains_nothing(client):
+    text = open(os.path.join(os.path.dirname(TESTS), "..", "userscript", "feedvault.user.js")).read()
+    assert "/api/scripts" not in text and "script-sync" not in text and '"script"' not in text
+
+
+# ---------------------------------------------------------------------------
+# Nothing writes a script
+# ---------------------------------------------------------------------------
+
+WRITES = {"os.rename", "os.remove", "os.rmdir", "os.mkdir", "os.chmod", "os.chown", "os.symlink",
+          "os.link", "os.truncate", "os.utime", "shutil.rmtree", "shutil.move", "shutil.copyfile"}
+WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+_watch = {"dir": None, "seen": []}
+
+
+def _audit(event, args):
+    folder = _watch["dir"]
+    if folder is None or not (event == "open" or event in WRITES):
+        return
+    if event == "open":
+        path, mode, flags = args
+        if not (isinstance(mode, str) and set(mode) & set("wax+") or flags & WRITE_FLAGS):
+            return
+    paths = [a for a in args if isinstance(a, (str, bytes, os.PathLike))]
+    for p in paths:
+        p = os.fsdecode(p)
+        if os.path.realpath(p) == folder or os.path.realpath(p).startswith(folder + os.sep):
+            _watch["seen"].append((event, p))
+
+
+sys.addaudithook(_audit)
+
+
+def _snapshot(folder):
+    return {name: (st.st_mode, st.st_size, st.st_mtime_ns, open(os.path.join(folder, name), "rb").read())
+            for name in os.listdir(folder)
+            for st in [os.lstat(os.path.join(folder, name))]}
+
+
+def test_only_the_three_script_routes_exist(client):
+    import app as app_module
+    got = sorted((r.rule, m) for r in app_module.app.url_map.iter_rules() if r.rule.startswith("/api/scripts")
+                 for m in r.methods - {"HEAD", "OPTIONS"})
+    assert got == [("/api/scripts", "GET"), ("/api/scripts/<sid>", "GET"), ("/api/scripts/<sid>/run", "POST")]
+
+
+def test_no_route_writes_under_the_scripts_folder(client, folder, runner, env):
+    """Every rule, every method, with bodies naming the scripts folder and
+    its files: nothing is created, changed, moved or removed there."""
+    import app as app_module
+    write(folder, "rec.json", command(runner, "{target}"))
+    write(folder, "echo.sh", SHELL, mode=0o755)
+    before = _snapshot(folder)
+    inside = str(folder / "rec.json")
+    junk = {"path": inside, "folder": str(folder), "file": inside, "name": "rec", "id": "rec", "script": "rec",
+            "content": "{}", "argv": ["instaloader"], "target": "x", "url": "http://localhost/x",
+            "root": str(folder), "dest": inside, "media_roots": [str(env["media"])], "paths": [inside],
+            "keys": [inside], "posts": [1], "media": [1], "options": {"script": "rec"}}
+    values = {"int": "1", "path": "../scripts/rec.json", "default": "rec"}
+    _watch.update(dir=os.path.realpath(folder), seen=[])
+    try:
+        # The hook sees a write there (then the folder is as before).
+        open(folder / "probe.json", "w").close()
+        os.remove(folder / "probe.json")
+        assert [e for e, _ in _watch["seen"]] == ["open", "os.remove"]
+        _watch["seen"] = []
+        for rule in app_module.app.url_map.iter_rules():
+            if rule.rule in ("/api/quit", "/static/<path:filename>"):
+                continue
+            url = re.sub(r"<(?:(\w+):)?\w+>", lambda m: values.get(m.group(1), values["default"]), rule.rule)
+            for method in rule.methods - {"HEAD", "OPTIONS"}:
+                client.open(url, method=method, json=junk, headers=H)
+        wait_for(lambda: not jobs.active(), timeout=20)
+    finally:
+        _watch["dir"] = None
+    assert _watch["seen"] == []
+    assert _snapshot(folder) == before

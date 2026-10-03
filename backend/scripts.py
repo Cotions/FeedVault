@@ -36,6 +36,7 @@ from urllib.parse import urlsplit
 
 import archives
 import config
+import db
 import jobs
 import sources
 import sync
@@ -220,7 +221,8 @@ def _builtin(name):
     t = BUILTINS[name]
     return {"id": BUILTIN + name, "builtin": True, "kind": "command", "file": None, "path": None,
             "name": t["name"], "description": t["description"], "needs": t["needs"], "rescan": t["rescan"],
-            "tool": t["argv"][0], "argv": list(t["argv"]), "refused": None, "sha256": None,
+            "tool": t["argv"][0], "argv": list(t["argv"]), "refused": None,
+            "sha256": hashlib.sha256(template(name).encode()).hexdigest(),
             "size": None, "mtime": None}
 
 
@@ -606,4 +608,124 @@ jobs.register(KIND, label="Run a script",
                       "sha256": {"type": "text", "max": 64, "required": False}},
               build=_build, group="scripts", check=_check, pause=_pause, scrub=("argv", "params"),
               describe=lambda params, argv: f"Script {params.get('script', '')}")
-JOB_KINDS = (KIND,)
+
+
+# ---------------------------------------------------------------------------
+# A source's script (its option "script"), run by its Sync instead of the tool's command
+# ---------------------------------------------------------------------------
+
+SYNC_KIND = sync.SCRIPT_KIND
+
+
+def sync_params(sid, src):
+    """The params a source's script sync is queued with (sync._job): the
+    script's id and SHA-256 now (none when it is missing or refused: the
+    run then fails with the reason), and the source's target."""
+    script = get(sid)
+    sha = script["sha256"] if script and not script["refused"] else None
+    return {"script": sid, "target": src["target"], **({"sha256": sha} if sha else {})}
+
+
+def _source(params):
+    """The source row a script sync is for, still the one it was queued for."""
+    src = sources.row(db.connect(), sync._source_id(params))
+    if src is None:
+        raise jobs.BadRequest("no such source")
+    if src["target"] != params["target"]:
+        raise jobs.BadRequest("the source changed since its sync was queued")
+    return src
+
+
+def _source_values(script, src, cfg):
+    """The placeholders' values for a source: its target, its link, its folder."""
+    folder = sources.inside_root(src["folder"], cfg["media_roots"])
+    url = src["target"] if src["tool"] != "instaloader" else db.profile_url(src["platform"], src["target"])
+    return values(script, cfg, folder, src["target"], url)
+
+
+def _sync_build(params):
+    """As the tool's own sync checks a source (stored data is checked again:
+    sources.json can be edited by hand), then the script's command. A
+    script missing or refused is not an error here: the run fails with
+    the reason (_sync_check), so the source and its schedule see it."""
+    src = _source(params)
+    cfg = config.load()
+    roots = cfg["media_roots"]
+    if src["tool"] == "instaloader":
+        target = sources.parse_target("instaloader", src["target"])
+    else:
+        target = sources.check_target(src["tool"], src["target"], sources.routes(cfg))
+    if target is None or target != src["target"]:
+        raise jobs.BadRequest("the source's target is not one its tool takes")
+    folder = sources.inside_root(src["folder"], roots)
+    if folder is None:
+        raise jobs.BadRequest("the source's folder is not inside a media root")
+    if sources.in_saved(folder, roots):
+        raise jobs.BadRequest(sources.SAVED_REFUSED.format(folder=folder))
+    try:
+        os.makedirs(folder, exist_ok=True)
+        os.makedirs(os.path.join(cfg["data_directory"], DIR_NAME), exist_ok=True)
+    except OSError as e:
+        raise jobs.BadRequest(f"cannot create the source's folder: {e.strerror or e}")
+    try:
+        script = runnable(params["script"], params.get("sha256"))
+    except jobs.BadRequest:
+        return {"tool": params["script"], "args": [], "rescan": folder, "group": src["tool"]}
+    vals = _source_values(script, src, cfg)
+    spec = _spec(script, vals, cfg, _rescan(script, vals, roots) or folder)
+    return {**spec, "group": src["tool"]}
+
+
+def _sync_check(params, note):
+    """Right before it starts: the script is read again; missing, refused
+    or changed since it was queued, the run fails and says why. Never the
+    tool's own command instead."""
+    try:
+        if "sha256" not in params:
+            runnable(params["script"])         # says why it was not runnable when queued
+            raise jobs.BadRequest(f"{params['script']} could not be run when the sync was queued: sync again")
+        script = runnable(params["script"], params["sha256"])
+        src = _source(params)
+    except jobs.BadRequest as e:
+        message = f"the source's script: {e}"
+        note(message)
+        raise jobs.BadRequest(message)
+    _say(script, _source_values(script, src, config.load()), note)
+
+
+def _tool(params):
+    """The source's tool: whose outcome, lock group and pause a script sync has."""
+    try:
+        src = sources.row(db.connect(), sync._source_id(params))
+    except jobs.BadRequest:
+        src = None
+    return src["tool"] if src is not None else "instaloader"
+
+
+_TOOL_START = {"instaloader": sync._start, "gallery-dl": sync._start_archive("gallery-dl"),
+               "yt-dlp": sync._start_yt_dlp}
+
+
+def _sync_start(params, note, argv=None):
+    """What the tool's own sync does first (seed its stamps or archive, which
+    {archive} names; gather saved posts; note the trash), its arguments
+    kept: the script's."""
+    _TOOL_START[_tool(params)](params, note, None)
+    return None
+
+
+def _sync_pause(params):
+    tool = _tool(params)
+    return sync.settings()["pause"] if tool == "instaloader" else sync.tool_settings(tool)["pause"]
+
+
+jobs.register(SYNC_KIND, label="Sync with a script",
+              params={**sync.PARAMS, "script": {"type": "text", "max": 80},
+                      "target": {"type": "text", "max": sources.URL_MAX},
+                      "sha256": {"type": "text", "max": 64, "required": False}},
+              build=_sync_build, group=_tool, check=_sync_check, start=_sync_start, after=sync._strip_cookies,
+              outcome=lambda p, code, lines, index, note: sync._outcome(p, code, lines, index, note, _tool(p)),
+              ended=sync._ended, pause=_sync_pause, scrub=("argv",),
+              describe=lambda params, argv: f"Sync {params.get('target', '').removeprefix('https://')} "
+                                            f"with {params.get('script')}")
+JOB_KINDS = (KIND, SYNC_KIND)
