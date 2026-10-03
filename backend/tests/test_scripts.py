@@ -383,6 +383,93 @@ def test_a_folder_in_a_joined_option_is_escaped_too(env, tool, argv, want):
     assert scripts.command(script, vals) == [tool, *want]
 
 
+EXEC_URL = {"needs": "url", "argv": ["yt-dlp", "--exec", "notify-send done {url}", "--", "{url}"]}
+
+
+def test_a_placeholder_in_a_shell_run_option_is_refused_and_never_run(client, folder, runner, source):
+    """#62: the issue's example, through Run and through a source's Sync."""
+    runner.install_as("yt-dlp")
+    write(folder, "notify.json", EXEC_URL)
+    refused = listed(client)["notify"]["refused"]
+    assert refused.startswith("--exec's value can reach a shell") and "%(webpage_url)q" in refused \
+        and "FV_*" in refused and "{url}" in refused
+    error = run(client, "notify", status=400, url="https://example.com/$(touch pwned)")["error"]
+    assert "is refused" in error and "--exec" in error
+    assert "--exec" in attach(client, source["id"], "notify", status=400)["error"]
+    assert runner.runs() == [] and jobs.active() == []
+
+
+@pytest.mark.parametrize("tool, args, option", [
+    ("yt-dlp", ["--exec", "echo {root}"], "--exec"),
+    ("yt-dlp", ["--exec=echo {url}"], "--exec"),
+    ("yt-dlp", ["--exec", "before_dl:echo {url}"], "--exec"),
+    ("yt-dlp", ["--exec-before-download={archive}"], "--exec-before-download"),
+    ("yt-dlp", ["--exec-b", "echo {data_dir}"], "--exec-before-download"),
+    ("yt-dlp", ["--netrc-cmd", "pass {url}"], "--netrc-cmd"),
+    ("yt-dlp", ["--use-postprocessor=Exec:exec_cmd=echo {url}"], "--use-postprocessor"),
+    ("yt-dlp", ["--use-p", "Exec:exec_cmd=echo {url}"], "--use-postprocessor"),
+    ("gallery-dl", ["--exec", "convert {} {root}/x.png"], "--exec"),
+    ("gallery-dl", ["--exec-after={root}"], "--exec-after"),
+    ("gallery-dl", ["--exec-a", "cd {root}"], "--exec-after"),
+    ("gallery-dl", ["-o", "postprocessors=[{\"name\": \"exec\", \"command\": \"echo {url}\"}]"], "-o"),
+    ("gallery-dl", ["-obase-directory={root}"], "-o"),
+    ("gallery-dl", ["-qo", "x={root}"], "-o"),
+    ("gallery-dl", ["--opt=x={root}"], "--option"),
+    ("gallery-dl", ["-P", "exec", "-O", "command=echo {url}"], "-O"),
+    ("gallery-dl", ["--postprocessor-option", "command=echo {url}"], "--postprocessor-option"),
+])
+def test_each_shell_run_option_and_form_is_refused(tool, args, option):
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": [tool, *args, "--", "{url}"]}))
+    assert error and error.startswith(f"{option}'s value can reach a shell")
+
+
+@pytest.mark.parametrize("tool, args", [
+    # The tool's own fields, not FeedVault's.
+    ("yt-dlp", ["--exec", "notify-send done %(webpage_url)q"]),
+    ("yt-dlp", ["--exec=echo %(filepath)q"]),
+    ("gallery-dl", ["--exec", "convert {} {}.png && rm {_path}"]),
+    ("gallery-dl", ["-o", "skip=abort:5", "-O", "command=echo {_path}"]),
+    # Another option's whole name, though a prefix of one that runs a shell.
+    ("yt-dlp", ["--netrc", "{url}"]),
+    ("gallery-dl", ["--postprocessor", "metadata", "-D", "{root}"]),
+    # Placeholders in options that never reach a shell.
+    ("yt-dlp", ["--downloader-args", "aria2c:-d {root}", "--ppa", "ffmpeg:-metadata url={url}", "-P", "{root}"]),
+    ("gallery-dl", ["-D", "{root}", "--download-archive", "{archive}", "-q"]),
+    # What follows a short option that takes a value is that value.
+    ("gallery-dl", ["-D{root}o{url}"]),
+    # --alias without a placeholder anywhere.
+    ("yt-dlp", ["--alias", "n", "--exec {0}", "https://example.com/a"]),
+    # Not a downloader: its options are its own.
+    ("/usr/bin/env", ["--exec", "{url}"]),
+])
+def test_other_options_and_the_tools_own_fields_are_accepted(tool, args):
+    needs = "url" if any("{url}" in a for a in args) else "none"
+    _, error = scripts.parse_command(json.dumps({"needs": needs, "argv": [tool, *args]}))
+    assert error is None
+
+
+def test_an_alias_is_refused_beside_a_placeholder(client, folder):
+    write(folder, "alias.json", {"needs": "url", "argv": ["yt-dlp", "--alias", "n", "--exec \"echo {0}\"",
+                                                          "--n", "{url}"]})
+    assert listed(client)["alias"]["refused"].startswith("--alias carries what follows it")
+
+
+def test_exec_without_a_placeholder_is_accepted_and_runs(client, folder, runner):
+    runner.install_as("yt-dlp")
+    write(folder, "done.json", {"needs": "url", "argv": ["yt-dlp", "--exec", "notify-send done %(webpage_url)q",
+                                                         "--", "{url}"]})
+    assert listed(client)["done"]["refused"] is None
+    job = run(client, "done", url="https://example.com/v")["job"]
+    assert ended(job["id"])["state"] == "done"
+    assert runner.runs()[-1]["args"] == ["--exec", "notify-send done %(webpage_url)q", "--",
+                                         "https://example.com/v"]
+
+
+def test_the_builtins_hold_no_placeholder_in_a_shell_run_option():
+    for name in scripts.BUILTINS:
+        assert scripts._check_shell(scripts.BUILTINS[name]["argv"]) is None
+
+
 def test_a_folder_with_a_dollar_is_refused_to_gallery_dl_and_yt_dlp(client, folder, runner, env):
     write(folder, "gdl.json", {"needs": "url", "argv": ["gallery-dl", "-D", "{root}", "--", "{url}"]})
     error = run(client, "gdl", status=400, url="https://example.com/a", folder=f"{env['media']}/a$HOME")["error"]
