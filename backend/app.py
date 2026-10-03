@@ -274,24 +274,31 @@ def trash_items():
         offset=_int_arg("offset", 0, 0, 10**9),
         limit=_int_arg("limit", 60, 1, 500),
         accounts=_accounts_of(_person_arg()),
+        upto=_int_arg("upto", 0, 0, 2**53) if request.args.get("upto") else None,
     ))
 
 
+@app.post("/api/trash/check")
+def trash_check():
+    return jsonify({"ok": True, **trash.check(_roots())})
+
+
 def _purge_filter(f):
-    """A purge filter, checked: {platform, author, person, since, before} with
-    at least one set; ``person`` becomes that person's ``accounts``."""
-    keys = ("platform", "author", "person", "since", "before")
+    """A purge filter, checked: {platform, author, person, since, before,
+    upto} with at least one of the first five set; ``person`` becomes that
+    person's ``accounts``."""
+    keys = ("platform", "author", "person", "since", "before", "upto")
     if not isinstance(f, dict) or set(f) - set(keys):
         return None
     out = {k: f.get(k) for k in keys}
     if any(out[k] is not None and not (isinstance(out[k], str) and out[k]) for k in ("platform", "author")):
         return None
-    for k in ("person", "since", "before"):
+    for k in ("person", "since", "before", "upto"):
         if out[k] is not None and (not isinstance(out[k], int) or isinstance(out[k], bool)
                                    or not 0 <= out[k] < 2**53):
             return None
-    if all(v is None for v in out.values()):
-        return None
+    if all(out[k] is None for k in keys[:5]):
+        return None                            # upto alone would be the whole trash: that is Empty trash
     out["accounts"] = _accounts_of(out.pop("person"))
     return out
 
@@ -309,7 +316,8 @@ def trash_purge():
     if match is not None:
         match = _purge_filter(match)
         if match is None or keys is not None:
-            return jsonify({"ok": False, "error": "filter needs platform, author, person, since or before (and no keys)"}), 400
+            return jsonify({"ok": False, "error": "filter needs platform, author, person, since or before "
+                                                  "(upto optional, no keys)"}), 400
     elif not _str_list(keys):
         return jsonify({"ok": False, "error": "keys must be a non-empty list"}), 400
     cfg = config.load()

@@ -168,8 +168,9 @@ Only **Empty trash** and **purge** (below) remove files for good.
 | POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
 | GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }` |
 | POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }` |
-| GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
-| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "person": …, "since": …, "before": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
+| GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=&upto=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
+| POST | `/api/trash/check` | looks at every trashed file now → `{ "ok": true, "entries": 7, "files": 21, "bytes": 52428800, "missing": 1 }`, see [Trash contents](#trash-contents) |
+| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "person": …, "since": …, "before": …, "upto": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
 | GET | `/trash/<key>/thumb` | small JPEG of a trashed entry (no header needed, like `/media`) |
 
 `/api/delete` removes each listed post with all its files (media, posters,
@@ -261,7 +262,7 @@ deletion first:
 
 ```json
 {
-  "total": 3, "files": 9, "bytes": 15728640,
+  "total": 3, "files": 9, "bytes": 15728640, "upto": 1727500000123,
   "trash": { "entries": 7, "files": 21, "bytes": 52428800 },
   "authors": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "entries": 4, "bytes": 31457280 }],
   "entries": [
@@ -278,13 +279,29 @@ deletion first:
   send `platform` with it), `person` (a person id: entries of any of their
   accounts, see [People](#people); one that is not an id matches nothing),
   `since` (Unix seconds: deleted at or after),
-  `before` (deleted strictly before), `offset` (default 0), `limit`
+  `before` (deleted strictly before), `upto` (a list's `upto`: nothing
+  deleted after that list was made), `offset` (default 0), `limit`
   (default 60, max 500).
+- `upto`: the newest deletion in the trash when the list was made (with
+  `upto` given, the smaller of the two). It is a stamp, not a time to
+  compare with a clock: each manifest line written has `at_ms`, the
+  deletion time in milliseconds but always above every stamp FeedVault
+  wrote or read before, so a deletion made after a list is never inside
+  its `upto`, even within the same millisecond. Lines written before it
+  count as their whole second (`at` × 1000). Send it with later pages and
+  with a purge by filter, so both mean the list the user saw.
 - `total`, `files` and `bytes` add up every entry the filters match, not just
   one page. `trash` and `authors` cover the whole trash, whatever the filters.
 - `key` is opaque. It names one entry and is what restore and purge take.
 - `files` and `bytes` (here and in the totals) count the entry's files still
-  in the trash. `items` counts its media items, `of` the post's media count when it
+  in the trash. Looking costs one `lstat` per file, so a list only looks at
+  the entries of the page it returns (again once their last look is 30 s
+  old); every other entry counts as its last look, or, never looked at, as
+  its manifest lines recorded it (every file there, their recorded sizes).
+  `POST /api/trash/check` looks at every file now (the Trash page's "Check
+  for missing files"). The manifest is parsed once per version; one that
+  only grew (a delete appends to it) is read from where the last read
+  stopped. `items` counts its media items, `of` the post's media count when it
   was deleted (`null` for old lines).
 - `partial`: only some media items of the post were deleted; the rest is still
   in the index. Not set when the same call went on to delete the whole post.
@@ -322,9 +339,10 @@ target. Lines of files already gone are dropped. Response:
 Instead of `keys`, `{ "filter": { … } }` purges every entry the same filters
 as `/api/trash/items` match (`platform`, `author`, `person` (a number), `since`, `before`; each optional, but
 the filter must name at least one, use `/api/trash/empty` for everything).
-The match is made under the same lock as the purge itself. The page sends the
-time it loaded the list as `before`, so nothing trashed after the user saw
-the totals is purged with them.
+`upto` is optional and does not count as one: alone it would be the whole
+trash. The match is made under the same lock as the purge itself. The page
+sends its list's `upto`, so nothing trashed after the user saw the totals is
+purged with them, not even within the same second.
 
 `entries` counts the entries fully purged and `keys` names them, `dropped`
 the lines removed for files that were already missing. An entry with an error

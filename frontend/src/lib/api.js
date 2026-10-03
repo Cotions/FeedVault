@@ -139,10 +139,12 @@ export function deleteItems({ posts, media } = {}) {
 }
 export function getTrash()   { return get("/api/trash"); }
 export function emptyTrash() { return post("/api/trash/empty"); }
-// Trashed entries, newest deletion first → { total, files, bytes, trash, authors,
-// entries }. params: platform, author, person, since, before, offset, limit. See docs/API.md "Trash contents".
+// Trashed entries, newest deletion first → { total, files, bytes, upto, trash, authors,
+// entries }. params: platform, author, person, since, before, upto, offset, limit. See docs/API.md "Trash contents".
 export function getTrashItems(params = {}) { return get(`/api/trash/items${qs(params)}`); }
-// Permanently deletes entries' files: { keys } or { filter: { platform, author, person, since, before } }
+// Looks at every trashed file now → { ok, entries, files, bytes, missing }.
+export function checkTrash() { return post("/api/trash/check"); }
+// Permanently deletes entries' files: { keys } or { filter: { platform, author, person, since, before, upto } }
 // → { ok, entries, keys, files, bytes, dropped, errors }
 export function purgeTrash(body) { return post("/api/trash/purge", body); }
 // Puts exactly those entries back (partial deletes too) → { ok, posts, files, errors }
