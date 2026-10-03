@@ -170,7 +170,7 @@ def list_authors():
 
 @app.get("/api/stats")
 def get_stats():
-    return jsonify(db.stats(db.connect()))
+    return jsonify(db.stats(db.connect(), _person_arg()))
 
 
 @app.get("/api/storage")
@@ -605,20 +605,71 @@ def list_people():
     return jsonify(people.people(db.connect()))
 
 
+MAX_PROFILES = 20                              # profile links per new person
+
+
+def _profiles(value, conn, cfg):
+    """[resolved source] for a new person's profile links (sources.resolve,
+    or an Instagram name), or raises sources.Refused naming the one that is
+    not right."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_PROFILES or not all(isinstance(v, str) for v in value):
+        raise sources.Refused(f"profiles must be a list of at most {MAX_PROFILES} profile links")
+    out, table = [], sources.routes(cfg)
+    for text in dict.fromkeys(v.strip() for v in value if v.strip()):
+        try:
+            r = sources.resolve(text, table, cfg["media_roots"])
+        except sources.Refused as e:
+            try:
+                r = sources.resolve_name(text, cfg["media_roots"])
+            except sources.Refused:
+                raise sources.Refused(f"{text[:200]}: {e}")
+        folder = sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]
+        if sources.existing(conn, r["tool"], r["target"], folder) is not None:
+            raise sources.Refused(f"{text[:200]}: there is already a source for it; link its account instead")
+        out.append(r)
+    return out
+
+
 @app.post("/api/people")
 def create_person():
+    """A person, with accounts already indexed and/or profile links: each
+    link becomes a source of theirs (nothing is downloaded until a sync)."""
     body = request.get_json(silent=True) or {}
     name, accounts = people.clean_name(body.get("name")), people.clean_accounts(body.get("accounts"))
     if name is None:
         return jsonify({"ok": False, "error": _BAD_PERSON_NAME}), 400
     if accounts is None:
         return jsonify({"ok": False, "error": _BAD_ACCOUNTS}), 400
+    conn, cfg, now = db.connect(), config.load(), int(time.time())
     try:
-        p = people.create(db.connect(), name, accounts, int(time.time()))
-    except people.Refused as e:
+        profiles = _profiles(body.get("profiles"), conn, cfg)
+        if profiles and not cfg["media_roots"]:
+            raise sources.Refused("add a media root in Settings first")
+        p = people.create(conn, name, accounts, now)
+    except (people.Refused, sources.Refused) as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    made = []
+    try:
+        for r in profiles:
+            options = sources.clean_options(None, tool=r["tool"], platform=r["platform"], target=r["target"])
+            made.append(sources.create(conn, cfg["media_roots"], r["tool"], r["target"], None, p["id"], None,
+                                       options, now, sources.routes(cfg)))
+    except sources.Refused as e:
+        with conn:                             # all or nothing
+            conn.executemany("DELETE FROM sources WHERE id = ?", [(sid,) for sid in made])
+        people.delete(conn, p["id"])
+        return jsonify({"ok": False, "error": str(e)}), 400
+    # A profile whose account is indexed already: that account is theirs too.
+    found = [(r["platform"], r["author_id"]) for r in (sources.row(conn, sid) for sid in made) if r["author_id"]]
+    free = [k for k in found if not db.accounts(conn).get(people.canonical(conn, *k), {}).get("person")]
+    if free:
+        p = people.link(conn, p["id"], free, [], now)["person"]
     _people_changed(names=True)
-    return jsonify({"ok": True, "person": p})
+    if made:
+        userdata.changed("sources")
+    return jsonify({"ok": True, "person": p, "sources": [_source_or_404(sid) for sid in made]})
 
 
 @app.post("/api/people/merge")
@@ -663,6 +714,19 @@ def dismiss_suggestion():
         return jsonify({"ok": False, "error": "no such suggestion; reload"}), 404
     userdata.changed("dismissed_suggestions")
     return jsonify({"ok": True})
+
+
+@app.post("/api/people/<int:pid>/sync")
+def sync_person(pid):
+    """Sync each of a person's sources, through the normal queue."""
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    ids = sources.of_person(conn, pid)
+    queued, skipped, errors = sync.sync_all(only=set(ids))
+    if queued:
+        print(f"[jobs] sync person {pid}: {len(queued)} queued")
+    return jsonify({"ok": True, "sources": len(ids), "jobs": queued, "skipped": skipped, "errors": errors})
 
 
 @app.get("/api/people/<int:pid>")

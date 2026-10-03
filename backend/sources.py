@@ -536,6 +536,13 @@ def listing(conn, roots, active=None):
             "suggestions": suggestions(conn, roots)}
 
 
+def of_person(conn, pid):
+    """The ids of a person's sources, as listing() shows them (sources._owner)."""
+    accounts = db.accounts(conn)
+    return [r["id"] for r in conn.execute("SELECT * FROM sources ORDER BY target, tool").fetchall()
+            if (_owner(conn, r, accounts)[1] or {}).get("id") == pid]
+
+
 def account_folder(conn, platform, author_id, roots):
     """The top folder under a media root holding the account's instaloader
     posts (aliases included), the one with the most, or None."""

@@ -92,7 +92,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`, see [New posts](#new-posts) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
 | GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
-| GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
+| GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing. `?person=<id>`: counts over that person's posts only, as `/api/posts?person=` (`unmatched` stays the whole archive's: those files belong to nobody) |
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
@@ -769,7 +769,8 @@ A **person**:
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/people` | `[person, …]`, by name |
-| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }] }` (`accounts` may be omitted) → `{ "ok": true, "person": {…} }` |
+| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
+| POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }] }`: a sync of each of the person's sources, as Sync all does for every source; 404 for an unknown id |
 | GET | `/api/people/<id>` | person, or 404 |
 | POST | `/api/people/<id>` | body `{ "name": "…" }` and/or `{ "notes": "…" }` → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post |
@@ -780,6 +781,17 @@ A **person**:
   add, merge) takes it from any other. An account that is not in the index
   (no post, no alias) is a 400.
 - `added` and `removed` count the links that changed.
+- `profiles` (at most 20): profile links, or Instagram names, each made a
+  [source](#sources) of the new person, as `POST /api/sources` with
+  `person` would, with default options. Nothing is downloaded until a sync,
+  and no folder is made. A profile whose account is indexed already (its
+  folder holds posts) links that account too when it has no person. All
+  or nothing: a link that is not a profile in the routing table, or that
+  already has a source, is a 400 naming it, and nothing is created.
+- Sync on a person queues its sources (those shown with it, see
+  [Sources](#sources)) through the normal [job](#jobs) queue: one at a
+  time per tool, the tool's pause between two, a source already queued or
+  running counted in `skipped`, a refused one in `errors`.
 - Merge keeps the first id: its name (or `name`, when given), and the
   others' notes appended to its own. Every account of the others, and
   `accounts`, move to it; the others are gone. `ids` must all exist (404

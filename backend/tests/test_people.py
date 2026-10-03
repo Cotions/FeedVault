@@ -674,3 +674,79 @@ def test_similar_handles_with_the_same_digits(env, client):
     scanner.scan(env["roots"])
     got = [(s["reason"], sorted(a["id"] for a in s["accounts"])) for s in suggestions(client)["suggestions"]]
     assert got == [("similar_handle", ["801", "802"])]
+
+
+# ---------------------------------------------------------------------------
+# A person's pages: Stats, Sync, added by hand
+# ---------------------------------------------------------------------------
+
+def test_stats_by_person(env, client):
+    archive(env)
+    alice, x = account(client, "instagram", "alice.example"), account(client, "twitter", "example_user1")
+    pid = create(client, "Alice", alice, x)["person"]["id"]
+    post(client, "/api/review", {"posts": ["instagram:A1"], "decision": "keep"})
+    everyone, mine = get(client, "/api/stats"), get(client, f"/api/stats?person={pid}")
+    summary = get(client, f"/api/posts/summary?person={pid}")
+    assert (mine["posts"], mine["media"], mine["bytes"]) == (summary["posts"], summary["media"], summary["bytes"])
+    assert mine["posts"] == 4 and mine["authors"] == 3          # the id, its folder alias, the X account
+    assert mine["by_platform"] == {"instagram": 3, "twitter": 1} and mine["kept"] == 1
+    assert mine["unreviewed"] == 3 and mine["unmatched"] == everyone["unmatched"]
+    assert everyone["posts"] == 6 and everyone["by_platform"]["tiktok"] == 1
+    assert get(client, "/api/stats?person=999")["posts"] == 0
+    assert get(client, "/api/stats?person=abc")["posts"] == 0
+
+
+def queue(monkeypatch):
+    """jobs.submit recording what it was asked to queue: nothing runs."""
+    import jobs
+    import sync
+    calls = []
+
+    def submit(kind, params):
+        calls.append((kind, params["source"]))
+        return {"id": len(calls), "created_at": 0}
+    monkeypatch.setattr(jobs, "submit", submit)
+    monkeypatch.setattr(jobs, "get", lambda jid: None)
+    monkeypatch.setattr(sync, "active", lambda: {})
+    monkeypatch.setattr(sync, "_batch", None)
+    return calls
+
+
+def test_sync_a_person_queues_each_of_its_sources(env, client, monkeypatch):
+    archive(env)
+    calls = queue(monkeypatch)
+    pid = create(client, "Alice", account(client, "instagram", "alice.example"))["person"]["id"]
+    other = create(client, "Other")["person"]["id"]
+    mine = [post(client, "/api/sources", {"target": t, "person": pid})["source"]["id"]
+            for t in ("https://www.instagram.com/alice.example/", "https://x.com/alice_x")]
+    post(client, "/api/sources", {"target": "https://x.com/someone", "person": other})
+    r = post(client, f"/api/people/{pid}/sync", {})
+    assert (r["sources"], len(r["jobs"]), r["skipped"], r["errors"]) == (2, 2, 0, [])
+    assert sorted(int(s) for _, s in calls) == sorted(mine)
+    assert {k for k, _ in calls} == {"instaloader-sync", "gallery-dl-sync"}
+    assert post(client, "/api/people/999/sync", {}, 404)
+    assert client.post(f"/api/people/{pid}/sync").status_code == 403    # the guard header
+
+
+def test_add_a_person_by_hand_with_profile_links(env, client, monkeypatch):
+    archive(env)
+    calls = queue(monkeypatch)
+    before = set(os.listdir(env["media"]))
+    r = post(client, "/api/people", {"name": "New One", "profiles": [
+        "https://www.instagram.com/new.one/", "https://x.com/new_one", " ", "https://x.com/new_one"]})
+    p = r["person"]
+    assert [(s["tool"], s["target"], s["person"]["id"]) for s in r["sources"]] == [
+        ("instaloader", "new.one", p["id"]), ("gallery-dl", "https://x.com/new_one", p["id"])]
+    assert p["accounts"] == [] and calls == []                  # nothing downloaded
+    assert set(os.listdir(env["media"])) == before              # nor any folder made
+    assert len(post(client, f"/api/people/{p['id']}/sync", {})["jobs"]) == 2
+    # a profile already indexed: its account is theirs too
+    r = post(client, "/api/people", {"name": "Bob", "profiles": ["https://www.instagram.com/bob/"]})
+    assert [a["id"] for a in r["person"]["accounts"]] == ["222"]
+    # a bad link, or one with a source already: nothing is made
+    n = len(get(client, "/api/people"))
+    for profiles in (["https://example.com/x"], ["https://x.com/new_one"], "x", ["a"] * 21, [5]):
+        r = post(client, "/api/people", {"name": "Bad", "profiles": profiles}, 400)
+        assert r["error"]
+    assert len(get(client, "/api/people")) == n
+    assert len(get(client, "/api/sources")["sources"]) == 3

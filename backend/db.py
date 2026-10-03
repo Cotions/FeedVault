@@ -1199,22 +1199,27 @@ def _storage(conn, person=None):
     }
 
 
-def stats(conn):
-    one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
+def stats(conn, person=None):
+    """Counts over every post, or one person's (``person``, an id: the same
+    filter as /api/posts). Unmatched files belong to nobody: always all."""
+    one = lambda sql, args=(): conn.execute(sql, args).fetchone()[0]  # noqa: E731
+    clause, args = post_filter(person=person)
+    where = clause.replace("WHERE", "AND", 1)
+    posts = f"SELECT p.id {_FROM} {clause}"
     return {
-        "posts": one("SELECT COUNT(*) FROM posts"),
-        "media": one("SELECT COUNT(*) FROM media"),
-        "authors": one("SELECT COUNT(DISTINCT platform || ':' || author_id) FROM posts "
-                       "WHERE author_id IS NOT NULL"),
-        "bytes": one("SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0"),
-        "missing": one("SELECT COUNT(*) FROM posts WHERE missing = 1"),
-        "kept": one("SELECT COUNT(*) FROM decisions d JOIN posts p ON p.id = d.post_id "
-                    "WHERE d.decision = 'keep'"),
-        "unreviewed": one("SELECT COUNT(*) FROM posts p LEFT JOIN decisions d ON d.post_id = p.id "
-                          "WHERE d.post_id IS NULL"),
+        "posts": one(f"SELECT COUNT(*) {_FROM} {clause}", args),
+        "media": one(f"SELECT COUNT(*) FROM media WHERE post_id IN ({posts})", args) if person is not None
+        else one("SELECT COUNT(*) FROM media"),
+        "authors": one(f"SELECT COUNT(DISTINCT p.platform || ':' || p.author_id) {_FROM} "
+                       f"WHERE p.author_id IS NOT NULL {where}", args),
+        "bytes": one(f"SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0 AND post_id IN ({posts})", args)
+        if person is not None else one("SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0"),
+        "missing": one(f"SELECT COUNT(*) {_FROM} WHERE p.missing = 1 {where}", args),
+        "kept": one(f"SELECT COUNT(*) {_FROM} WHERE d.decision = 'keep' {where}", args),
+        "unreviewed": one(f"SELECT COUNT(*) {_FROM} WHERE d.post_id IS NULL {where}", args),
         "unmatched": one("SELECT COUNT(*) FROM unmatched"),
-        "by_platform": dict(conn.execute("SELECT platform, COUNT(*) FROM posts GROUP BY platform").fetchall()),
-        "by_kind": dict(conn.execute("SELECT kind, COUNT(*) FROM posts GROUP BY kind").fetchall()),
+        "by_platform": dict(conn.execute(f"SELECT p.platform, COUNT(*) {_FROM} {clause} GROUP BY 1", args).fetchall()),
+        "by_kind": dict(conn.execute(f"SELECT p.kind, COUNT(*) {_FROM} {clause} GROUP BY 1", args).fetchall()),
     }
 
 

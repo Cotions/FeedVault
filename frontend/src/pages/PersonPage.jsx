@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getAuthors, getPerson, getSuggestions, updatePerson, deletePerson, linkAccounts, dismissSuggestion } from "../lib/api";
+import { getAuthors, getPerson, getSuggestions, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
@@ -122,6 +122,26 @@ export default function PersonPage() {
     }
   }
 
+  // Each source through the normal queue: one sync per platform at a time,
+  // the tool's pause between two.
+  async function syncAll() {
+    setBusy(true);
+    try {
+      const r = await syncPerson(p.id);
+      if (!r?.ok) { toast(r?.error || "Could not sync.", "err"); return; }
+      const n = r.jobs.length;
+      const parts = [n ? `${n} sync${n === 1 ? "" : "s"} queued` : "Nothing queued"];
+      if (r.skipped) parts.push(`${r.skipped} already queued or running`);
+      if (r.errors.length) parts.push(`${r.errors.length} refused: ${r.errors[0].error}`);
+      toast(`${parts.join("; ")}.`, r.errors.length && !n ? "err" : undefined);
+      sources.reload();
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function dismiss(s) {
     setBusy(true);
     try {
@@ -191,6 +211,7 @@ export default function PersonPage() {
         <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
         <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
         <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
+        <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
         <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
       </nav>
 
@@ -238,7 +259,15 @@ export default function PersonPage() {
       </section>
 
       <section className="person-section">
-        <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
+        <div className="person-section-head">
+          <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
+          {mine.length > 0 && (
+            <button type="button" className="btn-primary" disabled={busy} onClick={syncAll}
+                    title="Sync each source of this person, one after another">
+              <Icon name="refresh" size={14} /> Sync {mine.length > 1 ? `all ${mine.length}` : ""}
+            </button>
+          )}
+        </div>
         {mine.length === 0 ? (
           <div className="empty">
             {sources.data ? "Nothing to sync yet. Add a profile below to download their new posts from here." : "Loading…"}

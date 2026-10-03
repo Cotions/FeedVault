@@ -1410,16 +1410,19 @@ def sync(sid):
         return jobs.submit(_kind(sid), {"source": str(sid)})
 
 
-def sync_all():
+def sync_all(only=None):
     """Queue a sync for every source not already queued or running, by
-    target. They run one after another, the pause between each. Returns
-    (jobs, skipped, errors: [{source, error}] for those refused). The jobs
-    queued become the batch (see batch), or join it while it still runs."""
+    target, or for those of ``only`` (source ids: a person's). They run one
+    after another, the pause between each. Returns (jobs, skipped, errors:
+    [{source, error}] for those refused). The jobs queued become the batch
+    (see batch), or join it while it still runs."""
     global _batch
     queued, skipped, errors = [], 0, []
     with _submitting:
         busy = active()
         for sid, tool in db.connect().execute("SELECT id, tool FROM sources ORDER BY target, id").fetchall():
+            if only is not None and sid not in only:
+                continue
             if sid in busy:
                 skipped += 1
                 continue
