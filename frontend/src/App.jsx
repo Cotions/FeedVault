@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { getScan, startScan, getJobs, getNotifications, quitApp, onConnectionChange } from "./lib/api";
 import { ScanContext } from "./lib/scan";
-import { JobsContext, ENDED, SAVE_KIND } from "./lib/jobs";
+import { JobsContext, ENDED, SAVE_KIND, shownParams } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
 import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
@@ -27,6 +27,7 @@ import Unmatched       from "./pages/Unmatched";
 import Duplicates      from "./pages/Duplicates";
 import Settings        from "./pages/Settings";
 import Jobs            from "./pages/Jobs";
+import Scripts         from "./pages/Scripts";
 
 const SCAN_POLL_MS    = 1500;
 const OFFLINE_POLL_MS = 4000;
@@ -179,7 +180,7 @@ export default function App() {
       if (j.kind === SAVE_KIND) { saveToast(toast, j); continue; }
       // Which tool or source, for jobs that name one ("Done, yt-dlp: 2024.08.06").
       // A source sync names its profile in its label, not its params (an id).
-      const what = j.params?.source ? j.label : Object.values(j.params || {}).join(" ");
+      const what = j.params?.source ? j.label : shownParams(j).join(" ");
       const head = what ? `, ${what}` : "";
       if (j.state === "done") toast(`Done${head}: ${j.message}`);
       else if (j.state === "failed") toast(`Failed${head}: ${j.message}`, "err");
@@ -342,6 +343,7 @@ export default function App() {
           </NavLink>
           <Notifications unread={jobList?.notifications?.unread ?? 0} latest={jobList?.notifications?.latest ?? null}
                          onRead={jobStarted} />
+          <NavLink to="/scripts" className="side-link" title="Your own download commands and shell scripts"><Icon name="pencil" />Scripts</NavLink>
           <NavLink to="/settings" className="side-link"><Icon name="settings" />Settings</NavLink>
           <div className="side-sep" />
           <button
@@ -419,6 +421,7 @@ export default function App() {
             <Route path="/unmatched" element={<Unmatched />} />
             <Route path="/duplicates" element={<Duplicates />} />
             <Route path="/jobs" element={<Jobs />} />
+            <Route path="/scripts" element={<Scripts />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<div className="card"><div className="empty">Nothing here.</div></div>} />
           </Routes>

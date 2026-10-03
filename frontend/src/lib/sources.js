@@ -5,8 +5,8 @@ import { useScan } from "./scan";
 import { useJobs, ENDED } from "./jobs";
 import { useToast } from "./toast";
 
-// One sync kind per tool (docs/API.md "Jobs").
-export const SYNC_KINDS = new Set(["instaloader-sync", "gallery-dl-sync", "yt-dlp-sync"]);
+// One sync kind per tool, and a source's script (docs/API.md "Jobs").
+export const SYNC_KINDS = new Set(["instaloader-sync", "gallery-dl-sync", "yt-dlp-sync", "script-sync"]);
 
 // Failures the Downloaders card in Settings can fix: install, log in, update.
 export const SETUP_ERRORS = new Set(["missing", "login_required"]);

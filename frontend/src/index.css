@@ -2449,6 +2449,24 @@ a.btn-primary { color: var(--on-accent); }
 .dl-jobs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .dl-jobs .btn-ghost { font-size: 12px; padding: 4px 8px; }
 .dl-row .job-log { height: 220px; }
+/* Scripts */
+.script-row.is-refused { border-color: rgba(229, 72, 77, 0.3); }
+.script-refused { margin: 0; }
+.script-meta { font-size: 11.5px; overflow-wrap: anywhere; }
+.script-path { font-size: 11.5px; overflow-wrap: anywhere; user-select: all; }
+.script-content {
+  margin: 0; max-height: 360px; overflow: auto;
+  padding: 10px 12px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.script-template { display: flex; flex-direction: column; gap: 8px; }
+.script-template-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12.5px; }
+.script-run { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.script-run .msg { flex-basis: 100%; margin: 0; }
+.script-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; flex: 1 1 220px; }
+.script-pick { width: 100%; max-width: 420px; }
 .dl-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
 .tool-name { font-size: 12.5px; color: var(--text); font-weight: 700; }
 .tool-status { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); overflow-wrap: anywhere; }

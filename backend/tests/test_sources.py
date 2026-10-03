@@ -12,7 +12,7 @@ import userdata
 ALICE = owner("alice.example", 111, "Alice Example")
 TS = 1717243200                                     # 2024-06-01 12:00 UTC
 OPTS = {"full_history": False, "session": None, "content": None, "media": "all", "since": None, "first_posts": None,
-        "schedule": "off"}
+        "script": None, "schedule": "off"}
 
 
 def get(client, url, status=200):

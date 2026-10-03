@@ -82,7 +82,8 @@ export function today(now = new Date()) {
 }
 
 /* The form's state from a source's stored options (or the defaults):
-   { content: [kinds], media, since: "" | date, first: "new" | "full" | "last", count: "" | text, schedule } */
+   { content: [kinds], media, since: "" | date, first: "new" | "full" | "last", count: "" | text, schedule,
+     script: "" | script id } */
 export function formOf(options, choices) {
   const o = options || {};
   return {
@@ -92,6 +93,7 @@ export function formOf(options, choices) {
     first: o.first_posts ? "last" : o.full_history ? "full" : "new",
     count: o.first_posts ? String(o.first_posts) : "",
     schedule: o.schedule || "off",
+    script: o.script || "",
   };
 }
 
@@ -118,7 +120,8 @@ export function formError(form, choices, now = new Date()) {
    form formError passed. ``firstSync``: the first-sync choice is sent
    (only last_posts is refused once a source has synced). */
 export function optionsOf(form, choices, firstSync = true) {
-  const out = { media: choices?.media ? form.media : "all", since: form.since || null, schedule: form.schedule };
+  const out = { media: choices?.media ? form.media : "all", since: form.since || null, schedule: form.schedule,
+                script: form.script || null };
   if (choices?.content?.length) out.content = choices.content.filter(k => form.content.includes(k));
   out.full_history = form.first === "full";
   if (firstSync) out.first_posts = form.first === "last" ? Number(form.count) : null;
@@ -141,10 +144,12 @@ export function needsLogin(form, choices, session) {
   return (choices?.login || []).filter(k => form.content.includes(k));
 }
 
-/* One line for a source's row: "posts, reels · images · since 2024-01-01".
+/* One line for a source's row: "posts, reels · images · since 2024-01-01",
+   or "script my-insta" when a script runs instead of its tool's command.
    Only what differs from the defaults; "" when nothing does. */
 export function optionsSummary(s) {
   const o = s.options || {};
+  if (o.script) return `script ${o.script}`;
   const parts = [];
   if (o.content) parts.push(o.content.map(k => kindLabel(s.platform, k)).join(", "));
   if (o.media && o.media !== "all") parts.push(`${o.media} only`);

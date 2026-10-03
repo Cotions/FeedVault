@@ -13,7 +13,8 @@ const NOW = new Date(2026, 9, 2, 12);
 
 test("defaults from no options", () => {
   assert.deepEqual(formOf(null, IG), { content: ["posts"], media: "all", since: "", first: "new", count: "",
-                                    schedule: "off" });
+                                    schedule: "off", script: "" });
+  assert.equal(formOf({ script: "my-insta" }, IG).script, "my-insta");
   assert.deepEqual(formOf({ first_posts: 50, full_history: false }, YT).first, "last");
 });
 
@@ -36,10 +37,13 @@ test("options sent", () => {
   const form = { content: ["stories", "posts"], media: "images", since: "2024-01-01", first: "new", count: "",
                  schedule: "daily" };
   assert.deepEqual(optionsOf(form, IG), { media: "images", since: "2024-01-01", content: ["posts", "stories"],
-                                           full_history: false, first_posts: null, schedule: "daily" });
+                                           full_history: false, first_posts: null, schedule: "daily",
+                                           script: null });
   assert.deepEqual(optionsOf({ ...form, first: "last", count: "20" }, YT),
-                   { media: "all", since: "2024-01-01", full_history: false, first_posts: 20, schedule: "daily" });
+                   { media: "all", since: "2024-01-01", full_history: false, first_posts: 20, schedule: "daily",
+                     script: null });
   assert.equal("first_posts" in optionsOf(form, YT, false), false);
+  assert.equal(optionsOf({ ...form, script: "builtin:yt-dlp-channel" }, YT).script, "builtin:yt-dlp-channel");
 });
 
 test("login kinds without a session", () => {
@@ -49,6 +53,9 @@ test("login kinds without a session", () => {
 });
 
 test("summary", () => {
+  // A script runs instead of the tool's command: the other options are not its.
+  assert.equal(optionsSummary({ platform: "instagram", options: { content: ["posts"], script: "my-insta" } }),
+               "script my-insta");
   assert.equal(optionsSummary({ platform: "instagram", options: { content: ["posts", "reels"], media: "all",
                                                                    since: "2024-01-01" } }),
                "posts, reels · since 2024-01-01");

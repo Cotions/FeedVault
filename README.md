@@ -226,11 +226,51 @@ yt-dlp copies the cookies it used into each video's `.info.json`; FeedVault
 rewrites the files of each sync without them, and **Settings → Sync → YouTube
 and TikTok sync** can do the same for info JSONs written before.
 
+## Scripts
+
+When the built-in commands are not what you want, write your own as files in
+`~/.config/feedvault/scripts/` (beside `config.json`). FeedVault never writes
+there: you create and edit them in a text editor, and the **Scripts** page
+lists them, shows them read-only and runs them as jobs (live log, cancel,
+history). The folder is read again each time, so an edit counts at once.
+
+- **A command**, `my-insta.json`: `{"needs": "target", "rescan": "{root}",
+  "argv": ["instaloader", "--no-videos", "--dirname-pattern", "{root}", "--", "{target}"]}`.
+  The program is instaloader, gallery-dl, yt-dlp or ffmpeg (found as in
+  Settings) or an absolute path. `{target}`, `{url}`, `{root}`,
+  `{data_dir}` and `{archive}` are replaced inside their own element; the
+  list is run as it is, without a shell.
+- **A shell script**, `my-script.sh`, executable, with a `#!` line and a
+  `# needs: url` (or `target`, `none`) header. It gets its inputs only as
+  `FV_TARGET`, `FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE` in a
+  minimal environment: quote them (`"$FV_URL"`).
+
+**Copy template** on a built-in (instaloader profile, saved posts, one post,
+stories and highlights; gallery-dl profile media, one link; yt-dlp one
+video, a channel) shows the file to create and its content, with copy
+buttons. A source's **Options → Command** picks a script its Sync (and its
+schedule) runs instead of the tool's own command; a script that is missing
+or refused fails that sync with the reason, never running the built-in one.
+
+A file is refused, with the reason shown, and never run when it is a
+symlink, someone else's, writable by group or others (as is the folder),
+over 64 KiB, not named `[a-z0-9_-].json` / `.sh`, or malformed. A script
+changed between queueing and starting fails its run. Inputs are checked:
+a link must be `http(s)://`, an Instagram target a profile name or
+shortcode, and nothing may start with `-`. Details:
+[docs/API.md → Scripts](docs/API.md#scripts).
+
+**Anyone who can reach FeedVault's port can run every script in that
+folder.** FeedVault binds to `127.0.0.1` for that reason: do not expose it
+(`0.0.0.0`, a reverse proxy, a tunnel). Pages on other sites, the
+userscript's included, cannot list, run or attach a script.
+
 ## Where things live
 
 | What | Where |
 |---|---|
 | Config | `~/.config/feedvault/config.json` (override with `FEEDVAULT_CONFIG`) |
+| Scripts | `~/.config/feedvault/scripts/`, beside the config; FeedVault only reads it |
 | Index | `~/.local/share/feedvault/feedvault.db`, rebuilt from your folders by a rescan |
 | Media | wherever your downloader put it; FeedVault only reads it |
 
@@ -240,7 +280,8 @@ The server binds to `127.0.0.1` only. Every `/api` call needs an `X-FeedVault`
 header and a local `Host`, and no CORS is ever granted, so other websites in
 your browser cannot read or change your library. Jobs are started by kind,
 with parameters each kind checks; the API never takes a command, and tools run
-without a shell. The server itself contacts the network for one thing only,
+without a shell. Your [scripts](#scripts) are the exception you write
+yourself: whoever reaches the port can run them, so never expose it. The server itself contacts the network for one thing only,
 and only if you turn it on (**Settings → Downloads → Downloaders → check for updates**):
 PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
 to say when an update is out. API reference:

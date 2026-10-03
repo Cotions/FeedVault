@@ -60,26 +60,32 @@ class Cancelled(Exception):
 
 class Kind:
     def __init__(self, name, label, params, build, group, summarize=None, start=None, outcome=None,
-                 ended=None, pause=None, describe=None, after=None):
+                 ended=None, pause=None, describe=None, after=None, check=None, scrub=()):
         self.name, self.label, self.params = name, label, params
         self.build, self.group, self.summarize = build, group, summarize
         self.start, self.outcome, self.ended = start, outcome, ended
         self.pause, self.describe, self.after = pause, describe, after
+        self.check, self.scrub = check, tuple(scrub)
 
 
 _kinds = {}
 
 
 def register(name, *, label, params, build, group, summarize=None, start=None, outcome=None, ended=None,
-             pause=None, describe=None, after=None):
+             pause=None, describe=None, after=None, check=None, scrub=()):
     """Add a job kind.
 
     params:    {name: {"type": "choice", "choices": [...]}
                      | {"type": "text", "max": 500}}, each "required"
                unless it says "required": False
     build:     checked params -> {"tool": name or absolute path, "args": [...],
-               "cwd": folder or None, "rescan": folder or None, "full_scan": bool}
+               "cwd": folder or None, "rescan": folder or None, "full_scan": bool,
+               "env": the process's whole environment (else FeedVault's own),
+               "group": a lock group, instead of ``group``'s}
     group:     lock group, or a function of the params returning one
+    check:     optional, (params, note) -> None, run in the job's thread
+               before anything else (before its tool is looked for); an
+               exception fails the job with its message, Cancelled cancels it
     summarize: optional, output lines -> (result dict, message) for a job
                that exited 0 and has no rescan target
     start:     optional, (params, note, argv) -> None or a new argument list
@@ -102,8 +108,11 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
     pause:     optional, params -> seconds: once a job of this kind has run,
                the next one of this kind in its group waits that long
     describe:  optional, (params, argv) -> label shown instead of ``label``
+    scrub:     what of the job is scrubbed as its output is (health.scrub)
+               wherever it is shown or stored: "argv", "params" (each value)
     """
-    _kinds[name] = Kind(name, label, params, build, group, summarize, start, outcome, ended, pause, describe, after)
+    _kinds[name] = Kind(name, label, params, build, group, summarize, start, outcome, ended, pause, describe, after,
+                        check, scrub)
 
 
 def kinds():
@@ -168,11 +177,29 @@ register("tool-version", label="Check a tool's version",
 # Queue
 # ---------------------------------------------------------------------------
 
+def _shown_argv(kind_name, argv):
+    """An argument list as shown and stored: scrubbed when its kind says so."""
+    kind = _kinds.get(kind_name)
+    if kind is None or "argv" not in kind.scrub:
+        return list(argv)
+    return [health.scrub(a, LINE_MAX) or "" for a in argv]
+
+
+def _shown_params(kind_name, params):
+    kind = _kinds.get(kind_name)
+    if kind is None or "params" not in kind.scrub:
+        return dict(params)
+    return {k: health.scrub(v, LINE_MAX) or "" if isinstance(v, str) else v for k, v in params.items()}
+
+
 class Job:
     def __init__(self, job_id, kind, params, spec, group, cwd, rescan, now):
         self.id, self.kind, self.params, self.group, self.cwd = job_id, kind, params, group, cwd
+        self.shown_params = _shown_params(kind, params)
         self.tool, self.args = spec["tool"], [str(a) for a in spec.get("args", [])]
-        self.argv = [self.tool, *self.args]        # for display; the tool's path is resolved at start
+        # For display; the tool's path is resolved at start.
+        self.argv = _shown_argv(kind, [self.tool, *self.args])
+        self.env = spec.get("env")
         self.rescan, self.full_scan = rescan, bool(spec.get("full_scan"))
         self.state = "queued"
         self.created_at, self.started_at, self.ended_at = now, None, None
@@ -193,8 +220,8 @@ class Job:
         if self.shown is not None and not live:
             return self.shown
         waits = _cool.get(self.group) if self.state == "queued" and _pauses(self.kind) else None
-        return {"id": self.id, "kind": self.kind, "label": _label(self.kind, self.params, self.argv),
-                "params": self.params, "argv": self.argv, "cwd": self.cwd, "group": self.group,
+        return {"id": self.id, "kind": self.kind, "label": _label(self.kind, self.shown_params, self.argv),
+                "params": self.shown_params, "argv": self.argv, "cwd": self.cwd, "group": self.group,
                 "state": self.state, "created_at": self.created_at, "started_at": self.started_at,
                 "ended_at": self.ended_at, "exit_code": self.exit_code, "rescan": self.rescan,
                 "result": self.result, "message": self.message,
@@ -237,7 +264,7 @@ def submit(kind_name, params):
         raise BadRequest("unknown kind")
     params = _check_params(kind, params)
     spec = kind.build(params)
-    group = kind.group(params) if callable(kind.group) else kind.group
+    group = spec.get("group") or (kind.group(params) if callable(kind.group) else kind.group)
     cfg = config.load()
     rescan = spec.get("rescan")
     if rescan is not None:
@@ -320,6 +347,17 @@ def _killpg(proc, sig):
 
 def _run(job):
     try:
+        kind = _kinds[job.kind]
+        if kind.check:
+            try:
+                kind.check(job.params, lambda text: _note(job, f"[feedvault] {text}"))
+            except Cancelled as e:
+                _note(job, f"[feedvault] {e}")
+                _finish(job, "cancelled", message=str(e))
+                return
+            except Exception as e:
+                _finish(job, "failed", message=str(e) or type(e).__name__)
+                return
         exe = tool_path(job.tool)
         if exe is None:
             _finish(job, "failed", result={"error": "missing"}, message=f"{job.tool} not found; set its path in Settings")
@@ -327,7 +365,6 @@ def _run(job):
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")
             return
-        kind = _kinds[job.kind]
         if kind.start:
             try:
                 args = kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"), job.argv)
@@ -340,7 +377,8 @@ def _run(job):
             except Exception as e:
                 _finish(job, "failed", message=str(e) or type(e).__name__)
                 return
-        env = {**os.environ, "PYTHONUNBUFFERED": "1"}      # the downloaders are Python: live output
+        # The downloaders are Python: live output.
+        env = {**(os.environ if job.env is None else job.env), "PYTHONUNBUFFERED": "1"}
         job.began = time.time()
         try:
             proc = subprocess.Popen([exe, *job.args], cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
@@ -637,7 +675,8 @@ def _insert(kind, params, spec, group, cwd, rescan, now):
     cur = conn.execute(
         "INSERT INTO jobs(kind, params, argv, cwd, lock_group, state, created_at, rescan, full_scan) "
         "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
-        (kind, json.dumps(params), json.dumps([spec["tool"], *map(str, spec.get("args", []))]), cwd, group,
+        (kind, json.dumps(_shown_params(kind, params)),
+         json.dumps(_shown_argv(kind, [spec["tool"], *map(str, spec.get("args", []))])), cwd, group,
          now, rescan, int(bool(spec.get("full_scan")))))
     conn.commit()
     return cur.lastrowid
@@ -646,7 +685,7 @@ def _insert(kind, params, spec, group, cwd, rescan, now):
 def _set_args(job, args):
     """A start hook's argument list replaces the one built at queue time."""
     job.args = [str(a) for a in args]
-    job.argv = [job.tool, *job.args]
+    job.argv = _shown_argv(job.kind, [job.tool, *job.args])
     conn = db.connect()
     conn.execute("UPDATE jobs SET argv = ? WHERE id = ?", (json.dumps(job.argv), job.id))
     conn.commit()

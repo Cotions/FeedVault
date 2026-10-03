@@ -1063,7 +1063,7 @@ def test_settings_action_goes_on_past_a_bad_file_or_folder(env, client):
 
 
 def test_settings_action_waits_for_a_running_yt_dlp_sync(env, client, monkeypatch):
-    monkeypatch.setattr(jobs, "active", lambda: [{"kind": "yt-dlp-sync", "state": "running"}])
+    monkeypatch.setattr(jobs, "active", lambda: [{"kind": "yt-dlp-sync", "group": "yt-dlp", "state": "running"}])
     assert post(client, "/api/yt-dlp/info-json-cookies", {}, 409)["ok"] is False
 
 

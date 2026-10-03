@@ -30,6 +30,7 @@ import people
 import save
 import scanner
 import scheduler
+import scripts
 import sources
 import sync
 import thumbs
@@ -857,7 +858,7 @@ def sync_person(pid):
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
     ids = sources.of_person(conn, pid)
-    queued, skipped, errors = sync.sync_all(only=set(ids))
+    queued, skipped, errors = sync.sync_all(only=set(ids), scripts_ok=not _foreign_origin())
     if queued:
         print(f"[jobs] sync person {pid}: {len(queued)} queued")
     return jsonify({"ok": True, "sources": len(ids), "jobs": queued, "skipped": skipped, "errors": errors})
@@ -978,9 +979,28 @@ def resolve_source():
                     "session": sync.session_of(r["tool"], sources.clean_options(None), cfg)})
 
 
+def _script_refused(options):
+    """(error, status) when ``options`` (a source's, as sent) set a script
+    that cannot be: from another origin (403), or one that does not exist
+    or is refused now (400). Else None; a malformed id is parse_options'."""
+    sid = options.get("script") if isinstance(options, dict) else None
+    if not isinstance(sid, str) or not sources.SCRIPT_ID_RE.fullmatch(sid):
+        return None
+    if _foreign_origin():
+        return FOREIGN, 403
+    try:
+        scripts.runnable(sid)
+    except jobs.BadRequest as e:
+        return str(e), 400
+    return None
+
+
 @app.post("/api/sources")
 def create_source():
     body = request.get_json(silent=True) or {}
+    refused = _script_refused(body.get("options"))
+    if refused:
+        return jsonify({"ok": False, "error": refused[0]}), refused[1]
     tool = body.get("tool")
     if tool is not None and tool not in sources.TOOLS:
         return jsonify({"ok": False, "error": f"tool must be one of: {', '.join(sources.TOOLS)}"}), 400
@@ -1046,6 +1066,9 @@ def update_source(sid):
         # ones. It reads the options again at the end, so a schedule can change.
         return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
     sent = body["options"]
+    refused = _script_refused(sent) if sent.get("script") != s["options"]["script"] else None
+    if refused:
+        return jsonify({"ok": False, "error": refused[0]}), refused[1]
     options, error = sources.parse_options(sent, base=s["options"], tool=s["tool"], platform=s["platform"],
                                            target=s["target"])
     # Last N stays open while a first sync with it has not worked yet.
@@ -1111,9 +1134,11 @@ def sync_source(sid):
     if sources.row(db.connect(), sid) is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
     try:
-        job = sync.sync(sid)
+        job = sync.sync(sid, scripts_ok=not _foreign_origin())
     except sync.Busy as e:
         return jsonify({"ok": False, "error": str(e)}), 409
+    except sync.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 403
     except jobs.BadRequest as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     print(f"[jobs] #{job['id']} {job['kind']} queued")
@@ -1122,7 +1147,7 @@ def sync_source(sid):
 
 @app.post("/api/sources/sync-all")
 def sync_all_sources():
-    queued, skipped, errors = sync.sync_all()
+    queued, skipped, errors = sync.sync_all(scripts_ok=not _foreign_origin())
     if queued:
         print(f"[jobs] sync all: {len(queued)} queued")
     return jsonify({"ok": True, "jobs": queued, "skipped": skipped, "errors": errors})
@@ -1260,8 +1285,9 @@ def clean_info_json_cookies():
     apply = body.get("apply", False)
     if not isinstance(apply, bool):
         return jsonify({"ok": False, "error": "apply must be true or false"}), 400
-    if any(j["kind"] == sync.KINDS["yt-dlp"] and j["state"] == "running" for j in jobs.active()):
-        return jsonify({"ok": False, "error": "a yt-dlp sync is running; try again once it ends"}), 409
+    # A yt-dlp sync, a yt-dlp source's script sync or a script running yt-dlp: all in its lock group.
+    if any(j["group"] == "yt-dlp" and j["state"] == "running" for j in jobs.active()):
+        return jsonify({"ok": False, "error": "yt-dlp is running (a sync or a script); try again once it ends"}), 409
     try:
         r = info_cookies.sweep(_roots(), apply)
     except info_cookies.Busy as e:
@@ -1299,6 +1325,8 @@ def start_job():
         return jsonify({"ok": False, "error": "send { kind, params }"}), 400
     if body.get("kind") == save.KIND:          # its checks are POST /api/save's
         return jsonify({"ok": False, "error": "start it with POST /api/save"}), 400
+    if body.get("kind") in scripts.JOB_KINDS:  # the origin check is theirs
+        return jsonify({"ok": False, "error": "start it with POST /api/scripts/<id>/run, or a source's Sync"}), 400
     try:
         job = jobs.submit(body.get("kind"), body.get("params"))
     except jobs.BadRequest as e:
@@ -1334,6 +1362,65 @@ def cancel_job(job_id):
             return jsonify({"ok": False, "error": "no such job"}), 404
         return jsonify({"ok": False, "error": "the job has already ended"}), 409
     print(f"[jobs] #{job_id} cancelled")
+    return jsonify({"ok": True, "job": job})
+
+
+# ---------------------------------------------------------------------------
+# Scripts (scripts.py: files on disk, listed and run; nothing here writes one)
+# ---------------------------------------------------------------------------
+
+def _foreign_origin():
+    """Whether the request comes from a page that is not FeedVault's: an
+    Origin not on this machine, or a browser saying it is cross-site. The
+    userscript's requests from instagram.com are; the dashboard's are not
+    (nor the Vite dev server's, on another port of this machine). Running
+    scripts is refused to them, on top of the X-FeedVault header."""
+    origin = request.headers.get("Origin")
+    if origin is not None:
+        scheme, _, host = origin.partition("://")
+        if scheme != "http" or _host_only(host) not in ALLOWED_HOSTS:
+            return True
+    return request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
+
+
+FOREIGN = "scripts can only be run from FeedVault's own dashboard"
+
+
+@app.get("/api/scripts")
+def list_scripts():
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": FOREIGN}), 403
+    return jsonify(scripts.listing())
+
+
+@app.get("/api/scripts/<sid>")
+def get_script(sid):
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": FOREIGN}), 403
+    s, refused = scripts.lookup(sid, content=True)
+    if s is None:
+        # A refused folder lists nothing: its reason, not "no such script".
+        return jsonify({"ok": False, "error": scripts.missing(sid, refused) if refused else "no such script"}), 404
+    return jsonify(s)
+
+
+@app.post("/api/scripts/<sid>/run")
+def run_script(sid):
+    """A script by id, with its inputs: never a command, a path or its text."""
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": FOREIGN}), 403
+    body = request.get_json(silent=True)
+    body = {} if body is None else body
+    if not isinstance(body, dict) or set(body) - set(scripts.INPUTS) \
+            or not all(v is None or isinstance(v, str) for v in body.values()):
+        return jsonify({"ok": False, "error": "send { target, url, folder }, each text or left out"}), 400
+    try:
+        job = scripts.run(sid, body)
+    except LookupError:
+        return jsonify({"ok": False, "error": "no such script"}), 404
+    except jobs.BadRequest as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    print(f"[jobs] #{job['id']} script {sid} queued")
     return jsonify({"ok": True, "job": job})
 
 

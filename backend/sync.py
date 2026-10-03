@@ -154,6 +154,7 @@ from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SPACED_RE, 
 KIND = "instaloader-sync"
 GROUP = "instaloader"
 KINDS = {"instaloader": KIND, "gallery-dl": "gallery-dl-sync", "yt-dlp": "yt-dlp-sync"}
+SCRIPT_KIND = "script-sync"                    # a source's own script instead (scripts.py)
 YT_DLP_NAME = "%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s"
 BREAK_ON_EXISTING = 101                        # yt-dlp's exit code when --break-on-existing stopped it
 PAUSE_DEFAULT = 60
@@ -530,12 +531,21 @@ def trusted_newest(conn, platform, author_id, skip=(), saved=(), held=None):
 GONE = "source {sid} no longer exists (removed, or the database was replaced): nothing to sync"
 
 
+def queued_target(params, argv):
+    """The target a sync was queued with: its ``target`` param (a script's
+    sync, whose argv is the script's), else argv[-1]; None when unknown."""
+    if "target" in params:
+        return params["target"]
+    return argv[-1] if argv else None
+
+
 def _queued_source(conn, params, argv):
     """The source a sync about to start is for. Cancelled when it is gone,
     or when its id names another source now (the database was replaced):
-    argv[-1] is the target the job was queued with."""
+    queued_target is the target the job was queued with."""
     src = sources.row(conn, _source_id(params))
-    if src is None or (argv and src["target"] != argv[-1]):
+    target = queued_target(params, argv)
+    if src is None or (target is not None and src["target"] != target):
         raise jobs.Cancelled(GONE.format(sid=params["source"]))
     return src
 
@@ -1059,7 +1069,8 @@ def _ended(job):
     r = job["result"] or {}
     conn = db.connect()
     src = sources.row(conn, sid)
-    if src is not None and job["argv"] and src["target"] != job["argv"][-1]:
+    target = queued_target(job["params"], job["argv"])
+    if src is not None and target is not None and src["target"] != target:
         return                                 # the id names another source now (database replaced)
     ended_at = job["ended_at"] or int(time.time())
     before = sources.last_result(src)
@@ -1411,23 +1422,24 @@ def _start_archive(tool):
 
 
 _seed_yt_dlp = _start_archive("yt-dlp")
-_info_before = {}                              # source id -> its folder's info JSONs right before yt-dlp starts
+_info_before = {}                              # source id -> (its folder, the info JSONs in it) right before yt-dlp starts
 
 
 def _start_yt_dlp(params, note, argv=None):
     _seed_yt_dlp(params, note, argv)
     src = sources.row(db.connect(), _source_id(params))
-    _info_before[src["id"]] = info_cookies.listing(src["folder"])
+    _info_before[src["id"]] = (src["folder"], info_cookies.listing(src["folder"]))
 
 
 def _strip_cookies(job, note):
     """After a yt-dlp run: take the cookies out of the info JSONs it wrote,
     whether they came from FeedVault's setting (--cookies-from-browser) or
     the user's own yt-dlp config. A failure is logged; the sync goes on."""
-    before = _info_before.pop(int(job["params"]["source"]), None)
-    if before is None or not job["rescan"]:
+    listed = _info_before.pop(int(job["params"]["source"]), None)
+    if listed is None or not job["rescan"]:
         return                                 # it never got to start
-    cleaned, failed = info_cookies.after_sync(job["rescan"], before)
+    # The folder listed at start: a script's sync may rescan another one.
+    cleaned, failed = info_cookies.after_sync(*listed)
     if cleaned:
         note(f"cookies removed from {cleaned} info JSON{'' if cleaned == 1 else 's'}")
     for path, error in failed:
@@ -1466,7 +1478,7 @@ def active():
     """{source id: {id, state, waits_until}} of the syncs queued or running.
     Live jobs only: nothing here outlives the process or the database."""
     out = {}
-    kinds = set(KINDS.values())
+    kinds = {*KINDS.values(), SCRIPT_KIND}
     for j in jobs.active():
         if j["kind"] in kinds:
             out.setdefault(int(j["params"]["source"]), {k: j[k] for k in ("id", "state", "waits_until")})
@@ -1476,46 +1488,63 @@ def active():
 _submitting = threading.Lock()                 # "already queued?" and queueing, as one step
 
 
-def _kind(sid):
-    src = sources.row(db.connect(), sid)
-    if src is None:
-        raise jobs.BadRequest("no such source")
+class Refused(Exception):
+    """The source runs a script, and the request may not run one."""
+
+
+SCRIPT_REFUSED = "this source runs a script, which only FeedVault's own dashboard can start"
+
+
+def _job(src, scheduled=False, scripts_ok=True):
+    """(kind, params) of a source's sync: its script's (scripts.py) when it
+    has one, else its tool's. Raises Refused for a script when not
+    ``scripts_ok``, jobs.BadRequest when it cannot be synced."""
+    params = {"source": str(src["id"]), **({"scheduled": "1"} if scheduled else {})}
+    script = _options(src)["script"]
+    if script is not None:
+        if not scripts_ok:
+            raise Refused(SCRIPT_REFUSED)
+        import scripts                         # it imports this module
+        return SCRIPT_KIND, {**params, **scripts.sync_params(script, src)}
     if src["tool"] not in KINDS:
         raise jobs.BadRequest(f"no sync for {src['tool']} sources")
-    return KINDS[src["tool"]]
+    return KINDS[src["tool"]], params
 
 
-def sync(sid, scheduled=False):
-    """Queue one source's sync: the job's public dict. Raises Busy, or
-    jobs.BadRequest when the source cannot be synced. ``scheduled``: the
-    scheduler's (notify.py)."""
+def sync(sid, scheduled=False, scripts_ok=True):
+    """Queue one source's sync: the job's public dict. Raises Busy, Refused
+    (see _job), or jobs.BadRequest when the source cannot be synced.
+    ``scheduled``: the scheduler's (notify.py)."""
     with _submitting:
         if sid in active():
             raise Busy("its sync is already queued or running")
-        return jobs.submit(_kind(sid), {"source": str(sid), **({"scheduled": "1"} if scheduled else {})})
+        src = sources.row(db.connect(), sid)
+        if src is None:
+            raise jobs.BadRequest("no such source")
+        return jobs.submit(*_job(src, scheduled, scripts_ok))
 
 
-def sync_all(only=None):
+def sync_all(only=None, scripts_ok=True):
     """Queue a sync for every source not already queued or running, by
     target, or for those of ``only`` (source ids: a person's). They run one
     after another, the pause between each. Returns (jobs, skipped, errors:
-    [{source, error}] for those refused). The jobs queued become the batch
-    (see batch), or join it while it still runs."""
+    [{source, error}] for those refused; a source with a script, when not
+    ``scripts_ok``). The jobs queued become the batch (see batch), or join
+    it while it still runs."""
     global _batch
     queued, skipped, errors = [], 0, []
     with _submitting:
         busy = active()
-        for sid, tool in db.connect().execute("SELECT id, tool FROM sources ORDER BY target, id").fetchall():
+        for src in db.connect().execute("SELECT * FROM sources ORDER BY target, id").fetchall():
+            sid = src["id"]
             if only is not None and sid not in only:
                 continue
             if sid in busy:
                 skipped += 1
                 continue
             try:
-                if tool not in KINDS:
-                    raise jobs.BadRequest(f"no sync for {tool} sources")
-                queued.append(jobs.submit(KINDS[tool], {"source": str(sid)}))
-            except jobs.BadRequest as e:
+                queued.append(jobs.submit(*_job(src, scripts_ok=scripts_ok)))
+            except (jobs.BadRequest, Refused) as e:
                 errors.append({"source": sid, "error": str(e)})
         if queued:
             with _batch_lock:
