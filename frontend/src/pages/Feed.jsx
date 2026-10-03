@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPosts, getPostsSummary, getAuthors, getPeople, getTags, deleteItems, setDecision, markSeen } from "../lib/api";
+import { getPosts, getPostsSummary, getAuthors, getPeople, getTags, getCollections, deleteItems, setDecision, markSeen } from "../lib/api";
+import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
@@ -20,7 +21,7 @@ import CreatorPicker from "../components/CreatorPicker";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
-const FILTERS = ["platform", "kind", "author", "person", "review", "tag", "untagged", "new", "sort"];
+const FILTERS = ["platform", "kind", "author", "person", "collection", "review", "tag", "untagged", "new", "sort"];
 const SUMMARY_DELAY = 250;
 
 export default function Feed() {
@@ -39,11 +40,12 @@ export default function Feed() {
   const tagKey   = JSON.stringify(params.getAll("tag").filter(t => t.trim()));
   const untagged = params.get("untagged") === "1";
   const newOnly  = params.get("new") === "1";
+  const collection = /^\d+$/.test(params.get("collection") || "") ? params.get("collection") : "";
   const { newCount, newUntil, started } = useJobs();
   const [seenTick, setSeenTick] = useState(0);         // bumped by "Mark all seen"
 
-  const filters = useMemo(() => ({ q, platform, kind, author, person, review, tag: JSON.parse(tagKey), untagged, new: newOnly, sort }),
-    [q, platform, kind, author, person, review, tagKey, untagged, newOnly, sort]);
+  const filters = useMemo(() => ({ q, platform, kind, author, person, collection, review, tag: JSON.parse(tagKey), untagged, new: newOnly, sort }),
+    [q, platform, kind, author, person, collection, review, tagKey, untagged, newOnly, sort]);
   const tagFilter = filters.tag;
   const filterKey = JSON.stringify(filters);
 
@@ -73,8 +75,8 @@ export default function Feed() {
   // Only with a filter: unfiltered, it is the whole archive (see Storage).
   // Built from the cleaned values, so ?review=bogus or a blank q is no filter.
   const anyFilter  = !!(rawQ || FILTERS.some(f => f !== "sort" && params.get(f)));
-  const summaryKey = q || platform || kind || author || person || review || tagFilter.length || untagged || newOnly
-    ? JSON.stringify({ q, platform, kind, author, person, review, tag: tagFilter, untagged, new: newOnly }) : null;
+  const summaryKey = q || platform || kind || author || person || collection || review || tagFilter.length || untagged || newOnly
+    ? JSON.stringify({ q, platform, kind, author, person, collection, review, tag: tagFilter, untagged, new: newOnly }) : null;
   const [summary, setSummary] = useState({ key: null, data: null });
   const [summaryTick, setSummaryTick] = useState(0);    // bumped after a delete or keep
   useEffect(() => {
@@ -239,7 +241,11 @@ export default function Feed() {
   const authorsApi = useApi(getAuthors, refreshKey);
   const peopleApi  = useApi(getPeople, refreshKey);
   const tagsApi    = useApi(getTags, refreshKey);
+  useEffect(() => { if (tagsApi.data) setTagColors(tagsApi.data); }, [tagsApi.data]);
   const allTags    = tagsApi.data || [];
+  const collectionsApi = useApi(getCollections, refreshKey);
+  const collections = collectionsApi.data || [];
+  const selectedCollection = collection ? collections.find(c => String(c.id) === collection) : null;
   const authors    = useMemo(() => authorsApi.data || [], [authorsApi.data]);
   const platforms  = useMemo(() => {
     const set = new Set(authors.map(a => a.platform).filter(Boolean));
@@ -288,7 +294,8 @@ export default function Feed() {
         <h2 className="page-title">
           {q ? "Results" : newOnly && !author && !person && !tagFilter.length ? "New since last visit"
             : selectedPerson ? selectedPerson.name : selectedAuthor ? `@${selectedAuthor.handle}`
-            : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span> : "Feed"}
+            : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span>
+            : selectedCollection ? <span className="page-title-tag"><Icon name="bookmark" size={17} />{selectedCollection.name}</span> : "Feed"}
         </h2>
         <span className="page-count">
           {current && !error
@@ -370,6 +377,16 @@ export default function Feed() {
               </li>
             ))}
           </ul>
+        )}
+        {(collections.length > 0 || collection) && (
+          <label className="filter filter-collection">
+            <span>Collection</span>
+            <select className="sort-select" value={collection} onChange={e => setParam({ collection: e.target.value })}>
+              <option value="">Any</option>
+              {collection && !selectedCollection && <option value={collection} disabled>collection {collection}</option>}
+              {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
+            </select>
+          </label>
         )}
         <label className="filter">
           <span>Review</span>

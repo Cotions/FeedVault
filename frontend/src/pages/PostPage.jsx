@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { getPost, deleteItems, getTags, applyTags } from "../lib/api";
+import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
@@ -18,6 +19,7 @@ import CollectionDialog from "../components/CollectionDialog";
 function PostTags({ post, onChanged }) {
   const toast = useToast();
   const tagsApi = useApi(getTags, 0);
+  useEffect(() => { if (tagsApi.data) setTagColors(tagsApi.data); }, [tagsApi.data]);
   const [busy, setBusy] = useState(false);
 
   async function change(body) {

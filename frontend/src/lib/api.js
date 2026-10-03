@@ -139,10 +139,12 @@ export function deleteItems({ posts, media } = {}) {
 }
 export function getTrash()   { return get("/api/trash"); }
 export function emptyTrash() { return post("/api/trash/empty"); }
-// Trashed entries, newest deletion first → { total, files, bytes, trash, authors,
-// entries }. params: platform, author, person, since, before, offset, limit. See docs/API.md "Trash contents".
+// Trashed entries, newest deletion first → { total, files, bytes, upto, trash, authors,
+// entries }. params: platform, author, person, since, before, upto, offset, limit. See docs/API.md "Trash contents".
 export function getTrashItems(params = {}) { return get(`/api/trash/items${qs(params)}`); }
-// Permanently deletes entries' files: { keys } or { filter: { platform, author, person, since, before } }
+// Looks at every trashed file now → { ok, entries, files, bytes, missing }.
+export function checkTrash() { return post("/api/trash/check"); }
+// Permanently deletes entries' files: { keys } or { filter: { platform, author, person, since, before, upto } }
 // → { ok, entries, keys, files, bytes, dropped, errors }
 export function purgeTrash(body) { return post("/api/trash/purge", body); }
 // Puts exactly those entries back (partial deletes too) → { ok, posts, files, errors }
@@ -170,8 +172,12 @@ export function dismissDuplicate(group, threshold) { return post("/api/duplicate
 
 /* ── Tags (see docs/API.md "Tags") ───────────────────────── */
 
-// [{ name, color, count }], most used first
+// [{ name, color, count, unused }], most used first
 export function getTags() { return get("/api/tags"); }
+// color: "#rrggbb" or null → { ok, color }
+export function setTagColor(name, color) { return post("/api/tags/color", { name, color }); }
+// Deletes those of `names` on no post at all (not even a trashed one) → { ok, deleted: [names] }
+export function deleteUnusedTags(names) { return post("/api/tags/delete-unused", { names }); }
 // → { ok, posts, added, removed, created }
 export function applyTags(posts, { add = [], remove = [] } = {}) {
   return post("/api/tags/apply", { posts, add, remove });
@@ -185,6 +191,8 @@ export function deleteTag(name) { return post("/api/tags/delete", { name }); }
 
 // [{ id, name, count, created_at, cover_post, cover }]
 export function getCollections() { return get("/api/collections"); }
+// The given collections take the places they held, in this order → { ok, collections }
+export function reorderCollections(ids) { return post("/api/collections/reorder", { ids }); }
 // → { ok, collection } or { ok: false, error } (bad or taken name)
 export function createCollection(name) { return post("/api/collections", { name }); }
 // → { collection, total, posts: [summary] }, in the collection's order

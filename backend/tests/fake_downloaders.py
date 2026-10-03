@@ -16,7 +16,7 @@ this script), keyed by the profile link FeedVault passes:
                                                "title": "…", "description": "…", "duration": 12}],
             "pinned": ["7300000000000000001"]}},
      "fail": null | "429" | "login" | "private" | "notfound",
-     "config_cookies": false}
+     "config_cookies": false, "config_no_metadata": false}
 
 An account may have its own "fail" (one of the same, or "cookies" for
 yt-dlp: its browser's cookie database is not there), used when the top
@@ -27,7 +27,8 @@ and behave like gallery-dl 1.32 and yt-dlp 2026.08 for one profile link with
 the flags FeedVault passes, newest post first:
 
 - both: the flag that skips the user's config (``--config-ignore``,
-  ``--ignore-config``), with no effect: there is no config to skip.
+  ``--ignore-config``). Its only effect: with ``config_no_metadata`` (the
+  user's config turns metadata off) no metadata is written without it.
 - both: ``--simulate`` (and yt-dlp's ``--no-playlist``), as Settings →
   Downloaders → Test runs them on one public item: one line and exit 0,
   or the ``fail`` setting's output and exit code; writes nothing.
@@ -178,6 +179,11 @@ def _children(account, include):
     return [(kind, [p for p in posts if "in" not in p or kind in p["in"]]) for kind in include.split(",")]
 
 
+def _config_drops_metadata(ignored):
+    """The user's own config turns the metadata off, unless it is skipped."""
+    return bool(_data().get("config_no_metadata")) and not ignored
+
+
 def gallery_dl_main(argv):
     if argv == ["--version"]:
         print("1.32.14")
@@ -255,7 +261,7 @@ def _gallery_dl_child(posts, account, folder, archive, args, abort, keep, after,
                 continue
             skipped = 0
             (mp4 if d["extension"] == "mp4" else lambda p: png(p, colour(name)))(path)
-            if args.write_metadata:
+            if args.write_metadata and not _config_drops_metadata(args.config_ignore):
                 with open(path + ".json", "w", encoding="utf-8") as f:
                     json.dump(d, f, indent=4)
             if archive:
@@ -410,7 +416,7 @@ def yt_dlp_main(argv):
             mp4(path)
             if args.write_thumbnail:
                 png(f"{base}.{THUMB.get(ie, 'jpg')}", colour(v["id"]))
-            if args.write_info_json:
+            if args.write_info_json and not _config_drops_metadata(args.ignore_config):
                 web = (f"https://www.tiktok.com/@{account['uploader']}/video/{v['id']}" if ie == "TikTok"
                        else f"https://www.youtube.com/watch?v={v['id']}")
                 with open(base + ".info.json", "w", encoding="utf-8") as f:

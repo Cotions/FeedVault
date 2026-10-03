@@ -85,9 +85,9 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&person=&kind=&tag=&untagged=&new=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&person=&collection=&kind=&tag=&untagged=&new=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&person=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
 | POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`, see [New posts](#new-posts) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
@@ -168,8 +168,9 @@ Only **Empty trash** and **purge** (below) remove files for good.
 | POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
 | GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }` |
 | POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }` |
-| GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
-| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "person": …, "since": …, "before": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
+| GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=&upto=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
+| POST | `/api/trash/check` | looks at every trashed file now → `{ "ok": true, "entries": 7, "files": 21, "bytes": 52428800, "missing": 1 }`, see [Trash contents](#trash-contents) |
+| POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "person": …, "since": …, "before": …, "upto": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
 | GET | `/trash/<key>/thumb` | small JPEG of a trashed entry (no header needed, like `/media`) |
 
 `/api/delete` removes each listed post with all its files (media, posters,
@@ -261,7 +262,7 @@ deletion first:
 
 ```json
 {
-  "total": 3, "files": 9, "bytes": 15728640,
+  "total": 3, "files": 9, "bytes": 15728640, "upto": 1727500000123,
   "trash": { "entries": 7, "files": 21, "bytes": 52428800 },
   "authors": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "entries": 4, "bytes": 31457280 }],
   "entries": [
@@ -278,13 +279,29 @@ deletion first:
   send `platform` with it), `person` (a person id: entries of any of their
   accounts, see [People](#people); one that is not an id matches nothing),
   `since` (Unix seconds: deleted at or after),
-  `before` (deleted strictly before), `offset` (default 0), `limit`
+  `before` (deleted strictly before), `upto` (a list's `upto`: nothing
+  deleted after that list was made), `offset` (default 0), `limit`
   (default 60, max 500).
+- `upto`: the newest deletion in the trash when the list was made (with
+  `upto` given, the smaller of the two). It is a stamp, not a time to
+  compare with a clock: each manifest line written has `at_ms`, the
+  deletion time in milliseconds but always above every stamp FeedVault
+  wrote or read before, so a deletion made after a list is never inside
+  its `upto`, even within the same millisecond. Lines written before it
+  count as their whole second (`at` × 1000). Send it with later pages and
+  with a purge by filter, so both mean the list the user saw.
 - `total`, `files` and `bytes` add up every entry the filters match, not just
   one page. `trash` and `authors` cover the whole trash, whatever the filters.
 - `key` is opaque. It names one entry and is what restore and purge take.
 - `files` and `bytes` (here and in the totals) count the entry's files still
-  in the trash. `items` counts its media items, `of` the post's media count when it
+  in the trash. Looking costs one `lstat` per file, so a list only looks at
+  the entries of the page it returns (again once their last look is 30 s
+  old); every other entry counts as its last look, or, never looked at, as
+  its manifest lines recorded it (every file there, their recorded sizes).
+  `POST /api/trash/check` looks at every file now (the Trash page's "Check
+  for missing files"). The manifest is parsed once per version; one that
+  only grew (a delete appends to it) is read from where the last read
+  stopped. `items` counts its media items, `of` the post's media count when it
   was deleted (`null` for old lines).
 - `partial`: only some media items of the post were deleted; the rest is still
   in the index. Not set when the same call went on to delete the whole post.
@@ -322,9 +339,10 @@ target. Lines of files already gone are dropped. Response:
 Instead of `keys`, `{ "filter": { … } }` purges every entry the same filters
 as `/api/trash/items` match (`platform`, `author`, `person` (a number), `since`, `before`; each optional, but
 the filter must name at least one, use `/api/trash/empty` for everything).
-The match is made under the same lock as the purge itself. The page sends the
-time it loaded the list as `before`, so nothing trashed after the user saw
-the totals is purged with them.
+`upto` is optional and does not count as one: alone it would be the whole
+trash. The match is made under the same lock as the purge itself. The page
+sends its list's `upto`, so nothing trashed after the user saw the totals is
+purged with them, not even within the same second.
 
 `entries` counts the entries fully purged and `keys` names them, `dropped`
 the lines removed for files that were already missing. An entry with an error
@@ -372,6 +390,9 @@ post id; after a keep, call `/api/review` with `decision: null`.
   either way the whole account's posts (see [People](#people))
 - `person`: a person id: posts of every account linked to that person, across
   platforms (see [People](#people)); a value that is not an id matches nothing
+- `collection`: a collection id: only posts in that collection (see
+  [Collections](#collections)), in the feed's order, not the collection's;
+  a value that is not an id matches nothing
 - `kind`: one of the kinds above
 - `sort`: `posted` (default) or `saved`
 - `order`: `desc` (default, newest first) or `asc`
@@ -379,7 +400,7 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `offset` (default 0), `limit` (default 60, max 200)
 
 `/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
-`platform`, `author`, `person`, `kind`, `review`, `tag`, `untagged`, `new`; `sort`, `order`, `offset` and `limit`
+`platform`, `author`, `person`, `collection`, `kind`, `review`, `tag`, `untagged`, `new`; `sort`, `order`, `offset` and `limit`
 are ignored) and totals everything they match, not just one page: `posts` is
 always equal to the `total` that `/api/posts` returns for the same filters,
 `media` and `bytes` count the media items of those posts that are not missing.
@@ -610,10 +631,12 @@ index gets them back.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/tags` | `[{ "name": "outfits", "color": null, "count": 12 }]`, most used first |
+| GET | `/api/tags` | `[{ "name": "outfits", "color": "#3b82f6", "count": 12, "unused": false }]`, most used first |
 | POST | `/api/tags/apply` | body `{ "posts": ["instagram:C8x…"], "add": ["outfits"], "remove": ["todo"] }` → see below |
 | POST | `/api/tags/rename` | body `{ "from": "outfit", "to": "outfits" }` → `{ "ok": true, "name": "outfits", "merged": true }` |
 | POST | `/api/tags/delete` | body `{ "name": "outfits" }` → `{ "ok": true, "posts": 12 }`: removes the tag from every post |
+| POST | `/api/tags/color` | body `{ "name": "outfits", "color": "#3b82f6" }`, or `null` for none → `{ "ok": true, "name": "outfits", "color": "#3b82f6" }` |
+| POST | `/api/tags/delete-unused` | body `{ "names": ["old", "todo"] }` → `{ "ok": true, "deleted": ["old"] }`, see below |
 
 `/api/tags/apply` adds and removes tags on up to 5000 posts at once (more is
 a 400). `add` and `remove` are lists of names, either may be omitted but not
@@ -633,7 +656,16 @@ two are merged: every post of `from` gets `to`, and `from` is gone
 `from` is a 404, a bad `to` a 400. `/api/tags/delete` of an unknown name is a
 404.
 
-`color` is reserved for later and always `null` for now.
+`color` is the colour the tag's chips wear, `#rrggbb` (stored in lower
+case), or `null` for none. `/api/tags/color` of a colour in any other form is
+a 400, of an unknown name a 404.
+
+`unused` is true for a tag on no post at all, not even one in the trash; a
+tag only on trashed posts has `count` 0 but is not unused, as it comes back
+with them. `/api/tags/delete-unused` deletes those of the names given that
+are unused when it runs (a tag put on a post since the list was read is
+kept, and left out of `deleted`); nothing is deleted on its own. At most
+5000 names; a bad body is a 400.
 
 ## Collections
 
@@ -660,7 +692,7 @@ A **collection**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/collections` | `[collection, …]`, in the order they were created |
+| GET | `/api/collections` | `[collection, …]`, in the user's order (new ones last) |
 | POST | `/api/collections` | body `{ "name": "Moodboard" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
 | GET | `/api/collections/<id>?offset=&limit=` | `{ "collection": {…}, "total": 24, "posts": [summary, …] }` in the collection's order; `limit` default 60, max 200; 404 if unknown |
 | POST | `/api/collections/<id>/rename` | body `{ "name": "…" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
@@ -669,6 +701,7 @@ A **collection**:
 | POST | `/api/collections/<id>/remove` | body `{ "posts": […] }` → `{ "ok": true, "removed": 2 }` |
 | POST | `/api/collections/<id>/order` | body `{ "posts": […] }` → `{ "ok": true }`, see below |
 | POST | `/api/collections/<id>/cover` | body `{ "post": "instagram:C8x…" }`, or `null` for the first post → `{ "ok": true, "collection": {…} }`; 400 if the post is not in it |
+| POST | `/api/collections/reorder` | body `{ "ids": [3, 1, 2] }` (1 to 5000 ids) → `{ "ok": true, "collections": [collection, …] }` in the new order |
 
 Every `/api/collections/<id>/…` call answers 404 `{ "ok": false, "error": … }`
 for an unknown id.
@@ -677,6 +710,11 @@ for an unknown id.
 the places those same posts held before, the rest staying where they are.
 Sending one page in its new order reorders that page; sending every post
 reorders the whole collection. Ids not in the collection are ignored.
+
+`/api/collections/reorder` does the same for the collections themselves:
+the ids given take the places they held between them, in the order given;
+unknown ids are ignored, a body that is not a list of ids is a 400. The order
+is user data, written to `collections.json` with the rest.
 
 ## People
 
@@ -1502,7 +1540,12 @@ never holds the other's syncs.
 tool's syncs and its Test skip the user's own config files
 (`--config-ignore` for gallery-dl, `--ignore-config` for yt-dlp), so
 options set there (another output folder, a different archive, cookies)
-do not change what FeedVault runs.
+do not change what FeedVault runs. With `false`, a sync that wrote media
+files no parser could read (changed since the tool started, in the
+source's folder, with no metadata FeedVault knows beside them) says the
+user's config is the likely cause at the end of its `message` (`…; 2 files
+it wrote could not be read: your own gallery-dl config is the likely cause
+…`); with `true`, only that they could not be read.
 
 `youtube_max_seconds`: whole seconds from 1 to 86400 (default 180).
 

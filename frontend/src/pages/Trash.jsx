@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPeople, getTrashItems, purgeTrash, restoreEntries } from "../lib/api";
+import { checkTrash, getPeople, getTrashItems, purgeTrash, restoreEntries } from "../lib/api";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
@@ -143,16 +143,14 @@ export default function Trash() {
   const [loadingMore, setLoadingMore] = useState(false);
 
   // The range is fixed when a filter's first page loads, so later pages and
-  // a bulk purge mean exactly what the user saw.
-  const [range, setRange] = useState(null);       // { key, since, before, asOf }
-  const rangeNow = useCallback(() => ({ key: filterKey, ...rangeFor(when), asOf: Math.floor(Date.now() / 1000) + 1 }),
-    [filterKey, when]);
+  // a bulk purge mean exactly what the user saw: `upto` is the newest
+  // deletion that list had (the server's stamp, not this browser's clock).
+  const [range, setRange] = useState(null);       // { key, since, before, upto }
+  const rangeNow = useCallback(() => ({ key: filterKey, ...rangeFor(when) }), [filterKey, when]);
   const [platform, authorId] = author.includes(":") ? [author.slice(0, author.indexOf(":")), author.slice(author.indexOf(":") + 1)] : ["", ""];
-  const fetchPage = useCallback((offset, limit, r) => {
-    // Capped at the first load, so later pages do not pick up newer deletions.
-    const before = Math.min(r.before ?? Infinity, r.asOf);
-    return getTrashItems({ platform, author: authorId, person: person || undefined, since: r.since, before, offset, limit });
-  }, [platform, authorId, person]);
+  const fetchPage = useCallback((offset, limit, r) => getTrashItems({
+    platform, author: authorId, person: person || undefined, since: r.since, before: r.before, upto: r.upto, offset, limit,
+  }), [platform, authorId, person]);
 
   // First page on a new filter; on a reload (after restore or purge) as many
   // entries as were on screen, so the page does not jump back to the top.
@@ -161,7 +159,7 @@ export default function Trash() {
     let alive = true;
     const r0 = rangeNow();
     fetchPage(0, Math.min(MAX_PAGE, Math.max(PAGE, shown)), r0).then(
-      r  => { if (alive) { setResult(r); setLoaded(filterKey); setRange(r0); setError(null); } },
+      r  => { if (alive) { setResult(r); setLoaded(filterKey); setRange({ ...r0, upto: r.upto }); setError(null); } },
       e  => { if (alive) setError(e); },
     );
     return () => { alive = false; };
@@ -205,6 +203,23 @@ export default function Trash() {
     sel.drop(keys);
   }
 
+  // Entries are measured as they are shown; this looks at every file now,
+  // so the totals and "missing" badges catch files moved out by hand.
+  async function checkFiles() {
+    setBusy(true);
+    try {
+      const r = await checkTrash();
+      toast(r.missing
+        ? `Checked ${plural(r.entries, "entry", "entries")}: ${fmtInt(r.missing)} with files missing, marked "missing".`
+        : `Checked ${plural(r.entries, "entry", "entries")}: no file is missing.`);
+      reload();
+    } catch (e) {
+      toast(e.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function restore(list) {
     setBusy(true);
     setErrors(null);
@@ -229,9 +244,10 @@ export default function Trash() {
   }
 
   // Everything the filters match, not just what is loaded. Nothing deleted
-  // after the list was loaded goes with it: `before` is at most that moment.
+  // after the list was loaded goes with it: `upto` is that list's.
   function askBulk() {
-    const filter = { before: Math.min(range.before ?? Infinity, range.asOf) };
+    const filter = { upto: range.upto };
+    if (range.before != null) filter.before = range.before;
     if (authorId) Object.assign(filter, { platform, author: authorId });
     if (person) filter.person = Number(person);
     if (range.since != null) filter.since = range.since;
@@ -281,6 +297,12 @@ export default function Trash() {
         </span>
       )}
       <div className="page-head-spacer" />
+      {trash?.entries > 0 && !sel.active && (
+        <button type="button" className="btn-secondary" onClick={checkFiles} disabled={busy}
+          title="Look at every trashed file now. The list checks the entries it shows; this finds files moved or deleted by hand anywhere in the trash">
+          <Icon name="search" size={14} />Check for missing files
+        </button>
+      )}
       {entries.length > 0 && !sel.active && (
         <button type="button" className="btn-secondary" onClick={sel.enter}>
           <Icon name="check" size={14} />Select
@@ -443,10 +465,11 @@ export default function Trash() {
         onCancel={() => { setConfirm(false); setBulk(null); }}
       >
         <p>
-          This <strong>permanently deletes {plural(bulk ? bulk.files : selFiles, "file")} ({fmtBytes(bulk ? bulk.bytes : selBytes)})</strong> of{" "}
+          This <strong>permanently deletes {bulk ? "up to " : ""}{plural(bulk ? bulk.files : selFiles, "file")} ({fmtBytes(bulk ? bulk.bytes : selBytes)})</strong> of{" "}
           {plural(bulk ? bulk.total : sel.count, "trashed entry", "trashed entries")}
           {bulk ? `, every one the filters match (${filterText(result?.authors, author, when, shownPerson)})` : ""} from
           disk. They do not go to the system trash, and this cannot be undone.
+          {bulk ? " Entries off the page count as last measured: a file removed by hand since is not freed again." : ""}
         </p>
       </ConfirmDialog>
     </div>

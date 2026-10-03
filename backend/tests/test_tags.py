@@ -308,3 +308,87 @@ def test_odd_filters_and_applies(env, client):
     apply(client, ["instagram:P1"], add=["Été"])
     assert tags(client) == {"été": 2, "Été": 1}
     assert ids(client, "tag=%C3%A9t%C3%A9&tag=%C3%89t%C3%A9") == ["P1"]
+
+
+# ---------------------------------------------------------------------------
+# #22: colours, unused tags, the untagged filter
+# ---------------------------------------------------------------------------
+
+def colors(client):
+    return {t["name"]: t["color"] for t in client.get("/api/tags", headers=H).get_json()}
+
+
+def test_tag_colors(env, client):
+    three_posts(env)
+    apply(client, ["instagram:P1"], add=["red", "blue"])
+    r = client.post("/api/tags/color", json={"name": "RED", "color": "#FF0044"}, headers=H)
+    assert r.status_code == 200 and r.get_json() == {"ok": True, "color": "#ff0044"}
+    assert colors(client) == {"red": "#ff0044", "blue": None}
+    for bad in ({"name": "red", "color": "red"}, {"name": "red", "color": "#ff004"}, {"name": "red"},
+                {"name": "red", "color": "#gg0000"}, {"name": "", "color": None}, {"name": "red", "color": 5},
+                {"name": "red", "color": "#ff0044;x"}):
+        assert client.post("/api/tags/color", json=bad, headers=H).status_code == 400, bad
+    assert client.post("/api/tags/color", json={"name": "nope", "color": None}, headers=H).status_code == 404
+    assert client.post("/api/tags/color", json={"name": "red", "color": None}).status_code == 403
+    assert client.post("/api/tags/color", json={"name": "red", "color": None}, headers=H).get_json()["ok"]
+    assert colors(client)["red"] is None
+
+
+def test_delete_unused_takes_only_tags_on_no_post(env, client):
+    three_posts(env)
+    apply(client, ["instagram:P1"], add=["kept"])
+    apply(client, ["instagram:P2"], add=["trashed only"])
+    apply(client, ["instagram:P3"], add=["gone"])
+    apply(client, ["instagram:P3"], remove=["gone"])
+    client.post("/api/delete", json={"posts": ["instagram:P2"]}, headers=H)
+    listed = {t["name"]: (t["count"], t["unused"]) for t in client.get("/api/tags", headers=H).get_json()}
+    assert listed == {"kept": (1, False), "trashed only": (0, False), "gone": (0, True)}
+    r = client.post("/api/tags/delete-unused", json={"names": ["gone", "kept", "trashed only", "nope"]},
+                    headers=H).get_json()
+    assert r == {"ok": True, "deleted": ["gone"]}
+    assert set(tags(client)) == {"kept", "trashed only"}
+    # One used again since the list was shown is not deleted.
+    apply(client, ["instagram:P3"], add=["again"])
+    assert client.post("/api/tags/delete-unused", json={"names": ["again"]}, headers=H).get_json()["deleted"] == []
+    for bad in ({}, {"names": []}, {"names": "gone"}, {"names": [1]}):
+        assert client.post("/api/tags/delete-unused", json=bad, headers=H).status_code == 400, bad
+    assert client.post("/api/tags/delete-unused", json={"names": ["x"]}).status_code == 403
+
+
+def test_untagged_with_other_filters(env, client):
+    three_posts(env)
+    apply(client, ["instagram:P1"], add=["a"])
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)   # its tag stays, the post goes
+    assert ids(client, "untagged=1") == ["P2", "P3"]
+    assert ids(client, "untagged=1&kind=video") == ["P2"]
+    assert ids(client, "untagged=1&q=red") == ["P3"]
+    client.post("/api/trash/restore", json={"posts": ["instagram:P1"]}, headers=H)
+    assert ids(client, "untagged=1") == ["P2", "P3"]
+    # The count (all less the tagged ones) agrees with the summary's NOT EXISTS, whatever else filters.
+    apply(client, ["instagram:P1"], add=["b"])                            # two tags on one post
+    client.post("/api/review", json={"posts": ["instagram:P3"], "decision": "keep"}, headers=H)
+    cid = client.post("/api/collections", json={"name": "c"}, headers=H).get_json()["collection"]["id"]
+    client.post(f"/api/collections/{cid}/add", json={"posts": ["instagram:P1", "instagram:P3"]}, headers=H)
+    assert ids(client, "untagged=1&review=unreviewed") == ["P2"]
+    assert ids(client, "untagged=1&review=kept") == ["P3"]
+    assert ids(client, f"untagged=1&collection={cid}") == ["P3"]
+    assert ids(client, "untagged=1&tag=a") == []
+
+
+def test_colors_and_unused_survive_rebuilding_the_index(env, client):
+    three_posts(env)
+    apply(client, ["instagram:P1"], add=["red"])
+    apply(client, ["instagram:P2"], add=["spare"])
+    apply(client, ["instagram:P2"], remove=["spare"])
+    client.post("/api/tags/color", json={"name": "red", "color": "#aa0000"}, headers=H)
+    client.post("/api/tags/color", json={"name": "spare", "color": "#00aa00"}, headers=H)
+    base = str(env["tmp"] / "data")
+    conn = db.connect()
+    for name in ("tags", "post_tags"):
+        userdata.export(conn, name, base)
+    db.init(str(env["tmp"] / "rebuilt.db"))
+    userdata.restore_all(db.connect(), base)
+    scanner.scan(env["roots"])
+    assert colors(client) == {"red": "#aa0000", "spare": "#00aa00"}
+    assert {t["name"]: t["unused"] for t in client.get("/api/tags", headers=H).get_json()} == \
+        {"red": False, "spare": True}

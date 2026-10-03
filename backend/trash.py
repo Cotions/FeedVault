@@ -80,8 +80,10 @@ def _move(path, roots, line):
         os.rename(path, dest)
     except OSError as e:
         raise TrashError(f"could not move to the trash: {e.strerror or e}") from e
+    now = time.time()
     with open(os.path.join(trash_dir(root), MANIFEST), "a", encoding="utf-8") as f:
-        f.write(json.dumps({"from": path, "to": dest, **line, "at": int(time.time()), "size": size}) + "\n")
+        f.write(json.dumps({"from": path, "to": dest, **line, "at": int(now), "at_ms": _next_stamp(roots, now),
+                            "size": size}) + "\n")
     return size, dest
 
 
@@ -311,49 +313,99 @@ def _forget_gone(roots, gone):
 # size changed, so the cache misses).
 # ---------------------------------------------------------------------------
 
-_cache = {}                     # manifest path -> ((mtime_ns, size, inode), lines, entries, entries by key)
+_cache = {}                     # manifest path -> ((mtime_ns, size, inode), lines, entries, entries by key,
+#                                  bytes read up to, their sha1)
 _cache_lock = threading.Lock()
+
+
+_last_stamp = None              # the highest at_ms written or read; None until a manifest is read
+_stamp_lock = threading.Lock()  # readers raise _last_stamp too: never let one lower it
+
+
+def _stamp(line):
+    """A line's at_ms, or its whole second for lines written before it."""
+    ms = line.get("at_ms")
+    if isinstance(ms, int) and not isinstance(ms, bool):
+        return ms
+    at = line.get("at")
+    return at * 1000 if isinstance(at, int) and not isinstance(at, bool) else 0
+
+
+def _next_stamp(roots, now):
+    """at_ms for a new line: the time in milliseconds, but always above every
+    stamp written or read before (under db.write_lock, as every move is), so
+    a list's ``upto`` never covers a deletion made after it was taken."""
+    global _last_stamp
+    if _last_stamp is None:
+        for root in roots:
+            _load(root)                        # sets _last_stamp from what is there
+    with _stamp_lock:
+        _last_stamp = max(int(now * 1000), (_last_stamp or 0) + 1)
+        return _last_stamp
 
 
 def _manifest_path(root):
     return os.path.join(trash_dir(root), MANIFEST)
 
 
-def _parse(path):
+def _parse(data):
+    """The manifest lines in ``data`` (bytes of whole lines)."""
     lines = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for raw in f:
-                try:
-                    line = json.loads(raw)
-                except ValueError:
-                    continue
-                if isinstance(line, dict) and isinstance(line.get("to"), str) \
-                        and isinstance(line.get("from"), str):
-                    lines.append(line)
-    except OSError:
-        pass
+    for raw in data.splitlines():
+        try:
+            line = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(line, dict) and isinstance(line.get("to"), str) \
+                and isinstance(line.get("from"), str):
+            lines.append(line)
     return lines
 
 
 def _load(root):
     """(lines, entries, entries by key) of one root's manifest, parsed once per
-    version of the file. Shared between callers: never mutate them."""
+    version of the file. Shared between callers: never mutate them.
+
+    A manifest that only grew (a delete appends to it: same file, the bytes
+    read before unchanged) is read from where the last read stopped, and
+    only the entries its new lines belong to are grouped again: a big trash
+    is not parsed whole after every delete."""
+    global _last_stamp
     path = _manifest_path(root)
+    with _cache_lock:
+        hit = _cache.get(path)
     try:
         st = os.stat(path)
     except OSError:
         return [], [], {}
-    sig = (st.st_mtime_ns, st.st_size, st.st_ino)
-    with _cache_lock:
-        hit = _cache.get(path)
+    if hit and hit[0] == (st.st_mtime_ns, st.st_size, st.st_ino):
+        return hit[1:4]                        # unchanged: not even read
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+            st = os.fstat(f.fileno())
+    except OSError:
+        return [], [], {}
+    end = data.rfind(b"\n") + 1                # a line being appended is read next time
+    sig = (st.st_mtime_ns, len(data), st.st_ino)
     if hit and hit[0] == sig:
-        return hit[1:]
-    lines = _parse(path)
-    entries = _group(root, lines)
+        return hit[1:4]
+    view = memoryview(data)
+    h = hashlib.sha1(view[:hit[4]] if hit and hit[4] <= end else b"")
+    if hit and hit[0][2] == st.st_ino and hit[4] <= end and h.digest() == hit[5]:
+        lines = hit[1] + _parse(data[hit[4]:end])
+        entries = _group(root, lines, prior=hit[3], start=len(hit[1]))
+        h.update(view[hit[4]:end])
+    else:
+        lines = _parse(data[:end])
+        entries = _group(root, lines)
+        h = hashlib.sha1(view[:end])
+    digest = h.digest()
     by_key = {g["key"]: g for g in entries}
+    with _stamp_lock:
+        _last_stamp = max(_last_stamp or 0, max((g["stamp"] for g in entries), default=0))
     with _cache_lock:
-        _cache[path] = (sig, lines, entries, by_key)
+        _cache[path] = (sig, lines, entries, by_key, end, digest)
     return lines, entries, by_key
 
 
@@ -416,13 +468,18 @@ def _roles(lines):
     return out
 
 
-def _group(root, lines):
+def _group(root, lines, prior=None, start=0):
+    """Entries of ``lines``. With ``prior`` (entries by key of
+    ``lines[:start]``), only the lines from ``start`` on are grouped: the
+    entries they belong to are made anew, the others kept as they were."""
     groups = {}
-    for seq, line in enumerate(lines):
+    for seq in range(start, len(lines)):
+        line = lines[seq]
         key = _line_key(root, line)
         g = groups.get(key)
         if g is None:
-            g = groups[key] = {"key": key, "root": root, "lines": []}
+            old = prior.get(key) if prior else None
+            g = groups[key] = {"key": key, "root": root, "lines": list(old["lines"]) if old else []}
         g["lines"].append(line)
         g["seq"] = seq                           # later in the file: deleted later, within one second
     for g in groups.values():
@@ -430,6 +487,11 @@ def _group(root, lines):
         roles = _roles(ls)
         g["roles"] = roles
         g["at"] = max((line.get("at") or 0) for line in ls)
+        g["stamp"] = max(_stamp(line) for line in ls)
+        g["paths"] = tuple(line["to"] for line in ls)
+        # What the lines recorded, for an entry not measured yet (_measured_now).
+        g["recorded"] = (sum(line["size"] for line in ls), len(ls), False) \
+            if all(isinstance(line.get("size"), int) for line in ls) else None
         media = sorted((i for i, r in enumerate(roles) if r == "media"),
                        key=lambda i: (ls[i].get("idx") or 0, ls[i]["to"]))
         g["media"] = [ls[i] for i in media]
@@ -453,19 +515,38 @@ def _group(root, lines):
             and not any(line.get("partial") is False for line in ls),
             "copy": isinstance(first.get("copy"), str),
         }
+    if prior:
+        return [g for key, g in prior.items() if key not in groups] + list(groups.values())
     return list(groups.values())
 
 
+_sorted = (None, [])            # (the roots' entry lists it was made from, all of them sorted)
+
+
 def _all_entries(roots):
-    out = []
-    for root in roots:
-        out.extend(_load(root)[1])
+    global _sorted
+    lists = [_load(root)[1] for root in roots]
+    made_from, out = _sorted
+    if made_from is not None and len(made_from) == len(lists) and all(a is b for a, b in zip(made_from, lists)):
+        return out                             # no manifest changed: sorted already
+    out = [g for entries in lists for g in entries]
     out.sort(key=lambda g: (-g["at"], -g["seq"], g["key"]))
+    _sorted = (lists, out)
     return out
 
 
 def _author_key(a):
     return (a or {}).get("id") or (a or {}).get("handle")
+
+
+# Measuring every entry on every list would be one lstat per trashed file
+# per request (tens of thousands after a big sort, on a spinning disk). An
+# entry is measured when it is on the page asked for (again once its last
+# measure is MEASURE_TTL old), or by check(); every other entry counts as
+# its last measure, or as its lines recorded it (every file there) if it was
+# never measured, so the totals stay close without touching the disk.
+MEASURE_TTL = 30
+_measured = {}                  # entry key -> (its files, time measured, (bytes, files, missing))
 
 
 def _measure(g):
@@ -484,8 +565,50 @@ def _measure(g):
     return size, files, missing
 
 
-def _matches(g, author=None, since=None, before=None, platform=None, accounts=None):
-    """``accounts``: a person's {(platform, author id)} (people.account_set)."""
+def _measured_now(g, fresh, now, force=False):
+    """_measure, from _measured when that is still good: for ``fresh``, one
+    younger than MEASURE_TTL, else any as long as the entry lists the same
+    files (``force``: none). Never measured and not ``fresh``: as its lines
+    say, when each recorded its size (old lines did not: measured once then)."""
+    paths = g["paths"]
+    hit = None if force else _measured.get(g["key"])
+    if hit and hit[0] == paths and (not fresh or now - hit[1] < MEASURE_TTL):
+        return hit[2]
+    if not fresh and hit is None and g["recorded"]:
+        return g["recorded"]
+    m = _measure(g)
+    _measured[g["key"]] = (paths, now, m)
+    return m
+
+
+def _forget_measures(entries):
+    """Drop the measures of entries no longer in the trash."""
+    if len(_measured) > len(entries) + 1000:
+        alive = {g["key"] for g in entries}
+        for key in [k for k in list(_measured) if k not in alive]:   # list(): others add meanwhile
+            _measured.pop(key, None)
+
+
+def check(roots):
+    """Measure every entry now ("Check for missing files"): {entries, files,
+    bytes, missing: entries with a file gone}."""
+    entries = _all_entries(roots)
+    now = time.monotonic()
+    out = {"entries": len(entries), "files": 0, "bytes": 0, "missing": 0}
+    for g in entries:
+        size, files, missing = _measured_now(g, True, now, force=True)
+        out["files"] += files
+        out["bytes"] += size
+        out["missing"] += missing
+    _forget_measures(entries)
+    return out
+
+
+def _matches(g, author=None, since=None, before=None, platform=None, accounts=None, upto=None):
+    """``accounts``: a person's {(platform, author id)} (people.account_set).
+    ``upto``: a list's ``upto``, nothing deleted after it was taken."""
+    if upto is not None and g["stamp"] > upto:
+        return False
     p = g["public"]
     # Author ids and handles are only unique within a platform.
     if platform is not None and p["platform"] != platform:
@@ -501,14 +624,20 @@ def _matches(g, author=None, since=None, before=None, platform=None, accounts=No
     return True
 
 
-def items(roots, author=None, since=None, before=None, platform=None, offset=0, limit=60, accounts=None):
+def items(roots, author=None, since=None, before=None, platform=None, offset=0, limit=60, accounts=None,
+          upto=None):
     entries = _all_entries(roots)
     ffmpeg = thumbs.have_ffmpeg()
-    out = {"total": 0, "files": 0, "bytes": 0,
+    newest = max((g["stamp"] for g in entries), default=0)
+    out = {"total": 0, "files": 0, "bytes": 0, "upto": newest if upto is None else min(upto, newest),
            "trash": {"entries": len(entries), "files": 0, "bytes": 0}, "authors": [], "entries": []}
     authors = {}
+    now = time.monotonic()
     for g in entries:
-        size, files, missing = _measure(g)
+        match = _matches(g, author, since, before, platform, accounts, upto)
+        # Only the page shown is measured again (see MEASURE_TTL).
+        shown = match and offset <= out["total"] < offset + limit
+        size, files, missing = _measured_now(g, shown, now)
         p = g["public"]
         out["trash"]["files"] += files
         out["trash"]["bytes"] += size
@@ -519,7 +648,7 @@ def items(roots, author=None, since=None, before=None, platform=None, offset=0, 
                 "entries": 0, "bytes": 0})
             a["entries"] += 1
             a["bytes"] += size
-        if not _matches(g, author, since, before, platform, accounts):
+        if not match:
             continue
         out["total"] += 1
         out["files"] += files
@@ -528,6 +657,7 @@ def items(roots, author=None, since=None, before=None, platform=None, offset=0, 
             out["entries"].append({**p, "files": files, "bytes": size, "missing": missing,
                                    "thumb_url": f"/trash/{g['key']}/thumb" if _thumb_source(g, ffmpeg) else None})
     out["authors"] = sorted(authors.values(), key=lambda a: (-a["bytes"], a["handle"] or ""))
+    _forget_measures(entries)
     return out
 
 

@@ -865,7 +865,7 @@ NEW = "p.first_seen > COALESCE((SELECT at FROM seen_at WHERE id = 1), 9223372036
 
 
 def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
-                person=None, new=False):
+                person=None, new=False, collection=None):
     """WHERE clause and arguments for the /api/posts filters, over _FROM.
     None when the search text can match nothing. Shared by list_posts,
     post_summary and storage so a count and its size can never disagree.
@@ -874,7 +874,7 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
     ``author`` is the whole account: an id takes in its folder-name aliases,
     an alias its id (and the id's other aliases). ``person`` (an id) every
     account linked to that person. ``new``: only new posts; ``is:new`` in
-    ``q`` too."""
+    ``q`` too. ``collection`` (an id): only the posts in it."""
     where, args = [], []
     tags = list(tags or ())
     if q:
@@ -898,7 +898,10 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
                      "WHERE t.name = ?)")
         args.append(name)
     if untagged:
-        where.append("p.id NOT IN (SELECT post_id FROM post_tags)")
+        where.append("NOT EXISTS (SELECT 1 FROM post_tags pt WHERE pt.post_id = p.id)")
+    if collection is not None:
+        where.append(f"{col} IN (SELECT post_id FROM collection_posts WHERE collection_id = ?)")
+        args.append(collection)
     if new:
         where.append(NEW)
     if platform:
@@ -925,24 +928,45 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
 
 
 def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted",
-               offset=0, limit=60, review=None, order="desc", tags=(), untagged=False, person=None, new=False):
-    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new)
+               offset=0, limit=60, review=None, order="desc", tags=(), untagged=False, person=None, new=False,
+               collection=None):
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection)
     if f is None:
         return 0, []
     clause, args = f
     direction = "ASC" if order == "asc" else "DESC"
     first, second = ("saved_at", "posted_at") if sort == "saved" else ("posted_at", "saved_at")
     order_by = f"p.{first} {direction}, p.{second} {direction}, p.id {direction}"
-    total = conn.execute(f"SELECT COUNT(*) {_FROM} {clause}", args).fetchone()[0]
+    if untagged and not (q or platform or author or kind or person is not None or new):
+        total = _untagged_count(conn, review, tags, collection)
+    else:
+        total = conn.execute(f"SELECT COUNT(*) {_FROM if review else _POSTS} {clause}", args).fetchone()[0]
     rows = conn.execute(f"{_SELECT} {clause} ORDER BY {order_by} LIMIT ? OFFSET ?",
                         (*args, limit, offset)).fetchall()
     return total, summaries(conn, rows)
 
 
+# Only review filters read the decisions join; a count without it is a
+# count of the posts table's index (instant without other filters).
+_POSTS = "FROM posts p"
+# The tagged posts, read from post_tags (the few, not every post).
+_TAGGED = ("FROM (SELECT DISTINCT post_id FROM post_tags) t CROSS JOIN posts p ON p.id = t.post_id "
+           "LEFT JOIN decisions d ON d.post_id = p.id")
+
+
+def _untagged_count(conn, review, tags, collection):
+    """How many posts untagged=1 matches, with filters that read nothing but
+    the post's id and decision: all of them less the tagged ones. Checking
+    every post for a tag (NOT EXISTS) took most of the request's time."""
+    clause, args = post_filter(review=review, tags=tags, collection=collection)
+    every = conn.execute(f"SELECT COUNT(*) {_FROM if review else _POSTS} {clause}", args).fetchone()[0]
+    return every - conn.execute(f"SELECT COUNT(*) {_TAGGED} {clause}", args).fetchone()[0]
+
+
 def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
-                 person=None, new=False):
+                 person=None, new=False, collection=None):
     """Posts, media and bytes matched by the /api/posts filters, all pages."""
-    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new)
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection)
     if f is None:
         return {"posts": 0, "media": 0, "bytes": 0}
     clause, args = f

@@ -396,3 +396,169 @@ def test_author_filter_is_per_platform(env, client):
                     headers=H).get_json()
     assert r["entries"] == 1                                           # the twin lines point at the same files
     assert {line["post"] for line in manifest(env)} == {"tiktok:T1"}
+
+
+# --- #17: the listing's cost, and purge by filter bound by the list ------------
+
+def _big_trash(env, entries, per=2):
+    """A generated trash: ``entries`` posts of ``per`` files each, every file
+    there, lines as delete() writes them."""
+    root = trash_root(env)
+    lines = []
+    for i in range(entries):
+        folder = root / f"author{i % 50}"
+        folder.mkdir(parents=True, exist_ok=True)
+        for j in range(per):
+            to = folder / f"P{i:06d}_{j}.jpg"
+            to.write_bytes(b"x")
+            lines.append({"from": str(env["media"] / f"author{i % 50}" / to.name), "to": str(to),
+                          "post": f"instagram:P{i:06d}", "batch": f"b{i}", "platform": "instagram",
+                          "author": {"id": str(i % 50), "handle": f"author{i % 50}"}, "kind": "image",
+                          "posted_at": 1717243200, "items": 1, "partial": False,
+                          "role": "media" if j == 0 else "meta", "idx": 0, "media_kind": "image",
+                          "at": 1717243200 + i, "at_ms": (1717243200 + i) * 1000, "size": 1})
+    with open(root / ".manifest.jsonl", "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in lines))
+
+
+def test_listing_measures_only_the_page(env, client, monkeypatch):
+    import time
+    _big_trash(env, 25000)                                             # 50k files
+    calls = []
+    real = os.lstat
+    monkeypatch.setattr(trash.os, "lstat", lambda p, *a, **kw: (calls.append(p), real(p, *a, **kw))[1])
+    r = items(client, limit=60)
+    assert (r["total"], r["files"], r["trash"]["files"]) == (25000, 50000, 50000)
+    assert len(calls) == 120                                           # the page's files, nothing else
+    calls.clear()
+    times = []
+    for _ in range(5):
+        t = time.perf_counter()
+        r = items(client, limit=60, author="7", offset=60)
+        times.append(time.perf_counter() - t)
+    assert r["total"] == 500 and len(r["entries"]) == 60
+    assert len(calls) == 120                                           # that page once, then cached
+    # Well under 100 ms on a desktop; the bound is loose for slow CI machines.
+    assert sorted(times)[2] < 0.5, times
+
+
+def test_a_file_moved_out_shows_on_the_page_once_its_measure_is_old(env, client, monkeypatch):
+    write_post(env["media"], "P1", 1717243200, ALICE, "image")
+    write_post(env["media"], "P2", 1717243300, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    client.post("/api/delete", json={"posts": ["instagram:P2"]}, headers=H)
+    assert [e["missing"] for e in items(client)["entries"]] == [False, False]
+    gone = [line["to"] for line in manifest(env) if line["role"] == "media"]
+    os.remove(gone[0])                                                  # P1's image, by hand
+    assert items(client)["entries"][1]["missing"] is False             # measured a moment ago
+    monkeypatch.setattr(trash, "MEASURE_TTL", 0)
+    assert items(client, limit=1)["entries"][0]["post"] == "instagram:P2"
+    r = items(client, limit=1, offset=1)                               # P1's page: measured again
+    assert r["entries"][0]["missing"] is True and r["trash"]["files"] == 3
+    # Off the page an entry keeps its last measure, until "Check for missing files".
+    monkeypatch.setattr(trash, "MEASURE_TTL", 3600)
+    os.remove(gone[1])
+    assert items(client, limit=1, offset=1)["trash"]["files"] == 3
+    r = client.post("/api/trash/check", headers=H).get_json()
+    assert r == {"ok": True, "entries": 2, "files": 2, "bytes": r["bytes"], "missing": 2}
+    assert items(client, limit=1, offset=1)["trash"]["files"] == 2
+    assert client.post("/api/trash/check").status_code == 403
+
+
+def test_stamps_only_go_up(env, client, monkeypatch):
+    write_post(env["media"], "P1", 1717243200, ALICE, "image")
+    write_post(env["media"], "P2", 1717243300, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    first = max(line["at_ms"] for line in manifest(env))
+    monkeypatch.setattr(trash.time, "time", lambda: 1000.0)            # the clock went back
+    client.post("/api/delete", json={"posts": ["instagram:P2"]}, headers=H)
+    stamps = [line["at_ms"] for line in manifest(env)]
+    assert stamps == sorted(set(stamps)) and min(s for s in stamps if s > first) == first + 1
+
+
+def test_purge_by_filter_takes_only_what_the_list_showed(env, client):
+    """#17.2: a deletion in the same second as the list, after it, is not purged with it."""
+    for i in (1, 2, 3):
+        write_post(env["media"] / "alice", f"P{i}", 1717243200 + i, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    client.post("/api/delete", json={"posts": ["instagram:P2"]}, headers=H)
+    listed = items(client, author="111")
+    assert listed["total"] == 2 and listed["upto"] == max(line["at_ms"] for line in manifest(env))
+    client.post("/api/delete", json={"posts": ["instagram:P3"]}, headers=H)
+    # Same second, or not: the bound is the list's, not the clock's.
+    lines = manifest(env)
+    for line in lines:
+        line["at"] = lines[0]["at"]
+    with open(trash_root(env) / ".manifest.jsonl", "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in lines))
+    more = items(client, author="111", upto=listed["upto"])
+    assert more["total"] == 2 and more["upto"] == listed["upto"]
+    r = client.post("/api/trash/purge", json={"filter": {"author": "111", "upto": listed["upto"]}},
+                    headers=H).get_json()
+    assert r["ok"] and sorted(r["keys"]) == sorted(e["key"] for e in listed["entries"])
+    assert {line["post"] for line in manifest(env)} == {"instagram:P3"}
+    for bad in ({"upto": 5}, {"author": "111", "upto": -1}, {"author": "111", "upto": "5"},
+                {"author": "111", "upto": True}):
+        assert client.post("/api/trash/purge", json={"filter": bad}, headers=H).status_code == 400, bad
+
+
+def test_old_lines_without_stamps_sort_before_new_ones(env, client):
+    write_post(env["media"], "P1", 1717243200, ALICE, "image")
+    write_post(env["media"], "P2", 1717243300, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    lines = manifest(env)
+    for line in lines:
+        del line["at_ms"]
+    with open(trash_root(env) / ".manifest.jsonl", "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in lines))
+    old = items(client)
+    assert old["upto"] == lines[0]["at"] * 1000
+    client.post("/api/delete", json={"posts": ["instagram:P2"]}, headers=H)
+    assert items(client, upto=old["upto"])["total"] == 1
+    assert items(client)["total"] == 2
+
+
+def test_a_grown_manifest_is_read_from_where_it_stopped(env, client, monkeypatch):
+    _big_trash(env, 300)
+    first = items(client)
+    write_post(env["media"], "NEW1", 1717243200, ALICE, "image")
+    scan(env)
+    parsed = []
+    real = trash._parse
+    monkeypatch.setattr(trash, "_parse", lambda data: (parsed.append(len(data)), real(data))[1])
+    client.post("/api/delete", json={"posts": ["instagram:NEW1"]}, headers=H)
+    r = items(client)
+    assert r["total"] == first["total"] + 1 and r["entries"][0]["post"] == "instagram:NEW1"
+    assert len(parsed) == 1 and parsed[0] < 5000                       # the appended lines only
+    # The same entries as reading the whole file.
+    trash._cache.clear()
+    assert items(client, limit=500) == items(client, limit=500)
+    # Edited in place (same file, the bytes read before changed): read whole again.
+    lines = manifest(env)
+    for line in lines:
+        if line["post"] == lines[0]["post"]:
+            line["at"] = 5
+    with open(trash_root(env) / ".manifest.jsonl", "w", encoding="utf-8") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in lines))
+    parsed.clear()
+    assert items(client, limit=500)["entries"][-1]["at"] == 5
+    assert len(parsed) == 1 and parsed[0] > 50000
+    # A line half written is read once it is whole.
+    with open(trash_root(env) / ".manifest.jsonl", "a", encoding="utf-8") as f:
+        whole = json.dumps({**lines[-1], "post": "instagram:HALF", "batch": "half"}) + "\n"
+        f.write(whole[:40])
+        f.flush()
+        assert items(client)["total"] == r["total"]
+        f.write(whole[40:])
+    assert items(client)["total"] == r["total"] + 1
+    # Unchanged since: not even opened.
+    opened = []
+    real_open = open
+    monkeypatch.setattr("builtins.open", lambda p, *a, **k: (opened.append(str(p)), real_open(p, *a, **k))[1])
+    items(client)
+    monkeypatch.undo()
+    assert not [p for p in opened if p.endswith(".manifest.jsonl")]

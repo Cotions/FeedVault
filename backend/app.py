@@ -91,10 +91,11 @@ def _int_arg(name, default, lo, hi):
     return max(lo, min(hi, v))
 
 
-def _person_arg():
-    """The ``person`` parameter: an id, or None when absent. A value that
-    cannot be an id names nobody, so it matches nothing (-1)."""
-    v = request.args.get("person")
+def _person_arg(name="person"):
+    """The ``person`` parameter (or another id's): an id, or None when
+    absent. A value that cannot be an id names nobody, so it matches
+    nothing (-1)."""
+    v = request.args.get(name)
     if not v:
         return None
     return int(v) if v.isascii() and v.isdigit() and len(v) < 16 else -1
@@ -113,6 +114,7 @@ def _post_filters():
         untagged=request.args.get("untagged") == "1",
         person=_person_arg(),
         new=request.args.get("new") == "1",
+        collection=_person_arg("collection"),
     )
 
 
@@ -274,24 +276,31 @@ def trash_items():
         offset=_int_arg("offset", 0, 0, 10**9),
         limit=_int_arg("limit", 60, 1, 500),
         accounts=_accounts_of(_person_arg()),
+        upto=_int_arg("upto", 0, 0, 2**53) if request.args.get("upto") else None,
     ))
 
 
+@app.post("/api/trash/check")
+def trash_check():
+    return jsonify({"ok": True, **trash.check(_roots())})
+
+
 def _purge_filter(f):
-    """A purge filter, checked: {platform, author, person, since, before} with
-    at least one set; ``person`` becomes that person's ``accounts``."""
-    keys = ("platform", "author", "person", "since", "before")
+    """A purge filter, checked: {platform, author, person, since, before,
+    upto} with at least one of the first five set; ``person`` becomes that
+    person's ``accounts``."""
+    keys = ("platform", "author", "person", "since", "before", "upto")
     if not isinstance(f, dict) or set(f) - set(keys):
         return None
     out = {k: f.get(k) for k in keys}
     if any(out[k] is not None and not (isinstance(out[k], str) and out[k]) for k in ("platform", "author")):
         return None
-    for k in ("person", "since", "before"):
+    for k in ("person", "since", "before", "upto"):
         if out[k] is not None and (not isinstance(out[k], int) or isinstance(out[k], bool)
                                    or not 0 <= out[k] < 2**53):
             return None
-    if all(v is None for v in out.values()):
-        return None
+    if all(out[k] is None for k in keys[:5]):
+        return None                            # upto alone would be the whole trash: that is Empty trash
     out["accounts"] = _accounts_of(out.pop("person"))
     return out
 
@@ -309,7 +318,8 @@ def trash_purge():
     if match is not None:
         match = _purge_filter(match)
         if match is None or keys is not None:
-            return jsonify({"ok": False, "error": "filter needs platform, author, person, since or before (and no keys)"}), 400
+            return jsonify({"ok": False, "error": "filter needs platform, author, person, since or before "
+                                                  "(upto optional, no keys)"}), 400
     elif not _str_list(keys):
         return jsonify({"ok": False, "error": "keys must be a non-empty list"}), 400
     cfg = config.load()
@@ -501,6 +511,33 @@ def tags_delete():
     return jsonify({"ok": True, "posts": n})
 
 
+@app.post("/api/tags/color")
+def tags_color():
+    body = request.get_json(silent=True) or {}
+    name = organize.clean_name(body.get("name"))
+    try:
+        color = organize.clean_color(body.get("color"))
+    except ValueError:
+        return jsonify({"ok": False, "error": "color must be #rrggbb or null"}), 400
+    if name is None or "color" not in body:
+        return jsonify({"ok": False, "error": "name must be a tag name, and color #rrggbb or null"}), 400
+    if not organize.set_color(db.connect(), name, color):
+        return jsonify({"ok": False, "error": "no such tag"}), 404
+    userdata.changed("tags")
+    return jsonify({"ok": True, "color": color})
+
+
+@app.post("/api/tags/delete-unused")
+def tags_delete_unused():
+    names = (request.get_json(silent=True) or {}).get("names")
+    if not _str_list(names) or len(names) > 5000:
+        return jsonify({"ok": False, "error": "names must be a list of 1 to 5000 tag names"}), 400
+    gone = organize.delete_unused(db.connect(), names)
+    if gone:
+        userdata.changed("tags")
+    return jsonify({"ok": True, "deleted": gone})
+
+
 # ---------------------------------------------------------------------------
 # Collections
 # ---------------------------------------------------------------------------
@@ -523,6 +560,18 @@ def create_collection():
         return jsonify({"ok": False, "error": "a collection with that name exists"}), 400
     userdata.changed("collections")
     return jsonify({"ok": True, "collection": c})
+
+
+@app.post("/api/collections/reorder")
+def reorder_collections():
+    ids = (request.get_json(silent=True) or {}).get("ids")
+    if not isinstance(ids, list) or not ids or len(ids) > 5000 \
+            or any(not isinstance(i, int) or isinstance(i, bool) for i in ids):
+        return jsonify({"ok": False, "error": "ids must be a list of 1 to 5000 collection ids"}), 400
+    conn = db.connect()
+    organize.reorder_collections(conn, ids)
+    userdata.changed("collections")
+    return jsonify({"ok": True, "collections": organize.collections(conn)})
 
 
 @app.get("/api/collections/<int:cid>")

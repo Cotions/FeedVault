@@ -140,3 +140,72 @@ def test_collections_survive_rebuilding_the_index(env, client):
     assert [(c["name"], c["count"], c["cover_post"]) for c in listed] == [
         ("Alpha", 3, "instagram:P1"), ("Empty", 0, None)]
     assert order(client, listed[0]["id"]) == ["P3", "P1", "P2"]
+
+
+# ---------------------------------------------------------------------------
+# #22: the collection filter, reordering collections
+# ---------------------------------------------------------------------------
+
+def feed(client, query):
+    r = client.get(f"/api/posts?{query}", headers=H).get_json()
+    summary = client.get(f"/api/posts/summary?{query}", headers=H).get_json()
+    assert summary["posts"] == r["total"]
+    return sorted(p["post_id"] for p in r["posts"])
+
+
+def test_feed_filter_by_collection(env, client):
+    posts(env)
+    a = create(client, "a")["collection"]["id"]
+    b = create(client, "b")["collection"]["id"]
+    call(client, a, "add", {"posts": ids(1, 3)})
+    call(client, b, "add", {"posts": ids(3, 4)})
+    assert feed(client, f"collection={a}") == ["P1", "P3"]
+    assert feed(client, f"collection={a}&q=") == ["P1", "P3"]
+    assert feed(client, f"collection={b}&review=unreviewed") == ["P3", "P4"]
+    client.post("/api/review", json={"posts": ids(4), "decision": "keep"}, headers=H)
+    assert feed(client, f"collection={b}&review=unreviewed") == ["P3"]
+    client.post("/api/tags/apply", json={"posts": ids(3), "add": ["t"]}, headers=H)
+    assert feed(client, f"collection={b}&tag=t") == ["P3"]
+    assert feed(client, f"collection={b}&untagged=1") == ["P4"]
+    assert feed(client, "collection=999") == [] and feed(client, "collection=x") == []
+    assert feed(client, "collection=") == ["P1", "P2", "P3", "P4"]
+    # A post trashed leaves the filter, and comes back to it.
+    client.post("/api/delete", json={"posts": ids(1)}, headers=H)
+    assert feed(client, f"collection={a}") == ["P3"]
+    client.post("/api/trash/restore", json={"posts": ids(1)}, headers=H)
+    assert feed(client, f"collection={a}") == ["P1", "P3"]
+
+
+def names(client):
+    return [c["name"] for c in client.get("/api/collections", headers=H).get_json()]
+
+
+def reorder(client, body, status=200):
+    r = client.post("/api/collections/reorder", json=body, headers=H)
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+def test_reorder_collections(env, client):
+    c = {n: create(client, n)["collection"]["id"] for n in ("a", "b", "c", "d")}
+    r = reorder(client, {"ids": [c["d"], c["a"], c["b"], c["c"]]})
+    assert [x["name"] for x in r["collections"]] == ["d", "a", "b", "c"] == names(client)
+    reorder(client, {"ids": [c["b"], c["d"], 999]})                       # two swap places
+    assert names(client) == ["b", "a", "d", "c"]
+    for bad in ({}, {"ids": []}, {"ids": "1"}, {"ids": ["1"]}, {"ids": [True]}):
+        reorder(client, bad, status=400)
+    assert client.post("/api/collections/reorder", json={"ids": [1]}).status_code == 403
+    create(client, "e")                                                    # a new one goes last
+    assert names(client)[-1] == "e"
+
+
+def test_collection_order_survives_rebuilding_the_index(env, client):
+    c = {n: create(client, n)["collection"]["id"] for n in ("a", "b", "c")}
+    reorder(client, {"ids": [c["c"], c["a"], c["b"]]})
+    base = str(env["tmp"] / "data")
+    conn = db.connect()
+    for name in ("collections", "collection_posts"):
+        userdata.export(conn, name, base)
+    db.init(str(env["tmp"] / "rebuilt.db"))
+    userdata.restore_all(db.connect(), base)
+    assert names(client) == ["c", "a", "b"]

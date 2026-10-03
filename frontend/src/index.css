@@ -2207,6 +2207,13 @@ a.btn-primary { color: var(--on-accent); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tag-chip > a:hover { color: var(--glow); }
+/* A tag's own colour (--tag, set on the chip), toned for the dark surface. */
+.tag-chip.has-color {
+  color: color-mix(in srgb, var(--tag) 65%, #fff);
+  background: color-mix(in srgb, var(--tag) 14%, transparent);
+  border-color: color-mix(in srgb, var(--tag) 45%, transparent);
+}
+.tag-chip.has-color > a:hover { color: #fff; }
 .tag-chip-x {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; margin-right: 3px;
@@ -2264,6 +2271,17 @@ a.btn-primary { color: var(--on-accent); }
 .tag-row-main .icon { color: var(--accent-hover); flex-shrink: 0; }
 .tag-row-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tag-row-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.tag-row { flex-wrap: wrap; }
+.tag-row.is-unused { opacity: 0.55; }
+.tag-row.is-unused:hover { opacity: 1; }
+.tag-row-main .icon.has-color { color: var(--tag); }
+.tag-color-btn { display: inline-flex; align-items: center; gap: 6px; }
+.tag-swatch { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+.tag-swatch.is-none { border: 1px dashed var(--text-faint, var(--text-dim)); }
+.tag-palette { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 12px 10px; }
+.tag-swatch-btn { width: 24px; height: 24px; padding: 0; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+.tag-swatch-btn.is-on { border-color: var(--text); }
+.tag-swatch-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tag-rename { flex: 1; display: flex; align-items: center; gap: 4px; padding: 6px 8px; }
 .tag-rename input[type="text"] { flex: 1; font-family: var(--body); padding: 6px 10px; }
 .page-title-tag { display: inline-flex; align-items: center; gap: 8px; }
@@ -2297,7 +2315,7 @@ a.btn-primary { color: var(--on-accent); }
 .collection-pick-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .collection-pick-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 
-.collection-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+.collection-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
 .collection-card {
   display: flex; flex-direction: column;
   background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden;
@@ -2306,6 +2324,11 @@ a.btn-primary { color: var(--on-accent); }
   animation: statRise 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both;
 }
 .collection-card:hover { border-color: rgba(var(--glow-rgb), 0.45); transform: translateY(-2px); color: var(--text); }
+.collection-card[draggable="true"] { cursor: grab; }
+.collection-card.is-dragging { opacity: 0.4; }
+.collection-card.is-over { border-color: var(--glow); box-shadow: var(--ring); transform: scale(1.02); }
+.collection-card-link { display: flex; flex-direction: column; color: inherit; }
+.collection-card .collection-tile-bar { border-top: 1px solid var(--border-soft); }
 .collection-cover {
   aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
   background: var(--surface-2); color: var(--muted);
@@ -2564,7 +2587,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .tool-chip { text-transform: none; flex-shrink: 0; font-family: var(--mono); font-size: 10.5px; }
 .tool-chip-gallery-dl { color: #c4b5fd; border-color: rgba(196, 181, 253, 0.35); }
 .tool-chip-yt-dlp { color: #fca5a5; border-color: rgba(252, 165, 165, 0.35); }
-.source-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.source-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; }
 .sources-panel .source-list { margin-bottom: 0; }
 .source-row {
   display: flex; align-items: center; gap: 10px;
