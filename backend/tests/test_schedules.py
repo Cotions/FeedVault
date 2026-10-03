@@ -472,3 +472,31 @@ def test_a_sync_that_works_in_between_starts_the_count_again(env, client, tools,
     for bad in ("2", True, -1, 0, None):
         assert health.blocking({"health": "not_found", "blocking": bad}) == 1
     assert health.blocking({"health": "ok", "blocking": 5}) == 0
+
+
+def test_a_new_tool_session_in_settings_resumes_its_sources(env, client, queued):
+    ig = add(client, "carol.cooks", "instaloader", schedule="daily")["id"]
+    own = add(client, "dave.draws", "instaloader", schedule="daily", session=LOGIN)["id"]
+    x = add(client, X, schedule="daily")["id"]
+    tiktok = add(client, "https://tiktok.com/@someone", schedule="daily")["id"]
+    for sid in (ig, own, x, tiktok):
+        synced(sid, NOW, "failed", 2, health="login_required", blocking=2)
+
+    def stopped(sid):
+        return client.get(f"/api/sources/{sid}", headers=H).get_json()["schedule"]["stopped"]
+    # The same session sent again changes nothing.
+    post(client, "/api/config", {"instaloader": {"session": {"mode": "none"}}})
+    assert all(stopped(sid) for sid in (ig, own, x, tiktok))
+    # Settings → Sync: instaloader's session. The source with its own stays stopped.
+    post(client, "/api/config", {"instaloader": {"session": {"mode": "cookies", "browser": "firefox"}}})
+    assert (stopped(ig), stopped(own), stopped(x)) == (None, "paused: login required", "paused: login required")
+    assert client.get(f"/api/sources/{ig}", headers=H).get_json()["last_result"]["resumed"] is True
+    # Settings → Downloads: gallery-dl's (X) and yt-dlp's (TikTok) sessions, one at a time.
+    post(client, "/api/config", {"gallery-dl": {"session": {"mode": "cookies", "browser": "firefox"}}})
+    assert (stopped(x), stopped(tiktok)) == (None, "paused: login required")
+    post(client, "/api/config", {"yt-dlp": {"session": {"mode": "cookies", "browser": "chrome"}}})
+    assert stopped(tiktok) is None
+    # A pause alone is no new session.
+    synced(x, NOW, "failed", 3, health="login_required", blocking=3)
+    post(client, "/api/config", {"gallery-dl": {"pause": 10}})
+    assert stopped(x) == "paused: login required"

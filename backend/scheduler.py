@@ -43,8 +43,9 @@ its own any more, as trying again would not change that; status says why
 ("paused: account not found", "paused: login required"). A lone one is
 backed off like any failure: instaloader says the same to a throttled
 anonymous client (health.paused). It comes back when a sync of it works
-(Sync clicked), or when its schedule or session changes or a rename is
-accepted (last_result.resumed). Rate limited is not stopped: the back-off
+(Sync clicked), or when its schedule or session changes (for a source
+without its own, the tool's session in Settings: sources.resume_tool) or a
+rename is accepted (last_result.resumed). Rate limited is not stopped: the back-off
 above applies.
 
 A sync refused (jobs.BadRequest: its folder is no longer inside a media

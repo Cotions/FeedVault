@@ -1412,7 +1412,9 @@ running is never queued again).
   says "does not exist" and "403 Forbidden" to a throttled anonymous
   client too). It is
   scheduled again once a sync of it works (Sync clicked), or when its
-  schedule or its session changes or a rename is accepted
+  schedule or its session changes (for a source without a session of its
+  own, also the tool's session in `POST /api/config`: Settings → Sync or
+  Downloaders) or a rename is accepted
   (`last_result.resumed` is set until a sync of it ends `done` or
   `failed`). Only a state read by these tables stops it: a `last_result`
   stored before them (an `error` only) keeps the back-off. `rate_limited` is not stopped: the back-off

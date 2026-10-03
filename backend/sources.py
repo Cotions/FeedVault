@@ -743,6 +743,22 @@ def resume(conn, sid):
             "WHERE id = ? AND json_valid(last_result) AND json_type(last_result) = 'object'", (sid,))
 
 
+def resume_tool(conn, tool):
+    """Schedule again the sources of ``tool`` the scheduler stopped that use
+    the tool's session (none of their own): that session changed in
+    Settings. Returns their ids."""
+    ids = []
+    for r in conn.execute("SELECT * FROM sources WHERE tool = ? ORDER BY id", (tool,)).fetchall():
+        try:
+            result = json.loads(r["last_result"]) if r["last_result"] else None
+        except ValueError:
+            continue
+        if stored_options(r)["session"] is None and health.paused(result):
+            resume(conn, r["id"])
+            ids.append(r["id"])
+    return ids
+
+
 def dismiss_rename(conn, sid):
     """Forget a source's rename suggestion; the next one the tool reports comes back."""
     with conn:
