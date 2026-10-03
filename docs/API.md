@@ -947,9 +947,9 @@ no person yet.
     scheduler's back-off
   - `blocking`: `not_found` or `login_required` results in a row
     (whichever; a cancelled or interrupted sync leaves it, any other
-    result removes it), for the scheduler's stop (see
-    [Schedules](#schedules)); one stored before it with such a state
-    counts as 1
+    result removes it; after a resume, see [Schedules](#schedules), it
+    counts from none), for the scheduler's stop; one stored before it
+    with such a state counts as 1
   - `health` and `ok_at`: see `health` below (stored here, with the
     sync's outcome, not with the options)
   - `line` and `message` are scrubbed before they are stored: see `health.line`
@@ -1383,8 +1383,10 @@ yt-dlp's `Extracted <n> cookies from …` (found; 0 is missing), gallery-dl's
 `could not find … cookies database` / `failed to load cookies` (missing),
 gallery-dl's X `'Could not authenticate you` (refused).
 Then a sync that ended `login_required` had its session refused, and one
-that ended otherwise (`ok`, `renamed`, `private`, `not_found`) with its
-session found had it accepted.
+that ended otherwise (`ok`, `renamed`, `private`) with its session found
+had it accepted. One that ended `not_found` says nothing of the session
+(the site says it to a throttled or logged-out client too): only a line
+above marks it accepted.
 
 ### Schedules
 
@@ -1416,9 +1418,9 @@ running is never queued again).
   scheduled again once a sync of it works (Sync clicked), or when its
   schedule or its session changes (for a source without a session of its
   own, also the tool's session in `POST /api/config`: Settings → Sync or
-  Downloaders) or a rename is accepted
-  (`last_result.resumed` is set until a sync of it ends `done` or
-  `failed`). Only a state read by these tables stops it: a `last_result`
+  Downloaders, which also starts again the count of one not stopped yet)
+  or a rename is accepted (`last_result.resumed` is set until a sync of it
+  ends `done` or `failed`, and the count starts again). Only a state read by these tables stops it: a `last_result`
   stored before them (an `error` only) keeps the back-off. `rate_limited` is not stopped: the back-off
   above applies.
 - A due source is skipped, with `schedule.skipped` saying why, while its

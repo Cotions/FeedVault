@@ -177,7 +177,9 @@ class Job:
         self.created_at, self.started_at, self.ended_at = now, None, None
         self.exit_code, self.result, self.message = None, None, None
         self.lines = collections.deque(maxlen=LOG_LINES)    # (n, text scrubbed): kept, shown, stored
-        self.raw = collections.deque(maxlen=LOG_LINES)      # (n, text as printed): for the kind's hooks only
+        # (n, text as printed): for the kind's hooks only, kept when it has one
+        hooks = _kinds[kind].outcome or _kinds[kind].summarize
+        self.raw = collections.deque(maxlen=LOG_LINES if hooks else 0)
         self.n = 0
         self.proc = None
         self.cancelled = False

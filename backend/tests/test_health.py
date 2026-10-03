@@ -41,6 +41,13 @@ def test_scrub():
     long = "/mnt/archive/Instagram/carol_cooks_and_friends/carol_cooks-2024-06-11-C0FAKE00001.jpg"
     assert s(f"{long} exists") == f"{long} exists"
     assert s(f"/mnt/x/{'a1' * 30}/y.jpg") == "/mnt/x/…/y.jpg"
+    # A token with "/" or "~" in it is no path: it still goes, whole or piece by piece.
+    assert s("got " + "A1b" * 12 + "~" + "B2c" * 12) == "got …"
+    assert s("key /aB3dE5fG7hJ9kL1mN3pQ5rS7tU/vW9xY1zA3bC5dE7fG9hJ1kL3m==") == "key /…/…"
+    assert s("x AbCdEfGh1234567890+/abcdefghij/KLMNOPQRST/uvwxyz1234") == "x …"
+    # A private name is a whole word: a folder that only contains one is kept.
+    assert s("[feedvault] indexing /mnt/media/Cooperative/carol") == "[feedvault] indexing /mnt/media/Cooperative/carol"
+    assert s("x /home/me/snap/chromium/common/Cookies") == "x <private path>"
     assert s(None) is None and s("   ") is None and s(5) is None
 
 
@@ -366,6 +373,9 @@ def test_login_lines():
     assert login("gallery-dl", [(1, "[cookies][info] Extracted 9 cookies from Firefox"),
                                 (2, "[twitter][error] 'Could not authenticate you.'")], cookies, "login_required") == \
         {"mode": "cookies", "found": True, "accepted": False}
+    # Not found says nothing of the session: a throttled or logged-out client hears it too.
+    assert login("gallery-dl", [(1, "[cookies][info] Extracted 9 cookies from Firefox")], cookies, "not_found") == \
+        {"mode": "cookies", "found": True, "accepted": None}
     # Nothing said: unknown.
     assert login("gallery-dl", [(1, "x")], cookies, "ok") == {"mode": "cookies", "found": None, "accepted": None}
 

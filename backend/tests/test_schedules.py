@@ -425,6 +425,9 @@ def test_what_keeps_or_lifts_the_stop(env, client, queued):
         "paused: login required"
     s = post(client, f"/api/sources/{s['id']}", {"options": {"session": LOGIN}})["source"]
     assert s["schedule"]["stopped"] is None and s["last_result"]["resumed"] is True
+    # And the count starts again: one more with the new session is the back-off's.
+    again = health.record(s["last_result"], "login_required", "failed", NOW, "x")
+    assert again["blocking"] == 1 and health.paused(again) is None
 
 
 def test_a_lone_blocking_result_backs_off(env, client, tools, sched):
@@ -496,6 +499,10 @@ def test_a_new_tool_session_in_settings_resumes_its_sources(env, client, queued)
     assert (stopped(x), stopped(tiktok)) == (None, "paused: login required")
     post(client, "/api/config", {"yt-dlp": {"session": {"mode": "cookies", "browser": "chrome"}}})
     assert stopped(tiktok) is None
+    # A count under the old session starts again too, though not stopped yet.
+    synced(x, NOW, "failed", 1, health="not_found", blocking=1)
+    post(client, "/api/config", {"gallery-dl": {"session": {"mode": "none"}}})
+    assert client.get(f"/api/sources/{x}", headers=H).get_json()["last_result"]["resumed"] is True
     # A pause alone is no new session.
     synced(x, NOW, "failed", 3, health="login_required", blocking=3)
     post(client, "/api/config", {"gallery-dl": {"pause": 10}})

@@ -274,7 +274,9 @@ def login(tool, lines, session, state):
     """{mode, found, accepted} for the session a sync used (``session``:
     sync.session_of's): found (the session file or the browser's cookies
     were there), accepted (the site took them); each true, false or None
-    when the output does not say. Mode "none": both None."""
+    when the output does not say. Mode "none": both None. A not_found run
+    says nothing of the session: the site answers it to a throttled or
+    logged-out client too, so only a line saying so marks it accepted."""
     mode = session.get("mode") if isinstance(session, dict) else None
     out = {"mode": mode if mode in SESSION_MODES else "none", "found": None, "accepted": None}
     if out["mode"] == "none":
@@ -286,7 +288,7 @@ def login(tool, lines, session, state):
         out["found"] = True
     if "refused" in seen or state == "login_required":
         out["accepted"] = False
-    elif "accepted" in seen or (out["found"] and state in ("ok", "renamed", "private", "not_found")):
+    elif "accepted" in seen or (out["found"] and state in ("ok", "renamed", "private")):
         out["accepted"] = True
     return out
 
@@ -308,20 +310,28 @@ _SECRET_VALUE = re.compile(rf"(?i)(?<![\w-])({_SECRET_NAMES})(\"?\s*[=:]\s*)(\"[
 _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
 # Opaque strings long enough to be a token (hex, base64, JWT): not kept.
 _OPAQUE = re.compile(r"(?<![A-Za-z0-9._~+/-])[A-Za-z0-9_~+/-]{40,}={0,2}(?:\.[A-Za-z0-9_~+/-]{10,}={0,2})*")
-_PATH = re.compile(r"(?:~|\b[A-Za-z]:\\|(?<![\w.:/])/)[^\s'\"<>|]*")
+_PATH = re.compile(r"(?:(?<![A-Za-z0-9._~+/-])~|\b[A-Za-z]:\\|(?<![\w.:/+])/)[^\s'\"<>|]*")
+# A path segment of a token's characters only, mixing upper and lower case
+# and digits: a base64 token's piece between two "/", not a folder's name.
+_TOKEN_PART = re.compile(r"(?=[^/]*[A-Z])(?=[^/]*[a-z])(?=[^/]*[0-9])[A-Za-z0-9_~+=-]{24,}")
 # Where browsers keep cookies and the tools their sessions: a path naming one
-# of these is dropped whole.
-_PRIVATE_PATH = re.compile(r"(?i)cookie|session|\.mozilla|firefox|librewolf|chrom(?:e|ium)|bravesoftware|"
-                           r"microsoft-edge|opera|vivaldi|/\.config/instaloader|instaloader/|gallery-dl/|"
-                           r"\.cache/gallery-dl|keyring|kwallet|local state|login data|\.netrc")
+# of these is dropped whole. A name is a whole word: "Cooperative" names no
+# Opera, "Sessions2024"'s photo shoots are a folder of sessions all the same.
+_PRIVATE_PATH = re.compile(r"(?i)(?<![a-z])(?:cookie(?:s|jars?)?|sessions?|firefox|librewolf|chrom(?:e|ium)|"
+                           r"bravesoftware|microsoft-edge|opera|vivaldi|keyring|kwallet|local state|login data)"
+                           r"(?![a-z])|\.mozilla|/\.config/instaloader|instaloader/|gallery-dl/|"
+                           r"\.cache/gallery-dl|\.netrc")
 
 
 def _path(m):
     """A path dropped whole when private, else kept with only a segment
-    long and opaque enough to be a token replaced: a media folder's path
-    runs past 40 characters with no dot, and a log names one per file."""
+    long and opaque enough to be a token replaced (or a token's piece,
+    _TOKEN_PART): a media folder's path runs past 40 characters with no
+    dot, and a log names one per file."""
     p = m.group(0)
-    return "<private path>" if _PRIVATE_PATH.search(p) else "/".join(_OPAQUE.sub("…", s) for s in p.split("/"))
+    if _PRIVATE_PATH.search(p):
+        return "<private path>"
+    return "/".join("…" if _TOKEN_PART.fullmatch(s) else _OPAQUE.sub("…", s) for s in p.split("/"))
 
 
 def _opaque(t):
@@ -366,7 +376,8 @@ def record(previous, state, job_state, ended_at, target, rename=None, login_stat
     renamed(); a suggestion stays while the target is the one it was for.
     ``login_state``: login()'s, None for a run that never got that far.
     Such a run also keeps ``resumed`` and ``blocking``: it said nothing new
-    about the account. A blocking state adds one to ``blocking``."""
+    about the account. A blocking state adds one to ``blocking``, counted
+    from none after a resume (a new schedule or session)."""
     prev = previous if isinstance(previous, dict) else {}
     ok_at = ended_at if job_state == "done" else _ok_at(prev, None)
     suggestion = _rename(prev.get("rename"))
@@ -378,8 +389,9 @@ def record(previous, state, job_state, ended_at, target, rename=None, login_stat
            "login": _login(login_state) or _login(prev.get("login"))}
     if state is None and prev.get("resumed") is True:
         out["resumed"] = True
-    if state in BLOCKING or (state is None and blocking(prev)):
-        out["blocking"] = blocking(prev) + (state in BLOCKING)
+    before = 0 if state is not None and prev.get("resumed") is True else blocking(prev)
+    if state in BLOCKING or (state is None and before):
+        out["blocking"] = before + (state in BLOCKING)
     return {**out, "rename": suggestion} if suggestion else out
 
 
