@@ -130,6 +130,102 @@ def test_alias_ends_with_its_id_and_never_joins_two_people(env, client):
     assert (shown["Folder"], shown["Id"]) == (["erin"], ["777"])
 
 
+def filename_posts(folder, handle, *codes):
+    folder.mkdir(parents=True, exist_ok=True)
+    for i, code in enumerate(codes):
+        png(folder / f"{handle}-2024-05-0{i + 1}-{code}.jpg")
+
+
+def test_an_id_file_names_the_account_and_a_rename_splits_nothing(env, client):
+    # Carol's first downloads: file names only, and instaloader's id file.
+    old = env["media"] / "carol.cooks"
+    filename_posts(old, "carol.cooks", "CCCCCCCCCC1", "CCCCCCCCCC2")
+    (old / "id").write_text("333\n")
+    scanner.scan(env["roots"])
+    [folder] = get(client, "/api/authors")
+    assert folder["id"] == "carol.cooks"                       # no metadata yet: the folder handle
+    pid = create(client, "Carol", folder)["person"]["id"]
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO sources(platform, author_id, tool, target, folder, created_at) "
+                     "VALUES ('instagram', 'carol.cooks', 'instaloader', 'carol.cooks', ?, 0)", (str(old),))
+    # She renamed herself; the new handle's posts come with metadata, elsewhere.
+    write_post(env["media"] / "carol.bakes", "N1", TS, owner("carol.bakes", 333, "Carol"), "image")
+    write_post(env["media"] / "carol.bakes", "N2", TS + 50, owner("carol.bakes", 333, "Carol"), "image")
+    scanner.scan(env["roots"])
+    [a] = get(client, "/api/authors")                          # one account
+    assert (a["id"], a["handle"], a["aliases"], a["count"]) == ("333", "carol.bakes", ["carol.cooks"], 4)
+    # The link and the source moved to the id: a rebuild or a folder rename keeps them.
+    assert links() == [("Carol", "instagram", "333")]
+    assert conn.execute("SELECT author_id FROM sources").fetchone()[0] == "333"
+    # One person, one feed, sorted by date.
+    feed = get(client, f"/api/posts?person={pid}")["posts"]
+    assert [p["id"] for p in feed] == ["instagram:N2", "instagram:N1", "instagram:CCCCCCCCCC2",
+                                       "instagram:CCCCCCCCCC1"]
+    userdata.flush()
+    saved = json.load(open(userdata.path(config.load()["data_directory"], "person_accounts")))["rows"]
+    assert [(r["author_id"], r["person"]) for r in saved] == [("333", "Carol")]
+    # An id file of another account in the folder wins over a handle that matches.
+    write_post(old, "X1", TS, owner("carol.cooks", 999), "image")
+    scanner.scan(env["roots"])
+    assert db.aliases(db.connect())[("instagram", "carol.cooks")] == "333"
+
+
+def test_id_files_as_instaloader_writes_them(env):
+    import parsers
+    d = env["media"] / "f.one"
+    d.mkdir()
+    (d / "id").write_text("00123\n")
+    (env["media"] / "f.two_id").write_text("456")
+    (env["media"] / "big_id").write_text("1" * 40)
+    (env["media"] / "text_id").write_text("abc")
+    (env["media"] / "bad name_id").write_text("7")
+    r = parsers.parse_dir(str(env["media"]), str(d), ["id"])
+    assert [(a.author_id, a.handle) for a in r.account_files] == [("123", "f.one")] and r.claimed == {"id"}
+    names = sorted(os.listdir(env["media"]))
+    r = parsers.parse_dir(str(env["media"]), str(env["media"]), names)
+    assert [(a.author_id, a.handle) for a in r.account_files] == [("456", "f.two")]
+    scanner.scan(env["roots"])
+    assert sorted(r[0] for r in db.connect().execute("SELECT author_id FROM account_files")) == ["123", "456"]
+    os.remove(d / "id")
+    scanner.index_dirs(env["roots"], [str(d)])
+    assert [r[0] for r in db.connect().execute("SELECT author_id FROM account_files")] == ["456"]
+
+
+def test_a_folder_renamed_by_the_tool_keeps_its_person(env, client):
+    old = env["media"] / "dana.old"
+    filename_posts(old, "dana.old", "DDDDDDDDDD1")
+    scanner.scan(env["roots"])
+    pid = create(client, "Dana", account(client, "instagram", "dana.old"))["person"]["id"]
+    # instaloader renames the folder after the profile's new name, and goes on in it.
+    new = env["media"] / "dana.new"
+    os.rename(old, new)
+    write_post(new, "D2", TS, owner("dana.new", 444, "Dana"), "image")
+    scanner.scan(env["roots"])
+    assert links() == [("Dana", "instagram", "444")]
+    assert ids(client, f"person={pid}") == ["instagram:D2", "instagram:DDDDDDDDDD1"]
+    [a] = get(client, "/api/authors")
+    assert [h["handle"] for h in a["handles"]] == ["dana.new", "dana.old"]
+
+
+def test_a_gone_link_never_moves_to_two_candidates_or_another_person(env, client):
+    filename_posts(env["media"] / "erin", "erin", "EEEEEEEEEE1")
+    scanner.scan(env["roots"])
+    pid = create(client, "Erin", account(client, "instagram", "erin"))["person"]["id"]
+    post(client, "/api/delete", {"posts": ["instagram:EEEEEEEEEE1"]})
+    # two accounts have had the handle: the link stays as it is
+    write_post(env["media"] / "x1", "F1", TS, owner("erin", 1), "image")
+    write_post(env["media"] / "x2", "F2", TS, owner("erin", 2), "image")
+    scanner.scan(env["roots"])
+    assert links() == [("Erin", "instagram", "erin")]
+    # one, linked to someone else: it stays too
+    post(client, "/api/delete", {"posts": ["instagram:F2"]})
+    create(client, "Other", account(client, "instagram", "erin"))
+    scanner.scan(env["roots"])
+    assert ("Erin", "instagram", "erin") in links()
+    assert get(client, f"/api/people/{pid}")["count"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Create, link, unlink, merge, delete
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ import lzma
 import os
 import re
 
-from . import DirResult, Media, ParsedPost, Profile, ext_of, is_media, IMAGE_EXT, VIDEO_EXT
+from . import AccountFile, DirResult, Media, ParsedPost, Profile, ext_of, is_media, IMAGE_EXT, VIDEO_EXT
 
 TOOL = "instaloader"
 
@@ -177,6 +177,40 @@ def _profile(node, path):
     bio = node.get("biography")
     return Profile("instagram", str(node["id"]), node.get("username"), bio if isinstance(bio, str) else "",
                    list(dict.fromkeys(u for u in urls if isinstance(u, str) and u)), at, path)
+
+
+# --- the id file ---------------------------------------------------------------
+#
+# instaloader keeps the profile's numeric id in ``<profile>/id`` (or
+# ``<profile>_id`` when the folder pattern has no profile in it), written
+# with the profile's first download, and renames the folder when the profile
+# changes its name. With --latest-stamps it keeps them in that file instead.
+
+_ID_MAX = 32                    # bytes: an id and a newline
+
+
+def _account_files(dirpath, names):
+    """AccountFile for each id file among ``names`` that holds a numeric id."""
+    out = []
+    for n in names:
+        if n == "id":
+            handle = os.path.basename(dirpath)
+        elif n.endswith("_id") and _HANDLE_RE.fullmatch(n[:-3]):
+            handle = n[:-3]
+        else:
+            continue
+        path = os.path.join(dirpath, n)
+        try:
+            if os.path.getsize(path) > _ID_MAX:
+                continue
+            with open(path, "rb") as f:
+                text = f.read(_ID_MAX).decode("ascii").strip()
+            at = int(os.path.getmtime(path))
+        except (OSError, UnicodeDecodeError):
+            continue
+        if text.isdigit() and len(text) <= 20 and _HANDLE_RE.fullmatch(handle):
+            out.append(AccountFile("instagram", str(int(text)), handle.lower(), path, at))
+    return out
 
 
 # --- filename-only posts ----------------------------------------------------
@@ -361,6 +395,8 @@ def parse_dir(root, dirpath, names):
         result.claimed |= claimed
         result.claimed |= {base + s for s in _SIDE_SUFFIXES if base + s in names_set}
 
+    result.account_files = _account_files(dirpath, names)
+    result.claimed |= {os.path.basename(a.path) for a in result.account_files}
     if seen_instaloader:
         # Profile folders also hold an "id" file.
         result.claimed |= {n for n in names if n == "id"}

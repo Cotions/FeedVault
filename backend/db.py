@@ -397,11 +397,26 @@ def _migrate_15(conn):
             conn.execute("INSERT OR IGNORE INTO saved_posts(post_id, saved_at) VALUES (?, ?)", (r["post"], at))
 
 
+def _migrate_16(conn):
+    """Stable account ids (people.refresh_aliases). account_files is derived
+    on every scan: instaloader's id files (parsers.AccountFile), whose
+    folder is which account, under the handle it had then."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS account_files (
+            path      TEXT PRIMARY KEY,             -- the id file
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            handle    TEXT NOT NULL,                -- lowercase, as instaloader names folders
+            at        INTEGER                       -- the file's mtime
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS account_files_account ON account_files(platform, author_id)")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
-              _migrate_13, _migrate_14, _migrate_15]
+              _migrate_13, _migrate_14, _migrate_15, _migrate_16]
 
 BACKUPS_KEPT = 3
 
@@ -640,6 +655,23 @@ def save_profiles(conn, found, prune):
             (r[0], r[1], r[5] or 0)).fetchone()}
     conn.executemany("INSERT OR REPLACE INTO profiles(platform, author_id, handle, bio, urls, at, source) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?)", list(rows.values()))
+
+
+def save_account_files(conn, found, prune, dirs=()):
+    """Record the id files found (parsers.AccountFile). ``prune`` (a full
+    scan): ``found`` is all there is; else ``dirs`` were read again, and an
+    id file no longer in them is gone."""
+    rows = {a.path: (a.path, a.platform, a.author_id, a.handle, a.at) for a in found}
+    have = {r[0]: tuple(r) for r in conn.execute("SELECT path, platform, author_id, handle, at FROM account_files")}
+    if prune:
+        gone = [p for p in have if p not in rows]
+    else:
+        gone = [p for p in have if os.path.dirname(p) in dirs and p not in rows]
+    rows = [r for p, r in rows.items() if have.get(p) != r]
+    if gone or rows:                           # an unchanged index stays unchanged (and cached)
+        conn.executemany("DELETE FROM account_files WHERE path = ?", [(p,) for p in gone])
+        conn.executemany("INSERT OR REPLACE INTO account_files(path, platform, author_id, handle, at) "
+                         "VALUES (?, ?, ?, ?, ?)", rows)
 
 
 def copy_row(conn, copy_id):

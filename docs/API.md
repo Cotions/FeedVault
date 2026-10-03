@@ -693,16 +693,30 @@ rebuilt index gets them back. Links are by account, not by post: a post
 trashed and restored, or replaced by a duplicate copy, keeps its person.
 Nothing moves on disk.
 
+An account is its platform's own id where the metadata has one
+(instaloader's `owner.id`, gallery-dl's `author.id`, yt-dlp's `channel_id`
+for YouTube), never its handle: a renamed account stays one account, with
+its person and one feed.
+
 Posts rebuilt from file names have no id: their author id is the profile
-folder's name. When the same folder also holds posts with metadata whose
-handle is that name (exactly one account), the folder name is an **alias** of
-that account's id. Aliases are derived on every scan, not stored as user
-data. An account and its aliases read as one: one row in `/api/authors` and
+folder's name. That folder name becomes an **alias** of the account's id
+when instaloader's id file in the folder (`<folder>/id`, or `<folder>_id`
+beside it) names the id, or else when the same folder also holds posts with
+metadata whose handle is that name or one in its file names (exactly one
+account). Aliases are derived on every scan, not stored as user data. An account and its aliases read as one: one row in `/api/authors` and
 Storage, one link (linking or unlinking an alias acts on the account), and
 the `author` and `person` filters take the aliases' posts in. No alias is
 made between two ids linked to different people (merging them is the
 user's call), and once every post of the id is gone the folder name is an
 account of its own again.
+
+A link (and a source's `account`) made to a folder name moves to the id
+once the id's posts are indexed: a scan rewrites it, and the userdata files
+with it, so a folder renamed later (instaloader renames a profile's folder
+after a rename) keeps nobody from their person. A link to an account no
+post has any more moves too, when exactly one account on its platform had
+that handle (the same account, its folder renamed), and never to an account
+linked to someone else.
 
 An **account** (`/api/authors` rows, a person's `accounts`):
 

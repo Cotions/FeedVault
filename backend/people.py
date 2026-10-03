@@ -64,14 +64,18 @@ def _folder(path, folder_id):
 
 
 def refresh_aliases(conn):
-    """Rebuild account_aliases from the index.
+    """Rebuild account_aliases from the index, and move links to the
+    account's id. Returns the user tables it changed (for userdata.py).
 
     Posts rebuilt from file names carry the folder's name as author id; posts
-    with metadata carry the platform's own id. When a folder holds both for
-    the same handle, they are one account: the folder name becomes an alias
-    of the id, so it is shown and linked with it. Only when exactly one
-    account with metadata in that folder has that handle, so a folder of
-    mixed downloads never merges two people."""
+    with metadata carry the platform's own id. The folder name becomes an
+    alias of the id, so it is shown and linked with it, when:
+
+    - instaloader's id file in (or beside) the folder names the id: it is
+      the folder's account, whatever its posts' handles;
+    - else the folder holds both for the same handle, and exactly one
+      account with metadata in that folder has that handle, so a folder of
+      mixed downloads never merges two people."""
     # Two passes over posts, not three queries per account: on an archive of
     # file-name posts those were a second per rescan.
     tops = conn.execute("SELECT platform, author_id, MIN(meta_path) FROM posts "
@@ -81,13 +85,26 @@ def refresh_aliases(conn):
             "SELECT DISTINCT platform, author_id, lower(author_handle) FROM posts "
             "WHERE tool LIKE ? AND author_id IS NOT NULL", (FILENAMES,)):
         handles[platform, folder_id].add(h or "")
+    in_dir, beside = {}, {}                    # id files: folder -> account, (parent, name) -> account
+    for path, platform, aid, handle in conn.execute("SELECT path, platform, author_id, handle FROM account_files"):
+        d, n = os.path.split(path)
+        if n == "id":
+            in_dir[d] = (platform, aid)
+        else:
+            beside[d, handle] = (platform, aid)
     folders = collections.defaultdict(list)    # (platform, handle) -> [(folder + "/", folder id)]
+    ids = collections.defaultdict(set)
     for platform, folder_id, meta_path in tops:
         folder = _folder(meta_path, folder_id)
-        if folder is not None:
-            for h in handles[platform, folder_id] | {folder_id}:
-                folders[platform, h].append((folder + os.sep, folder_id))
-    ids = collections.defaultdict(set)
+        if folder is None:
+            continue
+        said = in_dir.get(folder) or beside.get((os.path.dirname(folder), folder_id))
+        if said and said[0] == platform:
+            if said[1] != folder_id:
+                ids[platform, folder_id] = {said[1]}
+            continue
+        for h in handles[platform, folder_id] | {folder_id}:
+            folders[platform, h].append((folder + os.sep, folder_id))
     if folders:
         for platform, author_id, h, meta_path in conn.execute(
                 "SELECT DISTINCT platform, author_id, lower(author_handle), meta_path FROM posts "
@@ -112,7 +129,44 @@ def refresh_aliases(conn):
         conn.execute("DELETE FROM account_aliases")
         conn.executemany("INSERT OR REPLACE INTO account_aliases(platform, alias_id, author_id) VALUES (?, ?, ?)",
                          found)
-    return len(found)
+    return _move_links(conn, found, links)
+
+
+def _move_links(conn, found, links):
+    """Links (and sources) made to a folder name move to the account's id
+    once its metadata is indexed, so a folder renamed after the account
+    (instaloader does) or gone keeps nobody from their person. Also a link
+    to an account no post has any more (its folder was renamed), when
+    exactly one account had that handle: the same account, renamed.
+    Returns the user tables changed."""
+    indexed = lambda p, a: conn.execute(  # noqa: E731
+        "SELECT 1 FROM posts WHERE platform = ? AND author_id = ? LIMIT 1", (p, a)).fetchone() is not None
+    moves = [(p, f, t) for p, f, t in found if indexed(p, t)]
+    alias = {(p, f): t for p, f, t in found}
+    for (p, a), pid in links.items():
+        if (p, a) in alias or indexed(p, a):
+            continue
+        had = {alias.get((p, r[0]), r[0]) for r in conn.execute(
+            "SELECT DISTINCT author_id FROM posts WHERE platform = ? AND lower(author_handle) = ? "
+            "AND author_id IS NOT NULL UNION SELECT author_id FROM account_files WHERE platform = ? AND handle = ?",
+            (p, a.lower(), p, a.lower()))} - {a}
+        if len(had) == 1 and links.get((p, next(iter(had))), pid) == pid:
+            moves.append((p, a, next(iter(had))))
+    changed = []
+    for p, f, t in moves:
+        pid = links.get((p, f))
+        if pid is not None:
+            if links.get((p, t)) == pid:
+                conn.execute("DELETE FROM person_accounts WHERE platform = ? AND author_id = ?", (p, f))
+            else:
+                conn.execute("UPDATE person_accounts SET author_id = ? WHERE platform = ? AND author_id = ?",
+                             (t, p, f))
+                links[p, t] = pid
+            del links[p, f]
+            changed.append("person_accounts")
+        if conn.execute("UPDATE sources SET author_id = ? WHERE platform = ? AND author_id = ?", (t, p, f)).rowcount:
+            changed.append("sources")
+    return sorted(set(changed))
 
 
 def canonical(conn, platform, author_id):
