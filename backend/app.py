@@ -1002,6 +1002,7 @@ def set_config():
         if not isinstance(body["schedules_paused"], bool):
             return jsonify({"ok": False, "error": "schedules_paused must be true or false"})
         changes["schedules_paused"] = body["schedules_paused"]
+    sessions = {t: sync.session_of(t, {"session": None}, cfg) for t in sync.KINDS if t in body}
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
         if error:
@@ -1026,6 +1027,11 @@ def set_config():
     cfg.update(changes)
     if tools is not None or roots is not None or insta is not None or changes:
         config.save(cfg)
+    # A new tool-level session: the sources using it that the scheduler stopped are tried again.
+    resumed = [sources.resume_tool(db.connect(), t) for t, before in sessions.items()
+               if before != sync.session_of(t, {"session": None}, cfg)]
+    if any(resumed):
+        userdata.changed("sources")
     if changed:
         scanner.start(roots)
     return jsonify({"ok": True, "config": _public_config(cfg)})

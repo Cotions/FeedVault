@@ -359,8 +359,8 @@ def test_not_found_or_login_required_stops_it(env, client, queued):
     gone = add(client, X, schedule="hourly")["id"]
     walled = add(client, "carol.cooks", "instaloader", schedule="hourly")["id"]
     limited = add(client, "https://x.com/busy", schedule="hourly")["id"]
-    synced(gone, NOW, "failed", 1, health="not_found")
-    synced(walled, NOW, "failed", 4, health="login_required")
+    synced(gone, NOW, "failed", 2, health="not_found", blocking=2)
+    synced(walled, NOW, "failed", 4, health="login_required", blocking=4)
     synced(limited, NOW, "failed", 1, health="rate_limited")
     assert scheduler.tick(NOW + 30 * 24 * HOUR) == [{"id": 1}] and queued == [limited]   # the back-off applies
     synced(limited, NOW + 30 * 24 * HOUR, "done")
@@ -375,7 +375,7 @@ def test_not_found_or_login_required_stops_it(env, client, queued):
         (None, NOW + 24 * HOUR, None)
     assert s["health"]["state"] == "not_found"
     assert scheduler.tick(NOW + 30 * 24 * HOUR + scheduler.SPREAD) == [{"id": 2}] and queued[-1] == gone
-    synced(gone, NOW + 30 * 24 * HOUR, "failed", 2, health="not_found")
+    synced(gone, NOW + 30 * 24 * HOUR, "failed", 3, health="not_found", blocking=3)
     assert client.get(f"/api/sources/{gone}", headers=H).get_json()["schedule"]["stopped"] == \
         "paused: account not found"
     # Off: nothing to stop.
@@ -386,6 +386,7 @@ def test_not_found_or_login_required_stops_it(env, client, queued):
 def test_a_manual_sync_that_works_resumes_it(env, client, tools, sched):
     tools["dl"].write_text(json.dumps({"accounts": {}, "fail": "notfound"}))
     s = add(client, X, schedule="hourly")
+    sync_now(client, s["id"])
     sync_now(client, s["id"])
     got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
     assert (got["health"]["state"], got["schedule"]["stopped"]) == ("not_found", "paused: account not found")
@@ -410,16 +411,99 @@ def test_warning_after_three_failures(env, client, queued):
 def test_what_keeps_or_lifts_the_stop(env, client, queued):
     import health
     # A run that never got that far keeps "resumed": it said nothing new.
-    prev = {"state": "failed", "health": "not_found", "resumed": True, "failures": 2}
+    prev = {"state": "failed", "health": "not_found", "resumed": True, "failures": 2, "blocking": 2}
     kept = health.record(prev, None, "interrupted", NOW, "x")
-    assert kept["resumed"] is True and health.paused({**kept, "state": "interrupted"}) is None
+    assert kept["resumed"] is True and kept["blocking"] == 2
+    assert health.paused({**kept, "state": "interrupted"}) is None
     assert "resumed" not in health.record(prev, "not_found", "failed", NOW, "x")
     # A result stored before health (its error from broader patterns) does not stop it.
     assert health.paused({"state": "failed", "error": "not_found", "failures": 1}) is None
     # A new session lifts it too (a login fixed).
     s = add(client, "carol.cooks", "instaloader", schedule="daily")
-    synced(s["id"], NOW, "failed", 1, health="login_required")
+    synced(s["id"], NOW, "failed", 2, health="login_required", blocking=2)
     assert client.get(f"/api/sources/{s['id']}", headers=H).get_json()["schedule"]["stopped"] == \
         "paused: login required"
     s = post(client, f"/api/sources/{s['id']}", {"options": {"session": LOGIN}})["source"]
     assert s["schedule"]["stopped"] is None and s["last_result"]["resumed"] is True
+    # And the count starts again: one more with the new session is the back-off's.
+    again = health.record(s["last_result"], "login_required", "failed", NOW, "x")
+    assert again["blocking"] == 1 and health.paused(again) is None
+
+
+def test_a_lone_blocking_result_backs_off(env, client, tools, sched):
+    # instaloader says "does not exist" to a throttled anonymous client too: once is the back-off's.
+    tools["ig"].write_text(json.dumps({"profiles": {}, "fail": "notfound"}))
+    s = add(client, "carol.cooks", "instaloader", schedule="hourly")
+    sync_now(client, s["id"])
+    got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert (got["health"]["state"], got["last_result"]["blocking"], got["last_result"]["failures"]) == \
+        ("not_found", 1, 1)
+    assert (got["schedule"]["stopped"], got["health"]["paused"]) == (None, None)
+    assert got["schedule"]["next_at"] == got["last_sync_at"] + 2 * HOUR     # backed off
+    assert scheduler.tick(got["last_sync_at"] + 2 * HOUR - 1) == []
+    job = scheduler.tick(got["last_sync_at"] + 2 * HOUR)[0]
+    ended(job["id"])                                    # a second in a row: stopped
+    got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert (got["last_result"]["blocking"], got["schedule"]["stopped"], got["schedule"]["next_at"]) == \
+        (2, "paused: account not found", None)
+    assert scheduler.tick(NOW + 30 * 24 * HOUR) == []
+
+
+def test_not_found_with_an_accepted_session_stops_at_once(env, client, tools, sched):
+    tools["ig"].write_text(json.dumps({"profiles": {}, "fail": "notfound"}))
+    s = add(client, "carol.cooks", "instaloader", schedule="hourly", session=LOGIN)
+    sync_now(client, s["id"])
+    got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert got["health"]["login"] == {"mode": "login", "found": True, "accepted": True}
+    assert (got["last_result"]["blocking"], got["schedule"]["stopped"]) == (1, "paused: account not found")
+    assert scheduler.tick(NOW + 30 * 24 * HOUR) == []
+
+
+def test_a_sync_that_works_in_between_starts_the_count_again(env, client, tools, sched):
+    s = add(client, "carol.cooks", "instaloader", schedule="hourly")
+    for fail, blocking in (("notfound", 1), (None, None), ("notfound", 1)):
+        tools["ig"].write_text(json.dumps({**ig_profile(), "fail": fail}))
+        sync_now(client, s["id"])
+        got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+        assert (got["last_result"].get("blocking"), got["schedule"]["stopped"]) == (blocking, None)
+    # Rate limited in between too: it says nothing of the account, but it is not blocking.
+    import health
+    assert "blocking" not in health.record({"health": "not_found", "blocking": 1}, "rate_limited", "failed", NOW, "x")
+    # Stored before the count: a blocking state is one.
+    assert health.blocking({"health": "not_found"}) == 1 and health.paused({"health": "not_found"}) is None
+    assert health.record({"health": "login_required"}, "not_found", "failed", NOW, "x")["blocking"] == 2
+    for bad in ("2", True, -1, 0, None):
+        assert health.blocking({"health": "not_found", "blocking": bad}) == 1
+    assert health.blocking({"health": "ok", "blocking": 5}) == 0
+
+
+def test_a_new_tool_session_in_settings_resumes_its_sources(env, client, queued):
+    ig = add(client, "carol.cooks", "instaloader", schedule="daily")["id"]
+    own = add(client, "dave.draws", "instaloader", schedule="daily", session=LOGIN)["id"]
+    x = add(client, X, schedule="daily")["id"]
+    tiktok = add(client, "https://tiktok.com/@someone", schedule="daily")["id"]
+    for sid in (ig, own, x, tiktok):
+        synced(sid, NOW, "failed", 2, health="login_required", blocking=2)
+
+    def stopped(sid):
+        return client.get(f"/api/sources/{sid}", headers=H).get_json()["schedule"]["stopped"]
+    # The same session sent again changes nothing.
+    post(client, "/api/config", {"instaloader": {"session": {"mode": "none"}}})
+    assert all(stopped(sid) for sid in (ig, own, x, tiktok))
+    # Settings → Sync: instaloader's session. The source with its own stays stopped.
+    post(client, "/api/config", {"instaloader": {"session": {"mode": "cookies", "browser": "firefox"}}})
+    assert (stopped(ig), stopped(own), stopped(x)) == (None, "paused: login required", "paused: login required")
+    assert client.get(f"/api/sources/{ig}", headers=H).get_json()["last_result"]["resumed"] is True
+    # Settings → Downloads: gallery-dl's (X) and yt-dlp's (TikTok) sessions, one at a time.
+    post(client, "/api/config", {"gallery-dl": {"session": {"mode": "cookies", "browser": "firefox"}}})
+    assert (stopped(x), stopped(tiktok)) == (None, "paused: login required")
+    post(client, "/api/config", {"yt-dlp": {"session": {"mode": "cookies", "browser": "chrome"}}})
+    assert stopped(tiktok) is None
+    # A count under the old session starts again too, though not stopped yet.
+    synced(x, NOW, "failed", 1, health="not_found", blocking=1)
+    post(client, "/api/config", {"gallery-dl": {"session": {"mode": "none"}}})
+    assert client.get(f"/api/sources/{x}", headers=H).get_json()["last_result"]["resumed"] is True
+    # A pause alone is no new session.
+    synced(x, NOW, "failed", 3, health="login_required", blocking=3)
+    post(client, "/api/config", {"gallery-dl": {"pause": 10}})
+    assert stopped(x) == "paused: login required"

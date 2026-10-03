@@ -38,17 +38,29 @@ instaloadercontext.py, __main__.py)::
     renamed         "Profile <old> has changed its name to <new>." (check_profile_id, after "Trying to
                      find profile <old> using its unique ID <id>.": the profile id --latest-stamps keeps)
 
-gallery-dl: not installed where this was written; its log format
-``[<category>][error] <Exception>: <message>`` and the exception names are
-those of gallery-dl 1.30 (gallery_dl/exception.py), the messages those its
-twitter extractor raises::
+gallery-dl 1.32.14, read from its source (exception.py, job.py, output.py,
+cookies.py, extractor/common.py, twitter.py, tiktok.py); lines are
+``[<category>][<level>] <message>`` (output.LOG_FORMAT). An exception that
+ends the run is logged ``[<category>][error] <Exception>: <message>``
+(job.py), except AbortExtraction: its message alone::
 
-    rate_limited    "[twitter][error] HttpError: '429 Too Many Requests' for '<url>'"
+    rate_limited    "[<category>][error] HttpError: '429 Too Many Requests' for '<url>'" (common.py,
+                     once its retries are spent)
+                    "[twitter][error] Rate limit exceeded" (AbortExtraction, with the user's
+                     ratelimit=abort; else twitter waits: "[twitter][info] Waiting for …")
     private         "[twitter][error] AuthorizationError: <name>'s Tweets are protected"
-    login_required  "[<category>][error] AuthRequired: '<what>' needed …"
+    login_required  "[<category>][error] AuthRequired: authenticated cookies needed to access this
+                     timeline" (AuthRequired: "<auth> needed to access this <resource>", or its
+                     message alone: "NSFW Tweet")
                     "[<category>][error] AuthenticationError: …"
-                    "[<category>][error] AuthorizationError: …" (any other)
+                    "[<category>][error] AuthorizationError: …" (any other: "HTTP redirect to login
+                     page", "<name> blocked your account", "Account temporarily locked")
+                    "[twitter][error] 'Could not authenticate you.'" (AbortExtraction: cookies refused)
+                    "[tiktok][error] <url>: Login required to access this profile" (logged, then an
+                     ExtractionError no pattern knows)
     not_found       "[<category>][error] NotFoundError: Requested user could not be found"
+                    "[twitter][error] NotFoundError: <X's reason>" (UserUnavailable: "User is suspended")
+                    "[tiktok][error] <url>: User account could not be found"
     renamed         nothing: gallery-dl never names a profile's new handle
 
 yt-dlp 2026.08.19, read from its installed zipapp (networking/exceptions.py,
@@ -86,7 +98,9 @@ request of FeedVault's::
                                  successfully logged in." (accepted), "Not logged in. Are you logged
                                  in successfully in <browser>?" (refused)
     instaloader, either         "Redirected to login page. You've been logged out, …" (refused)
-    gallery-dl (1.30, as above) "[cookies][info] Extracted <n> cookies from <Browser>" (found; 0: missing)
+    gallery-dl (as above)       "[cookies][info] Extracted <n> cookies from <Browser>" (found; 0: missing,
+                                 as "[<category>][warning] cookies: Unable to find <Browser> cookies
+                                 database"), "[twitter][error] 'Could not authenticate you.'" (refused)
     yt-dlp                      "Extracted <n> cookies from <browser>" (found; 0: missing),
                                 "could not find <browser> cookies database …", "failed to load
                                  cookies" (missing)
@@ -108,6 +122,9 @@ never in its options:
 - ``line``: the output line behind it, scrubbed (scrub())
 - ``login``: {mode, found, accepted} of the session the last run used
   (login()), kept by a run that never got that far
+- ``blocking``: blocking results (BLOCKING) in a row, whichever; absent
+  once a run says anything else (a run that never got that far keeps it).
+  A record from before it with a blocking state counts as 1 (blocking())
 - ``resumed``: true once the user changed the schedule (or accepted a
   rename) after a blocking state: the scheduler tries it again (paused())
 - ``rename``: {from, to, at}, a new handle the tool reported for the
@@ -147,9 +164,13 @@ INSTALOADER = _table([
 ])
 GALLERY_DL = _table([
     ("rate_limited", r"\]\[error\] HttpError: '429 Too Many Requests'"),
+    ("rate_limited", r"^\[twitter\]\[error\] Rate limit exceeded\b"),
     ("private", r"\]\[error\] AuthorizationError: .*'s Tweets are protected"),
     ("login_required", r"\]\[error\] (?:AuthRequired|AuthenticationError|AuthorizationError): "),
+    ("login_required", r"^\[twitter\]\[error\] 'Could not authenticate you"),
+    ("login_required", r"^\[tiktok\]\[error\] \S+: Login required to access this profile\b"),
     ("not_found", r"\]\[error\] NotFoundError: "),
+    ("not_found", r"^\[tiktok\]\[error\] \S+: User account could not be found$"),
 ])
 YT_DLP = _table([
     ("rate_limited", r"HTTP Error 429: Too Many Requests"),
@@ -190,6 +211,8 @@ LOGIN = {
     "gallery-dl": _table([
         ("found", r"^\[cookies\]\[info\] Extracted [1-9]\d* cookies from "),
         ("missing", r"^\[cookies\]\[info\] Extracted 0 cookies from "),
+        ("missing", r"^\[[\w:-]+\]\[warning\] cookies: Unable to find \w+ cookies database"),
+        ("refused", r"^\[twitter\]\[error\] 'Could not authenticate you"),
     ]),
     "yt-dlp": _table([
         ("found", r"^Extracted [1-9]\d* cookies from "),
@@ -200,7 +223,10 @@ LOGIN = {
 SESSION_MODES = ("none", "cookies", "login")
 # The scheduler stops syncing a source in one of these (scheduler.py), and
 # the Creators list warns about it: syncing again on its own will not fix them.
+# instaloader says both to a throttled anonymous client too ("does not exist",
+# "403 Forbidden"), so one alone only backs off: see paused().
 BLOCKING = {"not_found": "account not found", "login_required": "login required"}
+STOP_AFTER = 2                                 # blocking results in a row before the scheduler stops
 WARN_FAILURES = 3                              # failed syncs in a row before the Creators list warns
 
 
@@ -248,7 +274,9 @@ def login(tool, lines, session, state):
     """{mode, found, accepted} for the session a sync used (``session``:
     sync.session_of's): found (the session file or the browser's cookies
     were there), accepted (the site took them); each true, false or None
-    when the output does not say. Mode "none": both None."""
+    when the output does not say. Mode "none": both None. A not_found run
+    says nothing of the session: the site answers it to a throttled or
+    logged-out client too, so only a line saying so marks it accepted."""
     mode = session.get("mode") if isinstance(session, dict) else None
     out = {"mode": mode if mode in SESSION_MODES else "none", "found": None, "accepted": None}
     if out["mode"] == "none":
@@ -260,7 +288,7 @@ def login(tool, lines, session, state):
         out["found"] = True
     if "refused" in seen or state == "login_required":
         out["accepted"] = False
-    elif "accepted" in seen or (out["found"] and state in ("ok", "renamed", "private", "not_found")):
+    elif "accepted" in seen or (out["found"] and state in ("ok", "renamed", "private")):
         out["accepted"] = True
     return out
 
@@ -282,17 +310,37 @@ _SECRET_VALUE = re.compile(rf"(?i)(?<![\w-])({_SECRET_NAMES})(\"?\s*[=:]\s*)(\"[
 _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
 # Opaque strings long enough to be a token (hex, base64, JWT): not kept.
 _OPAQUE = re.compile(r"(?<![A-Za-z0-9._~+/-])[A-Za-z0-9_~+/-]{40,}={0,2}(?:\.[A-Za-z0-9_~+/-]{10,}={0,2})*")
-_PATH = re.compile(r"(?:~|\b[A-Za-z]:\\|(?<![\w.:/])/)[^\s'\"<>|]*")
+_PATH = re.compile(r"(?:(?<![A-Za-z0-9._~+/-])~|\b[A-Za-z]:\\|(?<![\w.:/+])/)[^\s'\"<>|]*")
+# A path segment of a token's characters only, mixing upper and lower case
+# and digits: a base64 token's piece between two "/", not a folder's name.
+_TOKEN_PART = re.compile(r"(?=[^/]*[A-Z])(?=[^/]*[a-z])(?=[^/]*[0-9])[A-Za-z0-9_~+=-]{24,}")
 # Where browsers keep cookies and the tools their sessions: a path naming one
-# of these is dropped whole.
-_PRIVATE_PATH = re.compile(r"(?i)cookie|session|\.mozilla|firefox|librewolf|chrom(?:e|ium)|bravesoftware|"
-                           r"microsoft-edge|opera|vivaldi|/\.config/instaloader|instaloader/|gallery-dl/|"
-                           r"\.cache/gallery-dl|keyring|kwallet|local state|login data|\.netrc")
+# of these is dropped whole. A name is a whole word: "Cooperative" names no
+# Opera, "Sessions2024"'s photo shoots are a folder of sessions all the same.
+_PRIVATE_PATH = re.compile(r"(?i)(?<![a-z])(?:cookie(?:s|jars?)?|sessions?|firefox|librewolf|chrom(?:e|ium)|"
+                           r"bravesoftware|microsoft-edge|opera|vivaldi|keyring|kwallet|local state|login data)"
+                           r"(?![a-z])|\.mozilla|/\.config/instaloader|instaloader/|gallery-dl/|"
+                           r"\.cache/gallery-dl|\.netrc")
 
 
 def _path(m):
+    """A path dropped whole when private, else kept with only a segment
+    long and opaque enough to be a token replaced (or a token's piece,
+    _TOKEN_PART): a media folder's path runs past 40 characters with no
+    dot, and a log names one per file."""
     p = m.group(0)
-    return "<private path>" if _PRIVATE_PATH.search(p) else p
+    if _PRIVATE_PATH.search(p):
+        return "<private path>"
+    return "/".join("…" if _TOKEN_PART.fullmatch(s) else _OPAQUE.sub("…", s) for s in p.split("/"))
+
+
+def _opaque(t):
+    """_OPAQUE replaced outside paths, _path() in them."""
+    out, at = [], 0
+    for m in _PATH.finditer(t):
+        out += [_OPAQUE.sub("…", t[at:m.start()]), _path(m)]
+        at = m.end()
+    return "".join(out) + _OPAQUE.sub("…", t[at:])
 
 
 def scrub(text, limit=LINE_MAX):
@@ -308,8 +356,7 @@ def scrub(text, limit=LINE_MAX):
     t = _COOKIE_HEADER.sub(lambda m: f"{m.group(1)}: …", t)
     t = _BEARER.sub(lambda m: f"{m.group(1)} …", t)
     t = _SECRET_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}…", t)
-    t = _PATH.sub(_path, t)
-    t = _OPAQUE.sub("…", t)
+    t = _opaque(t)
     t = " ".join(t.split())
     if len(t) > limit:
         t = t[:limit - 1].rstrip() + "…"
@@ -328,7 +375,9 @@ def record(previous, state, job_state, ended_at, target, rename=None, login_stat
     interrupted): it keeps the previous one. ``rename``: (old, new) from
     renamed(); a suggestion stays while the target is the one it was for.
     ``login_state``: login()'s, None for a run that never got that far.
-    Such a run also keeps ``resumed``: it said nothing new about the account."""
+    Such a run also keeps ``resumed`` and ``blocking``: it said nothing new
+    about the account. A blocking state adds one to ``blocking``, counted
+    from none after a resume (a new schedule or session)."""
     prev = previous if isinstance(previous, dict) else {}
     ok_at = ended_at if job_state == "done" else _ok_at(prev, None)
     suggestion = _rename(prev.get("rename"))
@@ -340,6 +389,9 @@ def record(previous, state, job_state, ended_at, target, rename=None, login_stat
            "login": _login(login_state) or _login(prev.get("login"))}
     if state is None and prev.get("resumed") is True:
         out["resumed"] = True
+    before = 0 if state is not None and prev.get("resumed") is True else blocking(prev)
+    if state in BLOCKING or (state is None and before):
+        out["blocking"] = before + (state in BLOCKING)
     return {**out, "rename": suggestion} if suggestion else out
 
 
@@ -384,15 +436,30 @@ def state_of(result):
     return "error" if result.get("state") == "failed" else None
 
 
+def blocking(result):
+    """Blocking results in a row in a stored last_result: its ``blocking``,
+    else (stored before it) 1 when its state is BLOCKING, else 0."""
+    if not isinstance(result, dict) or result.get("health") not in BLOCKING:
+        return 0
+    n = result.get("blocking")
+    return n if _time(n) and n > 0 else 1
+
+
 def paused(result):
     """Why the scheduler leaves a source alone ("account not found", "login
-    required"), else None: its last state is BLOCKING and nothing resumed
-    it since (a sync's end stores a new result, without ``resumed``). Only
-    a state these tables read (``health``) stops it: an ``error`` stored
-    before them came from broader patterns, and keeps the back-off."""
+    required"), else None: its last state is BLOCKING, said STOP_AFTER
+    times in a row or once with a session the site accepted (login.accepted:
+    the profile really is gone for a logged-in viewer), and nothing resumed
+    it since (a sync's end stores a new result, without ``resumed``). A
+    lone one with no accepted session is the back-off's, as rate_limited:
+    instaloader says the same to a throttled anonymous client. Only a state
+    these tables read (``health``) stops it: an ``error`` stored before them
+    came from broader patterns, and keeps the back-off."""
     if not isinstance(result, dict) or result.get("resumed") is True:
         return None
-    return BLOCKING.get(result.get("health"))
+    why = BLOCKING.get(result.get("health"))
+    accepted = (_login(result.get("login")) or {}).get("accepted") is True
+    return why if why and (blocking(result) >= STOP_AFTER or accepted) else None
 
 
 def warning(state, failures):

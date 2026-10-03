@@ -245,8 +245,11 @@ def test_a_second_click_returns_the_same_job(env, client, fake):
 
 def test_queue_cap(env, client, fake):
     set_config(instaloader={"pause": 3600}, save_queue_max=3)
-    fake.set(profile())
+    # The first save starts at once (the pause is between jobs): held at the
+    # gate, it cannot end and free a slot before the 4th request.
+    fake.set(profile(), gate=env["tmp"] / "never")
     queued = [save_post(client, f"CSAVECAP0{i}")["job"] for i in range(3)]
+    assert [j["id"] for j in jobs.active()] == [j["id"] for j in queued]
     r = save_post(client, "CSAVECAP09", status=429)
     assert r["ok"] is False and "3 posts are already waiting" in r["error"]
     # A shortcode already queued still answers with its job.

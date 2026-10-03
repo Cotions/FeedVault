@@ -736,11 +736,29 @@ def rename(conn, sid, old, new):
 
 def resume(conn, sid):
     """Schedule again a source the scheduler stopped (health.paused): its
-    schedule changed. Its next sync's result replaces the mark."""
+    schedule changed. Its next sync's result replaces the mark, and counts
+    blocking results from none (health.record)."""
     with conn:
         conn.execute(
             "UPDATE sources SET last_result = json_set(last_result, '$.resumed', json('true')) "
             "WHERE id = ? AND json_valid(last_result) AND json_type(last_result) = 'object'", (sid,))
+
+
+def resume_tool(conn, tool):
+    """Schedule again the sources of ``tool`` the scheduler stopped, or
+    counting blocking results towards a stop, that use the tool's session
+    (none of their own): that session changed in Settings, the count starts
+    again. Returns their ids."""
+    ids = []
+    for r in conn.execute("SELECT * FROM sources WHERE tool = ? ORDER BY id", (tool,)).fetchall():
+        try:
+            result = json.loads(r["last_result"]) if r["last_result"] else None
+        except ValueError:
+            continue
+        if health.blocking(result) and stored_options(r)["session"] is None:
+            resume(conn, r["id"])
+            ids.append(r["id"])
+    return ids
 
 
 def dismiss_rename(conn, sid):

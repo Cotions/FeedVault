@@ -118,7 +118,8 @@ def run_version(path, tool):
         return None, f"no answer to --version within {VERSION_TIMEOUT} s"
     finally:
         jobs._killpg(proc, signal.SIGKILL)     # anything it left behind in its group
-    line = jobs.version_line(out.decode("utf-8", "replace").splitlines())[:VERSION_MAX]
+    # Shown on the Downloaders card: scrubbed as job output is (a failing tool may print anything).
+    line = health.scrub(jobs.version_line(out.decode("utf-8", "replace").splitlines()), VERSION_MAX) or ""
     if proc.returncode != 0:
         return None, f"--version failed (exit code {proc.returncode}){': ' + line if line else ''}"
     return (line, None) if line else (None, "no version printed")

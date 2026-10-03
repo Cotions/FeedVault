@@ -249,7 +249,7 @@ out = sys.stdout.buffer
 line = b"x" * 1023 + b"\\n"
 for i in range(100_000):
     out.write(line)
-out.write(b"y" * 10_000_000)
+out.write(b"y " * 5_000_000)
 """)
     before = rss_kb()
     job = jobs.submit("flood", {})
@@ -754,3 +754,60 @@ def test_leftover_is_stopped_without_pidfds(runner, monkeypatch):
     finally:
         proc.kill()
         proc.wait()
+
+
+SECRETS = ("FAKESESSION0001", "FAKECOOKIE0002", "FAKEBEARER0003token", "session-carol")
+LEAKY = "\n".join([
+    "print('starting')",
+    "print('GET https://example.com/api sessionid=FAKESESSION0001; csrftoken=abc')",
+    "print('')",
+    "print('Cookie: ds_user_id=1; FAKECOOKIE0002=yes')",
+    "print('Authorization: Bearer FAKEBEARER0003token')",
+    "print('Loaded session from /home/someone/.config/instaloader/session-carol.')",
+    "print('done', flush=True)",
+    "import os, sys, time",
+    "while not os.path.exists(sys.argv[-1]): time.sleep(0.02)",
+])
+
+
+def test_output_is_scrubbed_before_it_is_kept(runner, client):
+    from conftest import H
+    seen = []
+
+    def outcome(params, code, lines, index, note):
+        seen.extend(t for _, t in lines)       # the hooks parse it as printed
+        return "done", None, "finished"
+    gate, script = runner["tmp"] / "gate", runner["tmp"] / "leaky.py"
+    script.write_text(LEAKY)                   # in a file: the job's argv is stored and shown too
+    runner["kind"]("leaky", "import runpy, sys; runpy.run_path(sys.argv[1])", params={"gate": {"type": "text"}},
+                   args=lambda p: [str(script), p["gate"]])
+    jobs._kinds["leaky"].outcome = outcome
+    job = jobs.submit("leaky", {"gate": str(gate)})
+    # Live, while it runs (held by the gate), as the dashboard reads it.
+    live = wait_for(lambda: len(jobs.log(job["id"])["lines"]) == 7 and jobs.log(job["id"]))
+    assert live["state"] == "running" and not any(s in ln["text"] for s in SECRETS for ln in live["lines"])
+    gate.touch()
+    ended(job["id"])
+    assert any("FAKESESSION0001" in t for t in seen) and len(seen) == 7
+    got = jobs.log(job["id"])["lines"]
+    # One line for one line, the empty one too, numbered as printed.
+    assert [ln["n"] for ln in got] == list(range(1, 8))
+    assert [ln["text"] for ln in got] == [
+        "starting", "GET https://example.com/api sessionid=…; csrftoken=…", "", "Cookie: …",
+        "Authorization: … …", "Loaded session from <private path>", "done"]
+    import db
+    row = db.connect().execute("SELECT * FROM jobs WHERE id = ?", (job["id"],)).fetchone()
+    stored = json.dumps([row[k] for k in row.keys()])
+    api = client.get(f"/api/jobs/{job['id']}", headers=H).get_data(as_text=True) + \
+        client.get(f"/api/jobs/{job['id']}/log", headers=H).get_data(as_text=True) + \
+        client.get("/api/jobs", headers=H).get_data(as_text=True)
+    for s in SECRETS:
+        assert s not in stored and s not in api
+    assert "/.config/instaloader" not in stored + api
+
+
+def test_a_failed_job_s_message_is_scrubbed(runner):
+    runner["kind"]("leaky-fails", "print('token=FAKESESSION0001 at ~/.config/instaloader/x'); raise SystemExit(1)")
+    job = ended(jobs.submit("leaky-fails", {})["id"])
+    assert job["state"] == "failed" and "FAKESESSION0001" not in job["message"]
+    assert "/.config/instaloader" not in job["message"]

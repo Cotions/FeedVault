@@ -452,7 +452,9 @@ main {
 }
 
 /* Folder */
-.folder-row { display: flex; gap: 8px; align-items: center; }
+/* Wraps on a phone: the path field takes its own line, Add and Browse… below it. */
+.folder-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.folder-row input[type="text"] { flex: 1 1 180px; min-width: 0; }
 
 input[type="text"] {
   flex: 1;
@@ -1870,7 +1872,8 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   backdrop-filter: blur(16px);
 }
 .review-scope { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.review-scope .sort-select { width: 100%; min-width: 0; height: 30px; font-size: 11.5px; }
+/* 40px: a touch target on a phone, where the panel sits under the media. */
+.review-scope .sort-select { width: 100%; min-width: 0; height: 40px; font-size: 12.5px; }
 .review-scope-author { grid-column: 1 / -1; }
 .review-scope-author .picker-input { max-width: none; }
 .review-progress {
@@ -2585,7 +2588,10 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .source-setup { white-space: nowrap; }
 .source-badge { flex-shrink: 0; }
 .source-sync { font-size: 12px; padding: 6px 11px; flex-shrink: 0; }
-.creator-id .source-status { font-size: 11px; }
+/* On a card the sync and schedule lines wrap inside their column: never under
+   the count and "N new" chip beside it, however narrow the card. */
+.creator-id .source-status { font-size: 11px; flex-wrap: wrap; max-width: 100%; }
+.creator-id .source-schedule { max-width: 100%; }
 .source-health { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 11.5px; color: var(--text-dim); }
 .source-health-head { display: flex; flex-wrap: wrap; column-gap: 10px; min-width: 0; }
 .source-health-line {
@@ -2622,5 +2628,5 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .route-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .route-row { display: flex; align-items: center; gap: 8px; }
 .route-row .insta-input { margin-left: 0; }
-.route-host { flex: 1; max-width: 280px; }
+.route-host { flex: 1; min-width: 0; max-width: 280px; }    /* shrinks on a phone: the tool and Remove stay in view */
 .route-tool { min-width: 130px; }

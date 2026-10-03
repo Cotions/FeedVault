@@ -962,8 +962,9 @@ def test_cookie_cleaning_failure_does_not_fail_the_sync(env, fake, client, monke
     s = add(client, TT, options={"session": {"mode": "cookies", "browser": "firefox"}})
     job = run_sync(client, s["id"])
     assert (job["state"], job["message"]) == ("done", "1 new post")
+    # The log is scrubbed: this test's folder names cookies, so its path is a private one there.
     assert any(ln["text"].startswith("[feedvault] could not remove the cookies from ")
-               and ln["text"].endswith(": Permission denied") for ln in jobs.log(job["id"])["lines"])
+               and ln["text"].endswith(" Permission denied") for ln in jobs.log(job["id"])["lines"])
 
 
 def test_settings_action_counts_then_cleans_inside_the_roots(env, fake, client, tmp_path):
