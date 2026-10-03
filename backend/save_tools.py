@@ -17,14 +17,16 @@ cookies), into a folder of its own in the data directory
 (gallery-dl's default names, yt-dlp's sync.YT_DLP_NAME). Whose post it is is
 only known once it is there: the metadata names the owner, and the files
 move to the owner's folder (owner_folder), never over a file already there.
-That folder is then indexed, and the post's entries go into the tool's
-download archive (archives.py) as trashing would add them: a later sync of
-the profile, with either tool, does not download it again.
+That folder is then indexed, and the post's entries go into the download
+archives (archives.py) as trashing would add them: a later sync of the
+profile does not download it again (with gallery-dl or yt-dlp for X; with
+yt-dlp for TikTok, as no gallery-dl entry can be made from yt-dlp's files).
+Only a run that exited 0 moves anything: what a failed one left (an info
+JSON and thumbnail without their video) is dropped with the saving folder.
 
 Same lock group and pause as the tool's syncs; the queue limit is
 save.py's, Instagram saves included.
 """
-import json
 import os
 import re
 import shutil
@@ -54,8 +56,10 @@ PLATFORMS = {
                "hosts": {"tiktok.com", "www.tiktok.com", "m.tiktok.com"},
                "short": {"vm.tiktok.com", "vt.tiktok.com"}},
 }
-KINDS = {p["kind"]: name for name, p in PLATFORMS.items()}
 LINK_MAX = 500
+# A profile's link, as the userscript's Sync profile adds it: the folder a
+# save falls back to is the one that source would get (sources.default_folder).
+PROFILE_LINKS = {"twitter": "https://x.com/{handle}", "tiktok": "https://www.tiktok.com/@{handle}"}
 # A post id: digits only, ASCII, no leading zero (both sites' ids are 64-bit numbers).
 ID_RE = re.compile(r"[1-9][0-9]{0,19}")
 # X: /<name>/status/<id>, /i/web/status/<id>, /i/status/<id>, optionally a
@@ -174,7 +178,7 @@ def _strip_cookies(job, note):
     """After yt-dlp: the info JSON it wrote without the cookies it copies
     into it, before anything moves (as after a sync)."""
     params = job["params"]
-    if job["started_at"] is None or params.get("platform") != "tiktok":
+    if job["started_at"] is None:
         return
     cleaned, failed = info_cookies.after_sync(staging(params), {})
     if cleaned:
@@ -221,9 +225,8 @@ def owner_folder(conn, roots, platform, tool, author_id, handle):
                 counts[folder] = counts.get(folder, 0) + 1
         if counts:
             return max(counts, key=lambda f: (counts[f], f))
-    name = re.sub(r"[^a-z0-9._-]+", "_", (handle or "").lower()).strip("._")[:80]
-    if name:
-        return os.path.join(roots[0], platform, name)
+    if handle and re.sub(r"[^a-z0-9._-]+", "_", handle.lower()).strip("._"):
+        return sources.default_folder(tool, platform, PROFILE_LINKS[platform].format(handle=handle), roots)
     return os.path.join(roots[0], save.SAVED)
 
 
@@ -235,8 +238,10 @@ def _read(params, stage):
     except OSError:
         return None
     parser = gallery_dl_parser if PLATFORMS[platform]["tool"] == "gallery-dl" else yt_dlp_parser
-    posts = [p for p in parser.parse_dir(stage, stage, names).posts if p.platform == platform]
-    return next((p for p in posts if p.post_id == params["id"]), posts[0] if posts else None)
+    # Only the post asked for: a retweet's link saves the original under its
+    # own id, which is not the one FeedVault would answer for.
+    posts = parser.parse_dir(stage, stage, names).posts
+    return next((p for p in posts if p.platform == platform and p.post_id == params["id"]), None)
 
 
 def _place(params, stage, roots, note):
@@ -271,16 +276,10 @@ def record(conn, pid):
     row = conn.execute("SELECT id, tool, meta_path, side_files FROM posts WHERE id = ?", (pid,)).fetchone()
     if row is None:
         return 0
-    data_dir = config.load()["data_directory"]
-    entries = {}
     if row["tool"] == "gallery-dl":
-        formats, _ = archives.installed_formats()
-        entries["gallery-dl"] = archives._json_entries([row["meta_path"], *json.loads(row["side_files"] or "[]")],
-                                                       formats)
-    line = archives.yt_dlp_entry(row["id"]) if row["tool"] in ("gallery-dl", "yt-dlp") else None
-    if line:
-        entries["yt-dlp"] = [line]
-    return sum(len(archives.add(tool, e, data_dir)) for tool, e in entries.items() if e)
+        archives.installed_formats()           # read now, so post_entries has them (it never starts gallery-dl)
+    data_dir = config.load()["data_directory"]
+    return sum(len(archives.add(tool, e, data_dir)) for tool, e in archives.post_entries(row).items())
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +305,7 @@ def _outcome(params, code, lines, index, note=None):
     notes = []
     pid = post_id(params)
     try:
-        folder = _place(params, stage, roots, notes.append) if roots else None
+        folder = _place(params, stage, roots, notes.append) if roots and code == 0 else None
     except OSError as e:                       # a folder that cannot be made or written
         folder = None
         result["error"] = "generic"

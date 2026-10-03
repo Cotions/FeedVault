@@ -63,7 +63,9 @@ A link to one post (gallery-dl ``https://x.com/i/web/status/<id>``, yt-dlp
 ``https://www.tiktok.com/@<name>/video/<id>``, as Save passes them) gets
 that post from whichever account has it, alone; one no account has fails as
 the tools do for a removed post ("NotFoundError: Requested Tweet could not
-be found", "Video not available, status code 10204").
+be found", "Video not available, status code 10204"). A tweet with
+"retweet_of": <id> saves that tweet's files (a retweet's link gives the
+original), one with "cut": true stops with an error after its first file.
 
 Every run appends {"tool", "argv", "at"} as one JSON line to
 FAKE_DOWNLOADS_LOG, when set.
@@ -270,7 +272,7 @@ def _gallery_dl_post(data, pid, args):
         return code
     folder = args.D or os.path.join("gallery-dl", "twitter", account["user"]["name"])
     os.makedirs(folder, exist_ok=True)
-    for name, d in _gallery_dl_files(account, post):
+    for name, d in _gallery_dl_files(account, {**post, "id": post.get("retweet_of") or post["id"]}):
         d["subcategory"] = "tweet"
         path = os.path.join(folder, name)
         (mp4 if d["extension"] == "mp4" else lambda p: png(p, colour(name)))(path)
@@ -278,6 +280,9 @@ def _gallery_dl_post(data, pid, args):
             with open(path + ".json", "w", encoding="utf-8") as f:
                 json.dump(d, f, indent=4)
         print(path)
+        if post.get("cut"):
+            print("[downloader.http][error] ConnectionError: Connection reset by peer", file=sys.stderr)
+            return 1
     return 0
 
 

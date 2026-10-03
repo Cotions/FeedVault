@@ -206,7 +206,7 @@ async function flush() {
   ids.forEach((id) => pending.delete(id));
   if (!ids.length) return;
   const saved = await ask(ids);
-  if ((saved === null) !== offline) { offline = saved === null; paintPage(); }
+  if ((saved === null) !== offline) { offline = saved === null; paint(); }
   if (saved === null) return;                 // backend offline: try again on the next scan
   const now = Date.now();
   ids.forEach((id) => cache.set(id, { saved: saved.has(id), at: now }));
@@ -470,7 +470,7 @@ function paintProfile() {
       const row = el("div", { class: "fv-row" });
       row.append(button("confirm", `Add @${name}`, () => addAndSync(name)),
                  button("idle", "Cancel", () => setProfile(name, { state: "idle" })));
-      const where = s.resolved?.folder ? `downloading into ${s.resolved.folder}` : "downloading into your first media root";
+      const where = s.resolved?.folder ? `downloading into its folder ${s.resolved.folder.split(/[\\/]/).filter(Boolean).pop()}` : "downloading into your first media root";
       out.push(row, note(`New ${s.resolved?.tool || ""} source for @${name}, ${where}.`));
     } else if (s.state === "queued") out.push(button("busy", "Sync queued", null, `Job #${s.job.id}`));
     else if (s.state === "running") out.push(button("busy", "Syncing…", null, `Job #${s.job.id}`));
@@ -570,12 +570,12 @@ function sleep(ms) {
 // A page that does not look as expected leaves nothing behind: no error in
 // the page's console, the next change paints again.
 function paint() {
-  try {
-    paintTiles();
-    paintPage();
-    paintProfile();
-  } catch {
-    /* the page changed under us */
+  for (const part of [paintTiles, paintPage, paintProfile]) {
+    try {
+      part();
+    } catch {
+      /* the page changed under us: the other parts still paint */
+    }
   }
   if (pending.size) schedule();
 }

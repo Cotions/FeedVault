@@ -27,8 +27,8 @@ export function useJobs() {
 
 export const ENDED = new Set(["done", "failed", "cancelled", "interrupted"]);
 
-// The userscript's Save button (POST /api/save): one Instagram post.
-export const SAVE_KIND = "instaloader-post";
+// The userscript's Save button (POST /api/save): one post, per platform.
+export const SAVE_KINDS = new Set(["instaloader-post", "gallery-dl-post", "yt-dlp-post"]);
 
 // A job's params as shown: a script's SHA-256 is for the backend's check only.
 export const shownParams = job => Object.entries(job.params || {}).filter(([k]) => k !== "sha256").map(([, v]) => v);

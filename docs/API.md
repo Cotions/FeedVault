@@ -1859,7 +1859,9 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --no-playlist
   there is never overwritten. Then that folder is indexed.
 - The indexed post's entries go into the download archives as trashing
   would add them (gallery-dl's per file, yt-dlp's `<platform> <id>`
-  line): a later sync of the profile, with either tool, skips it.
+  line): a later sync of the profile skips it (with either tool for X;
+  with yt-dlp for TikTok: a TikTok save is a yt-dlp post, which has no
+  gallery-dl entry). Only a run that exits 0 moves or records anything.
 - `result`: as for an Instagram save, plus `archived` (how many archive
   entries were new). A tweet with no media leaves no post: `generic`,
   "gallery-dl saved no post".

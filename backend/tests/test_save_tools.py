@@ -332,6 +332,32 @@ def test_failures_are_named(env, client, fake):
         assert os.listdir(os.path.join(data_dir(), tool, "saving")) == []
 
 
+def test_a_failed_run_leaves_nothing(env, client, fake):
+    """gallery-dl stopped after one of two files: nothing moved, indexed or
+    archived, so the post is not marked saved and Save can try again."""
+    account = x_account((1, 2))
+    account["posts"][0]["cut"] = True
+    fake.put(X_PROFILE, account)
+    job = save_now(client, X_LINK)
+    assert job["state"] == "failed" and job["result"]["post"] is None, job
+    assert not os.path.exists(os.path.join(env["roots"][0], "twitter"))
+    assert archive_entries("gallery-dl") == set() and archive_entries("yt-dlp") == set()
+    assert os.listdir(os.path.join(data_dir(), "gallery-dl", "saving")) == []
+    assert post(client, "/api/saved", {"ids": [f"twitter:{X_ID}"]})["saved"] == []
+
+
+def test_another_posts_files_are_not_taken_for_it(env, client, fake):
+    """A retweet's link gets the original's files: not the post asked for,
+    so nothing is moved in its name."""
+    account = x_account((1, 1), (2, 1))
+    account["posts"][0]["retweet_of"] = "1800000000000000002"
+    fake.put(X_PROFILE, account)
+    job = save_now(client, X_LINK)
+    assert job["state"] == "failed" and job["message"] == "gallery-dl saved no post (a post with no media?)", job
+    assert not os.path.exists(os.path.join(env["roots"][0], "twitter"))
+    assert archive_entries("gallery-dl") == set()
+
+
 def test_tool_missing(env, client, monkeypatch):
     monkeypatch.setattr(jobs, "tool_path", lambda name: None)
     r = save_link(client, X_LINK)
