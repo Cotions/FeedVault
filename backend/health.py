@@ -108,6 +108,9 @@ never in its options:
 - ``line``: the output line behind it, scrubbed (scrub())
 - ``login``: {mode, found, accepted} of the session the last run used
   (login()), kept by a run that never got that far
+- ``blocking``: blocking results (BLOCKING) in a row, whichever; absent
+  once a run says anything else (a run that never got that far keeps it).
+  A record from before it with a blocking state counts as 1 (blocking())
 - ``resumed``: true once the user changed the schedule (or accepted a
   rename) after a blocking state: the scheduler tries it again (paused())
 - ``rename``: {from, to, at}, a new handle the tool reported for the
@@ -200,7 +203,10 @@ LOGIN = {
 SESSION_MODES = ("none", "cookies", "login")
 # The scheduler stops syncing a source in one of these (scheduler.py), and
 # the Creators list warns about it: syncing again on its own will not fix them.
+# instaloader says both to a throttled anonymous client too ("does not exist",
+# "403 Forbidden"), so one alone only backs off: see paused().
 BLOCKING = {"not_found": "account not found", "login_required": "login required"}
+STOP_AFTER = 2                                 # blocking results in a row before the scheduler stops
 WARN_FAILURES = 3                              # failed syncs in a row before the Creators list warns
 
 
@@ -328,7 +334,8 @@ def record(previous, state, job_state, ended_at, target, rename=None, login_stat
     interrupted): it keeps the previous one. ``rename``: (old, new) from
     renamed(); a suggestion stays while the target is the one it was for.
     ``login_state``: login()'s, None for a run that never got that far.
-    Such a run also keeps ``resumed``: it said nothing new about the account."""
+    Such a run also keeps ``resumed`` and ``blocking``: it said nothing new
+    about the account. A blocking state adds one to ``blocking``."""
     prev = previous if isinstance(previous, dict) else {}
     ok_at = ended_at if job_state == "done" else _ok_at(prev, None)
     suggestion = _rename(prev.get("rename"))
@@ -340,6 +347,8 @@ def record(previous, state, job_state, ended_at, target, rename=None, login_stat
            "login": _login(login_state) or _login(prev.get("login"))}
     if state is None and prev.get("resumed") is True:
         out["resumed"] = True
+    if state in BLOCKING or (state is None and blocking(prev)):
+        out["blocking"] = blocking(prev) + (state in BLOCKING)
     return {**out, "rename": suggestion} if suggestion else out
 
 
@@ -384,15 +393,30 @@ def state_of(result):
     return "error" if result.get("state") == "failed" else None
 
 
+def blocking(result):
+    """Blocking results in a row in a stored last_result: its ``blocking``,
+    else (stored before it) 1 when its state is BLOCKING, else 0."""
+    if not isinstance(result, dict) or result.get("health") not in BLOCKING:
+        return 0
+    n = result.get("blocking")
+    return n if _time(n) and n > 0 else 1
+
+
 def paused(result):
     """Why the scheduler leaves a source alone ("account not found", "login
-    required"), else None: its last state is BLOCKING and nothing resumed
-    it since (a sync's end stores a new result, without ``resumed``). Only
-    a state these tables read (``health``) stops it: an ``error`` stored
-    before them came from broader patterns, and keeps the back-off."""
+    required"), else None: its last state is BLOCKING, said STOP_AFTER
+    times in a row or once with a session the site accepted (login.accepted:
+    the profile really is gone for a logged-in viewer), and nothing resumed
+    it since (a sync's end stores a new result, without ``resumed``). A
+    lone one with no accepted session is the back-off's, as rate_limited:
+    instaloader says the same to a throttled anonymous client. Only a state
+    these tables read (``health``) stops it: an ``error`` stored before them
+    came from broader patterns, and keeps the back-off."""
     if not isinstance(result, dict) or result.get("resumed") is True:
         return None
-    return BLOCKING.get(result.get("health"))
+    why = BLOCKING.get(result.get("health"))
+    accepted = (_login(result.get("login")) or {}).get("accepted") is True
+    return why if why and (blocking(result) >= STOP_AFTER or accepted) else None
 
 
 def warning(state, failures):

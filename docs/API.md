@@ -945,6 +945,11 @@ no person yet.
   - `failures`: failed syncs in a row (a failure adds one, a sync that
     worked sets it to 0, a cancelled or interrupted one leaves it), for the
     scheduler's back-off
+  - `blocking`: `not_found` or `login_required` results in a row
+    (whichever; a cancelled or interrupted sync leaves it, any other
+    result removes it), for the scheduler's stop (see
+    [Schedules](#schedules)); one stored before it with such a state
+    counts as 1
   - `health` and `ok_at`: see `health` below (stored here, with the
     sync's outcome, not with the options)
   - `line` and `message` are scrubbed before they are stored: see `health.line`
@@ -1398,9 +1403,14 @@ running is never queued again).
 - At most one source per platform is queued at a time, the most overdue
   first, and only when no sync of that platform is queued or running and
   the scheduler queued the last one 5 minutes ago or more.
-- A source whose last sync ended `not_found` or `login_required` (see
-  [Account health](#account-health)) is no longer synced on its own:
-  trying again would not change that. `schedule.stopped` says so. It is
+- A source whose syncs ended `not_found` or `login_required` (see
+  [Account health](#account-health)) twice in a row
+  (`last_result.blocking` ≥ 2), or once with a session the site accepted
+  (`health.login.accepted` is `true`), is no longer synced on its own:
+  trying again would not change that. `schedule.stopped` says so. A lone
+  one with no accepted session is backed off like any failure (instaloader
+  says "does not exist" and "403 Forbidden" to a throttled anonymous
+  client too). It is
   scheduled again once a sync of it works (Sync clicked), or when its
   schedule or its session changes or a rename is accepted
   (`last_result.resumed` is set until a sync of it ends `done` or

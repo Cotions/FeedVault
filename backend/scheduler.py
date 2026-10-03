@@ -36,13 +36,16 @@ the next tick:
 - the media root holding its folder is offline: not a folder, or empty
   while the index has posts under it (a mount point with nothing mounted).
 
-Stopped: a source whose last sync said its account is not found (deleted,
-or renamed without a trace) or that a login is required (health.BLOCKING)
-is not synced on its own any more, as trying again would not change that;
-status says why ("paused: account not found", "paused: login required").
-It comes back when a sync of it works (Sync clicked), or when its schedule
-changes or a rename is accepted (health.paused: last_result.resumed). Rate
-limited is not stopped: the back-off above applies.
+Stopped: a source whose syncs said its account is not found (deleted, or
+renamed without a trace) or that a login is required (health.BLOCKING)
+twice in a row, or once with a session the site accepted, is not synced on
+its own any more, as trying again would not change that; status says why
+("paused: account not found", "paused: login required"). A lone one is
+backed off like any failure: instaloader says the same to a throttled
+anonymous client (health.paused). It comes back when a sync of it works
+(Sync clicked), or when its schedule or session changes or a rename is
+accepted (last_result.resumed). Rate limited is not stopped: the back-off
+above applies.
 
 A sync refused (jobs.BadRequest: its folder is no longer inside a media
 root…) is noted too and held for one interval. Notes and holds live in
