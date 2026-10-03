@@ -11,6 +11,7 @@ import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import CreatorPicker from "../components/CreatorPicker";
 import Suggestions from "../components/Suggestions";
+import MuteButton from "../components/MuteButton";
 import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
 
@@ -193,6 +194,7 @@ export default function PersonPage() {
   const scoped = path => `${path}?${new URLSearchParams({ person: p.id })}`;
   const notesValue = notes ?? p.notes;
   const fresh = (newApi.data?.by_person || []).find(r => r.id === p.id);
+  const muted = !!newApi.data?.muted?.people?.includes(p.id);
 
   return (
     <div className="card person-page">
@@ -237,18 +239,23 @@ export default function PersonPage() {
         <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
       </nav>
 
-      {fresh?.count > 0 && (
-        <div className="person-new">
-          <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
-                title="Their posts indexed since you last marked them seen">
-            {fmtInt(fresh.count)} new
-          </Link>
-          <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
-                  title="Their new posts stop being new; everyone else's stay">
-            <Icon name="check" size={14} /> Mark seen
-          </button>
-        </div>
-      )}
+      <div className="person-new">
+        {fresh?.count > 0 && (
+          <>
+            <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
+                  title="Their posts indexed since you last marked them seen">
+              {fmtInt(fresh.count)} new
+            </Link>
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
+                    title="Their new posts stop being new; everyone else's stay">
+              <Icon name="check" size={14} /> Mark seen
+            </button>
+          </>
+        )}
+        {newApi.data && (
+          <MuteButton muted={muted} whom={{ person: p.id }} name={p.name} onDone={() => { newApi.reload(); started(); }} />
+        )}
+      </div>
 
       <section className="person-section">
         <h3 className="card-title">Accounts <span className="page-count">{p.accounts.length}</span></h3>

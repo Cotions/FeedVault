@@ -2693,3 +2693,5 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 @media (max-width: 640px) {
   .notif-panel { left: 8px; right: 8px; width: auto; top: calc(var(--header-h) + 8px); }
 }
+.creator-mute { margin-right: 6px; flex-shrink: 0; }
+.creator-mute.is-muted { color: var(--glow); }

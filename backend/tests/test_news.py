@@ -225,7 +225,7 @@ def test_posts_indexed_after_the_mark_are_new(env, client):
     r = new_count(client)
     assert r["count"] == 3 and r["since"] == seen(conn)
     newest = conn.execute("SELECT MAX(first_seen) FROM posts").fetchone()[0]
-    assert r["by_person"] == [{"id": pid, "name": "Carol", "count": 2, "until": newest}]
+    assert r["by_person"] == [{"id": pid, "name": "Carol", "count": 2, "until": newest, "muted": False}]
     assert [(a["handle"], a["count"], a["person"]) for a in r["by_account"]] == \
         [("carol.cooks", 2, pid), ("dana.draws", 1, None)]
     new = ["instagram:NEWCAROL0001", "instagram:NEWCAROL0002", "instagram:NEWDANA00001"]
@@ -409,3 +409,70 @@ def test_mark_all_seen_drops_the_marks_it_passes(env, client):
     assert db.connect().execute("SELECT COUNT(*) FROM seen_marks").fetchone()[0] == 2
     mark(client, {})
     assert db.connect().execute("SELECT COUNT(*) FROM seen_marks").fetchone()[0] == 0
+
+
+def mute(client, body, status=200):
+    r = client.post("/api/new/mute", headers=H, json=body)
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+def test_muted_ones_stay_out_of_the_global_count_but_not_their_own(env, client):
+    pid, global_mark = _two_creators(env, client)
+    dana = {"platform": "instagram", "id": "888"}
+    assert mute(client, {"person": pid, "muted": True})["muted"] == {"people": [pid], "accounts": []}
+    r = new_count(client)
+    assert r["count"] == 2 and r["muted"] == {"people": [pid], "accounts": []}
+    assert [(p["id"], p["count"], p["muted"]) for p in r["by_person"]] == [(pid, 2, True)]
+    assert client.get("/api/jobs", headers=H).get_json()["new"] == 2
+    assert ids(client, new="1") == ["instagram:NEWDANA00001", "instagram:NEWDANA00002"]
+    assert len(ids(client, new="1", person=pid)) == 2            # her own page still shows them
+    assert len(ids(client, new="1", author="777")) == 2
+    # An unlinked account, and its folder-name alias.
+    mute(client, {"account": dana, "muted": True})
+    assert new_count(client)["count"] == 0 and ids(client, new="1") == []
+    assert len(ids(client, new="1", author="888")) == 2
+    # A linked account: mute the person.
+    assert "Carol" in mute(client, {"account": {"platform": "instagram", "id": "777"}, "muted": True}, 400)["error"]
+    # "Mark all seen" did not show them: they stay new on their own.
+    mark(client, {})
+    assert len(ids(client, new="1", person=pid)) == 2 and len(ids(client, new="1", author="888")) == 2
+    # Until their own "Mark seen".
+    until = next(p["until"] for p in new_count(client)["by_person"] if p["id"] == pid)
+    mark(client, {"person": pid, "at": until})
+    assert ids(client, new="1", person=pid) == []
+    # Unmuted: what the global mark passed while muted counts again.
+    mute(client, {"account": dana, "muted": False})
+    assert new_count(client)["count"] == 2 and len(ids(client, new="1")) == 2
+    # A second "Mark all seen" covers it now.
+    mark(client, {})
+    assert new_count(client)["count"] == 0
+    for bad in ({"person": pid}, {"person": pid, "muted": 1}, {"muted": True}, {"person": pid, "account": dana,
+                "muted": True}, {"person": 999, "muted": True}, {"person": pid, "muted": True, "x": 1}, [1]):
+        mute(client, bad, 400)
+
+
+def test_mutes_are_user_data_and_survive_a_rebuild(env, client):
+    pid, _ = _two_creators(env, client)
+    mute(client, {"person": pid, "muted": True})
+    mute(client, {"account": {"platform": "instagram", "id": "888"}, "muted": True})
+    conn = db.connect()
+    data_dir = config.load()["data_directory"]
+    for name in ("people", "person_accounts", "seen_at", "seen_marks", "muted_people", "muted_accounts"):
+        userdata.export(conn, name, data_dir)
+    with open(userdata.path(data_dir, "muted_people")) as f:
+        assert [r["person"] for r in json.load(f)["rows"]] == ["Carol"]
+    path = config.db_path(config.load())
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(path + suffix):
+            os.remove(path + suffix)
+    db.init(path)
+    conn = db.connect()
+    userdata.restore_all(conn, data_dir)
+    news.ensure(conn)
+    scanner.scan(env["roots"])
+    pid = conn.execute("SELECT id FROM people WHERE name = 'Carol'").fetchone()[0]
+    assert news.muted(conn) == {"people": [pid], "accounts": [{"platform": "instagram", "id": "888"}]}
+    # A person deleted takes its mute with it.
+    assert client.delete(f"/api/people/{pid}", headers=H).status_code == 200
+    assert news.muted(conn)["people"] == []

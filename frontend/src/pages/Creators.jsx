@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getAuthors, getPeople, getSuggestions, getNew, markSeen, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -12,6 +12,7 @@ import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import SelectionBar from "../components/SelectionBar";
 import Suggestions from "../components/Suggestions";
+import MuteButton from "../components/MuteButton";
 import {
   AddSource, RemoveSourceDialog, ScheduleLine, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
 } from "../components/Sources";
@@ -97,7 +98,7 @@ function WarnBadge({ sync }) {
   );
 }
 
-function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh, onSeen }) {
+function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted }) {
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
@@ -134,6 +135,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
         <Link to={personPath(p.id)} className="creator-main" title={`Open ${p.name}`}>{body}</Link>
       )}
       {!selectMode && <SeenButton fresh={fresh} name={p.name} onSeen={onSeen} />}
+      {!selectMode && muted != null && <MuteButton compact muted={muted} whom={{ person: p.id }} name={p.name} onDone={onMuted} />}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
   );
@@ -189,7 +191,7 @@ function CardOptionsButton({ sync, onEdit }) {
   );
 }
 
-function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen }) {
+function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted }) {
   const former = matchedFormer(a, query);
   const body = (
     <>
@@ -237,6 +239,9 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
         </span>
       )}
       {!selectMode && <SeenButton fresh={fresh} name={`@${a.handle || a.id}`} onSeen={onSeen} />}
+      {!selectMode && a.id != null && muted != null && (
+        <MuteButton compact muted={muted} whom={{ account: accountRef(a) }} name={`@${a.handle || a.id}`} onDone={onMuted} />
+      )}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
   );
@@ -308,6 +313,13 @@ export default function Creators() {
     for (const a of newApi.data?.by_account || []) m.set(`account:${accountKey(a)}`, a);
     return m;
   }, [newApi.data]);
+  // Who is muted: null until /api/new has answered (no button before).
+  const mutedSet = useMemo(() => newApi.data?.muted ? new Set([
+    ...newApi.data.muted.people.map(id => `person:${id}`),
+    ...newApi.data.muted.accounts.map(a => `account:${accountKey(a)}`),
+  ]) : null, [newApi.data]);
+  const reloadNew = newApi.reload;
+  const onMuted = useCallback(() => { reloadNew(); started(); }, [reloadNew, started]);
 
   // Up to the newest one counted: a post indexed since stays new.
   async function markCardSeen(row, whom, name) {
@@ -564,6 +576,8 @@ export default function Creators() {
                     onSync={sources.sync}
                     fresh={fresh.get(`person:${p.id}`)}
                     onSeen={() => markCardSeen(fresh.get(`person:${p.id}`), { person: p.id }, p.name)}
+                    muted={mutedSet && mutedSet.has(`person:${p.id}`)}
+                    onMuted={onMuted}
                   />
                 ))}
               </div>
@@ -590,6 +604,8 @@ export default function Creators() {
                     fresh={a.id != null ? fresh.get(`account:${accountKey(a)}`) : null}
                     onSeen={() => markCardSeen(fresh.get(`account:${accountKey(a)}`), { account: accountRef(a) },
                                                `@${a.handle || a.id}`)}
+                    muted={mutedSet && mutedSet.has(`account:${accountKey(a)}`)}
+                    onMuted={onMuted}
                   />
                 ))}
               </div>

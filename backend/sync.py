@@ -141,6 +141,7 @@ import db
 import health
 import info_cookies
 import jobs
+import news
 import notify
 import people
 import scanner
@@ -1043,6 +1044,8 @@ def _failures(src, state):
 
 def _ended(job):
     """Store how it went on the source, and let a new source adopt its account."""
+    if job["state"] in ("done", "failed"):
+        _mark_muted(job)
     _tally(job)
     if job["started_at"] is None:
         return                                 # cancelled while queued: it never ran
@@ -1106,13 +1109,29 @@ def _who(src):
     return f"@{src['target']}" if src["tool"] == "instaloader" else src["target"].removeprefix("https://")
 
 
+def _mark_muted(job):
+    """A sync of a muted person's or account's source (news.py) says so in
+    its result (``muted``): no toast, no notification, not in "Sync all"'s
+    count."""
+    try:
+        conn = db.connect()
+        src = sources.get(conn, _source_id(job["params"]))
+        account = src and src["account"]
+        if src and news.is_muted(conn, src["person"] and src["person"]["id"],
+                                 account and (account["platform"], account["id"])):
+            job["result"] = {**(job["result"] or {}), "muted": True}
+            jobs.amend(job["id"], {"muted": True})
+    except Exception as e:                     # it only says so as if it were not muted
+        print(f"[sync] source {job['params'].get('source')}: could not tell whether it is muted: {e}")
+
+
 def _notify(conn, job, sid, before):
     """The notifications entry of a sync that brought posts or failed
     (notify.py). A scheduled one that failed as the sync before it did adds
-    none. Its id goes in the job's result (``notification``)."""
+    none, nor does a muted one. Its id goes in the job's result (``notification``)."""
     state, r = job["state"], job["result"] or {}
     said = _said(state, r)
-    if not ((state == "done" and r.get("added")) or state == "failed"):
+    if r.get("muted") or not ((state == "done" and r.get("added")) or state == "failed"):
         return
     scheduled = job["params"].get("scheduled") == "1"
     if state == "failed" and scheduled and health.state_of(before) == said:
@@ -1524,7 +1543,7 @@ _batch_lock = threading.Lock()
 def _ending(job):
     r = job["result"] or {}
     return {"state": job["state"], "added": r.get("added", 0), "source": int(job["params"]["source"]),
-            "label": job["label"]}
+            "label": job["label"], "muted": bool(r.get("muted"))}
 
 
 def _tally(job):
@@ -1535,7 +1554,7 @@ def _tally(job):
 
 def batch():
     """The last "Sync all" while FeedVault has run, or None: {id, started_at,
-    total, ended, failed, added, profiles (sources that added posts), first
+    total, ended, failed, added (muted sources left out of both), profiles (sources that added posts), first
     (the label and source of the one that added the most), current (the
     job running, else the next queued, else None), jobs (its job ids),
     active (those still queued or running), done}. Progress counts live jobs only."""
@@ -1545,7 +1564,7 @@ def batch():
         b = {**_batch, "jobs": list(_batch["jobs"]), "ended": dict(_batch["ended"])}
     ids = set(b["jobs"])
     live = [j for j in jobs.active() if j["id"] in ids and j["id"] not in b["ended"]]
-    ended = list(b["ended"].values())
+    ended = [e for e in b["ended"].values() if not e.get("muted")]     # muted: never in its count
     adders = sorted((e for e in ended if e["added"]), key=lambda e: -e["added"])
     current = next((j for j in live if j["state"] == "running"), None) or (live[0] if live else None)
     return {"id": b["id"], "started_at": b["started_at"], "total": len(b["jobs"]),

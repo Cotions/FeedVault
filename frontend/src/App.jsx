@@ -436,6 +436,7 @@ const syncName = label => label.replace(/^Sync /, "");
    click from the Feed filtered to it, or what failed, one click from its
    source. */
 function syncToast(toast, j) {
+  if (j.result?.muted) return;                    // muted: no toast (docs/API.md "New posts")
   const added = j.result?.added || 0;
   const who = syncName(j.label);
   if (j.state === "failed") {

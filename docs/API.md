@@ -90,6 +90,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=&notification=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
 | POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`; with `"person": 3` or `"account": { "platform", "id" }`, theirs only; see [New posts](#new-posts) |
+| POST | `/api/new/mute` | body `{ "person": 3, "muted": true }` or `{ "account": { "platform", "id" }, "muted": false }` → `{ "ok": true, "muted": { "people": [3], "accounts": [] } }`; see [New posts](#new-posts) |
 | GET | `/api/notifications` | syncs that brought new posts or failed, see [Notifications](#notifications) |
 | POST | `/api/notifications/read` | body `{ "upto": 41 }` or nothing (all) → `{ "ok": true, "read": 3 }`, see [Notifications](#notifications) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
@@ -142,23 +143,46 @@ new.
   them. An account linked to a person later keeps the mark it had until
   the person's next "Mark seen". A global "Mark all seen" drops the marks it
   has passed (they no longer change anything).
+- **Mute.** A muted person, or account linked to nobody, makes no
+  [notification](#notifications) and no toast, and its new posts are left
+  out of the global count (`count` here, `new` in `GET /api/jobs`) and of
+  `new=1` / `is:new` without an `author` or `person` filter: its own page
+  (`?person=`, `?author=`) still shows them, and "Sync all" leaves its
+  syncs out of what it added and what failed. A global "Mark all seen" did
+  not show them, so it does not cover them: a muted account keeps a mark of
+  its own at the global mark it passes, which stands instead of the global
+  one until its own "Mark seen". Unmuted, what is still unseen counts again.
+  User data: `muted_people` (exported by person name, as
+  `person_accounts`; deleting the person drops it) and `muted_accounts`
+  (platform and account id, its folder-name aliases follow), in
+  `userdata/muted_people.json` and `userdata/muted_accounts.json`.
 
 `GET /api/new`:
 
 ```json
 { "count": 12, "since": 1727500000,
-  "by_person": [{ "id": 3, "name": "Some Body", "count": 9, "until": 1727503600 }],
-  "by_account": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "person": 3, "count": 9, "until": 1727503600 },
-                 { "platform": "tiktok", "id": "6900000000000000777", "handle": "demo.clips", "person": null, "count": 3, "until": 1727502000 }] }
+  "by_person": [{ "id": 3, "name": "Some Body", "count": 9, "until": 1727503600, "muted": false }],
+  "by_account": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "person": 3, "count": 9, "until": 1727503600, "muted": false },
+                 { "platform": "tiktok", "id": "6900000000000000777", "handle": "demo.clips", "person": null, "count": 3, "until": 1727502000, "muted": false }],
+  "muted": { "people": [], "accounts": [] } }
 ```
 
-- `count`: every new post, those without an author included; `since`: the
-  mark (`null` only before the first start has set it).
+- `count`: every new post, those without an author included and muted
+  ones left out; `since`: the mark (`null` only before the first start has
+  set it).
 - `by_account`: accounts as on the Creators page (folder-name aliases count
   for the id they stand for), `person` the id of the person linked, else
   `null`; `by_person`: the same added up per person. Most new posts first.
   `until`: the newest of those posts' `first_seen`, to send as `at` with a
-  "Mark seen" of that person or account.
+  "Mark seen" of that person or account. `muted`: muted (the account on its
+  own or through its person); such rows are listed, not counted in `count`.
+- `muted`: who was muted, as muted: person ids, and accounts linked to
+  nobody.
+
+`POST /api/new/mute` mutes (`"muted": true`) or unmutes a person or an
+account linked to nobody (an account linked to a person is a 400: mute the
+person). The body is `muted` and one of `person` or `account`, as for
+`/api/new/seen`; anything else is a 400.
 
 `POST /api/new/seen` marks everything seen: `at` (Unix seconds, optional,
 default now) becomes the mark, unless the mark is already later: it never

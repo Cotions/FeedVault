@@ -184,6 +184,24 @@ def mark_seen():
     return jsonify({"ok": True, "since": news.seen_at(conn), "at": mark})
 
 
+@app.post("/api/new/mute")
+def mute():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) - {"muted", "person", "account"} \
+            or not isinstance(body.get("muted"), bool) or (body.get("person") is None) == (body.get("account") is None):
+        return jsonify({"ok": False, "error": "send { muted: true or false } and person or account"}), 400
+    person, account, error = _whom(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    if account is not None:
+        owner = db.accounts(conn)[people.canonical(conn, *account)]["person"]
+        if owner:
+            return jsonify({"ok": False, "error": f"that account is {owner['name']}'s: mute the person"}), 400
+    news.mute(conn, body["muted"], person=person, account=account)
+    return jsonify({"ok": True, "muted": news.muted(conn)})
+
+
 # ---------------------------------------------------------------------------
 # Notifications (notify.py)
 # ---------------------------------------------------------------------------
@@ -688,11 +706,12 @@ _BAD_ACCOUNTS = f"accounts must be a list of at most {people.MAX_ACCOUNTS} {{ pl
 
 
 def _people_changed(names=False):
-    """Links changed (and, with ``names``, the people themselves: links and
-    sources are exported by person name)."""
+    """Links changed (and, with ``names``, the people themselves: links,
+    sources and mutes are exported by person name)."""
     if names:
         userdata.changed("people")
         userdata.changed("sources")
+        userdata.changed("muted_people")
     userdata.changed("person_accounts")
 
 

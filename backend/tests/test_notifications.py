@@ -119,3 +119,33 @@ def test_text_is_scrubbed_and_the_list_is_capped(env, monkeypatch):
     rows = [r[0] for r in conn.execute("SELECT id FROM notifications ORDER BY id")]
     assert rows == list(range(last - 4, last + 1))
     assert notify.read(conn, last - 1) == 4 and notify.unread(conn) == (1, last)
+
+
+def test_a_muted_one_makes_no_entry_and_no_count(env, client, tools):
+    tools["ig"].write_text(json.dumps(ig_profile()))
+    s = add(client, "carol.cooks", "instaloader")
+    sync_now(client, s["id"])                          # links the account
+    account = client.get(f"/api/sources/{s['id']}", headers=H).get_json()["account"]
+    post(client, "/api/new/mute", {"account": account, "muted": True})
+    profile = ig_profile()
+    profile["profiles"]["carol.cooks"]["posts"].append({"shortcode": "CPOSTNEW999", "ts": 1717243200 + 9 * 86400,
+                                                         "caption": "later", "kind": "image"})
+    tools["ig"].write_text(json.dumps(profile))
+    before = len(entries(client)["entries"])
+    job = sync_now(client, s["id"])
+    assert job["result"]["added"] == 1 and job["result"]["muted"] is True and "notification" not in job["result"]
+    assert len(entries(client)["entries"]) == before
+    # Nor a failure; nor in "Sync all"'s count.
+    tools["ig"].write_text(json.dumps({**profile, "fail": "429"}))
+    job = sync_now(client, s["id"])
+    assert job["state"] == "failed" and job["result"]["muted"] is True
+    assert len(entries(client)["entries"]) == before
+    queued = post(client, "/api/sources/sync-all", {})["jobs"]
+    for j in queued:
+        ended(j["id"])
+    b = client.get("/api/jobs", headers=H).get_json()["sync_all"]
+    assert b["done"] and b["failed"] == 0 and b["added"] == 0
+    # Unmuted: entries again.
+    post(client, "/api/new/mute", {"account": account, "muted": False})
+    sync_now(client, s["id"])
+    assert len(entries(client)["entries"]) == before + 1
