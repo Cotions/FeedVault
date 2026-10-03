@@ -621,6 +621,9 @@ def test_a_missing_or_refused_script_fails_the_run_never_falls_back(client, fold
     job = ended(sync_now(client, source["id"])["job"]["id"])
     assert job["state"] == "failed" and job["kind"] == "script-sync"
     assert job["message"].startswith("the source's script: ")
+    # Why, as it was when the sync was queued.
+    why = {"removed": "no script mine", "refused": "writable by group or others", "changed-to-bad": "mine.json is refused"}
+    assert why[breakage] in job["message"]
     assert any("the source's script" in t for t in log_of(client, job["id"]))
     assert runner.runs() == []                 # neither the script nor instaloader's own command
     s = client.get(f"/api/sources/{source['id']}", headers=H).get_json()
@@ -649,6 +652,44 @@ def test_a_script_broken_after_its_sync_was_queued_fails_it(client, folder, runn
     job = ended(queued["id"])
     assert job["state"] == "failed" and "changed since it was queued" in job["message"]
     assert all("--extra" not in r["args"] for r in runner.runs())
+
+
+def test_a_script_refused_when_queued_and_fixed_by_its_start_still_fails(client, folder, runner, source, env,
+                                                                          monkeypatch):
+    """Its params hold no SHA-256 to run: the run fails, says why it was
+    refused then and that it can run now. Nothing is built or run for it."""
+    gate = env["tmp"] / "gate"
+    os.mkfifo(gate)
+    monkeypatch.setenv("RECORDER_GATE", str(gate))
+    cfg = config.load()
+    cfg["instaloader"] = {"pause": 0}
+    config.save(cfg)
+    attach(client, source["id"], "mine")
+    write(folder, "insta-hold.json", {"needs": "none", "argv": ["instaloader", "--hold"]})
+    blocker = run(client, "insta-hold")["job"]
+    wait_for(lambda: runner.runs())
+    (folder / "mine.json").chmod(0o666)
+    queued = sync_now(client, source["id"])["job"]
+    assert "sha256" not in queued["params"] and "writable by group or others" in queued["params"]["why"]
+    (folder / "mine.json").chmod(0o644)
+    with open(gate, "w") as f:
+        f.write("go\n")
+    ended(blocker["id"])
+    job = ended(queued["id"])
+    assert job["state"] == "failed"
+    assert "writable by group or others" in job["message"] and "it can run now: sync again" in job["message"]
+    assert len(runner.runs()) == 1             # the blocker only
+
+
+def test_a_refused_folder_is_the_reason_given(client, folder, runner, source):
+    attach(client, source["id"], "mine")
+    folder.chmod(0o777)
+    try:
+        job = ended(sync_now(client, source["id"])["job"]["id"])
+    finally:
+        folder.chmod(0o755)
+    assert job["state"] == "failed" and "the scripts folder is writable by group or others" in job["message"]
+    assert "no script" not in job["message"] and runner.runs() == []
 
 
 def test_attaching_checks_the_script(client, folder, runner, source):

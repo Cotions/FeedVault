@@ -37,6 +37,7 @@ from urllib.parse import urlsplit
 import archives
 import config
 import db
+import health
 import jobs
 import sources
 import sync
@@ -493,7 +494,9 @@ def runnable(sid, sha256=None):
     whose SHA-256 is ``sha256``, when given). Raises jobs.BadRequest."""
     script = get(sid)
     if script is None:
-        raise jobs.BadRequest(f"no script {sid} (in {scripts_dir()})")
+        refused = None if sid.startswith(BUILTIN) else _files()[0]
+        raise jobs.BadRequest(f"{refused}, so nothing in it runs" if refused
+                              else f"no script {sid} (in {scripts_dir()})")
     if script["refused"]:
         raise jobs.BadRequest(f"{script['file'] or script['id']} is refused: {script['refused']}")
     if script["kind"] == "shell" and script["builtin"]:
@@ -617,13 +620,18 @@ jobs.register(KIND, label="Run a script",
 SYNC_KIND = sync.SCRIPT_KIND
 
 
+WHY_MAX = 500                            # a refusal's reason, kept in a script sync's params
+
+
 def sync_params(sid, src):
     """The params a source's script sync is queued with (sync._job): the
-    script's id and SHA-256 now (none when it is missing or refused: the
-    run then fails with the reason), and the source's target."""
-    script = get(sid)
-    sha = script["sha256"] if script and not script["refused"] else None
-    return {"script": sid, "target": src["target"], **({"sha256": sha} if sha else {})}
+    script's id and SHA-256 now, or why it cannot run (missing or refused:
+    the run then fails with that reason), and the source's target."""
+    base = {"script": sid, "target": src["target"]}
+    try:
+        return {**base, "sha256": runnable(sid)["sha256"]}
+    except jobs.BadRequest as e:
+        return {**base, "why": health.scrub(str(e))[:WHY_MAX]}
 
 
 def _source(params):
@@ -668,7 +676,9 @@ def _sync_build(params):
     except OSError as e:
         raise jobs.BadRequest(f"cannot create the source's folder: {e.strerror or e}")
     try:
-        script = runnable(params["script"], params.get("sha256"))
+        if "sha256" not in params:             # it could not run when queued: that run fails
+            raise jobs.BadRequest(params.get("why"))
+        script = runnable(params["script"], params["sha256"])
     except jobs.BadRequest:
         return {"tool": params["script"], "args": [], "rescan": folder, "group": src["tool"]}
     vals = _source_values(script, src, cfg)
@@ -682,8 +692,10 @@ def _sync_check(params, note):
     tool's own command instead."""
     try:
         if "sha256" not in params:
-            runnable(params["script"])         # says why it was not runnable when queued
-            raise jobs.BadRequest(f"{params['script']} could not be run when the sync was queued: sync again")
+            # Why it could not run when queued; if that is fixed by now, it says so.
+            runnable(params["script"])
+            why = params.get("why") or "it could not be run"
+            raise jobs.BadRequest(f"{why}; that was when the sync was queued, it can run now: sync again")
         script = runnable(params["script"], params["sha256"])
         src = _source(params)
     except jobs.BadRequest as e:
@@ -722,7 +734,8 @@ def _sync_pause(params):
 jobs.register(SYNC_KIND, label="Sync with a script",
               params={**sync.PARAMS, "script": {"type": "text", "max": 80},
                       "target": {"type": "text", "max": sources.URL_MAX},
-                      "sha256": {"type": "text", "max": 64, "required": False}},
+                      "sha256": {"type": "text", "max": 64, "required": False},
+                      "why": {"type": "text", "max": WHY_MAX, "required": False}},
               build=_sync_build, group=_tool, check=_sync_check, start=_sync_start, after=sync._strip_cookies,
               outcome=lambda p, code, lines, index, note: sync._outcome(p, code, lines, index, note, _tool(p)),
               ended=sync._ended, pause=_sync_pause, scrub=("argv",),

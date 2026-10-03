@@ -2288,7 +2288,8 @@ could not be read.
 that script instead of the built-in command, with `{target}` the source's
 target, `{url}` its `url` and `{root}` its folder (`FV_*` likewise). Its
 `rescan` is the declared folder, else the source's folder. It runs as job
-kind `script-sync`, params `{ "source", "script", "target", "scheduled"? }`,
+kind `script-sync`, params `{ "source", "script", "target", "sha256"?, "why"?,
+"scheduled"? }` (`sha256` the script's when queued, else `why` it could not run),
 in the tool's lock group with its pause. It reads its outcome, account
 health, notifications and schedule like the tool's own sync, the tool
 being the source's. A script that is missing or refused when the sync is
