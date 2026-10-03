@@ -660,7 +660,7 @@ def test_running_job_records_its_process(runner):
 
 def sleeper():
     """A harmless process in a group of its own, as a job's tool would be."""
-    proc = subprocess.Popen(["sleep", "1000"], start_new_session=True)
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1000)"], start_new_session=True)
     wait_for(lambda: jobs.identity(proc.pid))
     return proc
 
