@@ -649,10 +649,22 @@ def test_handle_and_link_normalizing():
     assert people.handle_parts("ab1") == (None, "1")
     assert people.norm_name("Zoé  Smith!") == "zoe smith" and people.norm_name("Al ✨") is None
     assert people.profile_links("x.com/Foo_bar. https://www.instagram.com/p/abc/ tiktok.com/@baz "
-                                "tiktok.com/nope instagram.com/holly.x twitch.tv/z") == [
-        ("twitter", "foo_bar"), ("tiktok", "baz"), ("instagram", "holly.x")]
+                                "tiktok.com/nope instagram.com/holly.x twitch.tv/z youtube.com/@Tube.Me "
+                                "youtube.com/watch?v=abc youtube.com/channel/UC1") == [
+        ("twitter", "foo_bar"), ("tiktok", "baz"), ("instagram", "holly.x"), ("youtube", "tube.me")]
     # other domains that end like one
     assert people.profile_links("https://www.dropbox.com/s/abc netflix.com/title mytiktok.com/@z") == []
+
+
+def test_large_groups_are_left_out(env, client):
+    import people
+    for i in range(people.MAX_GROUP + 1):
+        write_post(env["media"] / f"acct{i}", f"Q{i}", TS, owner(f"acct{i}", 900 + i, "Official Page"), "image")
+    write_post(env["media"] / "pair.one", "P1", TS, owner("pair.one", 801, "Pair Name"), "image")
+    write_post(env["media"] / "pair.two", "P2", TS, owner("pair.two", 802, "pair name"), "image")
+    scanner.scan(env["roots"])
+    got = suggestions(client)["suggestions"]
+    assert [sorted(a["handle"] for a in s["accounts"]) for s in got] == [["pair.one", "pair.two"]]
 
 
 def test_similar_handles_with_the_same_digits(env, client):

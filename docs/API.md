@@ -795,7 +795,7 @@ downloaded. Nothing is ever fetched.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/people/suggestions` | `{ "suggestions": [suggestion, …], "dismissed": 2 }`, most likely first |
-| POST | `/api/people/suggestions/dismiss` | body `{ "id": "…" }` → `{ "ok": true }`: "not the same person", for good; 404 when the id is not listed (reload) |
+| POST | `/api/people/suggestions/dismiss` | body `{ "id": "…" }` → `{ "ok": true }`: "not the same person" (the dashboard's **Not them**), for good; 404 when the id is not listed (reload) |
 
 ```json
 { "id": "4c1d9e0b7a2f3e5d6c8b", "score": 0.92, "reason": "same_handle",
@@ -808,7 +808,7 @@ downloaded. Nothing is ever fetched.
   - `bio_link` (0.95): an account's bio or website, as its metadata has it,
     links to another indexed account (`instagram.com/<handle>`,
     `x.com/<handle>` or `twitter.com/<handle>`, `tiktok.com/@<handle>`,
-    any of its handles, old ones too). Read on every scan from instaloader's
+    `youtube.com/@<handle>`, any of its handles, old ones too). Read on every scan from instaloader's
     Profile file (`<handle>_<id>.json[.xz]`: `biography`, `external_url`,
     `bio_links`) and from gallery-dl's author dict of the newest post
     (`description`/`signature`, `url`).
@@ -820,7 +820,11 @@ downloaded. Nothing is ever fetched.
     different numbers (`foo1`, `foo2`).
   - `same_name` (0.6): one display name, compared without case, accents,
     emoji and punctuation, at least 4 letters.
-  A group found for several reasons scores 0.02 more per extra reason.
+  A group found for several reasons scores 0.02 more per extra reason. A
+  group of more than 8 accounts is left out: they share something common
+  (a name like "Official"), not a person. Computed from the index alone
+  (cached until the next change), so its cost grows with the number of
+  accounts, not posts.
 - `detail`: what matched, for people.
 - `accounts`: the accounts of the group, most posts first. `person`: the
   person one of them is linked to, or `null`. Only groups where linking

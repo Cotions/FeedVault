@@ -367,11 +367,16 @@ def merge(conn, ids, name, accounts, now):
 
 # Most sure first; a group found for several reasons scores a little higher.
 SCORES = {"bio_link": 0.95, "same_handle": 0.9, "similar_handle": 0.7, "same_name": 0.6}
+# A group this large shares something common ("official", a first name),
+# not a person: left out, which also keeps the list, and its cost, bounded.
+MAX_GROUP = 8
 _PREFIXES = ("the", "real", "its", "official")
 _SUFFIXES = ("official",)
-_LINK_RE = re.compile(r"(?<![\w.-])(?:https?://)?(?:www\.|m\.|mobile\.)?(instagram\.com|x\.com|twitter\.com|tiktok\.com)"
+_LINK_RE = re.compile(r"(?<![\w.-])(?:https?://)?(?:www\.|m\.|mobile\.)?(instagram\.com|x\.com|twitter\.com|tiktok\.com|"
+                      r"youtube\.com)"
                       r"/(@?[A-Za-z0-9._]{1,30})", re.IGNORECASE)
-_LINK_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com": "twitter", "tiktok.com": "tiktok"}
+_LINK_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com": "twitter", "tiktok.com": "tiktok",
+                   "youtube.com": "youtube"}
 # First path parts that are pages, not profiles.
 _NOT_HANDLES = {"p", "reel", "reels", "tv", "stories", "explore", "accounts", "i", "intent", "share", "home",
                 "hashtag", "search", "status", "video", "tag", "discover", "music", "login", "settings"}
@@ -408,8 +413,8 @@ def profile_links(text):
     out = []
     for site, path in _LINK_RE.findall(text or ""):
         platform = _LINK_PLATFORMS[site.lower()]
-        if platform == "tiktok" and not path.startswith("@"):
-            continue                           # tiktok.com/@handle only
+        if platform in ("tiktok", "youtube") and not path.startswith("@"):
+            continue                           # tiktok.com/@handle, youtube.com/@handle only
         handle = path.lstrip("@").rstrip(".").lower()
         if handle and handle not in _NOT_HANDLES:
             out.append((platform, handle))
@@ -425,7 +430,7 @@ def suggestion_id(key):
 
 
 def _label(a):
-    from_platform = {"instagram": "Instagram", "twitter": "X", "tiktok": "TikTok"}
+    from_platform = {"instagram": "Instagram", "twitter": "X", "tiktok": "TikTok", "youtube": "YouTube"}
     return f"{from_platform.get(a['platform'], a['platform'])} @{a['handle'] or a['id']}"
 
 
@@ -479,6 +484,8 @@ def suggestions(conn):
         dismissed = {r[0] for r in conn.execute("SELECT key FROM dismissed_suggestions")}
         groups = {}
         for reason, detail, keys in _candidates(conn, accounts):
+            if len(keys) > MAX_GROUP:
+                continue
             people = {accounts[k]["person"]["id"] for k in keys if accounts[k]["person"]}
             unlinked = [k for k in keys if not accounts[k]["person"]]
             if len(people) > 1 or not unlinked:

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getAuthors, getPerson, updatePerson, deletePerson, linkAccounts } from "../lib/api";
+import { getAuthors, getPerson, getSuggestions, updatePerson, deletePerson, linkAccounts, dismissSuggestion } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
@@ -9,6 +9,7 @@ import { accountKey, accountRef } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import CreatorPicker from "../components/CreatorPicker";
+import Suggestions from "../components/Suggestions";
 import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
 
@@ -66,6 +67,7 @@ export default function PersonPage() {
   const load = useCallback(() => getPerson(id), [id]);
   const { data: p, error, reload } = useApi(load, refreshKey);
   const { data: authors } = useApi(getAuthors, refreshKey);
+  const suggestApi = useApi(getSuggestions, refreshKey);
   const [busy,     setBusy]     = useState(false);
   const [editName, setEditName] = useState(null);     // the name being typed, null when not renaming
   const [notes,    setNotes]    = useState(null);     // edited notes, null when untouched
@@ -97,6 +99,7 @@ export default function PersonPage() {
       if (!r?.ok) { toast(r?.error || "Could not change the accounts.", "err"); return; }
       toast(message);
       reload();
+      suggestApi.reload();
     } catch (err) {
       toast(err.message, "err");
     } finally {
@@ -119,6 +122,19 @@ export default function PersonPage() {
     }
   }
 
+  async function dismiss(s) {
+    setBusy(true);
+    try {
+      const r = await dismissSuggestion(s.id);
+      if (!r?.ok) { toast(r?.error || "Could not dismiss.", "err"); return; }
+      suggestApi.reload();
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!p) {
     return (
       <div className="card">
@@ -131,6 +147,8 @@ export default function PersonPage() {
   }
 
   const mine = (sources.data?.sources || []).filter(s => s.person?.id === p.id);
+  // Suggestions that would add accounts to this person.
+  const suggested = (suggestApi.data?.suggestions || []).filter(s => s.person?.id === p.id);
   const scoped = path => `${path}?${new URLSearchParams({ person: p.id })}`;
   const notesValue = notes ?? p.notes;
 
@@ -207,6 +225,16 @@ export default function PersonPage() {
           />
           <span className="creator-sub">An account belongs to one person: adding it here takes it from anyone else.</span>
         </div>
+        <Suggestions
+          title="Also them?"
+          data={{ suggestions: suggested }}
+          busy={busy}
+          onLink={s => {
+            const add = s.accounts.filter(a => !a.person).map(accountRef);
+            change({ add }, `${add.length} account${add.length === 1 ? "" : "s"} linked.`);
+          }}
+          onDismiss={dismiss}
+        />
       </section>
 
       <section className="person-section">
