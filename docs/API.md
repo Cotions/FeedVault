@@ -85,9 +85,9 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&person=&kind=&tag=&untagged=&new=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&person=&collection=&kind=&tag=&untagged=&new=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&person=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
 | POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`, see [New posts](#new-posts) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
@@ -390,6 +390,9 @@ post id; after a keep, call `/api/review` with `decision: null`.
   either way the whole account's posts (see [People](#people))
 - `person`: a person id: posts of every account linked to that person, across
   platforms (see [People](#people)); a value that is not an id matches nothing
+- `collection`: a collection id: only posts in that collection (see
+  [Collections](#collections)), in the feed's order, not the collection's;
+  a value that is not an id matches nothing
 - `kind`: one of the kinds above
 - `sort`: `posted` (default) or `saved`
 - `order`: `desc` (default, newest first) or `asc`
@@ -397,7 +400,7 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `offset` (default 0), `limit` (default 60, max 200)
 
 `/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
-`platform`, `author`, `person`, `kind`, `review`, `tag`, `untagged`, `new`; `sort`, `order`, `offset` and `limit`
+`platform`, `author`, `person`, `collection`, `kind`, `review`, `tag`, `untagged`, `new`; `sort`, `order`, `offset` and `limit`
 are ignored) and totals everything they match, not just one page: `posts` is
 always equal to the `total` that `/api/posts` returns for the same filters,
 `media` and `bytes` count the media items of those posts that are not missing.
@@ -628,10 +631,12 @@ index gets them back.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/tags` | `[{ "name": "outfits", "color": null, "count": 12 }]`, most used first |
+| GET | `/api/tags` | `[{ "name": "outfits", "color": "#3b82f6", "count": 12, "unused": false }]`, most used first |
 | POST | `/api/tags/apply` | body `{ "posts": ["instagram:C8x…"], "add": ["outfits"], "remove": ["todo"] }` → see below |
 | POST | `/api/tags/rename` | body `{ "from": "outfit", "to": "outfits" }` → `{ "ok": true, "name": "outfits", "merged": true }` |
 | POST | `/api/tags/delete` | body `{ "name": "outfits" }` → `{ "ok": true, "posts": 12 }`: removes the tag from every post |
+| POST | `/api/tags/color` | body `{ "name": "outfits", "color": "#3b82f6" }`, or `null` for none → `{ "ok": true, "name": "outfits", "color": "#3b82f6" }` |
+| POST | `/api/tags/delete-unused` | body `{ "names": ["old", "todo"] }` → `{ "ok": true, "deleted": ["old"] }`, see below |
 
 `/api/tags/apply` adds and removes tags on up to 5000 posts at once (more is
 a 400). `add` and `remove` are lists of names, either may be omitted but not
@@ -651,7 +656,16 @@ two are merged: every post of `from` gets `to`, and `from` is gone
 `from` is a 404, a bad `to` a 400. `/api/tags/delete` of an unknown name is a
 404.
 
-`color` is reserved for later and always `null` for now.
+`color` is the colour the tag's chips wear, `#rrggbb` (stored in lower
+case), or `null` for none. `/api/tags/color` of a colour in any other form is
+a 400, of an unknown name a 404.
+
+`unused` is true for a tag on no post at all, not even one in the trash; a
+tag only on trashed posts has `count` 0 but is not unused, as it comes back
+with them. `/api/tags/delete-unused` deletes those of the names given that
+are unused when it runs (a tag put on a post since the list was read is
+kept, and left out of `deleted`); nothing is deleted on its own. At most
+5000 names; a bad body is a 400.
 
 ## Collections
 
@@ -678,7 +692,7 @@ A **collection**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/collections` | `[collection, …]`, in the order they were created |
+| GET | `/api/collections` | `[collection, …]`, in the user's order (new ones last) |
 | POST | `/api/collections` | body `{ "name": "Moodboard" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
 | GET | `/api/collections/<id>?offset=&limit=` | `{ "collection": {…}, "total": 24, "posts": [summary, …] }` in the collection's order; `limit` default 60, max 200; 404 if unknown |
 | POST | `/api/collections/<id>/rename` | body `{ "name": "…" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
@@ -687,6 +701,7 @@ A **collection**:
 | POST | `/api/collections/<id>/remove` | body `{ "posts": […] }` → `{ "ok": true, "removed": 2 }` |
 | POST | `/api/collections/<id>/order` | body `{ "posts": […] }` → `{ "ok": true }`, see below |
 | POST | `/api/collections/<id>/cover` | body `{ "post": "instagram:C8x…" }`, or `null` for the first post → `{ "ok": true, "collection": {…} }`; 400 if the post is not in it |
+| POST | `/api/collections/reorder` | body `{ "ids": [3, 1, 2] }` (1 to 5000 ids) → `{ "ok": true, "collections": [collection, …] }` in the new order |
 
 Every `/api/collections/<id>/…` call answers 404 `{ "ok": false, "error": … }`
 for an unknown id.
@@ -695,6 +710,11 @@ for an unknown id.
 the places those same posts held before, the rest staying where they are.
 Sending one page in its new order reorders that page; sending every post
 reorders the whole collection. Ids not in the collection are ignored.
+
+`/api/collections/reorder` does the same for the collections themselves:
+the ids given take the places they held between them, in the order given;
+unknown ids are ignored, a body that is not a list of ids is a 400. The order
+is user data, written to `collections.json` with the rest.
 
 ## People
 

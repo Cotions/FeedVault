@@ -91,10 +91,11 @@ def _int_arg(name, default, lo, hi):
     return max(lo, min(hi, v))
 
 
-def _person_arg():
-    """The ``person`` parameter: an id, or None when absent. A value that
-    cannot be an id names nobody, so it matches nothing (-1)."""
-    v = request.args.get("person")
+def _person_arg(name="person"):
+    """The ``person`` parameter (or another id's): an id, or None when
+    absent. A value that cannot be an id names nobody, so it matches
+    nothing (-1)."""
+    v = request.args.get(name)
     if not v:
         return None
     return int(v) if v.isascii() and v.isdigit() and len(v) < 16 else -1
@@ -113,6 +114,7 @@ def _post_filters():
         untagged=request.args.get("untagged") == "1",
         person=_person_arg(),
         new=request.args.get("new") == "1",
+        collection=_person_arg("collection"),
     )
 
 
@@ -509,6 +511,33 @@ def tags_delete():
     return jsonify({"ok": True, "posts": n})
 
 
+@app.post("/api/tags/color")
+def tags_color():
+    body = request.get_json(silent=True) or {}
+    name = organize.clean_name(body.get("name"))
+    try:
+        color = organize.clean_color(body.get("color"))
+    except ValueError:
+        return jsonify({"ok": False, "error": "color must be #rrggbb or null"}), 400
+    if name is None or "color" not in body:
+        return jsonify({"ok": False, "error": "name must be a tag name, and color #rrggbb or null"}), 400
+    if not organize.set_color(db.connect(), name, color):
+        return jsonify({"ok": False, "error": "no such tag"}), 404
+    userdata.changed("tags")
+    return jsonify({"ok": True, "color": color})
+
+
+@app.post("/api/tags/delete-unused")
+def tags_delete_unused():
+    names = (request.get_json(silent=True) or {}).get("names")
+    if not _str_list(names) or len(names) > 5000:
+        return jsonify({"ok": False, "error": "names must be a list of 1 to 5000 tag names"}), 400
+    gone = organize.delete_unused(db.connect(), names)
+    if gone:
+        userdata.changed("tags")
+    return jsonify({"ok": True, "deleted": gone})
+
+
 # ---------------------------------------------------------------------------
 # Collections
 # ---------------------------------------------------------------------------
@@ -531,6 +560,18 @@ def create_collection():
         return jsonify({"ok": False, "error": "a collection with that name exists"}), 400
     userdata.changed("collections")
     return jsonify({"ok": True, "collection": c})
+
+
+@app.post("/api/collections/reorder")
+def reorder_collections():
+    ids = (request.get_json(silent=True) or {}).get("ids")
+    if not isinstance(ids, list) or not ids or len(ids) > 5000 \
+            or any(not isinstance(i, int) or isinstance(i, bool) for i in ids):
+        return jsonify({"ok": False, "error": "ids must be a list of 1 to 5000 collection ids"}), 400
+    conn = db.connect()
+    organize.reorder_collections(conn, ids)
+    userdata.changed("collections")
+    return jsonify({"ok": True, "collections": organize.collections(conn)})
 
 
 @app.get("/api/collections/<int:cid>")

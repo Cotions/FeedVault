@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getPosts, getPost, getAuthors, getPeople, getTags, applyTags, deleteItems, setDecision, restorePosts } from "../lib/api";
+import { getPosts, getPost, getAuthors, getPeople, getTags, getCollections, applyTags, deleteItems, setDecision, restorePosts } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, platformShort, authorFeedPath } from "../lib/fmt";
@@ -607,13 +607,16 @@ export default function Review() {
   const tag      = params.get("tag") || "";
   const untagged = !tag && params.get("untagged") === "1";
   const newOnly  = params.get("new") === "1";
-  const scope    = useMemo(() => ({ platform, author, person, kind, order, tag: tag ? [tag] : [], untagged, new: newOnly }),
-    [platform, author, person, kind, order, tag, untagged, newOnly]);
+  const collection = /^\d+$/.test(params.get("collection") || "") ? params.get("collection") : "";
+  const scope    = useMemo(() => ({ platform, author, person, kind, order, tag: tag ? [tag] : [], untagged, new: newOnly, collection }),
+    [platform, author, person, kind, order, tag, untagged, newOnly, collection]);
   const scopeKey = JSON.stringify(scope);
 
   const { data: authorsData } = useApi(getAuthors, 0);
   const { data: peopleData } = useApi(getPeople, 0);
   const { data: tagsData } = useApi(getTags, 0);
+  const { data: collectionsData } = useApi(getCollections, 0);
+  const collections = collectionsData || [];
   const authors = useMemo(() => authorsData || [], [authorsData]);
   const platforms = useMemo(() => {
     const set = new Set(authors.map(a => a.platform).filter(Boolean));
@@ -664,6 +667,16 @@ export default function Review() {
         {tag && !(tagsData || []).some(t => t.name === tag) && <option value={tag}>{tag}</option>}
         {(tagsData || []).map(t => <option key={t.name} value={t.name}>{t.name} ({t.count})</option>)}
       </select>
+      {(collections.length > 0 || collection) && (
+        <select className="sort-select review-scope-collection" aria-label="Collection" value={collection}
+                onChange={e => setParam({ collection: e.target.value })}>
+          <option value="">Any collection</option>
+          {collection && !collections.some(c => String(c.id) === collection) && (
+            <option value={collection} disabled>collection {collection}</option>
+          )}
+          {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
+        </select>
+      )}
       <select className="sort-select" aria-label="New posts" value={newOnly ? "1" : ""} onChange={e => setParam({ new: e.target.value })}>
         <option value="">New and old</option>
         <option value="1">New since last visit</option>

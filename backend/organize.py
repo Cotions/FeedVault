@@ -42,14 +42,47 @@ def _tag_id(conn, name):
 # ---------------------------------------------------------------------------
 
 def tags(conn):
-    """Every tag with the number of indexed posts that have it."""
-    return [{"name": r[0], "color": r[1], "count": r[2]} for r in conn.execute("""
-        SELECT t.name, t.color, COUNT(p.id) AS n
+    """Every tag with the number of indexed posts that have it, and whether
+    it is on no post at all (``unused``: not even one in the trash)."""
+    return [{"name": r[0], "color": r[1], "count": r[2], "unused": r[3] == 0} for r in conn.execute("""
+        SELECT t.name, t.color, COUNT(p.id) AS n, COUNT(pt.post_id)
         FROM tags t
         LEFT JOIN post_tags pt ON pt.tag_id = t.id
         LEFT JOIN posts p ON p.id = pt.post_id
         GROUP BY t.id
         ORDER BY n DESC, t.name COLLATE NOCASE""")]
+
+
+def clean_color(color):
+    """A tag colour as stored: ``#rrggbb`` in lower case, or None for none.
+    Raises ValueError for anything else."""
+    if color is None:
+        return None
+    if isinstance(color, str) and len(color) == 7 and color[0] == "#" \
+            and all(c in "0123456789abcdefABCDEF" for c in color[1:]):
+        return color.lower()
+    raise ValueError(color)
+
+
+def set_color(conn, name, color):
+    """Give a tag a colour (clean_color) or none. False when there is no such tag."""
+    with conn:
+        return conn.execute("UPDATE tags SET color = ? WHERE name = ?", (color, name)).rowcount > 0
+
+
+def delete_unused(conn, names):
+    """Delete those of the tags named that are on no post at all, indexed or
+    in the trash (a tag only on trashed posts comes back with them). Returns
+    the names deleted."""
+    gone = []
+    with conn:
+        for name in dict.fromkeys(names):
+            row = conn.execute("SELECT id, name FROM tags t WHERE name = ? AND NOT EXISTS "
+                               "(SELECT 1 FROM post_tags pt WHERE pt.tag_id = t.id)", (name,)).fetchone()
+            if row is not None:
+                conn.execute("DELETE FROM tags WHERE id = ?", (row[0],))
+                gone.append(row[1])
+    return gone
 
 
 def apply(conn, post_ids, add, remove, now):
@@ -207,6 +240,16 @@ def reorder(conn, cid, post_ids):
     with conn:
         conn.executemany("UPDATE collection_posts SET position = ? WHERE collection_id = ? AND post_id = ?",
                          [(pos, cid, pid) for pos, pid in zip(sorted(held[p] for p in ids), ids)])
+
+
+def reorder_collections(conn, ids):
+    """Put the given collections in this order, in the places they held
+    between them; the others do not move (as reorder does for posts)."""
+    held = dict(conn.execute("SELECT id, position FROM collections"))
+    ids = [i for i in dict.fromkeys(ids) if i in held]
+    with conn:
+        conn.executemany("UPDATE collections SET position = ? WHERE id = ?",
+                         [(pos, cid) for pos, cid in zip(sorted(held[i] for i in ids), ids)])
 
 
 def set_cover(conn, cid, post_id):

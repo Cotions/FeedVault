@@ -172,8 +172,12 @@ export function dismissDuplicate(group, threshold) { return post("/api/duplicate
 
 /* ── Tags (see docs/API.md "Tags") ───────────────────────── */
 
-// [{ name, color, count }], most used first
+// [{ name, color, count, unused }], most used first
 export function getTags() { return get("/api/tags"); }
+// color: "#rrggbb" or null → { ok, color }
+export function setTagColor(name, color) { return post("/api/tags/color", { name, color }); }
+// Deletes those of `names` on no post at all (not even a trashed one) → { ok, deleted: [names] }
+export function deleteUnusedTags(names) { return post("/api/tags/delete-unused", { names }); }
 // → { ok, posts, added, removed, created }
 export function applyTags(posts, { add = [], remove = [] } = {}) {
   return post("/api/tags/apply", { posts, add, remove });
@@ -187,6 +191,8 @@ export function deleteTag(name) { return post("/api/tags/delete", { name }); }
 
 // [{ id, name, count, created_at, cover_post, cover }]
 export function getCollections() { return get("/api/collections"); }
+// The given collections take the places they held, in this order → { ok, collections }
+export function reorderCollections(ids) { return post("/api/collections/reorder", { ids }); }
 // → { ok, collection } or { ok: false, error } (bad or taken name)
 export function createCollection(name) { return post("/api/collections", { name }); }
 // → { collection, total, posts: [summary] }, in the collection's order
