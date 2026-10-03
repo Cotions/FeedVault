@@ -481,7 +481,7 @@ def fake_gallery_dl_package(tmp, formats, monkeypatch):
                                       f"def extractors():\n    return [\n{classes}    ]\n")
     python = tmp / "gdl-bin" / "python3"
     python.parent.mkdir()
-    python.write_text(f"#!/bin/sh\nPYTHONPATH={tmp / 'gdl-site'} exec {sys.executable} \"$@\"\n")
+    python.write_text(f"#!/bin/sh\nPYTHONPATH={tmp / 'gdl-site'}:$PYTHONPATH exec {sys.executable} \"$@\"\n")
     python.chmod(0o755)
     exe = tmp / "gdl-bin" / "gallery-dl"
     exe.write_text(f"#!{python}\nimport sys\nsys.path.insert(0, {TESTS!r})\n"

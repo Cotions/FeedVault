@@ -3,6 +3,7 @@ import random
 import shutil
 import sqlite3
 import time
+import types
 
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -422,7 +423,8 @@ def test_videos_in_groups_are_measured_once(env, monkeypatch):
             f.write(extra)
     calls = []
     monkeypatch.setattr(hashing, "video_size", lambda p: calls.append(p) or ((720, 1280) if p == a + ".mp4" else None))
-    monkeypatch.setattr(hashing.shutil, "which", lambda name: "/usr/bin/" + name)
+    # hashing's own shutil: the global shutil.which stays the test guard's.
+    monkeypatch.setattr(hashing, "shutil", types.SimpleNamespace(which=lambda name: "/usr/bin/" + name))
     scanner.scan(env["roots"])
     hashing.run_pass(db.connect())
     assert sorted(calls) == sorted([a + ".mp4", b + ".mp4"])     # carol's is in no group
