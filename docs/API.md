@@ -2151,3 +2151,147 @@ a pipx virtualenv named otherwise than the package (`pipx install
 install with no `pipx` on `PATH`. ffmpeg is not a choice: it comes from the system's packages. Once
 the job has ended, the tool is found again, so `GET /api/downloaders` shows
 its new version.
+
+## Scripts
+
+Your own download commands and shell scripts. They are **files on disk
+only**: they are written and edited in a text editor in
+`<config dir>/scripts/`, the folder of `config.json`
+(`~/.config/feedvault/scripts/`, or beside `FEEDVAULT_CONFIG`). The API
+lists them, shows them read-only and runs them. No request writes,
+renames or deletes a script, and none ever carries a command. The folder
+is read again on every request, so an edit counts right away.
+
+A script's **id** is its file name without the suffix (`my-insta.json` is
+`my-insta`). Built-in templates are `builtin:<name>`, read-only. They can
+be run as they are, or copied into a file.
+
+**Command**, `<id>.json`:
+
+```json
+{ "name": "instaloader, no videos", "description": "…", "needs": "target", "rescan": "{root}",
+  "argv": ["instaloader", "--no-videos", "--no-compress-json", "--latest-stamps", "{archive}",
+           "--dirname-pattern", "{root}", "--", "{target}"] }
+```
+
+- `argv[0]`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg`, found as
+  every job finds them (see [Tools](#tools)), or an absolute path to a
+  program. Any other name is refused.
+- The placeholders `{target}`, `{url}`, `{root}`, `{data_dir}` and
+  `{archive}` are replaced inside the element they are in. Every other
+  `{…}` stays as it is (instaloader's `{profile}`). The list is run as it
+  is: a value is never split, joined into a shell string or read as an
+  option.
+- `needs`: `target`, `url` or `none`. A script that uses `{target}` or
+  `{url}` without needing it is refused.
+- `rescan`: a folder template indexed once it has run (it must be inside
+  a media root), or `null`.
+- `name` (optional, the id by default), `description` (optional).
+
+**Shell script**, `<id>.sh`, executable (`chmod +x`), its first line
+`#!/absolute/interpreter`, then a header of comment lines:
+
+```sh
+#!/bin/sh
+# name: Upper-case a link
+# needs: url
+# rescan: {root}/inbox
+echo "$FV_URL" | while read -r l; do echo "got: $l"; done
+```
+
+It is run as the file itself, never as `sh -c` of its text. Its inputs
+are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
+`FV_DATA_DIR` and `FV_ARCHIVE`. The rest of its environment is minimal:
+`PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME`,
+`TMPDIR` and the `XDG_*_HOME` folders. The header keys are `name`,
+`description`, `needs` and `rescan`; `needs` is required.
+
+**Values:**
+
+- `{root}`: the source's folder for a source's script. On its own, the
+  `folder` sent (inside a media root), else the first media root.
+- `{data_dir}`: the data directory.
+- `{archive}`: instaloader's stamps file (`--latest-stamps`), gallery-dl's
+  or yt-dlp's download archive (the ones syncs use), else
+  `<data_dir>/scripts/<id>.archive`.
+- `url`: an `http(s)://` link of at most 500 characters, without spaces
+  or control characters.
+- `target`, by the program run:
+  - instaloader: a profile name or a post's shortcode;
+  - gallery-dl and yt-dlp: a link, as for `url`;
+  - a shell script or a program by absolute path: any text of 1 to 200
+    characters, without control characters.
+
+  It never starts with `-`. It reaches the program as one literal
+  argument or env value.
+
+**Refused**, listed with `refused` saying why and never run:
+
+- the folder itself when it is a symlink, someone else's, or writable by
+  group or others;
+- a file that is a symlink, not a regular file, someone else's, writable
+  by group or others, over 64 KiB, or named otherwise than
+  `[a-z0-9_-]{1,64}` + `.json` / `.sh` (anything else in the folder is
+  listed too);
+- two files with the same id;
+- a command whose JSON is malformed;
+- a shell script that is not executable, has no absolute `#!` or has no
+  `needs`.
+
+A file is opened without following symlinks and checked on what was
+opened. Its SHA-256 is kept when its job is queued, and the file is read
+again right before the job starts. A script that changed, or is refused
+by then, fails the job.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/scripts` | `{ "dir": "/home/me/.config/feedvault/scripts", "dir_refused": null, "scripts": [script, …] }`, built-ins first, then the files by name |
+| GET | `/api/scripts/<id>` | script with `content` (the file's text, or the built-in's JSON), or 404 |
+| POST | `/api/scripts/<id>/run` | body `{ "target"?, "url"?, "folder"? }` → `{ "ok": true, "job": {…} }`; 400 bad input or refused script; 403 from another origin (see below); 404 unknown id |
+
+A script:
+
+```json
+{ "id": "my-insta", "builtin": false, "kind": "command", "file": "my-insta.json",
+  "path": "/home/me/.config/feedvault/scripts/my-insta.json",
+  "name": "instaloader, no videos", "description": "…", "needs": "target", "rescan": "{root}",
+  "tool": "instaloader", "argv": ["instaloader", "…"], "refused": null, "sha256": "…",
+  "size": 312, "mtime": 1727500000 }
+```
+
+`kind`: `command` or `shell`; `tool`: `argv[0]` of a command, `null` for a
+shell script; `argv`: `null` for a shell script. A refused file has
+`refused` set, and only `id`, `file`, `path` and `refused` filled when it
+could not be read.
+
+**Runs.** Job kind `script`, started by `POST /api/scripts/<id>/run` only
+(`POST /api/jobs` refuses it), shown in the [Jobs](#jobs) list as any job.
+
+- Lock group: the tool's for a downloader command (never beside a sync of
+  that tool, its pause between them), else `scripts`.
+- `argv` is the command as run, or the script's path. `argv` and `params`
+  are scrubbed as output is (`health.scrub`).
+- The log starts with `[feedvault]` lines: the script's path, its
+  SHA-256 and, for a shell script, each `FV_*` value it was given.
+- The `rescan` folder is indexed once it exits 0, as for any job.
+
+**On a source.** A source's `script` option (a script id, or `null`; see
+[What a source downloads](#what-a-source-downloads)) makes its Sync run
+that script instead of the built-in command, with `{target}` the source's
+target, `{url}` its `url` and `{root}` its folder (`FV_*` likewise). Its
+`rescan` is the declared folder, else the source's folder. It runs as job
+kind `script-sync`, params `{ "source", "script", "target", "scheduled"? }`,
+in the tool's lock group with its pause. It reads its outcome, account
+health, notifications and schedule like the tool's own sync, the tool
+being the source's. A script that is missing or refused when the sync is
+queued or starts fails that run with the reason in its log and on the
+source. It never falls back to the built-in command.
+
+**Who can run one.** Running a script, setting a source's `script`, and
+syncing a source that has one (alone, a person's, or Sync all) are refused
+with a 403 for a request whose `Origin` is not FeedVault's own, or whose
+`Sec-Fetch-Site` is `cross-site` or `same-site`. Sync all skips such
+sources with an error. The userscript's requests from instagram.com get
+nothing new here. FeedVault binds to `127.0.0.1` only. Exposing the port
+(`0.0.0.0`, a reverse proxy) would hand every script on disk to whoever
+reaches it.
