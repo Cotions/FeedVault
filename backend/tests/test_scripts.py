@@ -417,10 +417,35 @@ def test_a_placeholder_in_a_shell_run_option_is_refused_and_never_run(client, fo
     ("gallery-dl", ["--opt=x={root}"], "--option"),
     ("gallery-dl", ["-P", "exec", "-O", "command=echo {url}"], "-O"),
     ("gallery-dl", ["--postprocessor-option", "command=echo {url}"], "--postprocessor-option"),
+    ("gallery-dl", ["-So", "x={url}"], "-o"),
+    # Read as Python, or split into aria2c's or ffmpeg's arguments.
+    ("gallery-dl", ["--filter", "'{url}' != ''"], "--filter"),
+    ("gallery-dl", ["--chapter-filter={url}"], "--chapter-filter"),
+    ("yt-dlp", ["--downloader-args", "aria2c:-d {root}"], "--downloader-args"),
+    ("yt-dlp", ["--external-downloader-args={root}"], "--external-downloader-args"),
+    ("yt-dlp", ["--ppa", "ffmpeg:-metadata url={url}"], "--ppa"),
+    ("yt-dlp", ["--postprocessor-args", "{root}"], "--postprocessor-args"),
+    # The downloader by its path, or behind env.
+    ("/usr/local/bin/yt-dlp", ["--exec", "echo {url}"], "--exec"),
+    ("/usr/bin/env", ["A=1", "-u", "B", "gallery-dl", "--exec", "echo {url}"], "--exec"),
 ])
 def test_each_shell_run_option_and_form_is_refused(tool, args, option):
     _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": [tool, *args, "--", "{url}"]}))
-    assert error and error.startswith(f"{option}'s value can reach a shell")
+    assert error and error.startswith(f"{option}'s value can reach ")
+
+
+@pytest.mark.parametrize("argv, reason", [
+    (["/bin/sh", "-c", "notify-send {url}"], "a shell's -c text is read as code"),
+    (["/bin/bash", "-ec", "echo {url}", "bash"], "a shell's -c text is read as code"),
+    (["/bin/sh", "-o", "errexit", "-c", "echo {url}"], "a shell's -c text is read as code"),
+    (["/bin/bash", "--rcfile", "x", "-c", "echo {url}"], "a shell's -c text is read as code"),
+    (["/bin/sh", "-o", "{url}", "-c", "x"], "among a shell's options"),
+    (["/usr/bin/env", "-S", "yt-dlp --exec x", "{url}"], "env -S"),
+    (["/usr/bin/env", "--split-string=yt-dlp {url}"], "env -S"),
+])
+def test_a_placeholder_in_a_shells_code_is_refused(argv, reason):
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": argv}))
+    assert error and reason in error
 
 
 @pytest.mark.parametrize("tool, args", [
@@ -432,15 +457,19 @@ def test_each_shell_run_option_and_form_is_refused(tool, args, option):
     # Another option's whole name, though a prefix of one that runs a shell.
     ("yt-dlp", ["--netrc", "{url}"]),
     ("gallery-dl", ["--postprocessor", "metadata", "-D", "{root}"]),
+    ("yt-dlp", ["--downloader", "aria2c", "--external-downloader", "{root}/aria2c"]),
     # Placeholders in options that never reach a shell.
-    ("yt-dlp", ["--downloader-args", "aria2c:-d {root}", "--ppa", "ffmpeg:-metadata url={url}", "-P", "{root}"]),
+    ("yt-dlp", ["-P", "{root}", "--download-archive", "{archive}", "--match-filters", "id!={url}"]),
     ("gallery-dl", ["-D", "{root}", "--download-archive", "{archive}", "-q"]),
     # What follows a short option that takes a value is that value.
     ("gallery-dl", ["-D{root}o{url}"]),
     # --alias without a placeholder anywhere.
     ("yt-dlp", ["--alias", "n", "--exec {0}", "https://example.com/a"]),
     # Not a downloader: its options are its own.
-    ("/usr/bin/env", ["--exec", "{url}"]),
+    ("/usr/local/bin/other", ["--exec", "{url}"]),
+    # A shell given the placeholder as an argument after its -c text, or a script's path.
+    ("/bin/sh", ["-ec", "notify-send done \"$1\"", "sh", "{url}"]),
+    ("/bin/bash", ["/home/me/fetch.sh", "{url}"]),
 ])
 def test_other_options_and_the_tools_own_fields_are_accepted(tool, args):
     needs = "url" if any("{url}" in a for a in args) else "none"

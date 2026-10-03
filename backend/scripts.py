@@ -168,32 +168,47 @@ def _check_needs(meta, texts):
     return None
 
 
-# The options whose value a tool hands to a shell, from their source
-# (yt-dlp 2026.08.19, gallery-dl's master): a FeedVault placeholder in one
-# would be read by /bin/sh, so a command holding one is refused. yt-dlp:
-# --exec, --exec-before-download, --netrc-cmd (Popen(shell=True)) and
-# --use-postprocessor (its Exec post processor runs exec_cmd the same way).
-# gallery-dl: --exec, --exec-after, and -o / -O, whose KEY=VALUE can set
-# an exec post processor's command (a string runs in a shell). Not in it:
-# yt-dlp's --downloader-args and --postprocessor-args (shlex.split, then a
-# program's argv), --downloader (a program's name or path).
+# The options whose value a tool hands to a shell, evaluates as Python or
+# splits into another program's arguments, from their source (yt-dlp
+# 2026.08.19, gallery-dl's master): a FeedVault placeholder in one would be
+# read as code (a link holding $(...), a folder holding spaces and an
+# option), so a command holding one is refused. yt-dlp: --exec,
+# --exec-before-download, --netrc-cmd (Popen(shell=True)), --use-postprocessor
+# (its Exec post processor runs exec_cmd the same way); --downloader-args and
+# --postprocessor-args (shlex.split, then aria2c's or ffmpeg's argv). gallery-dl:
+# --exec, --exec-after, and -o / -O, whose KEY=VALUE can set an exec post
+# processor's command (a string runs in a shell); the --filter options
+# (eval). Not in it: yt-dlp's --downloader (a program's name or path), its
+# --match-filters (its own syntax, never eval).
 # Both take a long option's unique prefix (optparse, argparse): any prefix
 # counts, unless it is another option's whole name (yt-dlp's --netrc,
 # gallery-dl's --postprocessor). gallery-dl's -o and -O may follow its
 # flags in one item (-qo…), their value after them or in the next item.
+SHELL = "a shell"
+PYTHON = "Python (gallery-dl evaluates it)"
+SPLIT = "another program's arguments, split at spaces"
 SHELL_RUN = {
-    "yt-dlp": (("--exec", "--exec-before-download", "--netrc-cmd", "--use-postprocessor"), ("--netrc",),
-               "", "", "yt-dlp's own fields (%(webpage_url)q, %(filepath)q)"),
-    "gallery-dl": (("--exec", "--exec-after", "--option", "--postprocessor-option"), ("--postprocessor",),
-                   "oO", "hqwvgGjJsEK46", "gallery-dl's own fields ({_path}, {_directory}), -D {root}"),
+    "yt-dlp": ({"--exec": SHELL, "--exec-before-download": SHELL, "--netrc-cmd": SHELL,
+                "--use-postprocessor": SHELL, "--downloader-args": SPLIT, "--external-downloader-args": SPLIT,
+                "--postprocessor-args": SPLIT, "--ppa": SPLIT},
+               ("--netrc", "--downloader", "--external-downloader"), {}, "",
+               "yt-dlp's own fields (%(webpage_url)q, %(filepath)q)"),
+    "gallery-dl": ({"--exec": SHELL, "--exec-after": SHELL, "--option": SHELL, "--postprocessor-option": SHELL,
+                    "--filter": PYTHON, "--post-filter": PYTHON, "--child-filter": PYTHON,
+                    "--file-filter": PYTHON, "--image-filter": PYTHON, "--chapter-filter": PYTHON},
+                   ("--postprocessor",), {"o": SHELL, "O": SHELL}, "hqwvgGjJsEKSU46",
+                   "gallery-dl's own fields ({_path}, {_directory}), -D {root}, --download-archive {archive}"),
 }
 # yt-dlp's --alias puts what follows it into the options it expands to (--exec too).
 ALIAS = "--alias"
+# A shell's -c text is read as code; env runs the program after its own options.
+SHELLS = ("sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish")
+_ENV_VALUE = ("-u", "--unset", "-C", "--chdir")
 
 
 def _shell_option(a, longs, others, shorts, flags):
     """(the option ``a`` names, its value or None when the value is the
-    next item) when ``a`` names an option its tool hands to a shell, else None."""
+    next item) when ``a`` names one of ``longs`` or ``shorts``, else None."""
     if a.startswith("--"):
         name, eq, value = a.partition("=")
         if len(name) > 2 and name not in others:
@@ -210,18 +225,63 @@ def _shell_option(a, longs, others, shorts, flags):
     return None
 
 
-def _check_shell(argv):
-    """Why a FeedVault placeholder would reach a shell through one of the
-    tool's options, else None."""
-    if argv[0] not in SHELL_RUN:
+def _program(argv):
+    """(the index of the program a command runs, past env and its options,
+    or None when env splits a text into it: -S)."""
+    i = 0
+    while os.path.basename(argv[i]) == "env":
+        i += 1
+        while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i]):
+            if argv[i].startswith(("-S", "--split-string")) or (len(argv[i]) > 2 and "--split-string".startswith(argv[i])):
+                return None
+            i += 2 if argv[i] in _ENV_VALUE else 1
+        if i >= len(argv):
+            return len(argv) - 1
+    return i
+
+
+def _check_sh(argv):
+    """Why a placeholder would be in a shell's -c text, else None: the first
+    item after its options (-o, -O, --rcfile and --init-file take the next
+    one), once one of them holds c."""
+    run, value = False, False
+    for a in argv:
+        if _used([a]) and (value or a.startswith(("-", "+"))):
+            return f"{a!r}: a placeholder may not be among a shell's options"
+        if value:
+            value = False
+        elif a.startswith("--"):
+            value = a in ("--rcfile", "--init-file")
+        elif a.startswith(("-", "+")):
+            run = run or "c" in a
+            value = "o" in a or "O" in a
+        else:
+            break
+    else:
         return None
-    longs, others, shorts, flags, fields = SHELL_RUN[argv[0]]
-    why = ("can reach a shell, so it may not hold a FeedVault placeholder: use "
-           f"{fields}, or a shell script (its inputs are FV_* variables)")
+    if run and _used([a]):
+        return (f"a shell's -c text is read as code, so it may not hold a FeedVault placeholder: pass it "
+                "after the text (sh -c '… \"$1\"' sh {url}), or use a shell script (its inputs are FV_* variables)")
+    return None
+
+
+def _check_shell(argv):
+    """Why a FeedVault placeholder would be read as code through one of the
+    tool's options, else None."""
+    i = _program(argv)
+    if i is None:
+        return "env -S splits its text into a command: not in a command with a FeedVault placeholder" \
+            if _used(argv) else None
+    tool, args = os.path.basename(argv[i]), argv[i + 1:]
+    if tool in SHELLS:
+        return _check_sh(args)
+    if tool not in SHELL_RUN:
+        return None
+    longs, others, shorts, flags, fields = SHELL_RUN[tool]
     pending = None
-    for a in argv[1:]:
+    for a in args:
         name = a.partition("=")[0]
-        if argv[0] == "yt-dlp" and len(name) > 2 and ALIAS.startswith(name) and _used(argv):
+        if tool == "yt-dlp" and len(name) > 2 and ALIAS.startswith(name) and _used(argv):
             return (f"{ALIAS} carries what follows it into the options it expands to, a shell's too: "
                     "not in a command with a FeedVault placeholder (use a shell script)")
         if pending:
@@ -236,7 +296,10 @@ def _check_shell(argv):
                 continue
         used = _used([value])
         if used:
-            return f"{option}'s value {why}; found {{{sorted(used)[0]}}} in {value!r}"
+            how = longs.get(option) or shorts[option[1]]
+            return (f"{option}'s value can reach {how}, so it may not hold a FeedVault placeholder: use "
+                    f"{fields}, or a shell script (its inputs are FV_* variables); "
+                    f"found {{{sorted(used)[0]}}} in {value!r}")
     return None
 
 

@@ -2316,15 +2316,18 @@ are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
   listed too);
 - two files with the same id;
 - a command whose JSON is malformed;
-- a command with a placeholder in the value of an option its tool hands
-  to a shell, where `/bin/sh` would read it: yt-dlp `--exec`,
-  `--exec-before-download`, `--netrc-cmd`, `--use-postprocessor` (and
-  `--alias` in a command holding any placeholder); gallery-dl `--exec`,
-  `--exec-after`, `-o` / `--option` and `-O` / `--postprocessor-option`
-  (either can set an exec post processor's command). Joined (`--exec=…`,
-  `-o…`) and abbreviated forms count. Use the tool's own fields
-  (`%(webpage_url)q`, `{_path}`), or a shell script and its `FV_*`
-  variables;
+- a command with a placeholder where it would be read as code: in the
+  value of yt-dlp `--exec`, `--exec-before-download`, `--netrc-cmd`,
+  `--use-postprocessor` (a shell), `--downloader-args` or
+  `--postprocessor-args` (split into aria2c's or ffmpeg's arguments), or
+  anywhere beside `--alias`; of gallery-dl `--exec`, `--exec-after`,
+  `-o` / `--option` and `-O` / `--postprocessor-option` (either can set an
+  exec post processor's command), or a `--filter` option (Python). The
+  downloader may be named by its path or run through `env`; joined
+  (`--exec=…`, `-o…`) and abbreviated forms count. Also a shell's `-c` text
+  (`sh`, `bash`, …: pass the value after it, as `"$1"`) and `env -S`. Use
+  the tool's own fields (`%(webpage_url)q`, `{_path}`), or a shell script
+  and its `FV_*` variables;
 - a shell script that is not executable, has no absolute `#!` or has no
   `needs`.
 
