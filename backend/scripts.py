@@ -493,19 +493,40 @@ def _rescan(script, vals, roots):
 
 # The options whose value a tool formats (instaloader: str.format, yt-dlp:
 # %), and how a value put in one is escaped, as sync.py does for its own.
-FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern"), sync._escape),
-             "yt-dlp": (("-o", "--output"), lambda v: v.replace("%", "%%"))}
+# The value is the next item, or in the same one: after "=" for a long
+# option (--output=…), right after a short one (-o…; -o=… is the value "=…").
+FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern"), (), sync._escape),
+             "yt-dlp": (("--output",), ("-o",), lambda v: v.replace("%", "%%"))}
+
+
+def _joined(a, longs, shorts):
+    """The option part of ``a`` when it holds a formatted option and its value, else None."""
+    for o in longs:
+        if a.startswith(o + "="):
+            return o + "="
+    for o in shorts:
+        if a.startswith(o) and len(a) > len(o):
+            return o
+    return None
 
 
 def command(script, vals):
     """A command's argument list, its placeholders filled in: escaped in
-    the value of an option its tool formats."""
-    options, escape = FORMATTED.get(script["tool"], ((), None))
+    the value of an option its tool formats (before "--": the tool reads
+    no option after it)."""
+    longs, shorts, escape = FORMATTED.get(script["tool"], ((), (), None))
     escaped = {k: escape(v) for k, v in vals.items()} if escape else vals
-    argv, formatted = [], False
+    argv, formatted, positional = [], False, False
     for a in script["argv"]:
-        argv.append(substitute(a, escaped if formatted else vals))
-        formatted = a in options
+        head = None if formatted or positional else _joined(a, longs, shorts)
+        if formatted:
+            argv.append(substitute(a, escaped))
+        elif head:
+            argv.append(head + substitute(a[len(head):], escaped))
+        else:
+            argv.append(substitute(a, vals))
+        positional = positional or (a == "--" and not formatted)
+        formatted = not formatted and not positional and (a in longs or a in shorts)
     return argv
 
 

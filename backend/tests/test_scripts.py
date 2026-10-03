@@ -354,6 +354,29 @@ def test_a_folder_in_an_option_its_tool_formats_is_escaped(env, name, root, want
         {**script, "argv": [script["tool"], "{root}", "--", "{root}"]}, vals))
 
 
+@pytest.mark.parametrize("tool, argv, want", [
+    ("instaloader", ["--dirname-pattern", "{root}/{profile}"], ["--dirname-pattern", "/m/{{x}} 50%/{profile}"]),
+    ("instaloader", ["--dirname-pattern={root}/{profile}"], ["--dirname-pattern=/m/{{x}} 50%/{profile}"]),
+    ("instaloader", ["--filename-pattern", "{root}_{date_utc}"], ["--filename-pattern", "/m/{{x}} 50%_{date_utc}"]),
+    ("instaloader", ["--filename-pattern={root}_{date_utc}"], ["--filename-pattern=/m/{{x}} 50%_{date_utc}"]),
+    ("yt-dlp", ["-o", "{root}/%(id)s.%(ext)s"], ["-o", "/m/{x} 50%%/%(id)s.%(ext)s"]),
+    ("yt-dlp", ["--output", "{root}/%(id)s.%(ext)s"], ["--output", "/m/{x} 50%%/%(id)s.%(ext)s"]),
+    ("yt-dlp", ["--output={root}/%(id)s.%(ext)s"], ["--output=/m/{x} 50%%/%(id)s.%(ext)s"]),
+    ("yt-dlp", ["-o{root}/%(id)s.%(ext)s"], ["-o/m/{x} 50%%/%(id)s.%(ext)s"]),
+    # Not those options: as it is.
+    ("instaloader", ["--dirname-patterns={root}", "-d{root}"], ["--dirname-patterns=/m/{x} 50%", "-d/m/{x} 50%"]),
+    ("yt-dlp", ["--output-na-placeholder={root}", "-P{root}", "--", "-o{root}", "--output", "{root}"],
+     ["--output-na-placeholder=/m/{x} 50%", "-P/m/{x} 50%", "--", "-o/m/{x} 50%", "--output", "/m/{x} 50%"]),
+    # "--" as an option's value is not the end of the options.
+    ("yt-dlp", ["-o", "--", "--output={root}"], ["-o", "--", "--output=/m/{x} 50%%"]),
+])
+def test_a_folder_in_a_joined_option_is_escaped_too(env, tool, argv, want):
+    """#59: --opt=value (and yt-dlp's -ovalue) as the separate form, for a root with {x} and %."""
+    script = {"tool": tool, "argv": [tool, *argv]}
+    vals = scripts.values(script, config.load(), "/m/{x} 50%")
+    assert scripts.command(script, vals) == [tool, *want]
+
+
 def test_a_folder_with_a_dollar_is_refused_to_gallery_dl_and_yt_dlp(client, folder, runner, env):
     write(folder, "gdl.json", {"needs": "url", "argv": ["gallery-dl", "-D", "{root}", "--", "{url}"]})
     error = run(client, "gdl", status=400, url="https://example.com/a", folder=f"{env['media']}/a$HOME")["error"]
