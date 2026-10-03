@@ -2501,6 +2501,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 20px; }
 .person-section { margin-bottom: 22px; }
 .person-section .card-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.person-section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.person-section-head .card-title { margin-bottom: 0; flex: 1; }
 .person-accounts { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .person-account {
   display: flex; align-items: center; gap: 10px;
@@ -2508,6 +2510,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 }
 .person-account-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .person-account-id .creator-sub { white-space: normal; }
+.person-former { overflow-wrap: anywhere; }
 .person-account-stats { flex-shrink: 0; }
 .person-add { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .person-add .creator-sub { white-space: normal; }

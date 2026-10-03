@@ -130,6 +130,130 @@ def test_alias_ends_with_its_id_and_never_joins_two_people(env, client):
     assert (shown["Folder"], shown["Id"]) == (["erin"], ["777"])
 
 
+def filename_posts(folder, handle, *codes):
+    folder.mkdir(parents=True, exist_ok=True)
+    for i, code in enumerate(codes):
+        png(folder / f"{handle}-2024-05-0{i + 1}-{code}.jpg")
+
+
+def test_an_id_file_names_the_account_and_a_rename_splits_nothing(env, client):
+    # Carol's first downloads: file names only, and instaloader's id file.
+    old = env["media"] / "carol.cooks"
+    filename_posts(old, "carol.cooks", "CCCCCCCCCC1", "CCCCCCCCCC2")
+    (old / "id").write_text("333\n")
+    scanner.scan(env["roots"])
+    [folder] = get(client, "/api/authors")
+    assert folder["id"] == "carol.cooks"                       # no metadata yet: the folder handle
+    pid = create(client, "Carol", folder)["person"]["id"]
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO sources(platform, author_id, tool, target, folder, created_at) "
+                     "VALUES ('instagram', 'carol.cooks', 'instaloader', 'carol.cooks', ?, 0)", (str(old),))
+    # She renamed herself; the new handle's posts come with metadata, elsewhere.
+    write_post(env["media"] / "carol.bakes", "N1", TS, owner("carol.bakes", 333, "Carol"), "image")
+    write_post(env["media"] / "carol.bakes", "N2", TS + 50, owner("carol.bakes", 333, "Carol"), "image")
+    scanner.scan(env["roots"])
+    [a] = get(client, "/api/authors")                          # one account
+    assert (a["id"], a["handle"], a["aliases"], a["count"]) == ("333", "carol.bakes", ["carol.cooks"], 4)
+    # The link and the source moved to the id: a rebuild or a folder rename keeps them.
+    assert links() == [("Carol", "instagram", "333")]
+    assert conn.execute("SELECT author_id FROM sources").fetchone()[0] == "333"
+    # One person, one feed, sorted by date.
+    feed = get(client, f"/api/posts?person={pid}")["posts"]
+    assert [p["id"] for p in feed] == ["instagram:N2", "instagram:N1", "instagram:CCCCCCCCCC2",
+                                       "instagram:CCCCCCCCCC1"]
+    userdata.flush()
+    saved = json.load(open(userdata.path(config.load()["data_directory"], "person_accounts")))["rows"]
+    assert [(r["author_id"], r["person"]) for r in saved] == [("333", "Carol")]
+    # An id file of another account in the folder wins over a handle that matches.
+    write_post(old, "X1", TS, owner("carol.cooks", 999), "image")
+    scanner.scan(env["roots"])
+    assert db.aliases(db.connect())[("instagram", "carol.cooks")] == "333"
+
+
+def test_id_files_as_instaloader_writes_them(env):
+    import parsers
+    d = env["media"] / "f.one"
+    d.mkdir()
+    (d / "id").write_text("00123\n")
+    (env["media"] / "f.two_id").write_text("456")
+    (env["media"] / "big_id").write_text("1" * 40)
+    (env["media"] / "text_id").write_text("abc")
+    (env["media"] / "bad name_id").write_text("7")
+    r = parsers.parse_dir(str(env["media"]), str(d), ["id"])
+    assert [(a.author_id, a.handle) for a in r.account_files] == [("123", "f.one")] and r.claimed == {"id"}
+    names = sorted(os.listdir(env["media"]))
+    r = parsers.parse_dir(str(env["media"]), str(env["media"]), names)
+    assert [(a.author_id, a.handle) for a in r.account_files] == [("456", "f.two")]
+    scanner.scan(env["roots"])
+    assert sorted(r[0] for r in db.connect().execute("SELECT author_id FROM account_files")) == ["123", "456"]
+    os.remove(d / "id")
+    scanner.index_dirs(env["roots"], [str(d)])
+    assert [r[0] for r in db.connect().execute("SELECT author_id FROM account_files")] == ["456"]
+
+
+def test_a_folder_renamed_by_the_tool_keeps_its_person(env, client):
+    old = env["media"] / "dana.old"
+    filename_posts(old, "dana.old", "DDDDDDDDDD1")
+    scanner.scan(env["roots"])
+    pid = create(client, "Dana", account(client, "instagram", "dana.old"))["person"]["id"]
+    # instaloader renames the folder after the profile's new name, and goes on in it.
+    new = env["media"] / "dana.new"
+    os.rename(old, new)
+    write_post(new, "D2", TS, owner("dana.new", 444, "Dana"), "image")
+    scanner.scan(env["roots"])
+    assert links() == [("Dana", "instagram", "444")]
+    assert ids(client, f"person={pid}") == ["instagram:D2", "instagram:DDDDDDDDDD1"]
+    [a] = get(client, "/api/authors")
+    assert [h["handle"] for h in a["handles"]] == ["dana.new", "dana.old"]
+
+
+def test_a_gone_link_never_moves_to_two_candidates_or_another_person(env, client):
+    filename_posts(env["media"] / "erin", "erin", "EEEEEEEEEE1")
+    scanner.scan(env["roots"])
+    pid = create(client, "Erin", account(client, "instagram", "erin"))["person"]["id"]
+    post(client, "/api/delete", {"posts": ["instagram:EEEEEEEEEE1"]})
+    # two accounts have had the handle: the link stays as it is
+    write_post(env["media"] / "x1", "F1", TS, owner("erin", 1), "image")
+    write_post(env["media"] / "x2", "F2", TS, owner("erin", 2), "image")
+    scanner.scan(env["roots"])
+    assert links() == [("Erin", "instagram", "erin")]
+    # one, linked to someone else: it stays too
+    post(client, "/api/delete", {"posts": ["instagram:F2"]})
+    create(client, "Other", account(client, "instagram", "erin"))
+    scanner.scan(env["roots"])
+    assert ("Erin", "instagram", "erin") in links()
+    assert get(client, f"/api/people/{pid}")["count"] == 0
+
+
+def test_two_folders_of_one_id_linked_to_two_people_stay_apart(env, client):
+    for h, code in (("foo.a", "FFFFFFFFFF1"), ("foo.b", "FFFFFFFFFF2")):
+        filename_posts(env["media"] / h, h, code)
+        (env["media"] / h / "id").write_text("777")
+    scanner.scan(env["roots"])
+    create(client, "A", account(client, "instagram", "foo.a"))
+    create(client, "B", account(client, "instagram", "foo.b"))
+    write_post(env["media"] / "foo.c", "F3", TS, owner("foo.c", 777), "image")
+    scanner.scan(env["roots"])                                  # no IntegrityError
+    assert sorted(links()) == [("A", "instagram", "777"), ("B", "instagram", "foo.b")]
+
+
+def test_id_files_count_in_instaloader_folders_only_and_stay_while_a_root_is_offline(env):
+    gallery_dl_case("twitter/photo", env["media"] / "twitter" / "example_user1")
+    (env["media"] / "twitter" / "example_user1" / "id").write_text("12")
+    filename_posts(env["media"] / "hal", "hal", "HHHHHHHHHH1")
+    (env["media"] / "hal" / "id").write_text("34")
+    scanner.scan(env["roots"])
+    rows = lambda: [r[0] for r in db.connect().execute("SELECT author_id FROM account_files")]  # noqa: E731
+    assert rows() == ["34"]
+    other = env["media"].parent / "gone_root"
+    scanner.scan(env["roots"] + [str(other)])                  # a root not found prunes nothing of it
+    assert rows() == ["34"]
+    os.rename(env["media"], other)
+    scanner.scan([str(env["media"])])
+    assert rows() == ["34"]
+
+
 # ---------------------------------------------------------------------------
 # Create, link, unlink, merge, delete
 # ---------------------------------------------------------------------------
@@ -355,6 +479,70 @@ def test_handle_history_from_renamed_posts(env, client):
     assert p["accounts"][0]["handles"] == a["handles"]
 
 
+def test_handles_from_id_files_and_accepted_renames(env, client):
+    write_post(env["media"] / "gina.now", "G1", TS, owner("gina.now", 555, "Gina"), "image")
+    # an older folder of hers, renamed by hand, with instaloader's id file
+    filename_posts(env["media"] / "gina_archive", "gina.first", "GGGGGGGGGG1")
+    (env["media"] / "gina_archive" / "id").write_text("555")
+    os.utime(env["media"] / "gina_archive" / "id", (TS - 900, TS - 900))
+    scanner.scan(env["roots"])
+    [a] = get(client, "/api/authors")
+    assert (a["id"], a["aliases"]) == ("555", ["gina_archive"])
+    assert {h["handle"]: (h["first"], h["last"]) for h in a["handles"]}["gina_archive"] == (TS - 900, TS - 900)
+    assert {"gina.now", "gina.first", "gina_archive"} == {h["handle"] for h in a["handles"]}
+    # a rename the user accepted: the new handle is current until a post says otherwise
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO handle_renames(platform, author_id, old, new, at) "
+                     "VALUES ('instagram', '555', 'gina.now', 'gina.later', ?)", (TS + 10,))
+    [a] = get(client, "/api/authors")
+    assert a["handle"] == "gina.later" and a["handles"][0]["handle"] == "gina.later"
+    assert a["url"] == "https://www.instagram.com/gina.later/"
+    write_post(env["media"] / "gina.now", "G2", TS + 20, owner("gina.again", 555, "Gina"), "image")
+    scanner.scan(env["roots"])
+    assert get(client, "/api/authors")[0]["handle"] == "gina.again"
+    # a rename refused (the target changed meanwhile) leaves no trace
+    import sources
+    src = post(client, "/api/sources", {"target": "https://www.instagram.com/gina.now/"})["source"]
+    sid = src["id"]
+    assert src["account"] == {"platform": "instagram", "id": "555"}
+    assert sources.rename(conn, sid, "someone.else", "gina.wrong", TS + 30) is False
+    assert "gina.wrong" not in {h["handle"] for h in get(client, "/api/authors")[0]["handles"]}
+
+
+def test_a_rebuild_keeps_links_dismissals_and_handles(env, client):
+    suggestion_archive(env)
+    filename_posts(env["media"] / "old.folder", "old.folder", "OOOOOOOOOO1")
+    (env["media"] / "old.folder" / "id").write_text("501")
+    scanner.scan(env["roots"])
+    x = account(client, "twitter", "example_user1")
+    ig = next(a for a in get(client, "/api/authors") if a["id"] == "501")
+    pid = create(client, "Eee", ig, x)["person"]["id"]
+    s = next(s for s in suggestions(client)["suggestions"] if s["reason"] == "same_name")
+    post(client, "/api/people/suggestions/dismiss", {"id": s["id"]})
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO handle_renames(platform, author_id, old, new, at) "
+                     "VALUES ('instagram', '501', 'example_user1', 'eee.now', ?)", (TS + 10,))
+    userdata.changed("handle_renames")
+    before = (links(), get(client, "/api/authors"), suggestions(client), ids(client, f"person={pid}"))
+    userdata.flush()
+    path = config.db_path(config.load())
+    db.init(str(env["tmp"] / "other.db"))
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(path + suffix):
+            os.remove(path + suffix)
+    db.init(path)
+    userdata.restore_all(db.connect(), config.load()["data_directory"])
+    scanner.scan(env["roots"])
+    pid = get(client, "/api/people")[0]["id"]
+    after = (links(), get(client, "/api/authors"), suggestions(client), ids(client, f"person={pid}"))
+    assert after == before
+    assert before[0] == [("Eee", "instagram", "501"), ("Eee", "twitter", x["id"])]
+    assert before[2]["dismissed"] == 1
+    assert "example_user1" in [h["handle"] for h in ig["handles"]]
+
+
 # ---------------------------------------------------------------------------
 # Suggestions
 # ---------------------------------------------------------------------------
@@ -496,10 +684,22 @@ def test_handle_and_link_normalizing():
     assert people.handle_parts("ab1") == (None, "1")
     assert people.norm_name("Zoé  Smith!") == "zoe smith" and people.norm_name("Al ✨") is None
     assert people.profile_links("x.com/Foo_bar. https://www.instagram.com/p/abc/ tiktok.com/@baz "
-                                "tiktok.com/nope instagram.com/holly.x twitch.tv/z") == [
-        ("twitter", "foo_bar"), ("tiktok", "baz"), ("instagram", "holly.x")]
+                                "tiktok.com/nope instagram.com/holly.x twitch.tv/z youtube.com/@Tube.Me youtube.com/@jane-doe "
+                                "youtube.com/watch?v=abc youtube.com/channel/UC1") == [
+        ("twitter", "foo_bar"), ("tiktok", "baz"), ("instagram", "holly.x"), ("youtube", "tube.me"), ("youtube", "jane-doe")]
     # other domains that end like one
     assert people.profile_links("https://www.dropbox.com/s/abc netflix.com/title mytiktok.com/@z") == []
+
+
+def test_large_groups_are_left_out(env, client):
+    import people
+    for i in range(people.MAX_GROUP + 1):
+        write_post(env["media"] / f"acct{i}", f"Q{i}", TS, owner(f"acct{i}", 900 + i, "Official Page"), "image")
+    write_post(env["media"] / "pair.one", "P1", TS, owner("pair.one", 801, "Pair Name"), "image")
+    write_post(env["media"] / "pair.two", "P2", TS, owner("pair.two", 802, "pair name"), "image")
+    scanner.scan(env["roots"])
+    got = suggestions(client)["suggestions"]
+    assert [sorted(a["handle"] for a in s["accounts"]) for s in got] == [["pair.one", "pair.two"]]
 
 
 def test_similar_handles_with_the_same_digits(env, client):
@@ -509,3 +709,94 @@ def test_similar_handles_with_the_same_digits(env, client):
     scanner.scan(env["roots"])
     got = [(s["reason"], sorted(a["id"] for a in s["accounts"])) for s in suggestions(client)["suggestions"]]
     assert got == [("similar_handle", ["801", "802"])]
+
+
+# ---------------------------------------------------------------------------
+# A person's pages: Stats, Sync, added by hand
+# ---------------------------------------------------------------------------
+
+def test_stats_by_person(env, client):
+    archive(env)
+    alice, x = account(client, "instagram", "alice.example"), account(client, "twitter", "example_user1")
+    pid = create(client, "Alice", alice, x)["person"]["id"]
+    post(client, "/api/review", {"posts": ["instagram:A1"], "decision": "keep"})
+    everyone, mine = get(client, "/api/stats"), get(client, f"/api/stats?person={pid}")
+    summary = get(client, f"/api/posts/summary?person={pid}")
+    assert (mine["posts"], mine["media"], mine["bytes"]) == (summary["posts"], summary["media"], summary["bytes"])
+    assert mine["posts"] == 4 and mine["authors"] == 3          # the id, its folder alias, the X account
+    assert mine["by_platform"] == {"instagram": 3, "twitter": 1} and mine["kept"] == 1
+    assert mine["unreviewed"] == 3 and mine["unmatched"] == everyone["unmatched"]
+    assert everyone["posts"] == 6 and everyone["by_platform"]["tiktok"] == 1
+    assert get(client, "/api/stats?person=999")["posts"] == 0
+    assert get(client, "/api/stats?person=abc")["posts"] == 0
+
+
+def queue(monkeypatch):
+    """jobs.submit recording what it was asked to queue: nothing runs."""
+    import jobs
+    import sync
+    calls = []
+
+    def submit(kind, params):
+        calls.append((kind, params["source"]))
+        return {"id": len(calls), "created_at": 0}
+    monkeypatch.setattr(jobs, "submit", submit)
+    monkeypatch.setattr(jobs, "get", lambda jid: None)
+    monkeypatch.setattr(sync, "active", lambda: {})
+    monkeypatch.setattr(sync, "_batch", None)
+    return calls
+
+
+def test_sync_a_person_queues_each_of_its_sources(env, client, monkeypatch):
+    archive(env)
+    calls = queue(monkeypatch)
+    pid = create(client, "Alice", account(client, "instagram", "alice.example"))["person"]["id"]
+    other = create(client, "Other")["person"]["id"]
+    mine = [post(client, "/api/sources", {"target": t, "person": pid})["source"]["id"]
+            for t in ("https://www.instagram.com/alice.example/", "https://x.com/alice_x")]
+    post(client, "/api/sources", {"target": "https://x.com/someone", "person": other})
+    r = post(client, f"/api/people/{pid}/sync", {})
+    assert (r["sources"], len(r["jobs"]), r["skipped"], r["errors"]) == (2, 2, 0, [])
+    assert sorted(int(s) for _, s in calls) == sorted(mine)
+    assert {k for k, _ in calls} == {"instaloader-sync", "gallery-dl-sync"}
+    assert post(client, "/api/people/999/sync", {}, 404)
+    assert client.post(f"/api/people/{pid}/sync").status_code == 403    # the guard header
+
+
+def test_add_a_person_by_hand_with_profile_links(env, client, monkeypatch):
+    archive(env)
+    calls = queue(monkeypatch)
+    before = set(os.listdir(env["media"]))
+    r = post(client, "/api/people", {"name": "New One", "profiles": [
+        "https://www.instagram.com/new.one/", "https://x.com/new_one", " ", "https://x.com/new_one"]})
+    p = r["person"]
+    assert [(s["tool"], s["target"], s["person"]["id"]) for s in r["sources"]] == [
+        ("instaloader", "new.one", p["id"]), ("gallery-dl", "https://x.com/new_one", p["id"])]
+    assert p["accounts"] == [] and calls == []                  # nothing downloaded
+    assert set(os.listdir(env["media"])) == before              # nor any folder made
+    assert len(post(client, f"/api/people/{p['id']}/sync", {})["jobs"]) == 2
+    # a profile already indexed: its account is theirs too
+    r = post(client, "/api/people", {"name": "Bob", "profiles": ["https://www.instagram.com/bob/"]})
+    assert [a["id"] for a in r["person"]["accounts"]] == ["222"]
+    # a bad link, or one with a source already: nothing is made
+    n = len(get(client, "/api/people"))
+    for profiles in (["https://example.com/x"], ["https://x.com/new_one"], "x", ["a"] * 21, [5]):
+        r = post(client, "/api/people", {"name": "Bad", "profiles": profiles}, 400)
+        assert r["error"]
+    assert len(get(client, "/api/people")) == n
+    assert len(get(client, "/api/sources")["sources"]) == 3
+    # two links to one profile make one source
+    r = post(client, "/api/people", {"name": "Two", "profiles": ["new.two", "https://instagram.com/new.two"]})
+    assert [s["target"] for s in r["sources"]] == ["new.two"]
+    # an account someone else has: refused, and undoing it takes nothing from anyone
+    alice = account(client, "instagram", "alice.example")
+    pid = create(client, "Alice", alice)["person"]["id"]
+    n = len(get(client, "/api/people"))
+    for body in ({"name": "Al", "profiles": ["https://www.instagram.com/alice.example/"]},
+                 {"name": "Al", "accounts": [ref(account(client, "twitter", "example_user1"))],
+                  "profiles": ["https://www.instagram.com/alice.example/"]}):
+        assert "Alice's already" in post(client, "/api/people", body, 400)["error"]
+        assert [a["id"] for a in get(client, f"/api/people/{pid}")["accounts"]] == [alice["id"]]
+        assert account(client, "twitter", "example_user1")["person"] is None
+    assert len(get(client, "/api/people")) == n
+    assert len(get(client, "/api/sources")["sources"]) == 4

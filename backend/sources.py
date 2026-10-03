@@ -484,10 +484,7 @@ def _owner(conn, row, accounts):
 
 def _public(conn, row, accounts, active):
     key, person = _owner(conn, row, accounts)
-    try:
-        result = json.loads(row["last_result"]) if row["last_result"] else None
-    except ValueError:                         # sources.json edited by hand
-        result = None
+    result = last_result(row)
     job = active.get(row["id"])
     return {
         "id": row["id"], "tool": row["tool"], "platform": row["platform"], "target": row["target"],
@@ -537,6 +534,13 @@ def listing(conn, roots, active=None):
     rows = conn.execute("SELECT * FROM sources ORDER BY target, tool").fetchall()
     return {"sources": [_public(conn, r, accounts, active or {}) for r in rows],
             "suggestions": suggestions(conn, roots)}
+
+
+def of_person(conn, pid):
+    """The ids of a person's sources, as listing() shows them (sources._owner)."""
+    accounts = db.accounts(conn)
+    return [r["id"] for r in conn.execute("SELECT * FROM sources ORDER BY target, tool").fetchall()
+            if (_owner(conn, r, accounts)[1] or {}).get("id") == pid]
 
 
 def account_folder(conn, platform, author_id, roots):
@@ -710,6 +714,16 @@ def update(conn, sid, options, keys=None):
             (*paths, json.dumps(options), sid))
 
 
+def last_result(row):
+    """A source row's last_result as stored: the object, or None (none yet,
+    not JSON or not an object: sources.json can be edited by hand)."""
+    try:
+        r = json.loads(row["last_result"]) if row is not None and row["last_result"] else None
+    except (TypeError, ValueError):
+        return None
+    return r if isinstance(r, dict) else None
+
+
 def failures(result):
     """Failed syncs in a row in a stored last_result (any value), else 0."""
     n = result.get("failures") if isinstance(result, dict) else None
@@ -721,17 +735,25 @@ _ANSWERED = (", '$.health', CASE WHEN json_extract(last_result, '$.health') = 'r
              "ELSE json_extract(last_result, '$.health') END")
 
 
-def rename(conn, sid, old, new):
+def rename(conn, sid, old, new, now):
     """Accept a rename suggestion: the source's target becomes ``new`` (its
     folder and files stay as they are) and the suggestion goes. False when
     the target is no longer ``old`` (changed meanwhile). A source the
-    scheduler had stopped (account not found) is scheduled again."""
+    scheduler had stopped (account not found) is scheduled again. Its
+    account, when it has one, keeps both handles in its history
+    (handle_renames, user data)."""
+    src = row(conn, sid)
+    key = people.canonical(conn, src["platform"], src["author_id"]) if src and src["author_id"] else None
     with conn:
-        return conn.execute(
+        done = conn.execute(
             "UPDATE sources SET target = ?, last_result = CASE WHEN json_valid(last_result) "
             "AND json_type(last_result) = 'object' THEN json_set(json_remove(last_result, '$.rename'), "
             f"'$.resumed', json('true'){_ANSWERED}) ELSE last_result END WHERE id = ? AND target = ?",
             (new, sid, old)).rowcount > 0
+        if done and key:                       # only a rename that happened goes in the history
+            conn.execute("INSERT OR REPLACE INTO handle_renames(platform, author_id, old, new, at) "
+                         "VALUES (?, ?, ?, ?, ?)", (*key, old.lower(), new.lower(), now))
+        return done
 
 
 def resume(conn, sid):
@@ -751,11 +773,7 @@ def resume_tool(conn, tool):
     again. Returns their ids."""
     ids = []
     for r in conn.execute("SELECT * FROM sources WHERE tool = ? ORDER BY id", (tool,)).fetchall():
-        try:
-            result = json.loads(r["last_result"]) if r["last_result"] else None
-        except ValueError:
-            continue
-        if health.blocking(result) and stored_options(r)["session"] is None:
+        if health.blocking(last_result(r)) and stored_options(r)["session"] is None:
             resume(conn, r["id"])
             ids.append(r["id"])
     return ids

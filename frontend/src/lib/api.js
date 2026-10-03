@@ -113,7 +113,7 @@ export function getAuthors()   { return get("/api/authors"); }
 export function getNew()       { return get("/api/new"); }
 // at: unix seconds, posts first seen after it stay new; default now.
 export function markSeen(at)   { return post("/api/new/seen", at == null ? {} : { at }); }
-export function getStats()     { return get("/api/stats"); }
+export function getStats(person) { return get(`/api/stats${qs({ person })}`); }
 // { totals, by_author, by_kind, by_year, largest, trash }, see docs/API.md "Storage".
 // person: an id, to cover that person's posts only.
 export function getStorage(person) { return get(`/api/storage${qs({ person })}`); }
@@ -206,7 +206,10 @@ export function getPeople() { return get("/api/people"); }
 // Throws ApiError with status 404 for an unknown id.
 export function getPerson(id) { return get(`/api/people/${id}`); }
 // accounts: [{ platform, id }] → { ok, person } or { ok: false, error }
-export function createPerson(name, accounts = []) { return post("/api/people", { name, accounts }); }
+export function createPerson(name, accounts = [], profiles) {
+  return post("/api/people", profiles ? { name, accounts, profiles } : { name, accounts });
+}
+export function syncPerson(id) { return post(`/api/people/${id}/sync`); }
 // changes: { name } and/or { notes } → { ok, person }
 export function updatePerson(id, changes) { return post(`/api/people/${id}`, changes); }
 // Unlinks every account; posts are never touched → { ok, unlinked }

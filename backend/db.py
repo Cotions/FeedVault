@@ -397,11 +397,41 @@ def _migrate_15(conn):
             conn.execute("INSERT OR IGNORE INTO saved_posts(post_id, saved_at) VALUES (?, ?)", (r["post"], at))
 
 
+def _migrate_16(conn):
+    """Stable account ids (people.refresh_aliases). account_files is derived
+    on every scan: instaloader's id files (parsers.AccountFile), whose
+    folder is which account, under the handle it had then."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS account_files (
+            path      TEXT PRIMARY KEY,             -- the id file
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            handle    TEXT NOT NULL,                -- lowercase, as instaloader names folders
+            at        INTEGER                       -- the file's mtime
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS account_files_account ON account_files(platform, author_id)")
+
+
+def _migrate_17(conn):
+    """Handle history (db._accounts). handle_renames is user data, mirrored
+    by userdata.py: a new handle the user accepted for a source
+    (sources.rename), the account's old and new handle and when."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS handle_renames (
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            old       TEXT NOT NULL,
+            new       TEXT NOT NULL,
+            at        INTEGER NOT NULL,
+            PRIMARY KEY (platform, author_id, old, new)
+        ) WITHOUT ROWID""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
-              _migrate_13, _migrate_14, _migrate_15]
+              _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17]
 
 BACKUPS_KEPT = 3
 
@@ -640,6 +670,25 @@ def save_profiles(conn, found, prune):
             (r[0], r[1], r[5] or 0)).fetchone()}
     conn.executemany("INSERT OR REPLACE INTO profiles(platform, author_id, handle, bio, urls, at, source) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?)", list(rows.values()))
+
+
+def save_account_files(conn, found, prune, dirs=()):
+    """Record the id files found (parsers.AccountFile). ``prune`` (a full
+    scan): the media roots read, and ``found`` is all there is under them
+    (a root not found keeps its files, as its posts stay); else ``dirs``
+    were read again, and an id file no longer in them is gone."""
+    rows = {a.path: (a.path, a.platform, a.author_id, a.handle, a.at) for a in found}
+    have = {r[0]: tuple(r) for r in conn.execute("SELECT path, platform, author_id, handle, at FROM account_files")}
+    if prune:
+        under = tuple(r.rstrip(os.sep) + os.sep for r in prune)
+        gone = [p for p in have if p not in rows and p.startswith(under)]
+    else:
+        gone = [p for p in have if os.path.dirname(p) in dirs and p not in rows]
+    rows = [r for p, r in rows.items() if have.get(p) != r]
+    if gone or rows:                           # an unchanged index stays unchanged (and cached)
+        conn.executemany("DELETE FROM account_files WHERE path = ?", [(p,) for p in gone])
+        conn.executemany("INSERT OR REPLACE INTO account_files(path, platform, author_id, handle, at) "
+                         "VALUES (?, ?, ?, ?, ?)", rows)
 
 
 def copy_row(conn, copy_id):
@@ -1033,6 +1082,24 @@ def _accounts(conn, sizes=True):
         for table in ("handles", "names"):
             for v, (first, last) in h[table].items():
                 _seen(a[table], v, first, last)
+    # Handles known besides the posts': instaloader's id files (the folder's
+    # name when written) and renames the user accepted (old, then new: the
+    # handle now, unless a post was seen under another one since).
+    renamed = {}
+    for platform, aid, handle, first, last, new in conn.execute("""
+            SELECT platform, author_id, handle, at, at, 0 FROM account_files
+            UNION ALL SELECT platform, author_id, old, NULL, at, 0 FROM handle_renames
+            UNION ALL SELECT platform, author_id, new, at, at, 1 FROM handle_renames ORDER BY 4"""):
+        a = out.get((platform, alias.get((platform, aid), aid)))
+        if a is None:
+            continue
+        handle = next((h for h in a["handles"] if h.lower() == handle.lower()), handle)
+        _seen(a["handles"], handle, first, last)
+        if new:
+            renamed[id(a)] = (a, handle, first)
+    for a, handle, at in renamed.values():
+        if at >= (a["handles"].get(a["handle"], [None, None])[1] or 0):
+            a["handle"] = handle
     for a in out.values():
         a["handle"] = a["handle"] or next(iter(a["handles"]), None)
         a["url"] = profile_url(a["platform"], a["handle"])
@@ -1134,22 +1201,41 @@ def _storage(conn, person=None):
     }
 
 
-def stats(conn):
-    one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
+def stats(conn, person=None):
+    """Counts over every post, or one person's (``person``, an id: the same
+    filter as /api/posts). Unmatched files belong to nobody: always all."""
+    one = lambda sql, args=(): conn.execute(sql, args).fetchone()[0]  # noqa: E731
+    if person is None:                         # the whole archive: plain counts, a third faster than the joins
+        return {
+            "posts": one("SELECT COUNT(*) FROM posts"),
+            "media": one("SELECT COUNT(*) FROM media"),
+            "authors": one("SELECT COUNT(DISTINCT platform || ':' || author_id) FROM posts "
+                           "WHERE author_id IS NOT NULL"),
+            "bytes": one("SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0"),
+            "missing": one("SELECT COUNT(*) FROM posts WHERE missing = 1"),
+            "kept": one("SELECT COUNT(*) FROM decisions d JOIN posts p ON p.id = d.post_id "
+                        "WHERE d.decision = 'keep'"),
+            "unreviewed": one("SELECT COUNT(*) FROM posts p LEFT JOIN decisions d ON d.post_id = p.id "
+                              "WHERE d.post_id IS NULL"),
+            "unmatched": one("SELECT COUNT(*) FROM unmatched"),
+            "by_platform": dict(conn.execute("SELECT platform, COUNT(*) FROM posts GROUP BY platform").fetchall()),
+            "by_kind": dict(conn.execute("SELECT kind, COUNT(*) FROM posts GROUP BY kind").fetchall()),
+        }
+    clause, args = post_filter(person=person)
+    where = clause.replace("WHERE", "AND", 1)
+    posts = f"SELECT p.id {_FROM} {clause}"
     return {
-        "posts": one("SELECT COUNT(*) FROM posts"),
-        "media": one("SELECT COUNT(*) FROM media"),
-        "authors": one("SELECT COUNT(DISTINCT platform || ':' || author_id) FROM posts "
-                       "WHERE author_id IS NOT NULL"),
-        "bytes": one("SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0"),
-        "missing": one("SELECT COUNT(*) FROM posts WHERE missing = 1"),
-        "kept": one("SELECT COUNT(*) FROM decisions d JOIN posts p ON p.id = d.post_id "
-                    "WHERE d.decision = 'keep'"),
-        "unreviewed": one("SELECT COUNT(*) FROM posts p LEFT JOIN decisions d ON d.post_id = p.id "
-                          "WHERE d.post_id IS NULL"),
+        "posts": one(f"SELECT COUNT(*) {_FROM} {clause}", args),
+        "media": one(f"SELECT COUNT(*) FROM media WHERE post_id IN ({posts})", args),
+        "authors": one(f"SELECT COUNT(DISTINCT p.platform || ':' || p.author_id) {_FROM} "
+                       f"WHERE p.author_id IS NOT NULL {where}", args),
+        "bytes": one(f"SELECT COALESCE(SUM(size), 0) FROM media WHERE missing = 0 AND post_id IN ({posts})", args),
+        "missing": one(f"SELECT COUNT(*) {_FROM} WHERE p.missing = 1 {where}", args),
+        "kept": one(f"SELECT COUNT(*) {_FROM} WHERE d.decision = 'keep' {where}", args),
+        "unreviewed": one(f"SELECT COUNT(*) {_FROM} WHERE d.post_id IS NULL {where}", args),
         "unmatched": one("SELECT COUNT(*) FROM unmatched"),
-        "by_platform": dict(conn.execute("SELECT platform, COUNT(*) FROM posts GROUP BY platform").fetchall()),
-        "by_kind": dict(conn.execute("SELECT kind, COUNT(*) FROM posts GROUP BY kind").fetchall()),
+        "by_platform": dict(conn.execute(f"SELECT p.platform, COUNT(*) {_FROM} {clause} GROUP BY 1", args).fetchall()),
+        "by_kind": dict(conn.execute(f"SELECT p.kind, COUNT(*) {_FROM} {clause} GROUP BY 1", args).fetchall()),
     }
 
 

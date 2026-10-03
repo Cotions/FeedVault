@@ -48,6 +48,13 @@ def test_scrub():
     # A private name is a whole word: a folder that only contains one is kept.
     assert s("[feedvault] indexing /mnt/media/Cooperative/carol") == "[feedvault] indexing /mnt/media/Cooperative/carol"
     assert s("x /home/me/snap/chromium/common/Cookies") == "x <private path>"
+    # A browser's folder names with a space are part of the path: nothing of it is left after the space.
+    assert s("cookies from C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cookies done") == \
+        "cookies from <private path> done"
+    assert s("x /Users/me/Library/Application Support/Google/Chrome/Profile 1/Cookies end") == "x <private path> end"
+    assert s("x C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\User Data\\Local State y") == \
+        "x <private path> y"
+    assert s("[feedvault] indexing /mnt/My Pictures/carol") == "[feedvault] indexing /mnt/My Pictures/carol"
     assert s(None) is None and s("   ") is None and s(5) is None
 
 
@@ -294,6 +301,11 @@ def test_a_renamed_profile_is_a_suggestion_the_user_accepts(env, client, fake):
     userdata.flush()
     saved = json.load(open(userdata.path(config.load()["data_directory"], "sources"), encoding="utf-8"))
     assert [x["target"] for x in saved["rows"]] == ["carol.bakes"]
+    # The account keeps both handles, the new one current, as user data.
+    renames = json.load(open(userdata.path(config.load()["data_directory"], "handle_renames"), encoding="utf-8"))
+    assert [(x["author_id"], x["old"], x["new"]) for x in renames["rows"]] == [("777", "carol.cooks", "carol.bakes")]
+    [a] = [a for a in get(client, "/api/authors") if a["id"] == "777"]
+    assert a["handle"] == "carol.bakes" and "carol.cooks" in [h["handle"] for h in a["handles"]]
     job = sync_now(client, s["id"])
     h = get(client, f"/api/sources/{s['id']}")["health"]
     assert (job["state"], h["state"]) == ("done", "ok")

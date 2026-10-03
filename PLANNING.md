@@ -98,6 +98,13 @@ the badge once the rescan picks the post up.
   the stats snapshot the downloader captured, tags
 - **Creators**: one page per person, **across platforms**. You link
   `@foo` on Instagram, `@foo_` on X and `@Foo` on TikTok to one creator, by hand
+  or from a suggestion (same or similar handle, same display name, a bio link
+  already in the downloaded metadata). Accounts are linked by the platform's
+  own account id where the metadata has one, so a renamed account stays one
+  account; every handle it had is kept and searchable. The link lives only in
+  the database: files stay where each tool wrote them. Not built: importing a
+  link-in-bio page (linktr.ee and the like), which would be FeedVault fetching
+  a web page itself
 - **Search**: full text over captions and tweets
 - **Tags**: on posts, as in ChannelVault
 - **Stats**: posts per platform and creator, storage used, saves over time

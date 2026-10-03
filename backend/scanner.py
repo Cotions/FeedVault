@@ -18,6 +18,7 @@ import db
 import hashing
 import parsers
 import people
+import userdata
 
 # Folders that never hold posts but may hold images (icons in packages).
 # (Dot-folders, including FeedVault's own .feedvault-trash, are skipped too.)
@@ -107,11 +108,14 @@ def _scan(roots):
     unmatched = []                             # (path, size, mtime, reason)
     copies = []                                # (parsed post, meta mtime), see db.save_copies
     profiles = []                              # parsers.Profile, see db.save_profiles
+    account_files = []                         # parsers.AccountFile, see db.save_account_files
 
+    read = []                                  # the roots walked
     for root in roots:
         if not os.path.isdir(root):
             report["errors"].append({"path": root, "error": "media root not found"})
             continue
+        read.append(root)
         for dirpath, dirnames, filenames in os.walk(root):
             if "pyvenv.cfg" in filenames:     # a Python virtualenv parked in the folder
                 dirnames[:] = []
@@ -122,6 +126,7 @@ def _scan(roots):
                 continue
             result = parsers.parse_dir(root, dirpath, names)
             profiles.extend(result.profiles)
+            account_files.extend(result.account_files)
             for path, message in result.errors:
                 report["errors"].append({"path": path, "error": message})
                 unmatched.append((path, *_size_mtime(path), message))
@@ -141,14 +146,23 @@ def _scan(roots):
     report["missing"] = _mark_missing(conn, seen_meta)
     db.save_copies(conn, copies, started, prune=True)
     db.save_profiles(conn, profiles, prune=True)
-    people.refresh_aliases(conn)
+    db.save_account_files(conn, account_files, prune=read)
+    changed = people.refresh_aliases(conn)
     conn.execute("DELETE FROM unmatched")
     conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
                      unmatched)
     conn.commit()
+    _changed(changed)
     report["unmatched"] = len(unmatched)
     report["finished_at"] = int(time.time())
     return report
+
+
+def _changed(tables):
+    """Note the user tables a scan changed (links moved to an account's id,
+    see people.refresh_aliases), for userdata.py to write."""
+    for name in tables:
+        userdata.changed(name)
 
 
 def nothing_under(conn, root):
@@ -221,7 +235,7 @@ def index_dirs(roots, dirs, new=False):
         now = int(time.time())
         first_seen = now if new else 0
         report = {"added": 0, "updated": 0}
-        unmatched, copies, indexed, profiles = [], [], [], []
+        unmatched, copies, indexed, profiles, account_files, read = [], [], [], [], [], set()
         for d in sorted(set(dirs)):
             real = os.path.realpath(d)
             root = next((r for r in roots
@@ -232,6 +246,8 @@ def index_dirs(roots, dirs, new=False):
             names = [n for n in os.listdir(d) if not n.startswith(".") and os.path.isfile(os.path.join(d, n))]
             result = parsers.parse_dir(root, d, names)
             profiles.extend(result.profiles)
+            account_files.extend(result.account_files)
+            read.add(d)
             seen = set()
             for post in result.posts:
                 _index_post(conn, post, now, report, seen, unmatched, copies, first_seen)
@@ -246,7 +262,9 @@ def index_dirs(roots, dirs, new=False):
         conn.executemany("DELETE FROM copies WHERE meta_path = ?", [(p,) for p in indexed])
         db.save_copies(conn, copies, now, prune=False)
         db.save_profiles(conn, profiles, prune=False)
-        people.refresh_aliases(conn)
+        db.save_account_files(conn, account_files, prune=False, dirs=read)
+        changed = people.refresh_aliases(conn)
         conn.commit()
+    _changed(changed)
     hashing.kick()                             # files back from the trash may need hashing again
     return report

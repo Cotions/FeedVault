@@ -1,20 +1,21 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getAuthors, getPerson, updatePerson, deletePerson, linkAccounts } from "../lib/api";
+import { getAuthors, getPerson, getSuggestions, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
-import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
-import { accountKey, accountRef, formerHandles } from "../lib/people";
+import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, platformLabel, platformShort, safeUrl } from "../lib/fmt";
+import { accountKey, accountRef } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import CreatorPicker from "../components/CreatorPicker";
+import Suggestions from "../components/Suggestions";
 import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
 
 function AccountRow({ account: a, busy, onUnlink }) {
   const url = safeUrl(a.url);
-  const former = formerHandles(a);
+  const former = (a.handles || []).filter(h => h.handle !== a.handle);
   const names = (a.names || []).map(n => n.name).filter(n => n !== a.name);
   return (
     <li className="person-account">
@@ -26,10 +27,19 @@ function AccountRow({ account: a, busy, onUnlink }) {
         </span>
         <span className="creator-sub">
           {platformLabel(a.platform)} · id {a.id}
-          {former.length > 0 && ` · was ${former.map(h => `@${h}`).join(", ")}`}
           {names.length > 0 && ` · also named ${names.join(", ")}`}
           {a.aliases?.length > 0 && ` · folder ${a.aliases.join(", ")}`}
         </span>
+        {former.length > 0 && (
+          <span className="creator-sub person-former">
+            Former handles:{" "}
+            {former.map((h, i) => (
+              <span key={h.handle} title={h.first || h.last ? `seen ${fmtFullDate(h.first ?? h.last)} – ${fmtFullDate(h.last ?? h.first)}` : undefined}>
+                {i > 0 && ", "}@{h.handle}{h.last != null && ` (until ${fmtShortDate(h.last)})`}
+              </span>
+            ))}
+          </span>
+        )}
       </span>
       <span className="person-account-stats creator-sub">
         {a.count ? `${fmtInt(a.count)} posts · ${fmtBytes(a.bytes)}` : "No posts indexed"}
@@ -57,6 +67,7 @@ export default function PersonPage() {
   const load = useCallback(() => getPerson(id), [id]);
   const { data: p, error, reload } = useApi(load, refreshKey);
   const { data: authors } = useApi(getAuthors, refreshKey);
+  const suggestApi = useApi(getSuggestions, refreshKey);
   const [busy,     setBusy]     = useState(false);
   const [editName, setEditName] = useState(null);     // the name being typed, null when not renaming
   const [notes,    setNotes]    = useState(null);     // edited notes, null when untouched
@@ -88,6 +99,8 @@ export default function PersonPage() {
       if (!r?.ok) { toast(r?.error || "Could not change the accounts.", "err"); return; }
       toast(message);
       reload();
+      suggestApi.reload();
+      sources.reload();                        // a source shows with its account's person
     } catch (err) {
       toast(err.message, "err");
     } finally {
@@ -110,6 +123,39 @@ export default function PersonPage() {
     }
   }
 
+  // Each source through the normal queue: one sync per platform at a time,
+  // the tool's pause between two.
+  async function syncAll() {
+    setBusy(true);
+    try {
+      const r = await syncPerson(p.id);
+      if (!r?.ok) { toast(r?.error || "Could not sync.", "err"); return; }
+      const n = r.jobs.length;
+      const parts = [n ? `${n} sync${n === 1 ? "" : "s"} queued` : "Nothing queued"];
+      if (r.skipped) parts.push(`${r.skipped} already queued or running`);
+      if (r.errors.length) parts.push(`${r.errors.length} refused: ${r.errors[0].error}`);
+      toast(`${parts.join("; ")}.`, r.errors.length && !n ? "err" : undefined);
+      sources.reload();
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function dismiss(s) {
+    setBusy(true);
+    try {
+      const r = await dismissSuggestion(s.id);
+      if (!r?.ok) { toast(r?.error || "Could not dismiss.", "err"); return; }
+      suggestApi.reload();
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!p) {
     return (
       <div className="card">
@@ -122,6 +168,8 @@ export default function PersonPage() {
   }
 
   const mine = (sources.data?.sources || []).filter(s => s.person?.id === p.id);
+  // Suggestions that would add accounts to this person.
+  const suggested = (suggestApi.data?.suggestions || []).filter(s => s.person?.id === p.id);
   const scoped = path => `${path}?${new URLSearchParams({ person: p.id })}`;
   const notesValue = notes ?? p.notes;
 
@@ -164,6 +212,7 @@ export default function PersonPage() {
         <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
         <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
         <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
+        <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
         <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
       </nav>
 
@@ -198,10 +247,28 @@ export default function PersonPage() {
           />
           <span className="creator-sub">An account belongs to one person: adding it here takes it from anyone else.</span>
         </div>
+        <Suggestions
+          title="Also them?"
+          data={{ suggestions: suggested }}
+          busy={busy}
+          onLink={s => {
+            const add = s.accounts.filter(a => !a.person).map(accountRef);
+            change({ add }, `${add.length} account${add.length === 1 ? "" : "s"} linked.`);
+          }}
+          onDismiss={dismiss}
+        />
       </section>
 
       <section className="person-section">
-        <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
+        <div className="person-section-head">
+          <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
+          {mine.length > 0 && (
+            <button type="button" className="btn-primary" disabled={busy} onClick={syncAll}
+                    title="Sync each source of this person, one after another">
+              <Icon name="refresh" size={14} /> Sync {mine.length > 1 ? `all ${mine.length}` : ""}
+            </button>
+          )}
+        </div>
         {mine.length === 0 ? (
           <div className="empty">
             {sources.data ? "Nothing to sync yet. Add a profile below to download their new posts from here." : "Loading…"}

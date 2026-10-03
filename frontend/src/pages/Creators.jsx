@@ -7,10 +7,11 @@ import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
 import { platformLabel, platformShort, authorFeedPath, fmtBytes, fmtInt } from "../lib/fmt";
-import { accountKey, accountRef, accountText, matchedFormer, matches, personPath, personText, suggestName, REASONS } from "../lib/people";
+import { accountKey, accountRef, accountText, matchedFormer, matches, personPath, personText, suggestName } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import SelectionBar from "../components/SelectionBar";
+import Suggestions from "../components/Suggestions";
 import {
   AddSource, RemoveSourceDialog, ScheduleLine, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
 } from "../components/Sources";
@@ -227,55 +228,6 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
   );
 }
 
-// "Link?" cards: why these accounts look like one person, link or dismiss.
-function Suggestions({ data, busy, onLink, onDismiss }) {
-  const [all, setAll] = useState(false);
-  const list = data?.suggestions || [];
-  if (!list.length) return null;
-  const shown = all ? list : list.slice(0, SUGGESTIONS_SHOWN);
-  return (
-    <section className="suggestions" aria-label="Link suggestions">
-      <div className="suggestions-head">
-        <h3 className="card-title">Link?</h3>
-        <span className="page-count">{fmtInt(list.length)} suggested</span>
-        <div className="page-head-spacer" />
-        {list.length > SUGGESTIONS_SHOWN && (
-          <button type="button" className="btn-ghost" onClick={() => setAll(a => !a)}>
-            {all ? "Show fewer" : `Show all ${fmtInt(list.length)}`}
-          </button>
-        )}
-      </div>
-      <ul className="suggestion-list">
-        {shown.map(s => (
-          <li key={s.id} className="suggestion">
-            <div className="suggestion-accounts">
-              {s.accounts.map(a => (
-                <Link key={accountKey(a)} to={authorFeedPath(a.platform, a)} className="chip platform-chip" title={`${platformLabel(a.platform)} · ${a.count} posts`}>
-                  {platformShort(a.platform)} @{a.handle || a.id}
-                </Link>
-              ))}
-              {s.person && <span className="suggestion-into">into <Link to={personPath(s.person.id)} className="text-link">{s.person.name}</Link></span>}
-            </div>
-            <div className="suggestion-why">
-              {s.reasons.map(r => (
-                <span key={`${r.reason}:${r.detail}`} className="suggestion-reason">
-                  <b>{REASONS[r.reason] || r.reason}</b> {r.detail}
-                </span>
-              ))}
-            </div>
-            <div className="suggestion-actions">
-              <button type="button" className="btn-primary" disabled={busy} onClick={() => onLink(s)}>
-                <Icon name="check" size={14} /> Link
-              </button>
-              <button type="button" className="btn-ghost" disabled={busy} onClick={() => onDismiss(s)}>Dismiss</button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 // "Sync these?": profile folders already downloaded with instaloader, offered
 // as sources. Nothing is added until the user says so.
 function SourceSuggestions({ list, busy, onAdd, onAddAll }) {
@@ -346,6 +298,8 @@ export default function Creators() {
   const [busy,   setBusy]   = useState(false);
   const [merge,  setMerge]  = useState(null);                // { name, error } while the dialog is open
   const nameRef = useRef(null);
+  const [adding, setAdding] = useState(null);                // { name, links, error }: "New person" dialog
+  const addRef = useRef(null);
   const sources = useSources();
   const syncAll = useSyncAll();
   const [removing, setRemoving] = useState(null);           // the source to remove
@@ -439,6 +393,23 @@ export default function Creators() {
     }
   }
 
+  // A person by hand: a name and the profile links to sync, before anything is downloaded.
+  async function runAdd() {
+    const profiles = adding.links.split(/\s+/).filter(Boolean);
+    setBusy(true);
+    try {
+      const r = await createPerson(adding.name.trim(), [], profiles);
+      if (!r?.ok) { setAdding(a => ({ ...a, error: r?.error || "Could not add." })); return; }
+      setAdding(null);
+      sources.reload();
+      navigate(personPath(r.person.id));
+    } catch (err) {
+      setAdding(a => ({ ...a, error: err.message }));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function linkSuggestion(s) {
     const add = s.accounts.filter(a => !a.person).map(accountRef);
     setBusy(true);
@@ -493,6 +464,12 @@ export default function Creators() {
             value={filter}
             onChange={e => setFilter(e.target.value)}
           />
+        )}
+        {!sel.active && (
+          <button type="button" className="btn-secondary" onClick={() => setAdding({ name: "", links: "", error: null })}
+                  title="A person and their profile links, before anything is downloaded">
+            <Icon name="plus" size={14} /> New person
+          </button>
         )}
         {data?.length > 1 && (
           <button
@@ -617,6 +594,41 @@ export default function Creators() {
       >
         Every instaloader folder listed becomes a source, with the profile name shown. Nothing is
         downloaded until you sync; each first sync starts after the newest post already in the folder.
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={!!adding}
+        title="New person"
+        confirmLabel="Create"
+        busy={busy}
+        error={adding?.error}
+        onConfirm={runAdd}
+        onCancel={() => setAdding(null)}
+        initialFocus={addRef}
+        confirmDisabled={!adding?.name.trim()}
+      >
+        <p>Each profile link becomes a source of theirs. Nothing is downloaded until you sync them.</p>
+        <label className="dialog-field">
+          <span>Name</span>
+          <input
+            ref={addRef}
+            type="text"
+            className="page-filter"
+            maxLength={64}
+            value={adding?.name || ""}
+            onChange={e => setAdding(a => ({ ...a, name: e.target.value, error: null }))}
+          />
+        </label>
+        <label className="dialog-field">
+          <span>Profile links, one per line</span>
+          <textarea
+            className="person-notes"
+            rows={4}
+            placeholder={"https://www.instagram.com/…\nhttps://x.com/…\nhttps://www.youtube.com/@…"}
+            value={adding?.links || ""}
+            onChange={e => setAdding(a => ({ ...a, links: e.target.value, error: null }))}
+          />
+        </label>
       </ConfirmDialog>
 
       <ConfirmDialog

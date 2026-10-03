@@ -2,7 +2,8 @@
 
 The index is derived from the media folders and rebuilds from a rescan. A few
 tables are not: review decisions, tags, collections, people, sources, the
-"new posts" mark, the posts the Save button added. Each one is
+handles the user accepted for an account, the "new posts" mark, the posts
+the Save button added. Each one is
 registered here once, and gets the same treatment:
 
 - written to ``<data_dir>/userdata/<name>.json`` shortly after it changes
@@ -104,6 +105,10 @@ register("sources", "sources", ("tool", "target", "platform", "author_id", "pers
                  "SELECT (SELECT id FROM people WHERE name = :person), :platform, :author_id, :tool, :target, "
                  ":folder, COALESCE(:options, '{}'), COALESCE(:created_at, 0), :last_sync_at, :last_result "
                  "WHERE :platform IS NOT NULL AND :folder IS NOT NULL",))
+
+# New handles the user accepted for a source's account (sources.rename).
+register("handle_renames", "handle_renames", ("platform", "author_id", "old", "new", "at"),
+         ("platform", "author_id", "old", "new"))
 
 # "Mark all seen" (news.py): one row, the time before which posts are not new.
 register("seen_at", "seen_at", ("id", "at"), "id")

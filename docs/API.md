@@ -92,7 +92,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`, see [New posts](#new-posts) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
 | GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
-| GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing |
+| GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing. `?person=<id>`: counts over that person's posts only, as `/api/posts?person=` (`unmatched` stays the whole archive's: those files belong to nobody) |
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
@@ -693,16 +693,32 @@ rebuilt index gets them back. Links are by account, not by post: a post
 trashed and restored, or replaced by a duplicate copy, keeps its person.
 Nothing moves on disk.
 
+An account is its platform's own id where the metadata has one
+(instaloader's `owner.id`, gallery-dl's `author.id`, yt-dlp's `channel_id`
+for YouTube), never its handle: a renamed account stays one account, with
+its person and one feed.
+
 Posts rebuilt from file names have no id: their author id is the profile
-folder's name. When the same folder also holds posts with metadata whose
-handle is that name (exactly one account), the folder name is an **alias** of
-that account's id. Aliases are derived on every scan, not stored as user
-data. An account and its aliases read as one: one row in `/api/authors` and
+folder's name. That folder name becomes an **alias** of the account's id
+when instaloader's id file in the folder (`<folder>/id`, or `<folder>_id`
+beside it; not in a folder of another tool's posts) names the id, or else when the same folder also holds posts with
+metadata whose handle is that name or one in its file names (exactly one
+account). Aliases are derived on every scan, not stored as user data. An account and its aliases read as one: one row in `/api/authors` and
 Storage, one link (linking or unlinking an alias acts on the account), and
 the `author` and `person` filters take the aliases' posts in. No alias is
 made between two ids linked to different people (merging them is the
 user's call), and once every post of the id is gone the folder name is an
 account of its own again.
+
+A link (and a source's `account`) made to a folder name moves to the id
+once the id's posts are indexed: a scan rewrites it, and the userdata files
+with it, so a folder renamed later (instaloader renames a profile's folder
+after a rename) keeps nobody from their person. A link to an account no
+post has any more moves too, when exactly one account on its platform had
+that handle (the same account, its folder renamed), and never to an account
+linked to someone else: two folders naming one id, linked to two people,
+stay apart until the user merges them. A media root not found on a scan
+keeps its id files, as its posts stay.
 
 An **account** (`/api/authors` rows, a person's `accounts`):
 
@@ -715,7 +731,8 @@ An **account** (`/api/authors` rows, a person's `accounts`):
   "names": [{ "name": "Some Body", "first": 1600000000, "last": 1727481600 }] }
 ```
 
-- `handle` and `name` are those of the newest post (handles change).
+- `handle` and `name` are those of the newest post (handles change), or the
+  new handle of a rename the user accepted after it.
 - `count` and `bytes` cover the posts in the index, aliases included;
   `newest` is the newest `posted_at`.
 - `url`: the profile's address for `instagram`, `twitter` and `tiktok`,
@@ -723,11 +740,18 @@ An **account** (`/api/authors` rows, a person's `accounts`):
 - `person`: the person the account is linked to, or `null`.
 - `handles` and `names`: **handle history**, every handle and display name
   the account's posts (aliases included) carry, with the `posted_at` of the
-  first and last post under it, the most recent first. Derived from the
-  posts on every request (cached), not stored: a renamed account keeps its
-  id, so its posts stay one account, and its old handles are listed here.
-  `first` and `last` are `null` when no post under it has a date. The
-  dashboard's Creators search and Feed author picker match any of them.
+  first and last post under it, the most recent first. Handles also come
+  from instaloader's id files (the folder's name when the file was written,
+  dated by the file's mtime) and from renames the user accepted for a
+  source (`POST /api/sources/<id>/rename`: the old handle last seen and the
+  new one first seen then). Derived from the index on every request
+  (cached), so a rescan rebuilds it; accepted renames are user data, table
+  `handle_renames`, written to `<data_directory>/userdata/handle_renames.json`
+  and restored after a rebuild. A renamed account keeps its id, so its
+  posts stay one account, and its old handles are listed here. `first` and
+  `last` are `null` when no post under it has a date. The dashboard's
+  Creators search and Feed author picker match any of them, so a person is
+  found by an old handle.
 
 A **person**:
 
@@ -747,7 +771,8 @@ A **person**:
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/people` | `[person, …]`, by name |
-| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }] }` (`accounts` may be omitted) → `{ "ok": true, "person": {…} }` |
+| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
+| POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }] }`: a sync of each of the person's sources, as Sync all does for every source; 404 for an unknown id |
 | GET | `/api/people/<id>` | person, or 404 |
 | POST | `/api/people/<id>` | body `{ "name": "…" }` and/or `{ "notes": "…" }` → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post |
@@ -758,6 +783,19 @@ A **person**:
   add, merge) takes it from any other. An account that is not in the index
   (no post, no alias) is a 400.
 - `added` and `removed` count the links that changed.
+- `profiles` (at most 20): profile links, or Instagram names, each made a
+  [source](#sources) of the new person, as `POST /api/sources` with
+  `person` would, with default options. Nothing is downloaded until a sync,
+  and no folder is made; two links to one profile make one source. A
+  profile whose account is indexed already (its folder holds posts) links
+  that account too. All or nothing: a link that is not a profile in the
+  routing table, that already has a source, or whose account is another
+  person's (and not in `accounts`) is a 400 naming it, and nothing is
+  created or moved.
+- Sync on a person queues its sources (those shown with it, see
+  [Sources](#sources)) through the normal [job](#jobs) queue: one at a
+  time per tool, the tool's pause between two, a source already queued or
+  running counted in `skipped`, a refused one in `errors`.
 - Merge keeps the first id: its name (or `name`, when given), and the
   others' notes appended to its own. Every account of the others, and
   `accounts`, move to it; the others are gone. `ids` must all exist (404
@@ -773,7 +811,7 @@ downloaded. Nothing is ever fetched.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/people/suggestions` | `{ "suggestions": [suggestion, …], "dismissed": 2 }`, most likely first |
-| POST | `/api/people/suggestions/dismiss` | body `{ "id": "…" }` → `{ "ok": true }`: "not the same person", for good; 404 when the id is not listed (reload) |
+| POST | `/api/people/suggestions/dismiss` | body `{ "id": "…" }` → `{ "ok": true }`: "not the same person" (the dashboard's **Not them**), for good; 404 when the id is not listed (reload) |
 
 ```json
 { "id": "4c1d9e0b7a2f3e5d6c8b", "score": 0.92, "reason": "same_handle",
@@ -786,7 +824,7 @@ downloaded. Nothing is ever fetched.
   - `bio_link` (0.95): an account's bio or website, as its metadata has it,
     links to another indexed account (`instagram.com/<handle>`,
     `x.com/<handle>` or `twitter.com/<handle>`, `tiktok.com/@<handle>`,
-    any of its handles, old ones too). Read on every scan from instaloader's
+    `youtube.com/@<handle>`, any of its handles, old ones too). Read on every scan from instaloader's
     Profile file (`<handle>_<id>.json[.xz]`: `biography`, `external_url`,
     `bio_links`) and from gallery-dl's author dict of the newest post
     (`description`/`signature`, `url`).
@@ -798,7 +836,11 @@ downloaded. Nothing is ever fetched.
     different numbers (`foo1`, `foo2`).
   - `same_name` (0.6): one display name, compared without case, accents,
     emoji and punctuation, at least 4 letters.
-  A group found for several reasons scores 0.02 more per extra reason.
+  A group found for several reasons scores 0.02 more per extra reason. A
+  group of more than 8 accounts is left out: they share something common
+  (a name like "Official"), not a person. Computed from the index alone
+  (cached until the next change), so its cost grows with the number of
+  accounts, not posts.
 - `detail`: what matched, for people.
 - `accounts`: the accounts of the group, most posts first. `person`: the
   person one of them is linked to, or `null`. Only groups where linking
@@ -973,14 +1015,17 @@ no person yet.
     `Authorization` headers, a `Cookie:` header's whole value and any
     opaque string of 40 characters or more become `…`; a path under a
     browser profile or a session or cookie folder becomes
-    `<private path>`. Tool output is untrusted text: the page shows it as
+    `<private path>`, whole, browser folder names with a space in them
+    (`Application Support`, `User Data`, `Profile 1`…) included. Tool output is untrusted text: the page shows it as
     text only.
   - `failures`: as `last_result.failures`
   - `paused`: `"account not found"` or `"login required"` while the
     scheduler no longer syncs it (see [Schedules](#schedules)), else `null`
-  - `warning`: why the Creators list warns about it: a blocking state
-    (as `paused`, also when its schedule is off) or `"3 failed syncs in a
-    row"` (3 or more), else `null`
+  - `warning`: why the Creators list warns about it: what stops the
+    scheduler (as `paused`, also when its schedule is off) or `"3 failed
+    syncs in a row"` (3 or more), else `null`. A lone `not_found` or
+    `login_required` only backs off (the scheduler tries again), so it
+    shows as the state's badge, not as a warning
   - `rename`: `{ "from": "old.name", "to": "new.name", "at": 1727503600 }`
     when the tool reported that the profile `target` names is now called
     `to` (instaloader only, see [Account health](#account-health)), else

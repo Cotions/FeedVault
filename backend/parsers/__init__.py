@@ -6,6 +6,7 @@ a whole directory listing and decides which files it understands.
 
 A parser never touches the network and never writes to the media folder.
 """
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -75,6 +76,8 @@ class DirResult:
     # (path, reason) for files that are ours but deliberately not indexed
     # (a long YouTube video): listed on the Unmatched page with the reason.
     skipped: list = field(default_factory=list)
+    # A tool's own note of whose folder this is (AccountFile below).
+    account_files: list = field(default_factory=list)
 
 
 @dataclass
@@ -86,6 +89,18 @@ class Profile:
     urls: list                      # links the profile shows (website, bio links)
     at: Optional[int]               # how recent: the post's time, or the file's mtime
     source: str                     # the metadata file it was read from
+
+
+@dataclass
+class AccountFile:
+    """A file a tool keeps to tell whose folder it is: instaloader's ``id``
+    (``<profile>/id``, or ``<profile>_id`` beside the folders), the
+    account's numeric id under the handle it had when written."""
+    platform: str
+    author_id: str
+    handle: str                     # the folder's name, or the name before "_id", lowercase
+    path: str
+    at: Optional[int]               # the file's mtime
 
 
 from . import instaloader, gallery_dl, yt_dlp  # noqa: E402
@@ -110,5 +125,10 @@ def parse_dir(root, dirpath, names):
         result.errors.extend(r.errors)
         result.profiles.extend(r.profiles)
         result.skipped.extend(r.skipped)
+        result.account_files.extend(r.account_files)
         remaining = [n for n in remaining if n not in r.claimed]
+    if any(not p.tool.startswith(instaloader.TOOL) for p in result.posts):
+        # An "id" file in another tool's folder is not instaloader's note.
+        result.claimed -= {os.path.basename(a.path) for a in result.account_files}
+        result.account_files = []
     return result

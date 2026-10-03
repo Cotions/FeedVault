@@ -996,14 +996,6 @@ def _outdated(tool):
         return None
 
 
-def _stored_result(src):
-    """A source row's last_result as stored, or None (none, or not JSON)."""
-    try:
-        return json.loads(src["last_result"]) if src is not None and src["last_result"] else None
-    except ValueError:
-        return None
-
-
 def _health_state(job):
     """What a sync's output said, as health.STATES: ok when it worked (renamed
     when the tool found the profile under a new name), the
@@ -1024,10 +1016,7 @@ def _failures(src, state):
     """Failed syncs in a row, for the scheduler's back-off: a failure adds
     one, a sync that worked starts again from 0, a cancelled or interrupted
     one leaves the count."""
-    try:
-        before = sources.failures(json.loads(src["last_result"] or "{}") if src is not None else None)
-    except ValueError:
-        before = 0
+    before = sources.failures(sources.last_result(src))
     return before + 1 if state == "failed" else 0 if state == "done" else before
 
 
@@ -1049,7 +1038,7 @@ def _ended(job):
     if src is not None and job["argv"] and src["target"] != job["argv"][-1]:
         return                                 # the id names another source now (database replaced)
     ended_at = job["ended_at"] or int(time.time())
-    before = _stored_result(src)
+    before = sources.last_result(src)
     if not sources.record(conn, sid, job["id"], ended_at, {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
             "line": health.scrub(r.get("line")), "added": r.get("added", 0), "job": job["id"],
@@ -1421,16 +1410,19 @@ def sync(sid):
         return jobs.submit(_kind(sid), {"source": str(sid)})
 
 
-def sync_all():
+def sync_all(only=None):
     """Queue a sync for every source not already queued or running, by
-    target. They run one after another, the pause between each. Returns
-    (jobs, skipped, errors: [{source, error}] for those refused). The jobs
-    queued become the batch (see batch), or join it while it still runs."""
+    target, or for those of ``only`` (source ids: a person's). They run one
+    after another, the pause between each. Returns (jobs, skipped, errors:
+    [{source, error}] for those refused). The jobs queued become the batch
+    (see batch), or join it while it still runs."""
     global _batch
     queued, skipped, errors = [], 0, []
     with _submitting:
         busy = active()
         for sid, tool in db.connect().execute("SELECT id, tool FROM sources ORDER BY target, id").fetchall():
+            if only is not None and sid not in only:
+                continue
             if sid in busy:
                 skipped += 1
                 continue

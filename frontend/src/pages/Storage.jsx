@@ -10,7 +10,7 @@ import StatsHero from "../components/StatsHero";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
-import CreatorPicker from "../components/CreatorPicker";
+import PersonScopeHead from "../components/PersonScopeHead";
 import { personPath } from "../lib/people";
 
 // Sortable creator columns. Share is the size as a fraction of the whole, so
@@ -170,7 +170,6 @@ export default function Storage() {
   const { data: s, error, reload } = useApi(load, refreshKey);
   const config = useApi(getConfig, refreshKey);
   const people = useApi(getPeople, refreshKey);
-  const who = person ? (people.data || []).find(p => String(p.id) === person) : null;
 
   const [pending,   setPending]   = useState(null);    // the largest-file item awaiting confirmation
   const [busy,      setBusy]      = useState(false);
@@ -202,24 +201,7 @@ export default function Storage() {
     }
   }
 
-  const head = (
-    <div className="page-head page-head-bare">
-      <h2 className="page-title">Storage</h2>
-      {person && <span className="page-count">{who ? who.name : `person ${person}`}</span>}
-      <div className="page-head-spacer" />
-      {(people.data?.length > 0 || person) && (
-        <CreatorPicker
-          className="storage-person"
-          label="Person"
-          allLabel="Everyone"
-          placeholder="Search people…"
-          people={people.data || []}
-          value={person ? { person } : null}
-          onChange={c => setParams(c ? { person: String(c.person.id) } : {}, { replace: true })}
-        />
-      )}
-    </div>
-  );
+  const head = <PersonScopeHead title="Storage" person={person} people={people.data} setParams={setParams} />;
 
   if (!s) {
     return (
