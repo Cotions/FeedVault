@@ -127,6 +127,7 @@ rate limited: health.py's tables) and stored on the source. Two syncs of one too
 them (config ``<tool>.pause``).
 """
 import configparser
+import contextlib
 import json
 import os
 import re
@@ -1054,9 +1055,12 @@ def _failures(src, state):
 
 def _ended(job):
     """Store how it went on the source, and let a new source adopt its account."""
-    # First: the folder listing yt-dlp's start took goes, whatever fails
-    # below (its after hook never ran when the tool could not start).
-    _info_before.pop(int(job["params"]["source"]), None)
+    if job["started_at"] is not None:
+        # First: the folder listing yt-dlp's start took goes, whatever fails
+        # below (its after hook never ran when the tool could not start).
+        # Not for a job that never ran: the listing would be a running sync's.
+        with contextlib.suppress(jobs.BadRequest):
+            _info_before.pop(_source_id(job["params"]), None)
     if job["state"] in ("done", "failed"):
         _mark_muted(job)
     _tally(job)

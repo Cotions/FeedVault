@@ -401,6 +401,7 @@ def lookup(sid, content=False):
     refused, found = _read_folder()
     for s, raw in found:
         if s["id"] == sid and s["kind"] is not None:
+            s = dict(s)                        # its own: the read may be read_once's, shared
             if content:
                 s["content"] = raw.decode("utf-8", "replace") if raw is not None else None
             return s, None
@@ -525,38 +526,41 @@ def _rescan(script, vals, roots):
 # %), and how a value put in one is escaped, as sync.py does for its own.
 # The value is the next item, or in the same one: after "=" for a long
 # option (--output=…), right after a short one (-o…; -o=… is the value "=…").
-FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern"), (), sync._escape),
-             "yt-dlp": (("--output",), ("-o",), lambda v: v.replace("%", "%%"))}
+# instaloader (argparse) also takes a long option's unique prefix (--dirname);
+# yt-dlp's are never unique (--output-na-placeholder, --exec-before-download).
+FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern", "--title-pattern"), (), True,
+                             sync._escape),
+             "yt-dlp": (("--output", "--exec"), ("-o",), False, lambda v: v.replace("%", "%%"))}
 
 
-def _joined(a, longs, shorts):
-    """The option part of ``a`` when it holds a formatted option and its value, else None."""
-    for o in longs:
-        if a.startswith(o + "="):
-            return o + "="
+def _formatted(a, longs, shorts, prefixes):
+    """(the option part of ``a``, its value or None when the value is the
+    next item) when ``a`` names an option its tool formats, else None."""
+    name, eq, value = a.partition("=")
+    if len(name) > 2 and name.startswith("--") \
+            and any(o == name or (prefixes and o.startswith(name)) for o in longs):
+        return name + eq, value if eq else None
     for o in shorts:
-        if a.startswith(o) and len(a) > len(o):
-            return o
+        if a.startswith(o):
+            return o, a[len(o):] or None
     return None
 
 
 def command(script, vals):
     """A command's argument list, its placeholders filled in: escaped in
-    the value of an option its tool formats (before "--": the tool reads
-    no option after it)."""
-    longs, shorts, escape = FORMATTED.get(script["tool"], ((), (), None))
+    the value of an option its tool formats."""
+    longs, shorts, prefixes, escape = FORMATTED.get(script["tool"], ((), (), False, None))
     escaped = {k: escape(v) for k, v in vals.items()} if escape else vals
-    argv, formatted, positional = [], False, False
+    argv, formatted = [], False
     for a in script["argv"]:
-        head = None if formatted or positional else _joined(a, longs, shorts)
+        option = None if formatted else _formatted(a, longs, shorts, prefixes)
         if formatted:
             argv.append(substitute(a, escaped))
-        elif head:
-            argv.append(head + substitute(a[len(head):], escaped))
+        elif option and option[1] is not None:
+            argv.append(option[0] + substitute(option[1], escaped))
         else:
             argv.append(substitute(a, vals))
-        positional = positional or (a == "--" and not formatted)
-        formatted = not formatted and not positional and (a in longs or a in shorts)
+        formatted = option is not None and option[1] is None
     return argv
 
 

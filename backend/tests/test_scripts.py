@@ -363,12 +363,18 @@ def test_a_folder_in_an_option_its_tool_formats_is_escaped(env, name, root, want
     ("yt-dlp", ["--output", "{root}/%(id)s.%(ext)s"], ["--output", "/m/{x} 50%%/%(id)s.%(ext)s"]),
     ("yt-dlp", ["--output={root}/%(id)s.%(ext)s"], ["--output=/m/{x} 50%%/%(id)s.%(ext)s"]),
     ("yt-dlp", ["-o{root}/%(id)s.%(ext)s"], ["-o/m/{x} 50%%/%(id)s.%(ext)s"]),
+    ("instaloader", ["--title-pattern={root}_{date_utc}"], ["--title-pattern=/m/{{x}} 50%_{date_utc}"]),
+    ("yt-dlp", ["--exec", "echo {root}/%(id)s"], ["--exec", "echo /m/{x} 50%%/%(id)s"]),
+    ("yt-dlp", ["--exec=echo {root}"], ["--exec=echo /m/{x} 50%%"]),
+    # argparse takes a unique prefix of a long option; yt-dlp's are never unique.
+    ("instaloader", ["--dirname={root}", "--filename", "{root}"], ["--dirname=/m/{{x}} 50%", "--filename", "/m/{{x}} 50%"]),
+    ("yt-dlp", ["--outp={root}", "--exe", "{root}"], ["--outp=/m/{x} 50%", "--exe", "/m/{x} 50%"]),
     # Not those options: as it is.
-    ("instaloader", ["--dirname-patterns={root}", "-d{root}"], ["--dirname-patterns=/m/{x} 50%", "-d/m/{x} 50%"]),
-    ("yt-dlp", ["--output-na-placeholder={root}", "-P{root}", "--", "-o{root}", "--output", "{root}"],
-     ["--output-na-placeholder=/m/{x} 50%", "-P/m/{x} 50%", "--", "-o/m/{x} 50%", "--output", "/m/{x} 50%"]),
-    # "--" as an option's value is not the end of the options.
-    ("yt-dlp", ["-o", "--", "--output={root}"], ["-o", "--", "--output=/m/{x} 50%%"]),
+    ("instaloader", ["--dirname-patterns={root}", "-d{root}", "--={root}"], ["--dirname-patterns=/m/{x} 50%",
+                                                                         "-d/m/{x} 50%", "--=/m/{x} 50%"]),
+    ("yt-dlp", ["--output-na-placeholder={root}", "-P{root}"], ["--output-na-placeholder=/m/{x} 50%", "-P/m/{x} 50%"]),
+    # An option as the value of a formatted one is that value.
+    ("yt-dlp", ["-o", "-o", "{root}"], ["-o", "-o", "/m/{x} 50%"]),
 ])
 def test_a_folder_in_a_joined_option_is_escaped_too(env, tool, argv, want):
     """#59: --opt=value (and yt-dlp's -ovalue) as the separate form, for a root with {x} and %."""
