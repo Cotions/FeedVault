@@ -203,6 +203,17 @@ What was already in the archive is never new, whenever it was posted.
 **Mark seen** on a Creators card or a person's page does the same for that
 person (or that account, when it is linked to nobody) only.
 
+Each sync that brought posts or failed also leaves an entry under the
+sidebar's **Notifications** bell ("12 new from X", "X: account not found");
+an entry opens exactly the posts that sync brought, or the source. A
+scheduled sync that keeps failing the same way is one entry, not one per
+retry. **Mute** (the bell on a Creators card or a person's page) keeps a
+person or an account out of the list, the toasts and the global new count;
+their own page still shows their new posts. **Settings → Sync → Desktop
+notifications** (off by default) pops entries up on the desktop: in the
+browser while a tab is open (it asks permission when you turn it on), else
+with `notify-send` when it is installed.
+
 By default syncs run without a login (public profiles only). **Settings → Sync →
 Instagram sync** can make instaloader use your browser's Instagram cookies
 (`--load-cookies`) or a session it saved after `instaloader --login` in a

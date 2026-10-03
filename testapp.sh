@@ -43,7 +43,7 @@ fi
 
 # --- demo: invented data, nothing to protect -------------------------------
 if [ "$MODE" = demo ]; then
-  [ -f "$DEMO_DIR/config.json" ] || python3 "$ROOT/scripts/make_demo.py" "$DEMO_DIR"
+  [ -f "$DEMO_DIR/config.json" ] || "$VENV/bin/python" "$ROOT/scripts/make_demo.py" "$DEMO_DIR"
   say "Demo instance → http://localhost:$PORT"
   exec env "FEEDVAULT_CONFIG=$DEMO_DIR/config.json" "FEEDVAULT_PORT=$PORT" "FEEDVAULT_NO_BROWSER=1" \
     "$VENV/bin/python" "$ROOT/backend/app.py"
