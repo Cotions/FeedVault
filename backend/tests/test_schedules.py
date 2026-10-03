@@ -401,6 +401,18 @@ def test_a_manual_sync_that_works_resumes_it(env, client, tools, sched):
     assert got["schedule"]["next_at"] == got["last_sync_at"] + HOUR
 
 
+def test_a_lone_blocking_result_only_backs_off_and_does_not_warn(env, client, queued):
+    s = add(client, X, schedule="hourly")
+    synced(s["id"], NOW, "failed", 1, health="not_found", blocking=1)
+    got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert (got["health"]["state"], got["health"]["paused"], got["health"]["warning"]) == ("not_found", None, None)
+    assert (got["schedule"]["stopped"], got["schedule"]["next_at"]) == (None, NOW + 2 * HOUR)
+    synced(s["id"], NOW + 2 * HOUR, "failed", 2, health="not_found", blocking=2)
+    got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()
+    assert (got["schedule"]["stopped"], got["health"]["warning"]) == \
+        ("paused: account not found", "account not found")
+
+
 def test_warning_after_three_failures(env, client, queued):
     s = add(client, X)
     for n, warning in ((2, None), (3, "3 failed syncs in a row"), (5, "5 failed syncs in a row")):
@@ -507,3 +519,11 @@ def test_a_new_tool_session_in_settings_resumes_its_sources(env, client, queued)
     synced(x, NOW, "failed", 3, health="login_required", blocking=3)
     post(client, "/api/config", {"gallery-dl": {"pause": 10}})
     assert stopped(x) == "paused: login required"
+
+
+def test_one_reading_of_a_stored_last_result():
+    row = lambda v: {"last_result": v}  # noqa: E731
+    assert sources.last_result(row('{"state": "done"}')) == {"state": "done"}
+    for v in (None, "", "not json", "[1]", "3", "null"):
+        assert sources.last_result(row(v)) is None
+    assert sources.last_result(None) is None

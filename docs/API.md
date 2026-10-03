@@ -973,14 +973,17 @@ no person yet.
     `Authorization` headers, a `Cookie:` header's whole value and any
     opaque string of 40 characters or more become `…`; a path under a
     browser profile or a session or cookie folder becomes
-    `<private path>`. Tool output is untrusted text: the page shows it as
+    `<private path>`, whole, browser folder names with a space in them
+    (`Application Support`, `User Data`, `Profile 1`…) included. Tool output is untrusted text: the page shows it as
     text only.
   - `failures`: as `last_result.failures`
   - `paused`: `"account not found"` or `"login required"` while the
     scheduler no longer syncs it (see [Schedules](#schedules)), else `null`
-  - `warning`: why the Creators list warns about it: a blocking state
-    (as `paused`, also when its schedule is off) or `"3 failed syncs in a
-    row"` (3 or more), else `null`
+  - `warning`: why the Creators list warns about it: what stops the
+    scheduler (as `paused`, also when its schedule is off) or `"3 failed
+    syncs in a row"` (3 or more), else `null`. A lone `not_found` or
+    `login_required` only backs off (the scheduler tries again), so it
+    shows as the state's badge, not as a warning
   - `rename`: `{ "from": "old.name", "to": "new.name", "at": 1727503600 }`
     when the tool reported that the profile `target` names is now called
     `to` (instaloader only, see [Account health](#account-health)), else

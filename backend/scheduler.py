@@ -54,7 +54,6 @@ memory: a restart tries again at once. A note no longer shows once the
 source has synced since (Sync clicked), and changing its schedule or
 removing it forgets both.
 """
-import json
 import os
 import threading
 import time
@@ -101,14 +100,6 @@ def due_at(every, last_sync_at, result):
     if not isinstance(last_sync_at, int) or isinstance(last_sync_at, bool) or result.get("state") == "interrupted":
         return 0
     return last_sync_at + delay(every, sources.failures(result))
-
-
-def _result(row):
-    try:
-        r = json.loads(row["last_result"]) if row["last_result"] else None
-    except ValueError:
-        return None
-    return r if isinstance(r, dict) else None
 
 
 def status(s, cfg=None):
@@ -187,9 +178,9 @@ def tick(now=None):
     due = []
     for r in rows:
         every = sources.stored_options(r)["schedule"]
-        if every not in INTERVALS or r["id"] in busy or health.paused(_result(r)):
+        if every not in INTERVALS or r["id"] in busy or health.paused(sources.last_result(r)):
             continue
-        at = max(due_at(every, r["last_sync_at"], _result(r)), held.get(r["id"], 0))
+        at = max(due_at(every, r["last_sync_at"], sources.last_result(r)), held.get(r["id"], 0))
         if at <= now:
             due.append((at, r["id"], every, r))
     queued = []

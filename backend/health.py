@@ -310,7 +310,12 @@ _SECRET_VALUE = re.compile(rf"(?i)(?<![\w-])({_SECRET_NAMES})(\"?\s*[=:]\s*)(\"[
 _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
 # Opaque strings long enough to be a token (hex, base64, JWT): not kept.
 _OPAQUE = re.compile(r"(?<![A-Za-z0-9._~+/-])[A-Za-z0-9_~+/-]{40,}={0,2}(?:\.[A-Za-z0-9_~+/-]{10,}={0,2})*")
-_PATH = re.compile(r"(?:(?<![A-Za-z0-9._~+/-])~|\b[A-Za-z]:\\|(?<![\w.:/+])/)[^\s'\"<>|]*")
+# Folder names with a space that browsers keep profiles under: read as part
+# of the path, or its tail would be left after the space.
+_SPACED = (r"(?<=[/\\])(?i:application support|user data|local state|login data|local storage|session storage|"
+           r"network persistent state|google chrome(?: beta| canary| dev)?|microsoft edge(?: beta| dev)?|"
+           r"brave browser|opera software|opera gx stable|profile \d+)(?=[/\\'\"\s]|$)")
+_PATH = re.compile(rf"(?:(?<![A-Za-z0-9._~+/-])~|\b[A-Za-z]:\\|(?<![\w.:/+])/)(?:{_SPACED}|[^\s'\"<>|])*")
 # A path segment of a token's characters only, mixing upper and lower case
 # and digits: a base64 token's piece between two "/", not a folder's name.
 _TOKEN_PART = re.compile(r"(?=[^/]*[A-Z])(?=[^/]*[a-z])(?=[^/]*[0-9])[A-Za-z0-9_~+=-]{24,}")
@@ -462,10 +467,14 @@ def paused(result):
     return why if why and (blocking(result) >= STOP_AFTER or accepted) else None
 
 
-def warning(state, failures):
-    """Why the Creators list warns about a source, else None."""
-    if state in BLOCKING:
-        return BLOCKING[state]
+def warning(result, failures):
+    """Why the Creators list warns about a source, else None: what stops
+    the scheduler (paused(), also when its schedule is off), so a lone
+    blocking result, which only backs off, does not; or WARN_FAILURES
+    failed syncs in a row."""
+    why = paused(result)
+    if why:
+        return why
     return f"{failures} failed syncs in a row" if failures >= WARN_FAILURES else None
 
 
@@ -478,7 +487,7 @@ def public(result, last_sync_at, failures, target=None):
             "ok_at": _ok_at(r, last_sync_at), "last_sync_at": last_sync_at if _time(last_sync_at) else None,
             "line": scrub(r.get("line")) if state not in (None, "ok", "renamed") else None, "failures": failures,
             "rename": _suggested(r.get("rename"), target), "login": _login(r.get("login")),
-            "paused": paused(r), "warning": warning(state, failures)}
+            "paused": paused(r), "warning": warning(r, failures)}
 
 
 def _suggested(v, target):

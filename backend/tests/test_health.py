@@ -48,6 +48,13 @@ def test_scrub():
     # A private name is a whole word: a folder that only contains one is kept.
     assert s("[feedvault] indexing /mnt/media/Cooperative/carol") == "[feedvault] indexing /mnt/media/Cooperative/carol"
     assert s("x /home/me/snap/chromium/common/Cookies") == "x <private path>"
+    # A browser's folder names with a space are part of the path: nothing of it is left after the space.
+    assert s("cookies from C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cookies done") == \
+        "cookies from <private path> done"
+    assert s("x /Users/me/Library/Application Support/Google/Chrome/Profile 1/Cookies end") == "x <private path> end"
+    assert s("x C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\User Data\\Local State y") == \
+        "x <private path> y"
+    assert s("[feedvault] indexing /mnt/My Pictures/carol") == "[feedvault] indexing /mnt/My Pictures/carol"
     assert s(None) is None and s("   ") is None and s(5) is None
 
 
