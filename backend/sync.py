@@ -141,6 +141,8 @@ import db
 import health
 import info_cookies
 import jobs
+import news
+import notify
 import people
 import scanner
 import sources
@@ -950,7 +952,9 @@ def _ended_as(params, code, lines, index, note, tool):
         added = max(0, added - len(_retrash(params, note)))
     result = {"added": added, "updated": index["updated"] if index else 0, "error": None, "line": None,
               **_owner(params)}
-    new = f"{added} new post{'' if added == 1 else 's'}"
+    if index and index.get("seen"):
+        result["seen"] = list(index["seen"])   # the first_seen range of what it added (notify.py)
+    new = notify.plural(added, "new post")
     rename = health.renamed(tool, lines)
     if rename:
         result["rename"] = rename
@@ -980,7 +984,7 @@ def _ended_as(params, code, lines, index, note, tool):
     if result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"
     if added:
-        message += f" ({added} new post{'' if added == 1 else 's'} before it stopped)"
+        message += f" ({notify.plural(added, 'new post')} before it stopped)"
     message += unread
     old = _outdated(tool)
     if old:
@@ -1040,6 +1044,8 @@ def _failures(src, state):
 
 def _ended(job):
     """Store how it went on the source, and let a new source adopt its account."""
+    if job["state"] in ("done", "failed"):
+        _mark_muted(job)
     _tally(job)
     if job["started_at"] is None:
         return                                 # cancelled while queued: it never ran
@@ -1065,6 +1071,7 @@ def _ended(job):
                             r.get("rename"), r.get("login") if job["state"] in ("done", "failed") else None)}):
         return
     changed = {"sources"}
+    _notify(conn, job, sid, before)
     src = sources.row(conn, sid)
     options = _options(src)
     if job["state"] == "done" and (options["full_history"] or options["first_posts"]):
@@ -1092,6 +1099,62 @@ def _ended(job):
                 print(f"[sync] source {sid}: could not update its saved posts: {e}")
     for name in sorted(changed):
         userdata.changed(name)
+
+
+def _who(src):
+    """How an entry names a source: its person, else @handle (instaloader)
+    or the link without https://."""
+    if src["person"]:
+        return src["person"]["name"]
+    return f"@{src['target']}" if src["tool"] == "instaloader" else src["target"].removeprefix("https://")
+
+
+def _mark_muted(job):
+    """A sync of a muted person's or account's source (news.py) says so in
+    its result (``muted``): no toast, no notification, not in "Sync all"'s
+    count."""
+    try:
+        conn = db.connect()
+        src = sources.get(conn, _source_id(job["params"]))
+        account = src and src["account"]
+        if src and news.is_muted(conn, src["person"] and src["person"]["id"],
+                                 account and (account["platform"], account["id"])):
+            job["result"] = {**(job["result"] or {}), "muted": True}
+            jobs.amend(job["id"], {"muted": True})
+    except Exception as e:                     # it only says so as if it were not muted
+        print(f"[sync] source {job['params'].get('source')}: could not tell whether it is muted: {e}")
+
+
+def _notify(conn, job, sid, before):
+    """The notifications entry of a sync that brought posts or failed
+    (notify.py). A scheduled one that failed as the sync before it did adds
+    none, nor does a muted one. Its id goes in the job's result (``notification``)."""
+    state, r = job["state"], job["result"] or {}
+    said = _said(state, r)
+    if r.get("muted") or not ((state == "done" and r.get("added")) or state == "failed"):
+        return
+    scheduled = job["params"].get("scheduled") == "1"
+    if state == "failed" and scheduled and health.state_of(before) == said:
+        return
+    try:
+        src = sources.get(conn, sid)
+        account = src["account"] or r.get("account")
+        who = _who(src)
+        common = {"job": job["id"], "source": sid, "person": src["person"] and src["person"]["id"],
+                  "account": account and (account["platform"], account["id"]), "state": said,
+                  "scheduled": scheduled}
+        if state == "done":
+            seen = r.get("seen")
+            text = notify.new_text(r["added"], who)
+            nid = notify.add(conn, "new", text, count=r["added"], folder=job["rescan"],
+                             seen=tuple(seen) if seen else None, **common)
+        else:
+            text = notify.failed_text(who, said, job["message"])
+            nid = notify.add(conn, "failed", text, **common)
+        jobs.amend(job["id"], {"notification": nid})
+        notify.desktop(text)
+    except Exception as e:                     # only the list misses it: the sync ended as it went
+        print(f"[sync] source {sid}: no notification: {e}")
 
 
 def _first_posts_floor(conn, src, job, listed=None):
@@ -1165,7 +1228,10 @@ def _forget_saved(conn, src):
     save.forget_synced(conn, *people.canonical(conn, src["platform"], src["author_id"]), stamp)
 
 
-jobs.register(KIND, label="Sync from Instagram", params={"source": {"type": "text", "max": 15}},
+# ``scheduled``: queued by the scheduler (notify.py: a failure it repeats adds no entry).
+PARAMS = {"source": {"type": "text", "max": 15}, "scheduled": {"type": "choice", "choices": ["1"], "required": False}}
+
+jobs.register(KIND, label="Sync from Instagram", params=PARAMS,
               build=_build, group=GROUP, start=_start, outcome=_outcome, ended=_ended,
               pause=lambda params: settings()["pause"],
               describe=lambda params, argv: f"Sync @{argv[-1]}" if argv else "Sync from Instagram")
@@ -1376,12 +1442,12 @@ def _describe(label):
     return describe
 
 
-jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params={"source": {"type": "text", "max": 15}},
+jobs.register(KINDS["gallery-dl"], label="Sync with gallery-dl", params=PARAMS,
               build=_build_gallery_dl, group="gallery-dl", start=_start_archive("gallery-dl"),
               outcome=lambda p, code, lines, index, note: _outcome(p, code, lines, index, note, "gallery-dl"),
               ended=_ended, pause=lambda params: tool_settings("gallery-dl")["pause"],
               describe=_describe("Sync with gallery-dl"))
-jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params={"source": {"type": "text", "max": 15}},
+jobs.register(KINDS["yt-dlp"], label="Sync with yt-dlp", params=PARAMS,
               build=_build_yt_dlp, group="yt-dlp", start=_start_yt_dlp, after=_strip_cookies,
               outcome=lambda p, code, lines, index, note: _outcome(p, code, lines, index, note, "yt-dlp"),
               ended=_ended, pause=lambda params: tool_settings("yt-dlp")["pause"],
@@ -1419,13 +1485,14 @@ def _kind(sid):
     return KINDS[src["tool"]]
 
 
-def sync(sid):
+def sync(sid, scheduled=False):
     """Queue one source's sync: the job's public dict. Raises Busy, or
-    jobs.BadRequest when the source cannot be synced."""
+    jobs.BadRequest when the source cannot be synced. ``scheduled``: the
+    scheduler's (notify.py)."""
     with _submitting:
         if sid in active():
             raise Busy("its sync is already queued or running")
-        return jobs.submit(_kind(sid), {"source": str(sid)})
+        return jobs.submit(_kind(sid), {"source": str(sid), **({"scheduled": "1"} if scheduled else {})})
 
 
 def sync_all(only=None):
@@ -1476,7 +1543,7 @@ _batch_lock = threading.Lock()
 def _ending(job):
     r = job["result"] or {}
     return {"state": job["state"], "added": r.get("added", 0), "source": int(job["params"]["source"]),
-            "label": job["label"]}
+            "label": job["label"], "muted": bool(r.get("muted"))}
 
 
 def _tally(job):
@@ -1487,7 +1554,7 @@ def _tally(job):
 
 def batch():
     """The last "Sync all" while FeedVault has run, or None: {id, started_at,
-    total, ended, failed, added, profiles (sources that added posts), first
+    total, ended, failed, added (muted sources left out of both), profiles (sources that added posts), first
     (the label and source of the one that added the most), current (the
     job running, else the next queued, else None), jobs (its job ids),
     active (those still queued or running), done}. Progress counts live jobs only."""
@@ -1497,7 +1564,7 @@ def batch():
         b = {**_batch, "jobs": list(_batch["jobs"]), "ended": dict(_batch["ended"])}
     ids = set(b["jobs"])
     live = [j for j in jobs.active() if j["id"] in ids and j["id"] not in b["ended"]]
-    ended = list(b["ended"].values())
+    ended = [e for e in b["ended"].values() if not e.get("muted")]     # muted: never in its count
     adders = sorted((e for e in ended if e["added"]), key=lambda e: -e["added"])
     current = next((j for j in live if j["state"] == "running"), None) or (live[0] if live else None)
     return {"id": b["id"], "started_at": b["started_at"], "total": len(b["jobs"]),

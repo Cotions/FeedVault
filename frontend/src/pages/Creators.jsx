@@ -1,17 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getAuthors, getPeople, getSuggestions, getNew, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
+import { getAuthors, getPeople, getSuggestions, getNew, markSeen, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
-import { platformLabel, platformShort, authorFeedPath, fmtBytes, fmtInt } from "../lib/fmt";
+import { platformLabel, platformShort, authorFeedPath, fmtBytes, fmtInt, plural } from "../lib/fmt";
 import { accountKey, accountRef, accountText, matchedFormer, matches, personPath, personText, suggestName } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import SelectionBar from "../components/SelectionBar";
 import Suggestions from "../components/Suggestions";
+import MuteButton from "../components/MuteButton";
 import {
   AddSource, RemoveSourceDialog, ScheduleLine, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
 } from "../components/Sources";
@@ -69,7 +70,19 @@ function CardSyncButton({ sync, onSync }) {
 // Posts indexed since the last "Mark all seen" (docs/API.md "New posts").
 function NewBadge({ count }) {
   if (!count) return null;
-  return <span className="side-badge new-badge" title="New since you last marked everything seen">{fmtInt(count)} new</span>;
+  return <span className="side-badge new-badge" title="New since you last marked them seen">{fmtInt(count)} new</span>;
+}
+
+// "Mark seen" of one card: its new posts stop being new, the others' stay.
+function SeenButton({ fresh, name, onSeen }) {
+  if (!fresh?.count) return null;
+  return (
+    <button type="button" className="icon-btn creator-seen" onClick={onSeen}
+            title={`Mark ${name}'s ${plural(fresh.count, "new post")} seen`}
+            aria-label={`Mark ${name}'s new posts seen`}>
+      <Icon name="check" size={15} />
+    </button>
+  );
 }
 
 // A source of the card needs a look: its account is not found, it needs a
@@ -85,7 +98,7 @@ function WarnBadge({ sync }) {
   );
 }
 
-function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh }) {
+function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted }) {
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
@@ -104,7 +117,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
       <span className="person-stats">
         <span className="creator-count">{fmtInt(p.count)}</span>
         <span className="creator-sub">{fmtBytes(p.bytes)}</span>
-        <NewBadge count={fresh} />
+        <NewBadge count={fresh?.count} />
         <WarnBadge sync={sync} />
       </span>
     </>
@@ -121,6 +134,8 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
       ) : (
         <Link to={personPath(p.id)} className="creator-main" title={`Open ${p.name}`}>{body}</Link>
       )}
+      {!selectMode && <SeenButton fresh={fresh} name={p.name} onSeen={onSeen} />}
+      {!selectMode && muted != null && <MuteButton compact muted={muted} whom={{ person: p.id }} name={p.name} onDone={onMuted} />}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
   );
@@ -176,7 +191,7 @@ function CardOptionsButton({ sync, onEdit }) {
   );
 }
 
-function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh }) {
+function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted }) {
   const former = matchedFormer(a, query);
   const body = (
     <>
@@ -191,7 +206,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
       </span>
       <span className="person-stats">
         <span className="creator-count">{a.count}</span>
-        <NewBadge count={fresh} />
+        <NewBadge count={fresh?.count} />
         <WarnBadge sync={sync} />
       </span>
     </>
@@ -222,6 +237,10 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
           </Link>
           <CardOptionsButton sync={sync} onEdit={onEdit} />
         </span>
+      )}
+      {!selectMode && <SeenButton fresh={fresh} name={`@${a.handle || a.id}`} onSeen={onSeen} />}
+      {!selectMode && a.id != null && muted != null && (
+        <MuteButton compact muted={muted} whom={{ account: accountRef(a) }} name={`@${a.handle || a.id}`} onDone={onMuted} />
       )}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
     </div>
@@ -286,14 +305,34 @@ export default function Creators() {
   const peopleApi  = useApi(getPeople, key);
   const suggestApi = useApi(getSuggestions, key);
   // New counts per card, again whenever the jobs poll's total moves.
-  const { newCount } = useJobs();
+  const { newCount, started } = useJobs();
   const newApi = useApi(getNew, `${key}:${newCount}`);
   const fresh = useMemo(() => {
     const m = new Map();
-    for (const p of newApi.data?.by_person || []) m.set(`person:${p.id}`, p.count);
-    for (const a of newApi.data?.by_account || []) m.set(`account:${accountKey(a)}`, a.count);
+    for (const p of newApi.data?.by_person || []) m.set(`person:${p.id}`, p);
+    for (const a of newApi.data?.by_account || []) m.set(`account:${accountKey(a)}`, a);
     return m;
   }, [newApi.data]);
+  // Who is muted: null until /api/new has answered (no button before).
+  const mutedSet = useMemo(() => newApi.data?.muted ? new Set([
+    ...newApi.data.muted.people.map(id => `person:${id}`),
+    ...newApi.data.muted.accounts.map(a => `account:${accountKey(a)}`),
+  ]) : null, [newApi.data]);
+  const reloadNew = newApi.reload;
+  const onMuted = useCallback(() => { reloadNew(); started(); }, [reloadNew, started]);
+
+  // Up to the newest one counted: a post indexed since stays new.
+  async function markCardSeen(row, whom, name) {
+    try {
+      const r = await markSeen(row.until, whom);
+      if (!r?.ok) { toast(r?.error || "Could not mark them seen.", "err"); return; }
+      toast(`${name}: ${plural(row.count, "new post")} marked seen.`);
+      newApi.reload();
+      started();                               // the sidebar's count, now
+    } catch (err) {
+      toast(err.message, "err");
+    }
+  }
   const [filter, setFilter] = useState("");
   const [busy,   setBusy]   = useState(false);
   const [merge,  setMerge]  = useState(null);                // { name, error } while the dialog is open
@@ -536,6 +575,9 @@ export default function Creators() {
                     sync={syncOf(`person:${p.id}`)}
                     onSync={sources.sync}
                     fresh={fresh.get(`person:${p.id}`)}
+                    onSeen={() => markCardSeen(fresh.get(`person:${p.id}`), { person: p.id }, p.name)}
+                    muted={mutedSet && mutedSet.has(`person:${p.id}`)}
+                    onMuted={onMuted}
                   />
                 ))}
               </div>
@@ -559,7 +601,11 @@ export default function Creators() {
                     sync={a.id != null ? syncOf(`account:${accountKey(a)}`) : null}
                     onSync={sources.sync}
                     onEdit={setEditing}
-                    fresh={a.id != null ? fresh.get(`account:${accountKey(a)}`) : 0}
+                    fresh={a.id != null ? fresh.get(`account:${accountKey(a)}`) : null}
+                    onSeen={() => markCardSeen(fresh.get(`account:${accountKey(a)}`), { account: accountRef(a) },
+                                               `@${a.handle || a.id}`)}
+                    muted={mutedSet && mutedSet.has(`account:${accountKey(a)}`)}
+                    onMuted={onMuted}
                   />
                 ))}
               </div>

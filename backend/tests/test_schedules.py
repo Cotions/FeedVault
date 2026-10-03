@@ -123,7 +123,7 @@ def queued(monkeypatch, sched):
     """sync.sync recording what it was asked to queue: nothing runs."""
     calls = []
 
-    def fake(sid):
+    def fake(sid, scheduled=False):
         calls.append(sid)
         return {"id": len(calls)}
     monkeypatch.setattr(sync, "sync", fake)
@@ -236,14 +236,14 @@ def test_missing_tool_and_offline_root_skip_it(env, client, queued, monkeypatch)
 def test_refused_is_held_an_interval(env, client, queued, monkeypatch):
     s = add(client, X, schedule="hourly")
 
-    def refuse(sid):
+    def refuse(sid, scheduled=False):
         raise jobs.BadRequest("its folder is no longer inside a media root")
     monkeypatch.setattr(sync, "sync", refuse)
     assert scheduler.tick() == []
     got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()["schedule"]
     assert got["skipped"] == "skipped: its folder is no longer inside a media root"
     assert got["next_at"] == NOW + HOUR
-    monkeypatch.setattr(sync, "sync", lambda sid: {"id": 7})
+    monkeypatch.setattr(sync, "sync", lambda sid, scheduled=False: {"id": 7})
     assert scheduler.tick(NOW + HOUR - 1) == []
     assert scheduler.tick(NOW + HOUR) == [{"id": 7}]
 

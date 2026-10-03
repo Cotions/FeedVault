@@ -21,7 +21,7 @@ import CreatorPicker from "../components/CreatorPicker";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
-const FILTERS = ["platform", "kind", "author", "person", "collection", "review", "tag", "untagged", "new", "sort"];
+const FILTERS = ["platform", "kind", "author", "person", "collection", "review", "tag", "untagged", "new", "notification", "sort"];
 const SUMMARY_DELAY = 250;
 
 export default function Feed() {
@@ -41,11 +41,13 @@ export default function Feed() {
   const untagged = params.get("untagged") === "1";
   const newOnly  = params.get("new") === "1";
   const collection = /^\d+$/.test(params.get("collection") || "") ? params.get("collection") : "";
+  // A notification's posts: what one sync brought (the sidebar's list).
+  const notification = /^\d+$/.test(params.get("notification") || "") ? params.get("notification") : "";
   const { newCount, newUntil, started } = useJobs();
   const [seenTick, setSeenTick] = useState(0);         // bumped by "Mark all seen"
 
-  const filters = useMemo(() => ({ q, platform, kind, author, person, collection, review, tag: JSON.parse(tagKey), untagged, new: newOnly, sort }),
-    [q, platform, kind, author, person, collection, review, tagKey, untagged, newOnly, sort]);
+  const filters = useMemo(() => ({ q, platform, kind, author, person, collection, review, tag: JSON.parse(tagKey), untagged, new: newOnly, notification, sort }),
+    [q, platform, kind, author, person, collection, review, tagKey, untagged, newOnly, notification, sort]);
   const tagFilter = filters.tag;
   const filterKey = JSON.stringify(filters);
 
@@ -75,8 +77,8 @@ export default function Feed() {
   // Only with a filter: unfiltered, it is the whole archive (see Storage).
   // Built from the cleaned values, so ?review=bogus or a blank q is no filter.
   const anyFilter  = !!(rawQ || FILTERS.some(f => f !== "sort" && params.get(f)));
-  const summaryKey = q || platform || kind || author || person || collection || review || tagFilter.length || untagged || newOnly
-    ? JSON.stringify({ q, platform, kind, author, person, collection, review, tag: tagFilter, untagged, new: newOnly }) : null;
+  const summaryKey = q || platform || kind || author || person || collection || review || tagFilter.length || untagged || newOnly || notification
+    ? JSON.stringify({ q, platform, kind, author, person, collection, review, tag: tagFilter, untagged, new: newOnly, notification }) : null;
   const [summary, setSummary] = useState({ key: null, data: null });
   const [summaryTick, setSummaryTick] = useState(0);    // bumped after a delete or keep
   useEffect(() => {
@@ -292,7 +294,8 @@ export default function Feed() {
     <div className="card feed">
       <div className="page-head">
         <h2 className="page-title">
-          {q ? "Results" : newOnly && !author && !person && !tagFilter.length ? "New since last visit"
+          {q ? "Results" : notification && !author && !person && !tagFilter.length ? "From one sync"
+            : newOnly && !author && !person && !tagFilter.length ? "New since last visit"
             : selectedPerson ? selectedPerson.name : selectedAuthor ? `@${selectedAuthor.handle}`
             : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span>
             : selectedCollection ? <span className="page-title-tag"><Icon name="bookmark" size={17} />{selectedCollection.name}</span> : "Feed"}
@@ -360,6 +363,15 @@ export default function Feed() {
             ))}
           </select>
         </label>
+        {notification && (
+          <ul className="tag-chips filter-tag-chips" aria-label="Sync filter">
+            <li className="tag-chip"><span><Icon name="bell" size={11} />this sync&apos;s posts</span>
+              <button type="button" className="tag-chip-x" onClick={() => setParam({ notification: "" })} aria-label="Remove the sync filter">
+                <Icon name="close" size={10} />
+              </button>
+            </li>
+          </ul>
+        )}
         {(tagFilter.length > 0 || untagged) && (
           <ul className="tag-chips filter-tag-chips" aria-label="Tag filters">
             {untagged && (

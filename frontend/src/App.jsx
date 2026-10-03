@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { getScan, startScan, getJobs, quitApp, onConnectionChange } from "./lib/api";
+import { getScan, startScan, getJobs, getNotifications, quitApp, onConnectionChange } from "./lib/api";
 import { ScanContext } from "./lib/scan";
 import { JobsContext, ENDED, SAVE_KIND } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
 import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
+import { desktopAllowed, notificationPath } from "./lib/notify";
 import Icon            from "./components/Icon";
 import CyberBackground from "./components/CyberBackground";
+import Notifications   from "./components/Notifications";
 import ScrollManager   from "./components/ScrollManager";
 import Feed            from "./pages/Feed";
 import PostPage        from "./pages/PostPage";
@@ -33,6 +35,9 @@ const OFFLINE_POLL_MS = 4000;
 const JOBS_POLL_MS        = 1000;
 const JOBS_HIDDEN_POLL_MS = 5000;
 const JOBS_IDLE_POLL_MS   = 15000;
+// Desktop notifications on: a hidden tab still polls, now and then.
+const DESKTOP_POLL_MS     = 60000;
+const DESKTOP_MAX         = 5;               // notifications shown at once; the bell lists the rest
 
 export default function App() {
   const location = useLocation();
@@ -53,6 +58,12 @@ export default function App() {
   // those above that first answer's newest id get a toast, once each, and
   // a "Sync all" batch only if it was not over yet.
   const jobsSeen = useRef(null);         // { since, told: Set, batches: Set } after the first poll
+  // The newest notifications entry already known (null before the first
+  // poll): only those above it make a desktop notification.
+  const notifSeen = useRef(null);
+  const desktopRef = useRef(false);       // this tab shows desktop notifications (the setting, and allowed)
+  const navigateRef = useRef(navigate);
+  useEffect(() => { navigateRef.current = navigate; }, [navigate]);
 
   const toast = useCallback((text, kind = "ok", link) => {
     const id = ++toastId.current;
@@ -142,6 +153,14 @@ export default function App() {
   // two polls) count too.
   const applyJobs = useCallback(list => {
     setJobList(list);
+    const notes = list.notifications;
+    desktopRef.current = !!notes?.desktop && desktopAllowed();
+    const known = notifSeen.current;
+    notifSeen.current = Math.max(known ?? 0, notes?.latest ?? 0);
+    if (known != null && desktopRef.current && (notes?.latest ?? 0) > known
+        && (document.hidden || !document.hasFocus())) {
+      showDesktop(known, path => navigateRef.current(path));
+    }
     const batch = list.sync_all;
     if (!jobsSeen.current) {
       const active = list.jobs.filter(j => !ENDED.has(j.state)).map(j => j.id);
@@ -172,7 +191,10 @@ export default function App() {
     }
     if (changed) setRefreshKey(k => k + 1);
   }, [toast]);
-  const pollJobs = useCallback(() => getJobs().then(applyJobs, () => {}), [applyJobs]);
+  // A visible tab has its toasts, a hidden one its desktop notifications: either
+  // way notify-send waits (docs/API.md "Notifications").
+  const pollJobs = useCallback(() => getJobs(desktopRef.current || !document.hidden).then(applyJobs, () => {}),
+    [applyJobs]);
   // Poll now: the job may be over in less than a second.
   const jobStarted = useCallback(() => { pollJobs(); }, [pollJobs]);
 
@@ -188,13 +210,15 @@ export default function App() {
 
   const jobsRunning = jobList?.running ?? 0;
   const jobsActive  = jobsRunning + (jobList?.queued ?? 0);
+  const desktopOn   = !!jobList?.notifications?.desktop;
   useEffect(() => {
     if (quit || online === false) return;
-    const ms = jobsActive ? (visible ? JOBS_POLL_MS : JOBS_HIDDEN_POLL_MS) : visible ? JOBS_IDLE_POLL_MS : null;
+    const ms = jobsActive ? (visible ? JOBS_POLL_MS : JOBS_HIDDEN_POLL_MS)
+      : visible ? JOBS_IDLE_POLL_MS : desktopOn ? DESKTOP_POLL_MS : null;
     if (!ms) return;
     const t = setInterval(pollJobs, ms);
     return () => clearInterval(t);
-  }, [jobsActive, visible, online, quit, pollJobs]);
+  }, [jobsActive, visible, desktopOn, online, quit, pollJobs]);
 
   const jobsCtx = useMemo(
     () => ({ list: jobList, running: jobsRunning, active: jobsActive, newCount: jobList?.new ?? 0, newUntil: jobList?.new_until ?? null, started: jobStarted }),
@@ -316,6 +340,8 @@ export default function App() {
               </span>
             )}
           </NavLink>
+          <Notifications unread={jobList?.notifications?.unread ?? 0} latest={jobList?.notifications?.latest ?? null}
+                         onRead={jobStarted} />
           <NavLink to="/settings" className="side-link"><Icon name="settings" />Settings</NavLink>
           <div className="side-sep" />
           <button
@@ -433,14 +459,17 @@ const syncName = label => label.replace(/^Sync /, "");
    click from the Feed filtered to it, or what failed, one click from its
    source. */
 function syncToast(toast, j) {
+  if (j.result?.muted) return;                    // muted: no toast (docs/API.md "New posts")
   const added = j.result?.added || 0;
   const who = syncName(j.label);
   if (j.state === "failed") {
     const to = j.result?.person ? personPath(j.result.person) : "/creators";
     toast(`Sync of ${who} failed: ${j.message}`, "err", { to, label: "Source" });
   } else if (j.state === "done" && added > 0) {
+    // Exactly the posts it brought: its notifications entry (notify.py).
     const a = j.result.account;
-    const to = `/?${new URLSearchParams({ new: "1", ...(a ? { platform: a.platform, author: a.id } : {}) })}`;
+    const to = j.result.notification ? `/?notification=${j.result.notification}`
+      : `/?${new URLSearchParams({ new: "1", ...(a ? { platform: a.platform, author: a.id } : {}) })}`;
     toast(`${plural(added, "new post")} from ${who}`, "ok", { to, label: "Show" });
   } else if (j.state === "done") {
     toast(`${who}: no new posts`);
@@ -459,6 +488,20 @@ function saveToast(toast, j) {
   } else {
     toast(`${j.label}: ${j.message}`, j.state === "failed" ? "err" : undefined);
   }
+}
+
+/* Desktop notifications for the entries above `after` (unread ones, the
+   newest DESKTOP_MAX): the browser's Notification API, text only. A click
+   opens what the entry leads to. */
+function showDesktop(after, go) {
+  getNotifications().then(r => {
+    const fresh = r.entries.filter(e => e.id > after && !e.read).slice(0, DESKTOP_MAX).reverse();
+    for (const e of fresh) {
+      if (!desktopAllowed()) return;
+      const note = new Notification("FeedVault", { body: e.text, tag: `feedvault-${e.id}` });
+      note.onclick = () => { window.focus(); go(notificationPath(e)); note.close(); };
+    }
+  }, () => {});
 }
 
 // "Sync all" is one toast when it is over (and one more if any failed).

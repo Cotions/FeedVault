@@ -259,6 +259,41 @@ def _delete_copy(conn, copy, roots, data_dir, report):
 
 
 def usage(roots):
+    """What the trash folders hold, per root, as the Trash list counts it:
+    each entry as last measured, or as its manifest lines recorded it (see
+    MEASURE_TTL), so no trashed file is looked at (#54). "Check for missing
+    files" (check) measures every one."""
+    now = time.monotonic()
+    out = {"files": 0, "bytes": 0, "roots": []}
+    for root in roots:
+        files = size = 0
+        for g in _load(root)[1]:
+            b, n, _ = _measured_now(g, False, now)
+            files += n
+            size += b
+        out["roots"].append({"root": root, "path": trash_dir(root), "files": files, "bytes": size})
+        out["files"] += files
+        out["bytes"] += size
+    return out
+
+
+def warm(roots):
+    """At startup: read the manifests in the background, so the first
+    Storage or Trash page does not wait for a big one to be parsed (about a
+    second for 50,000 lines). Returns the thread started."""
+    def read():
+        try:
+            _all_entries(roots)
+        except Exception as e:                 # the first page reads them instead
+            print(f"[trash] could not read the manifests: {type(e).__name__}: {e}")
+    t = threading.Thread(target=read, daemon=True, name="trash-manifests")
+    t.start()
+    return t
+
+
+def _on_disk(roots):
+    """usage() walked on disk, every file in the trash folders: what Empty
+    trash is about to delete for good."""
     out = {"files": 0, "bytes": 0, "roots": []}
     for root in roots:
         path = trash_dir(root)
@@ -281,7 +316,7 @@ def usage(roots):
 def empty(roots, data_dir=None):
     """Permanently delete every trash folder under the media roots."""
     with db.write_lock:
-        before = usage(roots)
+        before = _on_disk(roots)
         gone = set()
         for r in before["roots"]:
             for line in _read_manifest(r["root"]):

@@ -562,3 +562,39 @@ def test_a_grown_manifest_is_read_from_where_it_stopped(env, client, monkeypatch
     items(client)
     monkeypatch.undo()
     assert not [p for p in opened if p.endswith(".manifest.jsonl")]
+
+
+def test_usage_and_storage_look_at_no_trashed_file(env, client, monkeypatch):
+    """#54: /api/storage and /api/trash count the trash as the list does,
+    from the measures and the manifest's recorded sizes; only "Check for
+    missing files" looks at every file. Empty trash still counts what it deletes."""
+    import time
+    _big_trash(env, 25000)                                             # 50k files
+    calls = []
+    real = os.lstat
+    monkeypatch.setattr(trash.os, "lstat", lambda p, *a, **kw: (calls.append(p), real(p, *a, **kw))[1])
+    trash.warm(env["roots"]).join()
+    times = {"/api/storage": [], "/api/trash": []}
+    for _ in range(5):
+        for path, took in times.items():
+            t = time.perf_counter()
+            r = client.get(path, headers=H).get_json()
+            took.append(time.perf_counter() - t)
+            usage = r["trash"] if path == "/api/storage" else r
+            assert (usage["files"], usage["bytes"]) == (50000, items(client, limit=1)["trash"]["bytes"])
+    assert len(calls) == 2                                             # the list's one-entry page, nothing else
+    # Well under 100 ms on a desktop (about 12 ms); loose for slow CI machines.
+    assert all(sorted(took)[2] < 0.25 for took in times.values()), times
+    # A file moved out by hand counts until it is checked.
+    gone = next(line["to"] for line in manifest(env) if line["post"] == "instagram:P000000" and line["role"] == "media")
+    os.remove(gone)
+    assert client.get("/api/trash", headers=H).get_json()["files"] == 50000
+    calls.clear()
+    assert client.post("/api/trash/check", headers=H).get_json()["files"] == 49999
+    assert len(calls) == 50000
+    assert client.get("/api/trash", headers=H).get_json()["files"] == 49999
+    # Empty trash reports what was on disk.
+    stray = trash_root(env) / "by-hand.bin"
+    stray.write_bytes(b"x" * 10)
+    r = client.post("/api/trash/empty", headers=H).get_json()
+    assert r["files"] == 50000 and not trash_root(env).exists()

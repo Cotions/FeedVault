@@ -85,19 +85,22 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&person=&collection=&kind=&tag=&untagged=&new=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&person=&collection=&kind=&tag=&untagged=&new=&notification=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
-| GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
+| GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=&notification=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
-| POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`, see [New posts](#new-posts) |
+| POST | `/api/new/seen` | body `{ "at": 1727500000 }` or nothing (now) → `{ "ok": true, "since": 1727500000 }`; with `"person": 3` or `"account": { "platform", "id" }`, theirs only; see [New posts](#new-posts) |
+| POST | `/api/new/mute` | body `{ "person": 3, "muted": true }` or `{ "account": { "platform", "id" }, "muted": false }` → `{ "ok": true, "muted": { "people": [3], "accounts": [] } }`; see [New posts](#new-posts) |
+| GET | `/api/notifications` | syncs that brought new posts or failed, see [Notifications](#notifications) |
+| POST | `/api/notifications/read` | body `{ "upto": 41 }` or nothing (all) → `{ "ok": true, "read": 3 }`, see [Notifications](#notifications) |
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
 | GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing. `?person=<id>`: counts over that person's posts only, as `/api/posts?person=` (`unmatched` stays the whole archive's: those files belong to nobody) |
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
@@ -130,31 +133,139 @@ new.
   time of the upgrade, and a new one with nothing to restore at its first
   start, so an existing archive is never all new.
 - Strictly after: a post indexed in the same second as the mark is not new.
+- **Per person.** "Mark seen" on a person, or on an account linked to
+  nobody (it counts as its own), gives each of its accounts a mark of its
+  own (folder-name aliases included): a post is new when it came after the
+  global mark *and* after its account's mark. These marks are user data
+  too: table `seen_marks`, keyed by platform and account id, written to
+  `userdata/seen_marks.json` (`{"rows": [{"platform": "instagram",
+  "author_id": "123456", "at": 1727503600}]}`), so a rebuilt index keeps
+  them. An account linked to a person later keeps the mark it had until
+  the person's next "Mark seen". A global "Mark all seen" drops the marks it
+  has passed (they no longer change anything).
+- **Mute.** A muted person, or account linked to nobody, makes no
+  [notification](#notifications) and no toast, and its new posts are left
+  out of the global count (`count` here, `new` in `GET /api/jobs`) and of
+  `new=1` / `is:new` without an `author` or `person` filter: its own page
+  (`?person=`, `?author=`) still shows them, and "Sync all" leaves its
+  syncs out of what it added and what failed. A global "Mark all seen" did
+  not show them, so it does not cover them: a muted account keeps a mark of
+  its own at the global mark it passes, which stands instead of the global
+  one until its own "Mark seen". Unmuted, what is still unseen counts again.
+  User data: `muted_people` (exported by person name, as
+  `person_accounts`; deleting the person drops it) and `muted_accounts`
+  (platform and account id, its folder-name aliases follow), in
+  `userdata/muted_people.json` and `userdata/muted_accounts.json`.
 
 `GET /api/new`:
 
 ```json
 { "count": 12, "since": 1727500000,
-  "by_person": [{ "id": 3, "name": "Some Body", "count": 9 }],
-  "by_account": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "person": 3, "count": 9 },
-                 { "platform": "tiktok", "id": "6900000000000000777", "handle": "demo.clips", "person": null, "count": 3 }] }
+  "by_person": [{ "id": 3, "name": "Some Body", "count": 9, "until": 1727503600, "muted": false }],
+  "by_account": [{ "platform": "instagram", "id": "123456", "handle": "somebody", "person": 3, "count": 9, "until": 1727503600, "muted": false },
+                 { "platform": "tiktok", "id": "6900000000000000777", "handle": "demo.clips", "person": null, "count": 3, "until": 1727502000, "muted": false }],
+  "muted": { "people": [], "accounts": [] } }
 ```
 
-- `count`: every new post, those without an author included; `since`: the
-  mark (`null` only before the first start has set it).
+- `count`: every new post, those without an author included and muted
+  ones left out; `since`: the mark (`null` only before the first start has
+  set it).
 - `by_account`: accounts as on the Creators page (folder-name aliases count
   for the id they stand for), `person` the id of the person linked, else
   `null`; `by_person`: the same added up per person. Most new posts first.
+  `until`: the newest of those posts' `first_seen`, to send as `at` with a
+  "Mark seen" of that person or account. `muted`: muted (the account on its
+  own or through its person); such rows are listed, not counted in `count`.
+- `muted`: who was muted, as muted: person ids, and accounts linked to
+  nobody.
+
+`POST /api/new/mute` mutes (`"muted": true`) or unmutes a person or an
+account linked to nobody (an account linked to a person is a 400: mute the
+person). The body is `muted` and one of `person` or `account`, as for
+`/api/new/seen`; anything else is a 400.
 
 `POST /api/new/seen` marks everything seen: `at` (Unix seconds, optional,
 default now) becomes the mark, unless the mark is already later: it never
-moves backwards, nor past now. `{ "ok": true, "since": <the mark> }`; a
-body that is not `{}`, `{ "at": <whole seconds> }` or empty is a 400.
+moves backwards, nor past now. `{ "ok": true, "since": <the mark> }`.
+
+With `"person": <id>` or `"account": { "platform": "instagram", "id":
+"123456" }` (an indexed account, or a folder-name alias of one), only that
+person's or account's posts are marked seen, up to `at` the same way:
+`{ "ok": true, "since": <the global mark>, "at": <the mark set> }`. A body
+that is not `{}`, empty, or made of `at` and one of `person` or `account`
+is a 400, and so is a person or account that does not exist.
 The dashboard's **Mark all seen** sends `new_until` from `GET /api/jobs` (the
 newest new post's `first_seen` when it counted them), so a post indexed
 since, which it has not shown, stays new. A full scan stamps `first_seen`
 folder by folder, so a mark set while it runs leaves the folders it commits
 afterwards new.
+
+## Notifications
+
+Each sync, started by hand, by "Sync all" or by the scheduler, that brought
+new posts or failed leaves an entry: "12 new posts from Some Body", "@name:
+account not found". A sync that brought nothing leaves none, and neither
+does a cancelled or interrupted one. A **scheduled** sync that fails in the
+same [health state](#account-health) as the source's sync before it leaves
+none either: a source the scheduler retries while it stays rate limited is
+one entry, not one per retry. Another state, a sync by hand, or a sync that
+worked in between makes the next failure an entry again.
+
+Entries are kept in the database (table `notifications`), the newest 200;
+older ones are dropped as new ones come. They are not user data (not
+exported): like the jobs list, they say what happened.
+
+`GET /api/notifications`:
+
+```json
+{ "unread": 1, "latest": 42,
+  "entries": [{ "id": 42, "at": 1727503600, "kind": "new", "text": "3 new posts from Some Body",
+                "job_id": 118, "source_id": 5, "person_id": 3,
+                "account": { "platform": "instagram", "id": "123456" },
+                "state": "ok", "count": 3, "scheduled": true, "read": false },
+              { "id": 41, "at": 1727500000, "kind": "failed", "text": "x.com/someone: rate limited",
+                "job_id": 117, "source_id": 6, "person_id": null, "account": null,
+                "state": "rate_limited", "count": 0, "scheduled": false, "read": true }] }
+```
+
+- `kind`: `new` or `failed`; `state`: the sync's health state (`ok`,
+  `renamed`, `rate_limited`, `private`, `login_required`, `not_found`,
+  `error`).
+- `text` names the source by its person, else `@handle` (instaloader) or its
+  link without `https://`; a failure the health states do not name gives the
+  job's message. It is built from handles and tool output, so it is
+  scrubbed (as the [sync log](#log): no cookie, token or session path, no
+  control character, at most 200 characters) and the dashboard shows it as
+  text, never as HTML.
+- `GET /api/posts?notification=<id>` (and `/api/posts/summary`) gives the
+  posts that entry's sync brought: those first indexed by it, under the
+  source's folder, whether or not they were marked seen since. An unknown
+  id, or a failure's, matches nothing.
+- The entry's id is in its job's `result` as `notification` (the
+  dashboard's toast links to it).
+
+`POST /api/notifications/read` marks the entries up to `upto` (an id) read,
+or all of them with an empty body; `read` says how many were unread. Any
+other body is a 400.
+
+`GET /api/jobs` carries `"notifications": { "unread": 1, "latest": 42,
+"desktop": false }` for the sidebar's bell (`desktop`: the setting below).
+
+**Desktop notifications** are off by default (`desktop_notifications` in
+the config, Settings → Sync). On, a new entry pops up on the desktop:
+
+- An open dashboard tab shows it with the browser's Notification API (text
+  only; a click opens what the entry leads to) while it is hidden or not
+  focused; a focused tab has its toast. The browser asks for permission
+  only when the switch is turned on, never on load. Such a tab, and any
+  visible tab (it has its toasts), polls `GET /api/jobs?desktop=1` (a
+  hidden one once a minute), which tells the backend a tab tells of them.
+- When no tab has said so for 150 seconds, the backend runs `notify-send`
+  instead, if it is on the PATH (else nothing, quietly): the argument list
+  is fixed (`notify-send --app-name=FeedVault -- FeedVault <text>`), no
+  shell, the text one argument, scrubbed, at most 200 characters and its
+  `&`, `<`, `>` escaped (notification servers may read markup), with 5
+  seconds to finish.
 
 ## Deleting
 
@@ -166,8 +277,8 @@ Only **Empty trash** and **purge** (below) remove files for good.
 | Method | Path | Returns |
 |---|---|---|
 | POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
-| GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }` |
-| POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }` |
+| GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }`: the trash as `GET /api/trash/items` counts it (`trash` there), from the manifests, without looking at any trashed file (see [Trash contents](#trash-contents)) |
+| POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }`: every file that was in them, counted on disk right before |
 | GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=&upto=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
 | POST | `/api/trash/check` | looks at every trashed file now → `{ "ok": true, "entries": 7, "files": 21, "bytes": 52428800, "missing": 1 }`, see [Trash contents](#trash-contents) |
 | POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "person": …, "since": …, "before": …, "upto": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
@@ -1719,7 +1830,12 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
   for a video with neither a poster file nor ffmpeg to grab a frame. Trash one
   with `POST /api/delete` and `{ "media": [media_id] }`.
 - `trash`: what is waiting in the trash folders (the totals of `GET
-  /api/trash`). It still takes disk space until the trash is emptied.
+  /api/trash`). It still takes disk space until the trash is emptied. Read
+  from the manifests and the Trash list's last looks, never from the files
+  (no `lstat` per trashed file): a file moved out of the trash by hand still
+  counts until **Check for missing files**. The manifests are read once in
+  the background at startup, and again only when one changes (a delete
+  reads just the lines it added).
 - `?person=<id>`: everything above but `trash` covers that person's posts
   only, filtered as `/api/posts?person=` does, so `totals` equals
   `/api/posts/summary?person=`.
@@ -1729,12 +1845,12 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
 Every size is the `size` the scanner recorded for a media file (the photo or
 video itself), and media items marked missing are skipped. Poster images,
 thumbnails, metadata JSON, caption and other side files are not counted, so
-deleting a post frees a little more than its `bytes`, and the trash total is
-measured on disk instead.
+deleting a post frees a little more than its `bytes`, and the trash total
+counts every trashed file by the size it had when it was trashed.
 
 `/api/storage`, `/api/authors` and `/api/posts/summary` are computed in SQL
-from the index, never by walking the media folders (only the trash total is
-read from disk). Their answers are cached until anything in the index changes
+from the index, never by walking the media folders (the trash total comes
+from the trash manifests). Their answers are cached until anything in the index changes
 (a scan, a delete, a restore, a review decision, a tag change).
 
 ## Jobs
@@ -1790,7 +1906,7 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000 }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts), for the sidebar, which polls this |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "notifications": { "unread": 1, "latest": 42 } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
 | GET | `/api/jobs/<id>` | job, or 404 |
@@ -1806,11 +1922,11 @@ Built-in kinds:
 | Kind | Params | Runs | Group |
 |---|---|---|---|
 | `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
-| `instaloader-sync` | `source`: a source id | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line" }` | `instaloader` |
-| `gallery-dl-sync` | `source`: a source id | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
+| `instaloader-sync` | `source`: a source id; `scheduled`: `"1"` when the scheduler queued it (optional, see [Notifications](#notifications)) | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line", "seen", "notification" }` (`seen`: the `first_seen` range of the posts it added; `notification`: its entry's id, or absent) | `instaloader` |
+| `gallery-dl-sync` | `source`, `scheduled` as above | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
 | `tool-test` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | the tool once on a fixed public item, see [Downloaders](#downloaders); `result` `{ "ok", "error", "line" }` | the tool's name |
 | `tool-update` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | pip or pipx, picked from how the tool is installed, see [Downloaders](#downloaders) | the tool's name |
-| `yt-dlp-sync` | `source`: a source id | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
+| `yt-dlp-sync` | `source`, `scheduled` as above | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 | `instaloader-post` | `shortcode` | instaloader for one post, see [How a save runs](#how-a-save-runs); started by `POST /api/save` only | `instaloader` |
 
 ### Sync all

@@ -297,6 +297,9 @@ input[type="text"].header-search:focus {
      viewport so the fade reaches the bottom. */
   position: sticky;
   top: var(--header-h);
+  /* Sticky makes it a stacking context: above main, so the bell's panel
+     shows over the page; under the header. */
+  z-index: 35;
   align-self: flex-start;
   height: calc(100vh - var(--header-h));
   overflow-y: auto;
@@ -1802,6 +1805,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .creator-card { padding: 0; gap: 0; }
 .creator-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 11px 10px 11px 14px; }
 .creator-review { margin-right: 10px; flex-shrink: 0; }
+.creator-seen { margin-right: 6px; flex-shrink: 0; }
 /* Review with a source's Options under it, so the name keeps its room. */
 .creator-tools { display: flex; flex-direction: column; gap: 2px; margin-right: 10px; flex-shrink: 0; }
 .creator-tools .creator-review { margin-right: 0; }
@@ -2378,6 +2382,8 @@ a.btn-primary { color: var(--on-accent); }
 }
 .side-new:hover { background: rgba(var(--accent-rgb), 0.26); }
 .new-badge { margin-left: 0; align-self: flex-end; white-space: nowrap; }
+.side-new-inline { margin-left: 0; text-decoration: none; }
+.side-new-inline:hover { background: rgba(var(--accent-rgb), 0.26); }
 .jobs-page { display: flex; flex-direction: column; gap: 18px; }
 .job-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .job-row {
@@ -2522,6 +2528,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-rename { display: flex; align-items: center; gap: 6px; }
 .person-delete:hover:not(:disabled) { color: #ffb3b5; }
 .person-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 20px; }
+.person-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -8px 0 20px; }
 .person-section { margin-bottom: 22px; }
 .person-section .card-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
 .person-section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
@@ -2656,3 +2663,38 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .route-row .insta-input { margin-left: 0; }
 .route-host { flex: 1; min-width: 0; max-width: 280px; }    /* shrinks on a phone: the tool and Remove stay in view */
 .route-tool { min-width: 130px; }
+
+/* ── Notifications (the sidebar's bell) ─────────────────── */
+.side-bell { position: relative; }
+.notif-panel {
+  position: fixed; z-index: 105;
+  top: calc(var(--header-h) + 12px); left: 208px;
+  width: min(380px, calc(100vw - 224px));
+  max-height: calc(100vh - var(--header-h) - 32px);
+  display: flex; flex-direction: column;
+  background: rgba(20, 23, 31, 0.97);
+  border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.9);
+}
+.notif-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 0 16px; }
+.notif-head .card-title { margin-bottom: 8px; }
+.notif-close { padding: 4px; }
+.notif-empty { margin: 0; padding: 4px 16px 16px; color: var(--muted); font-size: 13px; }
+.notif-list { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; }
+.notif-entry {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: start;
+  padding: 9px 10px; border-radius: 8px;
+  color: var(--text-dim); text-decoration: none; font-size: 13px;
+}
+.notif-entry:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+.notif-entry .icon { margin-top: 2px; color: var(--muted); }
+.notif-new .icon { color: var(--accent-hover); }
+.notif-failed .icon { color: #e5484d; }
+.notif-text { overflow-wrap: anywhere; min-width: 0; }
+.notif-when { grid-column: 2; font-size: 11px; color: var(--muted); }
+.notif-entry.is-unread { color: var(--text); background: rgba(var(--accent-rgb), 0.08); }
+@media (max-width: 640px) {
+  .notif-panel { left: 8px; right: 8px; width: auto; top: calc(var(--header-h) + 8px); }
+}
+.creator-mute { margin-right: 6px; flex-shrink: 0; }
+.creator-mute.is-muted { color: var(--glow); }

@@ -24,6 +24,7 @@ import hashing
 import info_cookies
 import jobs
 import news
+import notify
 import organize
 import people
 import save
@@ -115,6 +116,7 @@ def _post_filters():
         person=_person_arg(),
         new=request.args.get("new") == "1",
         collection=_person_arg("collection"),
+        notification=_person_arg("notification"),
     )
 
 
@@ -146,15 +148,79 @@ def new_posts():
     return jsonify(news.summary(db.connect()))
 
 
+def _whom(body):
+    """The person (an id) or account ((platform, id)) a body names, as
+    ``person`` or ``account``: (person, account, error)."""
+    person, account = body.get("person"), body.get("account")
+    if person is not None and account is not None:
+        return None, None, "send person or account, not both"
+    if person is not None and (not isinstance(person, int) or isinstance(person, bool)
+                               or not people.exists(db.connect(), person)):
+        return None, None, "no such person"
+    if account is not None:
+        found = people.clean_accounts([account])
+        if not found or people.canonical(db.connect(), *found[0]) not in db.accounts(db.connect()):
+            return None, None, "account must be an indexed { platform, id }"
+        account = found[0]
+    return person, account, None
+
+
 @app.post("/api/new/seen")
 def mark_seen():
     body = request.get_json(silent=True)
     body = {} if body is None else body
     at = body.get("at") if isinstance(body, dict) else None
-    if not isinstance(body, dict) or (at is not None and (not isinstance(at, int) or isinstance(at, bool)
-                                                          or not 0 <= at < 2**53)):
-        return jsonify({"ok": False, "error": "send { at } (unix seconds), or nothing for now"}), 400
-    return jsonify({"ok": True, "since": news.mark_seen(db.connect(), at)})
+    if not isinstance(body, dict) or set(body) - {"at", "person", "account"} \
+            or (at is not None and (not isinstance(at, int) or isinstance(at, bool) or not 0 <= at < 2**53)):
+        return jsonify({"ok": False, "error": "send { at } (unix seconds), or nothing for now, "
+                                              "and person or account for theirs only"}), 400
+    person, account, error = _whom(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    if person is None and account is None:
+        return jsonify({"ok": True, "since": news.mark_seen(conn, at)})
+    mark = news.mark_seen(conn, at, person=person, account=account)
+    return jsonify({"ok": True, "since": news.seen_at(conn), "at": mark})
+
+
+@app.post("/api/new/mute")
+def mute():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) - {"muted", "person", "account"} \
+            or not isinstance(body.get("muted"), bool) or (body.get("person") is None) == (body.get("account") is None):
+        return jsonify({"ok": False, "error": "send { muted: true or false } and person or account"}), 400
+    person, account, error = _whom(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    if account is not None and body["muted"]:
+        # Unmuting one is always allowed: it may have been muted before it was linked.
+        owner = db.accounts(conn)[people.canonical(conn, *account)]["person"]
+        if owner:
+            return jsonify({"ok": False, "error": f"that account is {owner['name']}'s: mute the person"}), 400
+    news.mute(conn, body["muted"], person=person, account=account)
+    return jsonify({"ok": True, "muted": news.muted(conn)})
+
+
+# ---------------------------------------------------------------------------
+# Notifications (notify.py)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notifications")
+def notifications():
+    return jsonify(notify.listing(db.connect()))
+
+
+@app.post("/api/notifications/read")
+def notifications_read():
+    body = request.get_json(silent=True)
+    body = {} if body is None else body
+    upto = body.get("upto") if isinstance(body, dict) else None
+    if not isinstance(body, dict) or set(body) - {"upto"} \
+            or (upto is not None and (not isinstance(upto, int) or isinstance(upto, bool) or not 0 <= upto < 2**53)):
+        return jsonify({"ok": False, "error": "send { upto } (an entry's id), or nothing for all"}), 400
+    return jsonify({"ok": True, "read": notify.read(db.connect(), upto)})
 
 
 @app.get("/api/posts/<platform>/<post_id>")
@@ -641,11 +707,12 @@ _BAD_ACCOUNTS = f"accounts must be a list of at most {people.MAX_ACCOUNTS} {{ pl
 
 
 def _people_changed(names=False):
-    """Links changed (and, with ``names``, the people themselves: links and
-    sources are exported by person name)."""
+    """Links changed (and, with ``names``, the people themselves: links,
+    sources and mutes are exported by person name)."""
     if names:
         userdata.changed("people")
         userdata.changed("sources")
+        userdata.changed("muted_people")
     userdata.changed("person_accounts")
 
 
@@ -755,10 +822,13 @@ def merge_people():
     found = {r[0] for r in conn.execute(f"SELECT id FROM people WHERE id IN ({', '.join('?' for _ in ids)})", ids)}
     if found != set(ids):
         return jsonify({"ok": False, "error": "no such person"}), 404
+    muted = any(news.is_muted(conn, person=i) for i in ids)
     try:
         p = people.merge(conn, ids, name, accounts, int(time.time()))
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    if muted:                                  # a muted one's accounts stay muted in the one they join
+        news.mute(conn, True, person=p["id"])
     _people_changed(names=True)
     userdata.changed("sources")                # the others' sources moved to the first
     return jsonify({"ok": True, "person": p})
@@ -1095,7 +1165,8 @@ def _public_config(cfg):
             "gallery-dl": sync.tool_settings("gallery-dl", cfg), "yt-dlp": sync.tool_settings("yt-dlp", cfg),
             "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg),
             "check_updates": cfg.get("check_updates") is True,
-            "schedules_paused": cfg.get("schedules_paused") is True}
+            "schedules_paused": cfg.get("schedules_paused") is True,
+            "desktop_notifications": notify.enabled(cfg)}
 
 
 @app.get("/api/config")
@@ -1131,6 +1202,10 @@ def set_config():
         if not isinstance(body["schedules_paused"], bool):
             return jsonify({"ok": False, "error": "schedules_paused must be true or false"})
         changes["schedules_paused"] = body["schedules_paused"]
+    if "desktop_notifications" in body:
+        if not isinstance(body["desktop_notifications"], bool):
+            return jsonify({"ok": False, "error": "desktop_notifications must be true or false"})
+        changes["desktop_notifications"] = body["desktop_notifications"]
     sessions = {t: sync.session_of(t, {"session": None}, cfg) for t in sync.KINDS if t in body}
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
@@ -1204,7 +1279,12 @@ def clean_info_json_cookies():
 def list_jobs():
     # The sidebar's "New" count rides along with the poll (news.py).
     new, new_until = news.count(db.connect())
-    return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until})
+    unread, latest = notify.unread(db.connect())
+    # A tab that shows desktop notifications itself says so: notify-send waits.
+    if request.args.get("desktop") == "1":
+        notify.tab_shows()
+    return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until,
+                    "notifications": {"unread": unread, "latest": latest, "desktop": notify.enabled()}})
 
 
 @app.get("/api/jobs/kinds")
@@ -1433,6 +1513,7 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     scanner.start(cfg["media_roots"])
     archives.warm(db.connect())
+    trash.warm(cfg["media_roots"])
     if "--no-browser" not in sys.argv and os.environ.get("FEEDVAULT_NO_BROWSER") != "1":
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     print(f"[api] FeedVault {config.__version__}")

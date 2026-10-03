@@ -175,6 +175,33 @@ def test_a_media_root_just_added_is_not_new(env, client):
     assert ids(client, new="1") == ["instagram:NEWCAROL0001", "instagram:NEWDANA0001"]
 
 
+def test_a_root_added_while_stopped_is_not_new_whichever_scan_reads_it(env, client):
+    """#13 audit: a root put in config.json by hand is first read by the
+    Rescan button or by a job's full scan (scanner.run), not by the config
+    endpoint. Either way its first scan builds its part of the index."""
+    archive(env)
+    scanner.scan(env["roots"])
+    conn = db.connect()
+    news.ensure(conn)
+    set_seen(conn, int(time.time()) - 10)
+    added = []
+    for name, scan in (("media2", lambda roots: client.post("/api/scan", headers=H)),
+                       ("media3", scanner.run)):
+        root = env["tmp"] / name
+        write_post(root / f"{name}.user", f"OLD{name.upper()}01", TS, owner(f"{name}.user", 900 + len(added)))
+        added.append(str(root))
+        cfg = config.load()
+        cfg["media_roots"] = [*env["roots"], *added]
+        config.save(cfg)
+        scan(cfg["media_roots"])
+        deadline = time.monotonic() + 10
+        while scanner.status()["running"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        assert scanner.status()["last"]["added"] == 1
+    assert new_count(client)["count"] == 0
+
+
 def test_posts_indexed_after_the_mark_are_new(env, client):
     archive(env)
     archive(env, 1, "dana.draws", 888)
@@ -197,7 +224,8 @@ def test_posts_indexed_after_the_mark_are_new(env, client):
         {"platform": "instagram", "id": "777"}]}).get_json()["person"]["id"]
     r = new_count(client)
     assert r["count"] == 3 and r["since"] == seen(conn)
-    assert r["by_person"] == [{"id": pid, "name": "Carol", "count": 2}]
+    newest = conn.execute("SELECT MAX(first_seen) FROM posts").fetchone()[0]
+    assert r["by_person"] == [{"id": pid, "name": "Carol", "count": 2, "until": newest, "muted": False}]
     assert [(a["handle"], a["count"], a["person"]) for a in r["by_account"]] == \
         [("carol.cooks", 2, pid), ("dana.draws", 1, None)]
     new = ["instagram:NEWCAROL0001", "instagram:NEWCAROL0002", "instagram:NEWDANA00001"]
@@ -270,3 +298,203 @@ def test_mark_seen_while_a_scan_runs_leaves_the_folders_after_it_new(env, client
     monkeypatch.setattr(scanner.parsers, "parse_dir", parse)
     assert scanner.scan(env["roots"])["added"] == 2
     assert ids(client, new="1") == ["instagram:NEWDANA00001"]
+
+
+# ---------------------------------------------------------------------------
+# Per person and per account
+# ---------------------------------------------------------------------------
+
+def _two_creators(env, client):
+    """carol.cooks (linked to Carol) and dana.draws (unlinked), each with
+    two new posts. Returns (Carol's id, the mark)."""
+    from fakes import write_filename_post
+    archive(env)
+    archive(env, 1, "dana.draws", 888)
+    scanner.scan(env["roots"])
+    conn = db.connect()
+    news.ensure(conn)
+    mark = int(time.time()) - 10
+    set_seen(conn, mark)
+    carol, dana = env["media"] / "carol.cooks", env["media"] / "dana.draws"
+    write_post(carol, "NEWCAROL0001", TS + 100, owner("carol.cooks", 777))
+    write_filename_post(carol, "carol.cooks", "CNAMEPOST01", TS + 5)      # an alias post of 777
+    write_post(dana, "NEWDANA00001", TS + 101, owner("dana.draws", 888))
+    write_post(dana, "NEWDANA00002", TS + 102, owner("dana.draws", 888))
+    scanner.index_dirs(env["roots"], [str(carol), str(dana)], new=True)
+    pid = client.post("/api/people", headers=H, json={"name": "Carol", "accounts": [
+        {"platform": "instagram", "id": "777"}]}).get_json()["person"]["id"]
+    return pid, mark
+
+
+def mark(client, body, status=200):
+    r = client.post("/api/new/seen", headers=H, json=body)
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+def test_mark_seen_per_person_and_per_account(env, client):
+    pid, global_mark = _two_creators(env, client)
+    r = new_count(client)
+    assert r["count"] == 4
+    assert [(p["id"], p["count"]) for p in r["by_person"]] == [(pid, 2)]
+    carol = r["by_person"][0]
+    newest = db.connect().execute("SELECT MAX(first_seen) FROM posts").fetchone()[0]
+    assert carol["until"] == newest and all(a["until"] == newest for a in r["by_account"])
+    # Carol's posts, the alias one included, stop being new; Dana's stay.
+    out = mark(client, {"person": pid, "at": carol["until"]})
+    assert out == {"ok": True, "since": global_mark, "at": carol["until"]}
+    r = new_count(client)
+    assert r["count"] == 2 and r["by_person"] == [] and [a["id"] for a in r["by_account"]] == ["888"]
+    assert ids(client, new="1") == ["instagram:NEWDANA00001", "instagram:NEWDANA00002"]
+    assert ids(client, new="1", person=str(pid)) == []
+    assert client.get("/api/jobs", headers=H).get_json()["new"] == 2
+    # An unlinked account counts as its own; never backwards.
+    assert mark(client, {"account": {"platform": "instagram", "id": "888"}})["at"] >= newest
+    assert new_count(client)["count"] == 0
+    assert mark(client, {"account": {"platform": "instagram", "id": "888"}, "at": 5})["at"] == 5
+    assert new_count(client)["count"] == 0
+    # A post indexed later is new again, for that person too.
+    write_post(env["media"] / "carol.cooks", "NEWCAROL0002", TS + 200, owner("carol.cooks", 777))
+    scanner.index_dirs(env["roots"], [str(env["media"] / "carol.cooks")], new=True)
+    conn = db.connect()
+    with conn:                                 # indexed a second after the person's mark
+        conn.execute("UPDATE posts SET first_seen = ? WHERE id = 'instagram:NEWCAROL0002'", (newest + 1,))
+    assert [(p["id"], p["count"]) for p in new_count(client)["by_person"]] == [(pid, 1)]
+
+
+def test_mark_seen_bodies(env, client):
+    pid, _ = _two_creators(env, client)
+    for bad in ({"person": pid, "account": {"platform": "instagram", "id": "888"}}, {"person": "1"},
+                {"person": True}, {"person": 99999}, {"account": {"platform": "instagram", "id": "nobody"}},
+                {"account": ["instagram", "888"]}, {"account": {"platform": "instagram"}}, {"who": 1}):
+        assert "error" in mark(client, bad, status=400), bad
+    # An alias names its account.
+    assert mark(client, {"account": {"platform": "instagram", "id": "carol.cooks"}})["ok"]
+    assert new_count(client)["by_person"] == []
+
+
+def test_marks_are_user_data_and_survive_a_rebuild(env, client):
+    pid, _ = _two_creators(env, client)
+    at = mark(client, {"person": pid})["at"]
+    conn = db.connect()
+    data_dir = config.load()["data_directory"]
+    for name in ("people", "person_accounts", "seen_at", "seen_marks"):
+        userdata.export(conn, name, data_dir)
+    with open(userdata.path(data_dir, "seen_marks")) as f:
+        rows = json.load(f)["rows"]
+    assert {(r["platform"], r["author_id"]) for r in rows} == {("instagram", "777"), ("instagram", "carol.cooks")}
+    new = ids(client, new="1")
+    assert new == ["instagram:NEWDANA00001", "instagram:NEWDANA00002"]
+    # The index rebuilt from nothing: the marks come back from their files.
+    path = config.db_path(config.load())
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(path + suffix):
+            os.remove(path + suffix)
+    db.init(path)
+    conn = db.connect()
+    userdata.restore_all(conn, data_dir)
+    news.ensure(conn)
+    assert conn.execute("SELECT COUNT(*) FROM seen_marks").fetchone()[0] == 2
+    scanner.scan(env["roots"])                 # builds the index: nothing new
+    assert new_count(client)["count"] == 0
+    # Indexed at the person's mark (after the global one): Carol's are seen, Dana's new.
+    with conn:
+        conn.execute("UPDATE posts SET first_seen = ? WHERE id LIKE 'instagram:NEW%' OR id LIKE '%CNAMEPOST01'", (at,))
+    assert ids(client, new="1") == new
+
+
+def test_mark_all_seen_drops_the_marks_it_passes(env, client):
+    pid, _ = _two_creators(env, client)
+    mark(client, {"person": pid})
+    assert db.connect().execute("SELECT COUNT(*) FROM seen_marks").fetchone()[0] == 2
+    mark(client, {})
+    assert db.connect().execute("SELECT COUNT(*) FROM seen_marks").fetchone()[0] == 0
+
+
+def mute(client, body, status=200):
+    r = client.post("/api/new/mute", headers=H, json=body)
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+def test_muted_ones_stay_out_of_the_global_count_but_not_their_own(env, client):
+    pid, global_mark = _two_creators(env, client)
+    dana = {"platform": "instagram", "id": "888"}
+    assert mute(client, {"person": pid, "muted": True})["muted"] == {"people": [pid], "accounts": []}
+    r = new_count(client)
+    assert r["count"] == 2 and r["muted"] == {"people": [pid], "accounts": []}
+    assert [(p["id"], p["count"], p["muted"]) for p in r["by_person"]] == [(pid, 2, True)]
+    assert client.get("/api/jobs", headers=H).get_json()["new"] == 2
+    assert ids(client, new="1") == ["instagram:NEWDANA00001", "instagram:NEWDANA00002"]
+    assert len(ids(client, new="1", person=pid)) == 2            # her own page still shows them
+    assert len(ids(client, new="1", author="777")) == 2
+    # An unlinked account, and its folder-name alias.
+    mute(client, {"account": dana, "muted": True})
+    assert new_count(client)["count"] == 0 and ids(client, new="1") == []
+    assert len(ids(client, new="1", author="888")) == 2
+    # A linked account: mute the person.
+    assert "Carol" in mute(client, {"account": {"platform": "instagram", "id": "777"}, "muted": True}, 400)["error"]
+    # "Mark all seen" did not show them: they stay new on their own.
+    mark(client, {})
+    assert len(ids(client, new="1", person=pid)) == 2 and len(ids(client, new="1", author="888")) == 2
+    # Until their own "Mark seen".
+    until = next(p["until"] for p in new_count(client)["by_person"] if p["id"] == pid)
+    mark(client, {"person": pid, "at": until})
+    assert ids(client, new="1", person=pid) == []
+    # Unmuted: what the global mark passed while muted counts again.
+    mute(client, {"account": dana, "muted": False})
+    assert new_count(client)["count"] == 2 and len(ids(client, new="1")) == 2
+    # A second "Mark all seen" covers it now.
+    mark(client, {})
+    assert new_count(client)["count"] == 0
+    for bad in ({"person": pid}, {"person": pid, "muted": 1}, {"muted": True}, {"person": pid, "account": dana,
+                "muted": True}, {"person": 999, "muted": True}, {"person": pid, "muted": True, "x": 1}, [1]):
+        mute(client, bad, 400)
+
+
+def test_mutes_are_user_data_and_survive_a_rebuild(env, client):
+    pid, _ = _two_creators(env, client)
+    mute(client, {"person": pid, "muted": True})
+    mute(client, {"account": {"platform": "instagram", "id": "888"}, "muted": True})
+    conn = db.connect()
+    data_dir = config.load()["data_directory"]
+    for name in ("people", "person_accounts", "seen_at", "seen_marks", "muted_people", "muted_accounts"):
+        userdata.export(conn, name, data_dir)
+    with open(userdata.path(data_dir, "muted_people")) as f:
+        assert [r["person"] for r in json.load(f)["rows"]] == ["Carol"]
+    path = config.db_path(config.load())
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(path + suffix):
+            os.remove(path + suffix)
+    db.init(path)
+    conn = db.connect()
+    userdata.restore_all(conn, data_dir)
+    news.ensure(conn)
+    scanner.scan(env["roots"])
+    pid = conn.execute("SELECT id FROM people WHERE name = 'Carol'").fetchone()[0]
+    assert news.muted(conn) == {"people": [pid], "accounts": [{"platform": "instagram", "id": "888"}]}
+    # A person deleted takes its mute with it.
+    assert client.delete(f"/api/people/{pid}", headers=H).status_code == 200
+    assert news.muted(conn)["people"] == []
+
+
+def test_mute_edge_cases(env, client):
+    pid, global_mark = _two_creators(env, client)
+    dana = {"platform": "instagram", "id": "888"}
+    # Muted while unlinked, then linked: it can still be unmuted.
+    mute(client, {"account": dana, "muted": True})
+    assert client.post(f"/api/people/{pid}/accounts", headers=H, json={"add": [dana]}).status_code == 200
+    assert mute(client, {"account": dana, "muted": False})["muted"]["accounts"] == []
+    # A merge keeps a muted person's mute on the one they join.
+    other = client.post("/api/people", headers=H, json={"name": "Erin"}).get_json()["person"]["id"]
+    mute(client, {"person": other, "muted": True})
+    merged = client.post("/api/people/merge", headers=H, json={"ids": [pid, other], "accounts": []}).get_json()
+    assert merged["ok"] and news.muted(db.connect())["people"] == [pid]
+    # A muted account's own "Mark seen" never puts it below the global mark.
+    mute(client, {"person": pid, "muted": False})
+    client.post(f"/api/people/{pid}/accounts", headers=H, json={"remove": [dana]})
+    mute(client, {"account": dana, "muted": True})
+    mark(client, {"account": dana, "at": 0})
+    assert len(ids(client, new="1", author="888")) == 2
+    row = db.connect().execute("SELECT at FROM seen_marks WHERE author_id = '888'").fetchone()
+    assert row[0] == global_mark

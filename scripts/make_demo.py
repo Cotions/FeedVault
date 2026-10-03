@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a demo vault of invented instaloader and gallery-dl output, for trying the dashboard.
 
-    python3 scripts/make_demo.py /tmp/feedvault-demo
+    backend/venv/bin/python scripts/make_demo.py /tmp/feedvault-demo
 
 Writes <dir>/media (fake posts), <dir>/data (database goes here) and
 <dir>/config.json. It also installs stand-ins for gallery-dl and yt-dlp in
@@ -15,6 +15,10 @@ options (media tab, images, since 2023-11-01). One TikTok profile, old.sync, is 
 sync with cookies left it before FeedVault removed them. Start the backend against it with:
 
     FEEDVAULT_CONFIG=<dir>/config.json backend/venv/bin/python backend/app.py
+
+With the backend's virtualenv (as above) it also builds the index, so the
+demo starts with a few new posts and one notification entry (seed_news);
+with a bare python3 the first start builds it and nothing is new.
 
 Every handle, name and caption is made up. If ffmpeg is installed, videos are
 real 3-second clips; otherwise they are placeholders that will not play.
@@ -465,6 +469,45 @@ def seed_sources(data, media):
                 f"{datetime.fromtimestamp(now - 30 * day, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f%z')}\n")
 
 
+def seed_news(config_path):
+    """Index the demo now, so it starts with new posts: the newest of
+    lo.fi.garden's and quiet_kiln's posts came after the "Mark all seen"
+    mark, and lo.fi.garden's arrived with a sync that left a notification
+    entry. Needs the backend's dependencies (its virtualenv); without them
+    the demo starts with nothing new."""
+    os.environ["FEEDVAULT_CONFIG"] = config_path
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
+    try:
+        import config
+        import db
+        import news
+        import notify
+        import scanner
+        import userdata
+    except ImportError as e:
+        print(f"Not indexed now ({e}): run it with backend/venv/bin/python for new posts in the demo")
+        return
+    cfg = config.load()
+    db.init(config.db_path(cfg))
+    conn = db.connect()
+    userdata.restore_all(conn, cfg["data_directory"])
+    scanner.scan(cfg["media_roots"])           # built from nothing: nothing new
+    now = int(time.time())
+    synced, looked = now - 3600, now - 2 * 3600
+    with conn:
+        conn.execute("INSERT INTO seen_at(id, at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET at = excluded.at",
+                     (looked,))
+        for handle, n, at in (("lo.fi.garden", 4, synced), ("quiet_kiln", 2, now - 1800)):
+            conn.execute("UPDATE posts SET first_seen = ? WHERE id IN (SELECT id FROM posts WHERE meta_path LIKE ? "
+                         "ORDER BY posted_at DESC LIMIT ?)",
+                         (at, os.path.join(cfg["media_roots"][0], handle) + os.sep + "%", n))
+    notify.add(conn, "new", "4 new posts from @lo.fi.garden", account=("instagram", "9005"), state="ok", count=4,
+               folder=os.path.join(cfg["media_roots"][0], "lo.fi.garden"), seen=(synced, synced), scheduled=True,
+               at=synced)
+    userdata.export(conn, "seen_at", cfg["data_directory"])
+    print(f"Indexed: {news.count(conn)[0]} new posts, 1 notification")
+
+
 def add_old_yt_dlp_sync(media, root, ts):
     """A TikTok profile yt-dlp downloaded with a browser's cookies before
     FeedVault removed them: its info JSONs still hold the (made-up) cookies,
@@ -536,6 +579,7 @@ def main():
     tools = add_fake_tools(root, ts)
     with open(os.path.join(root, "config.json"), "w") as f:
         json.dump({"data_directory": os.path.join(root, "data"), "media_roots": [media], "tools": tools}, f, indent=2)
+    seed_news(os.path.join(root, "config.json"))
     print(f"Demo vault at {root} ({'real' if have_ffmpeg else 'placeholder'} videos)")
     print(f"Start: FEEDVAULT_CONFIG={root}/config.json backend/venv/bin/python backend/app.py")
 

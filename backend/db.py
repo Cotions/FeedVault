@@ -427,11 +427,73 @@ def _migrate_17(conn):
         ) WITHOUT ROWID""")
 
 
+def _migrate_18(conn):
+    """New posts per person and per account (news.py). seen_marks: the
+    "Mark seen" of a person or of an account, one row for each account it
+    covered (folder-name aliases too), user data mirrored by userdata.py. A
+    post is new when its first_seen is after the global mark (seen_at) and
+    after its account's own mark here."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS seen_marks (
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            at        INTEGER NOT NULL,
+            PRIMARY KEY (platform, author_id)
+        ) WITHOUT ROWID""")
+
+
+def _migrate_19(conn):
+    """The notifications list (notify.py): one entry for a sync that brought
+    new posts or failed. Operational, like jobs: not user data, pruned to
+    the newest notify.KEPT. ``text`` is scrubbed tool output and handles,
+    shown as text. A "new" entry opens the posts its sync indexed: those of
+    ``folder`` first seen from ``seen_from`` to ``seen_to``."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            at        INTEGER NOT NULL,
+            kind      TEXT NOT NULL,
+            text      TEXT NOT NULL,
+            job_id    INTEGER,
+            source_id INTEGER,
+            person_id INTEGER,
+            platform  TEXT,
+            author_id TEXT,
+            state     TEXT,
+            count     INTEGER NOT NULL DEFAULT 0,
+            folder    TEXT,
+            seen_from INTEGER,
+            seen_to   INTEGER,
+            scheduled INTEGER NOT NULL DEFAULT 0,
+            read      INTEGER NOT NULL DEFAULT 0
+        )""")
+
+
+def _migrate_20(conn):
+    """Mute (news.py): a muted person or account makes no notification and no
+    toast, and its new posts are left out of the global count. User data,
+    mirrored by userdata.py: muted_people by person (exported by name, as
+    person_accounts), muted_accounts by platform and account id."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS muted_people (
+            person_id INTEGER PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+            at        INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS muted_accounts (
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            at        INTEGER NOT NULL,
+            PRIMARY KEY (platform, author_id)
+        ) WITHOUT ROWID""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
-              _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17]
+              _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
+              _migrate_19, _migrate_20]
 
 BACKUPS_KEPT = 3
 
@@ -859,13 +921,49 @@ PERSON_ACCOUNTS = """
       ON pa.platform = a.platform AND pa.author_id = a.alias_id WHERE pa.person_id = ?"""
 
 
-# Posts first indexed after the user last marked everything seen (news.py);
-# none while there is no mark.
-NEW = "p.first_seen > COALESCE((SELECT at FROM seen_at WHERE id = 1), 9223372036854775807)"
+# Posts first indexed after the user last marked everything seen, and after
+# the mark of their account when it has one (its person's or its own "Mark
+# seen", news.py); none while there is no global mark. An account's own mark
+# is after the global one, except a muted account's, which a "Mark all
+# seen" leaves (news.py): it then stands instead of the global one. The
+# first test is a range on posts_first_seen, so only posts after the lowest
+# mark are looked at.
+NEW = ("p.first_seen > COALESCE((SELECT MIN(at) FROM (SELECT at FROM seen_at WHERE id = 1 "
+       "UNION ALL SELECT at FROM seen_marks WHERE at < (SELECT at FROM seen_at WHERE id = 1))), "
+       "9223372036854775807) "
+       "AND p.first_seen > COALESCE((SELECT s.at FROM seen_marks s "
+       "WHERE s.platform = p.platform AND s.author_id = p.author_id), "
+       "(SELECT at FROM seen_at WHERE id = 1), 9223372036854775807)")
+
+# (platform, author id) of every muted account (news.py): those muted on
+# their own and those of a muted person, folder-name aliases both ways.
+MUTED = """
+    SELECT platform, author_id FROM muted_accounts
+    UNION SELECT a.platform, a.alias_id FROM account_aliases a JOIN muted_accounts m
+      ON m.platform = a.platform AND m.author_id = a.author_id
+    UNION SELECT a.platform, a.author_id FROM account_aliases a JOIN muted_accounts m
+      ON m.platform = a.platform AND m.author_id = a.alias_id
+    UNION SELECT pa.platform, pa.author_id FROM person_accounts pa JOIN muted_people m ON m.person_id = pa.person_id
+    UNION SELECT a.platform, a.alias_id FROM account_aliases a JOIN person_accounts pa
+      ON pa.platform = a.platform AND pa.author_id = a.author_id JOIN muted_people m ON m.person_id = pa.person_id
+    UNION SELECT a.platform, a.author_id FROM account_aliases a JOIN person_accounts pa
+      ON pa.platform = a.platform AND pa.author_id = a.alias_id JOIN muted_people m ON m.person_id = pa.person_id"""
+
+# New and not muted: the sidebar's count, the Feed's "New since last visit".
+# A muted one's new posts show on its own (a person's, an account's filter).
+NEW_UNMUTED = f"{NEW} AND (p.author_id IS NULL OR (p.platform, p.author_id) NOT IN ({MUTED}))"
+
+
+# A notification's posts: first seen in its range (posts_first_seen), under
+# its folder. substr, not LIKE: a folder name may hold % or _.
+NOTIFIED = ("p.first_seen BETWEEN (SELECT seen_from FROM notifications WHERE id = ?) "
+            "AND (SELECT seen_to FROM notifications WHERE id = ?) "
+            "AND substr(p.meta_path, 1, length((SELECT folder FROM notifications WHERE id = ?)) + 1) "
+            "= (SELECT folder FROM notifications WHERE id = ?) || '/'")
 
 
 def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
-                person=None, new=False, collection=None):
+                person=None, new=False, collection=None, notification=None):
     """WHERE clause and arguments for the /api/posts filters, over _FROM.
     None when the search text can match nothing. Shared by list_posts,
     post_summary and storage so a count and its size can never disagree.
@@ -874,7 +972,8 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
     ``author`` is the whole account: an id takes in its folder-name aliases,
     an alias its id (and the id's other aliases). ``person`` (an id) every
     account linked to that person. ``new``: only new posts; ``is:new`` in
-    ``q`` too. ``collection`` (an id): only the posts in it."""
+    ``q`` too, those of muted accounts only with ``author`` or ``person``.
+    ``collection`` (an id): only the posts in it."""
     where, args = [], []
     tags = list(tags or ())
     if q:
@@ -903,7 +1002,10 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
         where.append(f"{col} IN (SELECT post_id FROM collection_posts WHERE collection_id = ?)")
         args.append(collection)
     if new:
-        where.append(NEW)
+        where.append(NEW if author or person is not None else NEW_UNMUTED)
+    if notification is not None:
+        where.append(NOTIFIED)
+        args += [notification] * 4
     if platform:
         where.append("p.platform = ?")
         args.append(platform)
@@ -929,15 +1031,15 @@ def post_filter(q=None, platform=None, author=None, kind=None, review=None, tags
 
 def list_posts(conn, q=None, platform=None, author=None, kind=None, sort="posted",
                offset=0, limit=60, review=None, order="desc", tags=(), untagged=False, person=None, new=False,
-               collection=None):
-    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection)
+               collection=None, notification=None):
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection, notification)
     if f is None:
         return 0, []
     clause, args = f
     direction = "ASC" if order == "asc" else "DESC"
     first, second = ("saved_at", "posted_at") if sort == "saved" else ("posted_at", "saved_at")
     order_by = f"p.{first} {direction}, p.{second} {direction}, p.id {direction}"
-    if untagged and not (q or platform or author or kind or person is not None or new):
+    if untagged and not (q or platform or author or kind or person is not None or new or notification is not None):
         total = _untagged_count(conn, review, tags, collection)
     else:
         total = conn.execute(f"SELECT COUNT(*) {_FROM if review else _POSTS} {clause}", args).fetchone()[0]
@@ -964,9 +1066,9 @@ def _untagged_count(conn, review, tags, collection):
 
 
 def post_summary(conn, q=None, platform=None, author=None, kind=None, review=None, tags=(), untagged=False,
-                 person=None, new=False, collection=None):
+                 person=None, new=False, collection=None, notification=None):
     """Posts, media and bytes matched by the /api/posts filters, all pages."""
-    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection)
+    f = post_filter(q, platform, author, kind, review, tags, untagged, person, new, collection, notification)
     if f is None:
         return {"posts": 0, "media": 0, "bytes": 0}
     clause, args = f
