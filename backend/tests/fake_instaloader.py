@@ -10,7 +10,7 @@ profiles from the JSON file named by FAKE_INSTALOADER (default
                                           "caption": "…", "kind": "image" | "video" | "carousel",
                                           "slides": 3, "video_slides": [2]}]}},
      "fail": null | "429" | "login" | "private" | "notfound" | "crash" | "leak",
-     "delay": 0}
+     "delay": 0, "gate": null}
 
 A profile may have its own "fail" (one of the same), used when the top
 one is null. A profile may also have "reels" and "tagged" (posts as above; a tagged
@@ -47,6 +47,8 @@ Every run appends {"argv", "at"} as one JSON line to FAKE_INSTALOADER_LOG,
 when set. With FAKE_INSTALOADER_WINDOWS_NAMES set it writes as on exFAT or
 NTFS: a name with a reserved character (``:``) fails with errno 22.
 "delay" sleeps that many seconds before each post (for cancelling).
+"gate", a file path: the run waits for that file to exist before it does
+anything, so a test holds it running for as long as it needs (no timing).
 """
 import argparse
 import ast
@@ -342,6 +344,8 @@ def run(argv):
                                                                    "fake_instaloader.json")
     with open(data_file) as f:
         data = json.load(f)
+    while data.get("gate") and not os.path.exists(data["gate"]):
+        time.sleep(0.01)
     if args.no_pictures and args.fast_update:
         print("Fatal error: --no-pictures and --fast-update cannot be used together.", file=sys.stderr)
         return 2

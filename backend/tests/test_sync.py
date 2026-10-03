@@ -52,8 +52,9 @@ class Fake:
         self.data, self.log = tmp / "fake.json", tmp / "fake.log"
         self.set({})
 
-    def set(self, profiles, fail=None, delay=0):
-        self.data.write_text(json.dumps({"profiles": profiles, "fail": fail, "delay": delay}))
+    def set(self, profiles, fail=None, delay=0, gate=None):
+        self.data.write_text(json.dumps({"profiles": profiles, "fail": fail, "delay": delay,
+                                         "gate": None if gate is None else str(gate)}))
 
     def runs(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
