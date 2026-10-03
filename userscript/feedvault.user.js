@@ -1,10 +1,13 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.2.1
-// @description  Marks Instagram posts you already have in FeedVault, and saves the ones you don't
+// @version      0.3.0
+// @description  Marks Instagram, X and TikTok posts you already have in FeedVault, and saves the ones you don't
 // @author       Cotions
 // @match        https://www.instagram.com/*
+// @match        https://x.com/*
+// @match        https://twitter.com/*
+// @match        https://www.tiktok.com/*
 // @connect      localhost
 // @connect      127.0.0.1
 // @grant        GM_xmlhttpRequest
@@ -16,7 +19,7 @@
 
 // Only this script talks to FeedVault, through GM_xmlhttpRequest: the page
 // gets no function, message handler or data from it, and nothing is read
-// from the page's own JavaScript. Shortcodes and profile names come from
+// from the page's own JavaScript. Post ids and profile names come from
 // location.pathname and link hrefs, checked against the patterns below.
 const API_BASE = "http://localhost:3380";
 // Backend denies every API call without this header. Ordinary web pages cannot
@@ -26,20 +29,101 @@ const BADGE_CLASS = "fv-badge";
 const MARKED_ATTR = "data-fv";
 // "Not saved" answers go stale when a download lands, so ask again after this.
 const MISS_TTL_MS = 30_000;
-const POST_PATH_RE = /^\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/;
-// A post page or dialog the Save button shows on: the whole path, and a
-// shortcode as POST /api/save accepts it.
-const SAVE_PATH_RE = /^\/(?:[A-Za-z0-9._]{1,30}\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,40})\/?$/;
-// A profile page (or one of its tabs) the Sync profile button shows on.
-const PROFILE_PATH_RE = /^\/([A-Za-z0-9._]{1,30})\/(?:(?:reels|tagged)\/)?$/;
-// First path parts that are Instagram's own pages, not profiles.
-const NOT_PROFILES = new Set(["p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about",
-  "developer", "legal", "web", "emails", "challenge", "session", "graphql", "api", "privacy", "terms",
-  "lite", "your_activity", "notifications", "nametag", "settings", "login", "signup", "_n", "_u"]);
 const JOB_POLL_MS = 1500;
 const SETTINGS_ERRORS = new Set(["missing", "login_required"]);   // fixed in Settings → Downloaders
 
-GM_addStyle(`
+// ---------------------------------------------------------------------------
+// The sites. Everything that knows a site's pages is here, one entry each:
+// which links are posts (tiles), which page is a post (the Save button) or a
+// profile (Sync profile), and what is sent for them. When a site changes its
+// layout or its paths, a selector or pattern stops matching and that part
+// does nothing: no button, no badge, no error.
+// ---------------------------------------------------------------------------
+
+// An X or TikTok post id: digits, as POST /api/save accepts them.
+const DIGITS = "[1-9][0-9]{0,19}";
+
+const SITES = {
+  instagram: {
+    hosts: ["www.instagram.com"],
+    platform: "instagram",
+    // Grid tiles and feed links: every anchor that points at a post.
+    tiles: 'a[href*="/p/"], a[href*="/reel/"]',
+    tileRe: /^\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/,
+    // A post page or dialog the Save button shows on (the grid's dialog
+    // sets the same path): the whole path, and a shortcode as POST /api/save
+    // accepts it.
+    postRe: /^\/(?:[A-Za-z0-9._]{1,30}\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,40})\/?$/,
+    saveBody: (m) => ({ platform: "instagram", shortcode: m[1] }),
+    // A profile page (or one of its tabs) the Sync profile button shows on.
+    profileRe: /^\/([A-Za-z0-9._]{1,30})\/(?:(?:reels|tagged)\/)?$/,
+    // First path parts that are Instagram's own pages, not profiles.
+    notProfiles: new Set(["p", "reel", "reels", "tv", "stories", "explore", "accounts", "direct", "about",
+      "developer", "legal", "web", "emails", "challenge", "session", "graphql", "api", "privacy", "terms",
+      "lite", "your_activity", "notifications", "nametag", "settings", "login", "signup", "_n", "_u"]),
+    // How GET /api/sources/resolve and POST /api/sources take the profile.
+    resolveQuery: (name) => ({ tool: "instaloader", url: name }),
+    addBody: (name) => ({ tool: "instaloader", target: name }),
+  },
+  x: {
+    hosts: ["x.com", "twitter.com"],
+    platform: "twitter",
+    // Photos and videos in timelines and the Media tab link to their post.
+    tiles: 'a[href*="/status/"]',
+    tileRe: new RegExp(`^/[A-Za-z0-9_]{1,15}/status/(${DIGITS})(?:/|$)`),
+    postRe: new RegExp(`^/([A-Za-z0-9_]{1,15})/status/(${DIGITS})(?:/(?:photo|video)/[1-4])?/?$`),
+    saveBody: (m) => ({ url: `https://x.com/${m[1]}/status/${m[2]}` }),
+    postId: (m) => m[2],
+    profileRe: /^\/([A-Za-z0-9_]{1,15})(?:\/(?:media|with_replies|highlights|articles|likes))?\/?$/,
+    notProfiles: new Set(["home", "explore", "notifications", "messages", "i", "settings", "search", "compose",
+      "login", "logout", "signup", "tos", "privacy", "jobs", "bookmarks", "lists", "communities", "premium",
+      "premium_sign_up", "hashtag", "account", "intent", "share", "download", "about", "help", "who_to_follow",
+      "connect_people", "topics", "follower_requests", "keyboard_shortcuts", "display", "sw.js", "grok"]),
+    resolveQuery: (name) => ({ url: `https://x.com/${name}` }),
+    addBody: (name) => ({ target: `https://x.com/${name}` }),
+  },
+  tiktok: {
+    hosts: ["www.tiktok.com"],
+    platform: "tiktok",
+    // A profile's grid and search results link to the video.
+    tiles: 'a[href*="/video/"]',
+    tileRe: new RegExp(`^/@[A-Za-z0-9._]{1,24}/video/(${DIGITS})(?:/|$)`),
+    postRe: new RegExp(`^/@([A-Za-z0-9._]{1,24})/video/(${DIGITS})/?$`),
+    saveBody: (m) => ({ url: `https://www.tiktok.com/@${m[1]}/video/${m[2]}` }),
+    postId: (m) => m[2],
+    profileRe: /^\/@([A-Za-z0-9._]{1,24})\/?$/,
+    notProfiles: new Set(),
+    resolveQuery: (name) => ({ url: `https://www.tiktok.com/@${name}` }),
+    addBody: (name) => ({ target: `https://www.tiktok.com/@${name}` }),
+  },
+};
+
+const SITE = Object.values(SITES).find((s) => s.hosts.includes(location.hostname)) || null;
+
+// The post id a path (or a link's href) is about: "<platform>:<id>", else
+// null. Each site's tileRe captures the id alone.
+function postOf(href, re = SITE.tileRe) {
+  try {
+    const m = new URL(href, location.origin).pathname.match(re);
+    return m ? `${SITE.platform}:${m[1]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+// The post the open page is, with what POST /api/save is sent for it, or null.
+function savePost() {
+  const m = location.pathname.match(SITE.postRe);
+  if (!m) return null;
+  return { id: `${SITE.platform}:${SITE.postId ? SITE.postId(m) : m[1]}`, body: SITE.saveBody(m) };
+}
+
+function postPath(id) {
+  const [platform, code] = id.split(":");
+  return `/p/${platform}/${code}`;
+}
+
+if (SITE) GM_addStyle(`
   .${BADGE_CLASS} {
     position: absolute; top: 6px; left: 6px; z-index: 5;
     display: inline-flex; align-items: center; gap: 4px;
@@ -67,7 +151,7 @@ GM_addStyle(`
   .fv-btn[aria-disabled="true"] { cursor: default; opacity: 0.85; }
   .fv-btn[data-state="done"] { box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.7); }
   .fv-btn[data-state="failed"], .fv-btn[data-state="offline"] { box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.8); }
-  .fv-btn[data-state="confirm"] { box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.8); }
+  .fv-btn[data-state="confirm"], .fv-btn[data-state="dashboard"] { box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.8); }
   .fv-note {
     padding: 4px 9px; border-radius: 8px; color: #e8ecf6; background: rgba(10, 12, 17, 0.88);
     font-weight: 400; overflow-wrap: anywhere;
@@ -81,15 +165,6 @@ const cache = new Map();
 let pending = new Set();
 let timer = null;
 let offline = false;                           // the last /api/saved went unanswered
-
-function shortcodeFromHref(href) {
-  try {
-    const m = new URL(href, location.origin).pathname.match(POST_PATH_RE);
-    return m ? m[1] : null;
-  } catch {
-    return null;
-  }
-}
 
 function known(id) {
   const hit = cache.get(id);
@@ -131,7 +206,7 @@ async function flush() {
   ids.forEach((id) => pending.delete(id));
   if (!ids.length) return;
   const saved = await ask(ids);
-  if ((saved === null) !== offline) { offline = saved === null; paintPage(); }
+  if ((saved === null) !== offline) { offline = saved === null; paint(); }
   if (saved === null) return;                 // backend offline: try again on the next scan
   const now = Date.now();
   ids.forEach((id) => cache.set(id, { saved: saved.has(id), at: now }));
@@ -150,13 +225,12 @@ function badge(text) {
   return el;
 }
 
-// Grid tiles and feed links: every anchor that points at a post.
+// Every anchor that points at a post, as the site's entry picks them.
 function paintTiles() {
-  for (const a of document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')) {
+  for (const a of document.querySelectorAll(SITE.tiles)) {
     if (a.closest(".fv-panel")) continue;      // our own links to FeedVault
-    const code = shortcodeFromHref(a.getAttribute("href"));
-    if (!code) continue;
-    const id = `instagram:${code}`;
+    const id = postOf(a.getAttribute("href"));
+    if (!id) continue;
     const state = known(id);
     if (state === null) { pending.add(id); continue; }
     const has = a.querySelector(`:scope > .${BADGE_CLASS}`);
@@ -177,13 +251,8 @@ function paintTiles() {
 // ---------------------------------------------------------------------------
 
 const ENDED = new Set(["done", "failed", "cancelled", "interrupted"]);
-// shortcode -> { state: "sending" | "queued" | "running" | "failed" | "offline", job, message, error }
+// post id -> { state: "sending" | "queued" | "running" | "failed" | "offline", job, message, error }
 const saves = new Map();
-
-function savePathCode() {
-  const m = location.pathname.match(SAVE_PATH_RE);
-  return m ? m[1] : null;
-}
 
 function el(tag, attrs = {}, text = "") {
   const e = document.createElement(tag);
@@ -241,29 +310,29 @@ function dropPanel(prefix) {
 // A post FeedVault has gets a link to it (on any page of the post); another,
 // the Save button and its state (on the post itself).
 function paintPage() {
-  const code = shortcodeFromHref(location.pathname);
-  const id = code && `instagram:${code}`;
-  const fresh = code ? known(id) : null;
-  if (code && fresh === null) pending.add(id);
+  const id = postOf(location.pathname);
+  const post = savePost();
+  const fresh = id ? known(id) : null;
+  if (id && fresh === null) pending.add(id);
   // While a stale "not saved" is asked again, keep showing it (no flicker).
-  const have = fresh ?? (code ? cache.get(id)?.saved ?? null : null);
-  if (have !== true && code !== savePathCode()) { dropPanel("post:"); return; }
-  if (code && have === null && !saves.has(code) && offline) {
-    const p = panel(`post:${code}`);
-    render(p, "offline", () => [button("offline", "FeedVault is not running — retry", () => startSave(code))]);
+  const have = fresh ?? (id ? cache.get(id)?.saved ?? null : null);
+  if (have !== true && id !== post?.id) { dropPanel("post:"); return; }
+  if (id && have === null && !saves.has(id) && offline) {
+    const p = panel(`post:${id}`);
+    render(p, "offline", () => [button("offline", "FeedVault is not running — retry", () => startSave(id))]);
     return;
   }
-  if (!code || (have === null && !saves.has(code))) { dropPanel("post:"); return; }
-  const p = panel(`post:${code}`);
+  if (!id || (have === null && !saves.has(id))) { dropPanel("post:"); return; }
+  const p = panel(`post:${id}`);
   if (have) {
     render(p, "done", () => {
-      const a = link(`${API_BASE}/p/instagram/${code}`, "In FeedVault", "fv-btn");
+      const a = link(`${API_BASE}${postPath(id)}`, "In FeedVault", "fv-btn");
       a.dataset.state = "done";
       return [a];
     });
     return;
   }
-  const s = saves.get(code);
+  const s = saves.get(id);
   const st = s?.state || "idle";
   render(p, `${st}|${s?.job?.id || ""}|${s?.message || ""}`, () => {
     if (st === "sending") return [button("busy", "Sending…", null)];
@@ -273,52 +342,55 @@ function paintPage() {
     }
     if (st === "running") return [button("busy", "Saving…", null, `Job #${s.job.id}`)];
     if (st === "failed") {
-      return [button("failed", "Failed — retry", () => startSave(code), s.message || ""),
+      return [button("failed", "Failed — retry", () => startSave(id), s.message || ""),
               note(s.message || "Save failed", SETTINGS_ERRORS.has(s.error))];
     }
-    if (st === "offline") return [button("offline", "FeedVault is not running — retry", () => startSave(code))];
-    return [button("idle", "Save to FeedVault", () => startSave(code))];
+    if (st === "offline") return [button("offline", "FeedVault is not running — retry", () => startSave(id))];
+    return [button("idle", "Save to FeedVault", () => startSave(id))];
   });
 }
 
-function setSave(code, value) {
-  saves.set(code, value);
+function setSave(id, value) {
+  saves.set(id, value);
   paint();
 }
 
-async function startSave(code) {
-  if (!SAVE_PATH_RE.test(`/p/${code}/`)) return;
-  setSave(code, { state: "sending" });
-  const r = await api("POST", "/api/save", { platform: "instagram", shortcode: code });
-  if (r === null) { setSave(code, { state: "offline" }); return; }
+// Saves the post the page shows, when it is still the one clicked for: what
+// is sent is built from the path again, never kept from an earlier page.
+async function startSave(id) {
+  const post = savePost();
+  if (!post || post.id !== id) return;
+  setSave(id, { state: "sending" });
+  const r = await api("POST", "/api/save", post.body);
+  if (r === null) { setSave(id, { state: "offline" }); return; }
   const b = r.body || {};
-  if (!b.ok) { setSave(code, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
+  if (!b.ok) { setSave(id, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
   if (b.have) {
-    cache.set(`instagram:${code}`, { saved: true, at: Date.now() });
-    saves.delete(code);
+    cache.set(id, { saved: true, at: Date.now() });
+    saves.delete(id);
     paint();
     return;
   }
-  if (!b.job || typeof b.job.id !== "number") { setSave(code, { state: "failed", message: "unexpected answer" }); return; }
-  applyJob(code, b.job);
+  if (!b.job || typeof b.job.id !== "number") { setSave(id, { state: "failed", message: "unexpected answer" }); return; }
+  applyJob(id, b.job);
   if (ENDED.has(b.job.state)) return;
-  watchJob(b.job.id, () => saves.get(code)?.job?.id === b.job.id, () => savePathCode() === code,
-    (job) => (job ? applyJob(code, job) : setSave(code, { state: "failed", message: GONE })));
+  watchJob(b.job.id, () => saves.get(id)?.job?.id === b.job.id, () => savePost()?.id === id,
+    (job) => (job ? applyJob(id, job) : setSave(id, { state: "failed", message: GONE })));
 }
 
 // A Save job's state, as GET /api/jobs/<id> says it.
-function applyJob(code, job) {
+function applyJob(id, job) {
   if (job.state === "done" && job.result?.post) {
-    cache.set(`instagram:${code}`, { saved: true, at: Date.now() });
-    saves.delete(code);
+    cache.set(id, { saved: true, at: Date.now() });
+    saves.delete(id);
     paint();
     return;
   }
   if (ENDED.has(job.state)) {
-    setSave(code, { state: "failed", job, message: job.message || job.state, error: job.result?.error || null });
+    setSave(id, { state: "failed", job, message: job.message || job.state, error: job.result?.error || null });
     return;
   }
-  setSave(code, { state: job.state === "running" ? "running" : "queued", job });
+  setSave(id, { state: job.state === "running" ? "running" : "queued", job });
 }
 
 const GONE = "the job is gone (FeedVault restarted?)";
@@ -343,17 +415,20 @@ async function watchJob(jobId, still, shown, onUpdate) {
 }
 
 // ---------------------------------------------------------------------------
-// Sync profile button: adds the profile's instaloader source (after asking,
-// in the button itself) unless there is one, then syncs it
+// Sync profile button: adds the profile's source (after asking, in the
+// button itself) unless there is one, then syncs it. Which tool, link and
+// folder: FeedVault's answer for the profile (GET /api/sources/resolve,
+// its link routing). A source that runs a script is only synced from the
+// dashboard: the button says so and links there.
 // ---------------------------------------------------------------------------
 
 // name -> { state: "checking" | "idle" | "confirm" | "sending" | "queued" | "running" | "done"
-//                  | "failed" | "offline", source, checked, job, message, error }
+//                  | "failed" | "offline" | "dashboard", source, resolved, checked, job, message, error }
 const profiles = new Map();
 
 function profileName() {
-  const m = location.pathname.match(PROFILE_PATH_RE);
-  if (!m || NOT_PROFILES.has(m[1].toLowerCase()) || !m[1].replace(/\./g, "")) return null;
+  const m = location.pathname.match(SITE.profileRe);
+  if (!m || SITE.notProfiles.has(m[1].toLowerCase()) || !m[1].replace(/\./g, "")) return null;
   return m[1].toLowerCase();
 }
 
@@ -370,6 +445,12 @@ function sourceLink(src) {
     return link(`${API_BASE}/?${q}`, "Posts in FeedVault");
   }
   return null;
+}
+
+// Where its source is shown in the dashboard: its person's page, else Creators.
+function dashboardLink(src) {
+  const to = src?.person ? `${API_BASE}/people/${encodeURIComponent(src.person.id)}` : `${API_BASE}/creators`;
+  return link(to, "Open it in FeedVault");
 }
 
 function paintProfile() {
@@ -389,11 +470,17 @@ function paintProfile() {
       const row = el("div", { class: "fv-row" });
       row.append(button("confirm", `Add @${name}`, () => addAndSync(name)),
                  button("idle", "Cancel", () => setProfile(name, { state: "idle" })));
-      out.push(row, note(`New instaloader source for @${name}, downloading into the folder ${name} of your first media root.`));
+      const where = s.resolved?.folder ? `downloading into its folder ${s.resolved.folder.split(/[\\/]/).filter(Boolean).pop()}` : "downloading into your first media root";
+      out.push(row, note(`New ${s.resolved?.tool || ""} source for @${name}, ${where}.`));
     } else if (s.state === "queued") out.push(button("busy", "Sync queued", null, `Job #${s.job.id}`));
     else if (s.state === "running") out.push(button("busy", "Syncing…", null, `Job #${s.job.id}`));
     else if (s.state === "offline") out.push(button("offline", "FeedVault is not running — retry", () => clickProfile(name)));
-    else if (s.state === "failed") {
+    else if (s.state === "dashboard") {
+      const n = note(s.message || "This profile's source runs a script, which only FeedVault's own dashboard can start.");
+      n.append(el("br"), dashboardLink(s.source));
+      out.push(button("dashboard", "Sync from FeedVault", null), n);
+      return out;
+    } else if (s.state === "failed") {
       out.push(button("failed", `${sync} — retry`, () => clickProfile(name), s.message || ""),
                note(s.message || "Sync failed", SETTINGS_ERRORS.has(s.error)));
     } else {
@@ -410,15 +497,24 @@ function paintProfile() {
   });
 }
 
-// Is there an instaloader source for it already? (Asked once per profile
-// visited; whatever the link routing says, the button adds an instaloader one.)
+// Is there a source for it already? (Asked once per profile visited.)
 async function checkProfile(name) {
-  const r = await api("GET", "/api/sources");
+  const r = await api("GET", `/api/sources/resolve?${new URLSearchParams(SITE.resolveQuery(name))}`);
   if (r === null) { setProfile(name, { state: "offline" }); return; }
-  if (!Array.isArray(r.body?.sources)) { setProfile(name, { state: "failed", message: `FeedVault answered ${r.status}` }); return; }
-  const src = r.body.sources.find((x) => x.tool === "instaloader" && x.target === name) || null;
-  setProfile(name, { state: "idle", source: src, checked: true });
-  if (src?.job) followSync(name, src.job.id);   // already syncing: show it
+  if (!r.body?.ok) { setProfile(name, { state: "failed", message: r.body?.error || `FeedVault answered ${r.status}` }); return; }
+  const resolved = { tool: r.body.tool, folder: r.body.folder };
+  let src = null;
+  if (typeof r.body.source === "number") {
+    const got = await api("GET", `/api/sources/${encodeURIComponent(r.body.source)}`);
+    if (got === null) { setProfile(name, { state: "offline" }); return; }
+    if (got.status !== 200 || typeof got.body?.id !== "number") {
+      setProfile(name, { state: "failed", message: got.body?.error || `FeedVault answered ${got.status}` });
+      return;
+    }
+    src = got.body;
+  }
+  setProfile(name, { state: src?.options?.script ? "dashboard" : "idle", source: src, resolved, checked: true });
+  if (src?.job && !src.options?.script) followSync(name, src.job.id);   // already syncing: show it
 }
 
 function clickProfile(name) {
@@ -430,7 +526,7 @@ function clickProfile(name) {
 
 async function addAndSync(name) {
   setProfile(name, { state: "sending", message: null });
-  const r = await api("POST", "/api/sources", { tool: "instaloader", target: name });
+  const r = await api("POST", "/api/sources", SITE.addBody(name));
   if (r === null) { setProfile(name, { state: "offline" }); return; }
   const b = r.body || {};
   if (!b.ok) { setProfile(name, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
@@ -447,6 +543,8 @@ async function syncSource(name, sid) {
     const got = await api("GET", `/api/sources/${encodeURIComponent(sid)}`);
     if (got?.body?.job) { followSync(name, got.body.job.id); return; }
   }
+  // Refused to this page (a source that runs a script): the dashboard can.
+  if (r.status === 403) { setProfile(name, { state: "dashboard", message: b.error || null }); return; }
   if (!b.ok) { setProfile(name, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
   followSync(name, b.job.id);
 }
@@ -469,19 +567,27 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// A page that does not look as expected leaves nothing behind: no error in
+// the page's console, the next change paints again.
 function paint() {
-  paintTiles();
-  paintPage();
-  paintProfile();
+  for (const part of [paintTiles, paintPage, paintProfile]) {
+    try {
+      part();
+    } catch {
+      /* the page changed under us: the other parts still paint */
+    }
+  }
   if (pending.size) schedule();
 }
 
-let raf = null;
-new MutationObserver(() => {
-  if (raf) return;
-  raf = requestAnimationFrame(() => { raf = null; paint(); });
-}).observe(document.body, { childList: true, subtree: true });
+if (SITE) {
+  let raf = null;
+  new MutationObserver(() => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => { raf = null; paint(); });
+  }).observe(document.body, { childList: true, subtree: true });
 
-// Instagram is a single-page app; misses expire, so look again now and then.
-setInterval(paint, MISS_TTL_MS);
-paint();
+  // These sites are single-page apps; misses expire, so look again now and then.
+  setInterval(paint, MISS_TTL_MS);
+  paint();
+}

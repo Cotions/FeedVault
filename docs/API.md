@@ -104,7 +104,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
-| POST | `/api/save` | body `{ "platform": "instagram", "shortcode": "…" }`: download one post (used by the userscript), see [Save from the browser](#save-from-the-browser-userscript) |
+| POST | `/api/save` | body `{ "platform": "instagram", "shortcode": "…" }` or `{ "url": "<an X or TikTok post's link>" }`: download one post (used by the userscript), see [Save from the browser](#save-from-the-browser-userscript) |
 | POST | `/api/quit` | stops the backend |
 | GET | `/media/<id>` | the media file bytes (Range supported, for video) |
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
@@ -1706,18 +1706,20 @@ confirm.
 
 ## Save from the browser (userscript)
 
-The userscript adds a **Save** button to an Instagram post and a **Sync
-profile** button to a profile page. What they can ask for is as narrow as
-it can be: a kind and a checked id, never a link, a path, a flag or a
-command.
+The userscript adds a **Save** button to a post and a **Sync profile**
+button to a profile page, on Instagram, X (x.com, twitter.com) and TikTok
+(www.tiktok.com). What they can ask for is as narrow as it can be: a
+checked id, or a post's link parsed down to its id, never a path, a flag or
+a command.
 
 **Who talks to FeedVault.** Only the userscript, through
 `GM_xmlhttpRequest` (`@connect localhost`, `@connect 127.0.0.1`). The page
 itself never does, and is given nothing to do it with: no function on
 `unsafeWindow`, no `window.postMessage` handler, nothing read from the
-page's JavaScript objects. The shortcode comes from `location.pathname` or
+page's JavaScript objects. The post id comes from `location.pathname` or
 a post link's `href`, the profile name from `location.pathname`, each
-checked against a strict pattern before it is sent. The buttons act on a
+checked against a strict pattern before it is sent; an X or TikTok post's
+link is built again from the name and id it found, not taken from the page. The buttons act on a
 real click only (`event.isTrusted`): the page's scripts can call
 `element.click()` or dispatch a click on them, and that does nothing.
 
@@ -1734,26 +1736,56 @@ that is what lets the userscript, and only it, send the header.
 
 | Method | Path | Returns |
 |---|---|---|
-| POST | `/api/save` | body `{ "platform": "instagram", "shortcode": "C8xYzAbCdEf" }` → `{ "ok": true, "have": true, "post": { "id": "instagram:C8xYzAbCdEf", "path": "/p/instagram/C8xYzAbCdEf" } }` when FeedVault already has the post (nothing runs), else `{ "ok": true, "have": false, "job": {…}, "existing": false }` |
+| POST | `/api/save` | body `{ "platform": "instagram", "shortcode": "C8xYzAbCdEf" }` or `{ "url": "https://x.com/someone/status/1800000000000000001" }` → `{ "ok": true, "have": true, "post": { "id": "instagram:C8xYzAbCdEf", "path": "/p/instagram/C8xYzAbCdEf" } }` when FeedVault already has the post (nothing runs), else `{ "ok": true, "have": false, "job": {…}, "existing": false }` |
 
-- `platform` must be `"instagram"`; `shortcode` must match
-  `^[A-Za-z0-9_-]{5,40}$` (ASCII only, the whole string). Any other key,
-  value or type is a 400. Nothing else is read from the request.
-- `existing`: `true` when a Save job for that shortcode was already queued
+- Instagram: `platform` must be `"instagram"`; `shortcode` must match
+  `^[A-Za-z0-9_-]{5,40}$` (ASCII only, the whole string).
+- X and TikTok: `url` alone, a post's link, parsed as below. Any other key,
+  value or type is a 400 (with why, for a link). Nothing else is read from
+  the request.
+- `existing`: `true` when a Save job for that post was already queued
   or running: that job is returned and no other is queued (a second click
   is not a second download).
-- At most `save_queue_max` Save jobs (config, default 20, 1 to 500) are
-  queued or running at once; one more is a 429 `{ "ok": false, "error":
-  "20 posts are already waiting to be saved; try again once some are done" }`.
-- `POST /api/jobs` refuses kind `instaloader-post`: it is only started
-  here, with the checks above.
+- At most `save_queue_max` Save jobs (config, default 20, 1 to 500), of
+  every platform together, are queued or running at once; one more is a
+  429 `{ "ok": false, "error": "20 posts are already waiting to be saved;
+  try again once some are done" }`.
+- `POST /api/jobs` refuses kinds `instaloader-post`, `gallery-dl-post` and
+  `yt-dlp-post`: they are only started here, with the checks above.
+- `POST /api/saved` and `have` answer for `twitter:<id>` and `tiktok:<id>`
+  as for `instagram:<shortcode>` (`path` `/p/twitter/<id>`).
 - The **Sync profile** button uses the source endpoints as they are:
-  `GET /api/sources` (is there an instaloader source with that target
-  already?), `POST /api/sources` with `{ "tool":
-  "instaloader", "target": "<name>" }` (the name checked by the same rules
-  as a pasted one) after the user confirms, then
-  `POST /api/sources/<id>/sync`. Its state is read from
-  `GET /api/jobs/<id>`.
+  `GET /api/sources/resolve` (`?tool=instaloader&url=<name>` on Instagram,
+  `?url=https://x.com/<name>` or `?url=https://www.tiktok.com/@<name>`
+  elsewhere: the tool, the target, the folder, and the source already
+  there, if any), `GET /api/sources/<id>` for that source, `POST
+  /api/sources` with `{ "tool": "instaloader", "target": "<name>" }` or `{
+  "target": "<the profile's link>" }` (the routing table picks the tool) after the
+  user confirms, then `POST /api/sources/<id>/sync`. Its state is read from
+  `GET /api/jobs/<id>`. A source with a script (`options.script`) is
+  refused there with a 403 (see [Scripts](#scripts)): the button says it
+  is synced from the dashboard and links to its person, else Creators.
+
+**Post links (X and TikTok).** Parsed strictly, nothing fetched:
+
+| | X | TikTok |
+|---|---|---|
+| Hosts (whole, any case) | `x.com`, `www.x.com`, `mobile.x.com`, `twitter.com`, `www.twitter.com`, `mobile.twitter.com` | `tiktok.com`, `www.tiktok.com`, `m.tiktok.com` |
+| Path | `/<name>/status/<id>`, `/i/web/status/<id>`, `/i/status/<id>`, then optionally `/photo/<1-4>` or `/video/<1-4>`, a trailing `/` | `/@<name>/video/<id>`, a trailing `/` |
+| Name | `[A-Za-z0-9_]{1,15}` (not used) | `[A-Za-z0-9._]{1,24}` |
+| Tool, and the link it gets after `--` | gallery-dl, `https://x.com/i/web/status/<id>` | yt-dlp, `https://www.tiktok.com/@<name>/video/<id>` |
+
+- `<id>`: ASCII digits, no leading zero, at most 20 (`^[1-9][0-9]{0,19}$`).
+- `http` or `https`; no login part, no port but 80 or 443, at most 500
+  characters, ASCII, no spaces or control characters. Query and fragment are
+  dropped.
+- Refused: any other host, a host that only ends with one of these
+  (`x.com.evil.com`), and short links (`t.co`, `vm.tiktok.com`,
+  `vt.tiktok.com`: only the site can resolve them, and FeedVault does not
+  fetch them; the error says to open the post and save from there). TikTok
+  photo posts (`/@<name>/photo/<id>`) are refused: yt-dlp downloads videos.
+- X and TikTok always use these tools, whatever the link routing says for
+  their hosts.
 
 ### How a save runs
 
@@ -1794,6 +1826,45 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
   `private`, `not_found`, `rate_limited`, `generic`; `missing` when
   instaloader is not found), with a message for people. The userscript
   says "see Settings → Downloaders" for `missing` and `login_required`.
+- The saving folder is emptied before each run and removed after.
+
+### How an X or TikTok save runs
+
+Job kinds `gallery-dl-post` and `yt-dlp-post`, params `{ "platform":
+"twitter" | "tiktok", "id": "<digits>", "handle": "<name>" (TikTok only) }`,
+checked again when the job is built; groups `gallery-dl` and `yt-dlp`
+(never beside a sync of the same tool), with the tool's pause. Each runs
+as its tool's sync does (the tool's `ignore_config` and cookies settings),
+into a folder of its own in the data directory, with the file names a sync
+gives:
+
+```
+gallery-dl [--config-ignore] --write-metadata -D <data_directory>/gallery-dl/saving/twitter-<id>
+           [--cookies-from-browser <browser>] -- https://x.com/i/web/status/<id>
+yt-dlp [--ignore-config] --write-info-json --write-thumbnail --no-playlist
+       -o <data_directory>/yt-dlp/saving/tiktok-<id>/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s
+       [--cookies-from-browser <browser>] -- https://www.tiktok.com/@<name>/video/<id>
+```
+
+- A data directory holding a `$` is refused (both tools expand `$NAME` in
+  the folder they are given).
+- After yt-dlp, the cookies it copies into the info JSON are removed, as
+  after a sync.
+- Once it exits (not when cancelled), the metadata names the owner, and the
+  files move to: the folder of the owner's gallery-dl or yt-dlp source (by
+  account, else by the name in its link), else the folder holding most of
+  the owner's gallery-dl and yt-dlp posts, else `<first media
+  root>/<platform>/<name>` (made: the folder a new source for the profile
+  would download into), else `<first media root>/_saved`. A file already
+  there is never overwritten. Then that folder is indexed.
+- The indexed post's entries go into the download archives as trashing
+  would add them (gallery-dl's per file, yt-dlp's `<platform> <id>`
+  line): a later sync of the profile skips it (with either tool for X;
+  with yt-dlp for TikTok: a TikTok save is a yt-dlp post, which has no
+  gallery-dl entry). Only a run that exits 0 moves or records anything.
+- `result`: as for an Instagram save, plus `archived` (how many archive
+  entries were new). A tweet with no media leaves no post: `generic`,
+  "gallery-dl saved no post".
 - The saving folder is emptied before each run and removed after.
 
 ## Storage
@@ -1934,6 +2005,8 @@ Built-in kinds:
 | `tool-update` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | pip or pipx, picked from how the tool is installed, see [Downloaders](#downloaders) | the tool's name |
 | `yt-dlp-sync` | `source`, `scheduled` as above | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 | `instaloader-post` | `shortcode` | instaloader for one post, see [How a save runs](#how-a-save-runs); started by `POST /api/save` only | `instaloader` |
+| `gallery-dl-post` | `platform` (`twitter`), `id` | gallery-dl for one X post, see [How an X or TikTok save runs](#how-an-x-or-tiktok-save-runs); started by `POST /api/save` only | `gallery-dl` |
+| `yt-dlp-post` | `platform` (`tiktok`), `id`, `handle` | yt-dlp for one TikTok video, as above | `yt-dlp` |
 | `script` | `script`, `target`, `url`, `folder`, `sha256` | a script on its own, see [Scripts](#scripts); started by `POST /api/scripts/<id>/run` only | the tool's name for a downloader's command, else `scripts` |
 | `script-sync` | `source`, `script`, `target`, `sha256`, `scheduled` | a source's script instead of its tool's command, see [Scripts](#scripts); started by the source's Sync (or the scheduler) only; `result` as a sync's | the source's tool |
 

@@ -28,6 +28,7 @@ import notify
 import organize
 import people
 import save
+import save_tools
 import scanner
 import scheduler
 import scripts
@@ -265,19 +266,30 @@ def saved():
 
 @app.post("/api/save")
 def save_post():
-    """The userscript's Save button: one Instagram post, by shortcode only
-    (save.py). A post FeedVault already has is answered without running anything."""
+    """The userscript's Save button: one Instagram post by shortcode only
+    (save.py), or one X or TikTok post by its link only, parsed strictly
+    (save_tools.py). A post FeedVault already has is answered without
+    running anything."""
     body = request.get_json(silent=True)
-    if not isinstance(body, dict) or set(body) != {"platform", "shortcode"} or body["platform"] != "instagram" \
+    if isinstance(body, dict) and set(body) == {"url"}:
+        try:
+            params = save_tools.parse_link(body["url"])
+        except save_tools.BadLink as e:
+            return jsonify({"ok": False, "error": f"{e}; {save_tools.LINK_HELP}"}), 400
+        post = save.have_id(db.connect(), save_tools.post_id(params))
+        submit = lambda: save_tools.submit(params)      # noqa: E731
+    elif not isinstance(body, dict) or set(body) != {"platform", "shortcode"} or body["platform"] != "instagram" \
             or not save.valid_shortcode(body["shortcode"]):
         return jsonify({"ok": False, "error": 'send { "platform": "instagram", "shortcode": "<5 to 40 of '
-                        'A-Z a-z 0-9 _ ->" } and nothing else'}), 400
-    code = body["shortcode"]
-    post = save.have(db.connect(), code)
+                        'A-Z a-z 0-9 _ ->" } or { "url": "<an X or TikTok post\'s link>" }, and nothing else'}), 400
+    else:
+        code = body["shortcode"]
+        post = save.have(db.connect(), code)
+        submit = lambda: save.submit(code)              # noqa: E731
     if post is not None:
         return jsonify({"ok": True, "have": True, "post": post})
     try:
-        job, existing = save.submit(code)
+        job, existing = submit()
     except save.Full as e:
         return jsonify({"ok": False, "error": str(e)}), 429
     except jobs.BadRequest as e:
@@ -1323,7 +1335,7 @@ def start_job():
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({"ok": False, "error": "send { kind, params }"}), 400
-    if body.get("kind") == save.KIND:          # its checks are POST /api/save's
+    if body.get("kind") in save.KINDS:         # their checks are POST /api/save's
         return jsonify({"ok": False, "error": "start it with POST /api/save"}), 400
     if body.get("kind") in scripts.JOB_KINDS:  # the origin check is theirs
         return jsonify({"ok": False, "error": "start it with POST /api/scripts/<id>/run, or a source's Sync"}), 400

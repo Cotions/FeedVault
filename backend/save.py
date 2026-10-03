@@ -42,6 +42,7 @@ SHORTCODE_RE = re.compile(r"[A-Za-z0-9_-]{5,40}", re.ASCII)
 SAVED = sources.SAVED                          # under the first media root: posts of owners with no folder
 QUEUE_MAX_DEFAULT = 20                         # Save jobs queued or running at once (config save_queue_max)
 QUEUE_MAX_LIMIT = 500
+KINDS = {KIND}                                 # every Save kind (save_tools adds X's and TikTok's)
 
 
 def valid_shortcode(value):
@@ -370,9 +371,15 @@ jobs.register(KIND, label="Save a post", params={"shortcode": {"type": "text", "
 
 def have(conn, shortcode):
     """{id, path} of the post when FeedVault has it, else None."""
-    if not db.saved_ids(conn, [f"instagram:{shortcode}"]):
+    return have_id(conn, f"instagram:{shortcode}")
+
+
+def have_id(conn, pid):
+    """have() for a FeedVault post id (``<platform>:<id>``)."""
+    if not db.saved_ids(conn, [pid]):
         return None
-    return {"id": f"instagram:{shortcode}", "path": f"/p/instagram/{shortcode}"}
+    platform, _, code = pid.partition(":")
+    return {"id": pid, "path": f"/p/{platform}/{code}"}
 
 
 class Full(Exception):
@@ -392,13 +399,21 @@ def submit(shortcode):
     """Queue a save: (the job's public dict, whether it was already queued
     or running). A shortcode with a Save job active gets that job back; one
     more than queue_max() active Save jobs raises Full."""
+    return queue(KIND, {"shortcode": shortcode}, ("shortcode",))
+
+
+def queue(kind, params, same):
+    """submit() for any Save kind (KINDS): the job of that kind whose params
+    ``same`` (their names) match is returned instead of a new one; the limit
+    counts Save jobs of every kind."""
     with _submitting:
-        active = [j for j in jobs.active() if j["kind"] == KIND]
-        same = next((j for j in active if j["params"].get("shortcode") == shortcode), None)
-        if same is not None:
-            return same, True
+        active = [j for j in jobs.active() if j["kind"] in KINDS]
+        match = next((j for j in active if j["kind"] == kind
+                      and all(j["params"].get(k) == params.get(k) for k in same)), None)
+        if match is not None:
+            return match, True
         limit = queue_max()
         if len(active) >= limit:
             raise Full(f"{limit} post{'' if limit == 1 else 's'} {'is' if limit == 1 else 'are'} already "
                        "waiting to be saved; try again once some are done")
-        return jobs.submit(KIND, {"shortcode": shortcode}), False
+        return jobs.submit(kind, params), False

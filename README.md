@@ -129,16 +129,34 @@ yt-dlp --write-info-json --write-thumbnail \
 
 
 Install [Tampermonkey](https://www.tampermonkey.net/), then open
-<http://localhost:3380/userscript/feedvault.user.js>. On Instagram, saved posts
-get a green "saved" badge in grids, and a post page shows an "In FeedVault" link.
+<http://localhost:3380/userscript/feedvault.user.js>. It runs on Instagram,
+X (x.com, twitter.com) and TikTok (www.tiktok.com). Saved posts get a green
+"saved" badge in grids, and a post page shows an "In FeedVault" link.
 A post FeedVault does not have gets a **Save to FeedVault** button instead (on
-the post page and in the dialog a grid opens): it downloads that one post with
-instaloader, into its owner's folder (or `_saved/` in your first media root,
-until the owner gets a source: its next sync moves them into its folder),
-and turns into the link once it is indexed. It shows Queued, Saving… and, when
-it fails, why. A profile page gets a **Sync profile** button: it syncs the
-profile's source, or first adds one (it asks, in the button itself), and
-links to the person or account in FeedVault.
+the post page and in the dialog a grid opens on Instagram): it downloads that
+one post, and turns into the link once it is indexed. It shows Queued,
+Saving… and, when it fails, why; with FeedVault stopped it says "FeedVault is
+not running". Several saves in a row queue up (at most 20 at once,
+`save_queue_max` in the config).
+
+- Instagram: instaloader, into its owner's folder (or `_saved/` in your
+  first media root, until the owner gets a source: its next sync moves them
+  into its folder).
+- X: gallery-dl; TikTok videos: yt-dlp (TikTok photo posts are not saved).
+  The file names are the ones a sync gives, and the post goes into gallery-dl's
+  and yt-dlp's download archives, so a later sync of the profile does not
+  download it again. It goes into the folder of the owner's source, else the
+  folder holding the owner's posts, else `<first media root>/twitter/<name>`
+  or `tiktok/<name>`: the folder a source for that profile would use. Only
+  the post's own link is accepted: a short link (t.co, vm.tiktok.com) is
+  refused, open it and save from the post's page. The tool's settings apply
+  (browser cookies, ignoring your config).
+
+A profile page gets a **Sync profile** button: it syncs the profile's
+source, or first adds one (it asks, in the button itself, naming the tool and
+folder), and links to the person or account in FeedVault. A source that runs
+a script is only synced from the dashboard: the button says so and links
+there.
 
 ## Jobs and tools
 
