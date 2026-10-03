@@ -728,12 +728,19 @@ _ANSWERED = (", '$.health', CASE WHEN json_extract(last_result, '$.health') = 'r
              "ELSE json_extract(last_result, '$.health') END")
 
 
-def rename(conn, sid, old, new):
+def rename(conn, sid, old, new, now):
     """Accept a rename suggestion: the source's target becomes ``new`` (its
     folder and files stay as they are) and the suggestion goes. False when
     the target is no longer ``old`` (changed meanwhile). A source the
-    scheduler had stopped (account not found) is scheduled again."""
+    scheduler had stopped (account not found) is scheduled again. Its
+    account, when it has one, keeps both handles in its history
+    (handle_renames, user data)."""
+    src = row(conn, sid)
+    key = people.canonical(conn, src["platform"], src["author_id"]) if src and src["author_id"] else None
     with conn:
+        if key and src["target"] == old:
+            conn.execute("INSERT OR REPLACE INTO handle_renames(platform, author_id, old, new, at) "
+                         "VALUES (?, ?, ?, ?, ?)", (*key, old.lower(), new.lower(), now))
         return conn.execute(
             "UPDATE sources SET target = ?, last_result = CASE WHEN json_valid(last_result) "
             "AND json_type(last_result) = 'object' THEN json_set(json_remove(last_result, '$.rename'), "

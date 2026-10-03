@@ -890,10 +890,11 @@ def accept_rename(sid):
     other = sources.existing(conn, s["tool"], new)
     if other is not None and other != sid:
         return jsonify({"ok": False, "error": f"there is already a {s['tool']} source for {new}"}), 409
-    if not sources.rename(conn, sid, s["target"], new):
+    if not sources.rename(conn, sid, s["target"], new, int(time.time())):
         return jsonify({"ok": False, "error": "the source's target changed meanwhile"}), 409
     scheduler.forget(sid)
     userdata.changed("sources")
+    userdata.changed("handle_renames")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
 
 

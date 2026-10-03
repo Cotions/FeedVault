@@ -729,7 +729,8 @@ An **account** (`/api/authors` rows, a person's `accounts`):
   "names": [{ "name": "Some Body", "first": 1600000000, "last": 1727481600 }] }
 ```
 
-- `handle` and `name` are those of the newest post (handles change).
+- `handle` and `name` are those of the newest post (handles change), or the
+  new handle of a rename the user accepted after it.
 - `count` and `bytes` cover the posts in the index, aliases included;
   `newest` is the newest `posted_at`.
 - `url`: the profile's address for `instagram`, `twitter` and `tiktok`,
@@ -737,11 +738,18 @@ An **account** (`/api/authors` rows, a person's `accounts`):
 - `person`: the person the account is linked to, or `null`.
 - `handles` and `names`: **handle history**, every handle and display name
   the account's posts (aliases included) carry, with the `posted_at` of the
-  first and last post under it, the most recent first. Derived from the
-  posts on every request (cached), not stored: a renamed account keeps its
-  id, so its posts stay one account, and its old handles are listed here.
-  `first` and `last` are `null` when no post under it has a date. The
-  dashboard's Creators search and Feed author picker match any of them.
+  first and last post under it, the most recent first. Handles also come
+  from instaloader's id files (the folder's name when the file was written,
+  dated by the file's mtime) and from renames the user accepted for a
+  source (`POST /api/sources/<id>/rename`: the old handle last seen and the
+  new one first seen then). Derived from the index on every request
+  (cached), so a rescan rebuilds it; accepted renames are user data, table
+  `handle_renames`, written to `<data_directory>/userdata/handle_renames.json`
+  and restored after a rebuild. A renamed account keeps its id, so its
+  posts stay one account, and its old handles are listed here. `first` and
+  `last` are `null` when no post under it has a date. The dashboard's
+  Creators search and Feed author picker match any of them, so a person is
+  found by an old handle.
 
 A **person**:
 

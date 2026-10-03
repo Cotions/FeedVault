@@ -164,8 +164,10 @@ def _move_links(conn, found, links):
                 links[p, t] = pid
             del links[p, f]
             changed.append("person_accounts")
-        if conn.execute("UPDATE sources SET author_id = ? WHERE platform = ? AND author_id = ?", (t, p, f)).rowcount:
-            changed.append("sources")
+        for table in ("sources", "handle_renames"):
+            if conn.execute(f"UPDATE OR REPLACE {table} SET author_id = ? WHERE platform = ? AND author_id = ?",
+                            (t, p, f)).rowcount:
+                changed.append(table)
     return sorted(set(changed))
 
 

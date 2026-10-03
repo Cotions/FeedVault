@@ -301,6 +301,11 @@ def test_a_renamed_profile_is_a_suggestion_the_user_accepts(env, client, fake):
     userdata.flush()
     saved = json.load(open(userdata.path(config.load()["data_directory"], "sources"), encoding="utf-8"))
     assert [x["target"] for x in saved["rows"]] == ["carol.bakes"]
+    # The account keeps both handles, the new one current, as user data.
+    renames = json.load(open(userdata.path(config.load()["data_directory"], "handle_renames"), encoding="utf-8"))
+    assert [(x["author_id"], x["old"], x["new"]) for x in renames["rows"]] == [("777", "carol.cooks", "carol.bakes")]
+    [a] = [a for a in get(client, "/api/authors") if a["id"] == "777"]
+    assert a["handle"] == "carol.bakes" and "carol.cooks" in [h["handle"] for h in a["handles"]]
     job = sync_now(client, s["id"])
     h = get(client, f"/api/sources/{s['id']}")["health"]
     assert (job["state"], h["state"]) == ("done", "ok")

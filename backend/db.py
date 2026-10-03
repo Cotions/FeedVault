@@ -412,11 +412,26 @@ def _migrate_16(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS account_files_account ON account_files(platform, author_id)")
 
 
+def _migrate_17(conn):
+    """Handle history (db._accounts). handle_renames is user data, mirrored
+    by userdata.py: a new handle the user accepted for a source
+    (sources.rename), the account's old and new handle and when."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS handle_renames (
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            old       TEXT NOT NULL,
+            new       TEXT NOT NULL,
+            at        INTEGER NOT NULL,
+            PRIMARY KEY (platform, author_id, old, new)
+        ) WITHOUT ROWID""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
-              _migrate_13, _migrate_14, _migrate_15, _migrate_16]
+              _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17]
 
 BACKUPS_KEPT = 3
 
@@ -1065,6 +1080,24 @@ def _accounts(conn, sizes=True):
         for table in ("handles", "names"):
             for v, (first, last) in h[table].items():
                 _seen(a[table], v, first, last)
+    # Handles known besides the posts': instaloader's id files (the folder's
+    # name when written) and renames the user accepted (old, then new: the
+    # handle now, unless a post was seen under another one since).
+    renamed = {}
+    for platform, aid, handle, first, last, new in conn.execute("""
+            SELECT platform, author_id, handle, at, at, 0 FROM account_files
+            UNION ALL SELECT platform, author_id, old, NULL, at, 0 FROM handle_renames
+            UNION ALL SELECT platform, author_id, new, at, at, 1 FROM handle_renames ORDER BY 4"""):
+        a = out.get((platform, alias.get((platform, aid), aid)))
+        if a is None:
+            continue
+        handle = next((h for h in a["handles"] if h.lower() == handle.lower()), handle)
+        _seen(a["handles"], handle, first, last)
+        if new:
+            renamed[id(a)] = (a, handle, first)
+    for a, handle, at in renamed.values():
+        if at >= (a["handles"].get(a["handle"], [None, None])[1] or 0):
+            a["handle"] = handle
     for a in out.values():
         a["handle"] = a["handle"] or next(iter(a["handles"]), None)
         a["url"] = profile_url(a["platform"], a["handle"])

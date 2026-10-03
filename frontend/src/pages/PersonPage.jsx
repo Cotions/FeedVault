@@ -4,8 +4,8 @@ import { getAuthors, getPerson, updatePerson, deletePerson, linkAccounts } from 
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
-import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
-import { accountKey, accountRef, formerHandles } from "../lib/people";
+import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, platformLabel, platformShort, safeUrl } from "../lib/fmt";
+import { accountKey, accountRef } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import CreatorPicker from "../components/CreatorPicker";
@@ -14,7 +14,7 @@ import { useSources } from "../lib/sources";
 
 function AccountRow({ account: a, busy, onUnlink }) {
   const url = safeUrl(a.url);
-  const former = formerHandles(a);
+  const former = (a.handles || []).filter(h => h.handle !== a.handle);
   const names = (a.names || []).map(n => n.name).filter(n => n !== a.name);
   return (
     <li className="person-account">
@@ -26,10 +26,19 @@ function AccountRow({ account: a, busy, onUnlink }) {
         </span>
         <span className="creator-sub">
           {platformLabel(a.platform)} · id {a.id}
-          {former.length > 0 && ` · was ${former.map(h => `@${h}`).join(", ")}`}
           {names.length > 0 && ` · also named ${names.join(", ")}`}
           {a.aliases?.length > 0 && ` · folder ${a.aliases.join(", ")}`}
         </span>
+        {former.length > 0 && (
+          <span className="creator-sub person-former">
+            Former handles:{" "}
+            {former.map((h, i) => (
+              <span key={h.handle} title={h.first || h.last ? `seen ${fmtFullDate(h.first ?? h.last)} – ${fmtFullDate(h.last ?? h.first)}` : undefined}>
+                {i > 0 && ", "}@{h.handle}{h.last != null && ` (until ${fmtShortDate(h.last)})`}
+              </span>
+            ))}
+          </span>
+        )}
       </span>
       <span className="person-account-stats creator-sub">
         {a.count ? `${fmtInt(a.count)} posts · ${fmtBytes(a.bytes)}` : "No posts indexed"}

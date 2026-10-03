@@ -2508,6 +2508,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 }
 .person-account-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .person-account-id .creator-sub { white-space: normal; }
+.person-former { overflow-wrap: anywhere; }
 .person-account-stats { flex-shrink: 0; }
 .person-add { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .person-add .creator-sub { white-space: normal; }

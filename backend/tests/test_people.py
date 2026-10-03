@@ -451,6 +451,63 @@ def test_handle_history_from_renamed_posts(env, client):
     assert p["accounts"][0]["handles"] == a["handles"]
 
 
+def test_handles_from_id_files_and_accepted_renames(env, client):
+    write_post(env["media"] / "gina.now", "G1", TS, owner("gina.now", 555, "Gina"), "image")
+    # an older folder of hers, renamed by hand, with instaloader's id file
+    filename_posts(env["media"] / "gina_archive", "gina.first", "GGGGGGGGGG1")
+    (env["media"] / "gina_archive" / "id").write_text("555")
+    os.utime(env["media"] / "gina_archive" / "id", (TS - 900, TS - 900))
+    scanner.scan(env["roots"])
+    [a] = get(client, "/api/authors")
+    assert (a["id"], a["aliases"]) == ("555", ["gina_archive"])
+    assert {h["handle"]: (h["first"], h["last"]) for h in a["handles"]}["gina_archive"] == (TS - 900, TS - 900)
+    assert {"gina.now", "gina.first", "gina_archive"} == {h["handle"] for h in a["handles"]}
+    # a rename the user accepted: the new handle is current until a post says otherwise
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO handle_renames(platform, author_id, old, new, at) "
+                     "VALUES ('instagram', '555', 'gina.now', 'gina.later', ?)", (TS + 10,))
+    [a] = get(client, "/api/authors")
+    assert a["handle"] == "gina.later" and a["handles"][0]["handle"] == "gina.later"
+    assert a["url"] == "https://www.instagram.com/gina.later/"
+    write_post(env["media"] / "gina.now", "G2", TS + 20, owner("gina.again", 555, "Gina"), "image")
+    scanner.scan(env["roots"])
+    assert get(client, "/api/authors")[0]["handle"] == "gina.again"
+
+
+def test_a_rebuild_keeps_links_dismissals_and_handles(env, client):
+    suggestion_archive(env)
+    filename_posts(env["media"] / "old.folder", "old.folder", "OOOOOOOOOO1")
+    (env["media"] / "old.folder" / "id").write_text("501")
+    scanner.scan(env["roots"])
+    x = account(client, "twitter", "example_user1")
+    ig = next(a for a in get(client, "/api/authors") if a["id"] == "501")
+    pid = create(client, "Eee", ig, x)["person"]["id"]
+    s = next(s for s in suggestions(client)["suggestions"] if s["reason"] == "same_name")
+    post(client, "/api/people/suggestions/dismiss", {"id": s["id"]})
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO handle_renames(platform, author_id, old, new, at) "
+                     "VALUES ('instagram', '501', 'example_user1', 'eee.now', ?)", (TS + 10,))
+    userdata.changed("handle_renames")
+    before = (links(), get(client, "/api/authors"), suggestions(client), ids(client, f"person={pid}"))
+    userdata.flush()
+    path = config.db_path(config.load())
+    db.init(str(env["tmp"] / "other.db"))
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(path + suffix):
+            os.remove(path + suffix)
+    db.init(path)
+    userdata.restore_all(db.connect(), config.load()["data_directory"])
+    scanner.scan(env["roots"])
+    pid = get(client, "/api/people")[0]["id"]
+    after = (links(), get(client, "/api/authors"), suggestions(client), ids(client, f"person={pid}"))
+    assert after == before
+    assert before[0] == [("Eee", "instagram", "501"), ("Eee", "twitter", x["id"])]
+    assert before[2]["dismissed"] == 1
+    assert "example_user1" in [h["handle"] for h in ig["handles"]]
+
+
 # ---------------------------------------------------------------------------
 # Suggestions
 # ---------------------------------------------------------------------------
