@@ -15,7 +15,15 @@ A script's id is its file name without the suffix. Two kinds:
   itself; its inputs are FV_* environment variables only.
 
 ``needs`` (target, url or none) says which input it takes; ``rescan`` the
-folder indexed once it has run. Built-in templates (``builtin:<name>``)
+folder indexed once it has run.
+
+Read strictly, and listed with the reason when refused, never run: the
+folder must be a folder (no symlink), ours, not writable by group or
+others, nor its parent (unless sticky); a file must be a regular file
+directly in it (opened without following a symlink, checked again on what
+was opened), ours, not writable by group or others, at most SIZE_MAX,
+named ``[a-z0-9_-]{1,64}`` + ``.json`` / ``.sh``; a shell script
+executable. Two files with one id are both refused. Built-in templates (``builtin:<name>``)
 are the commands downloaders.py and sync.py run, written as such a file
 would be: read-only, runnable, to copy.
 """
@@ -221,21 +229,64 @@ def _entry(name, folder):
             "mtime": None}
 
 
-def _read(name, folder):
-    """(script dict, raw bytes or None) of one name in the folder."""
+def _folder_refused(st, what, sticky_ok=False):
+    """Why a folder (its lstat) may not hold scripts, else None."""
+    if stat.S_ISLNK(st.st_mode):
+        return f"{what} is a symlink"
+    if not stat.S_ISDIR(st.st_mode):
+        return f"{what} is not a folder"
+    if st.st_uid != os.getuid():
+        return f"{what} belongs to another user"
+    # A sticky folder (/tmp) lets nobody else rename or remove what is ours.
+    if st.st_mode & 0o022 and not (sticky_ok and st.st_mode & stat.S_ISVTX):
+        return f"{what} is writable by group or others (chmod go-w)"
+    return None
+
+
+def _file_refused(st, kind):
+    """Why a file (its stat) may not run, else None."""
+    if stat.S_ISLNK(st.st_mode):
+        return "a symlink: a script must be a regular file in the folder itself"
+    if not stat.S_ISREG(st.st_mode):
+        return "not a regular file"
+    if st.st_uid != os.getuid():
+        return "belongs to another user"
+    if st.st_mode & 0o022:
+        return "writable by group or others (chmod go-w)"
+    if st.st_size > SIZE_MAX:
+        return f"larger than {SIZE_MAX // 1024} KiB"
+    if kind == "shell" and not st.st_mode & stat.S_IXUSR:
+        return "not executable (chmod u+x)"
+    return None
+
+
+def _read(name, folder, dir_fd):
+    """(script dict, raw bytes or None) of one name in the folder (open as
+    ``dir_fd``). The file is opened without following a symlink, and
+    checked again on what was opened."""
     out = _entry(name, folder)
     if out["kind"] is None:
         out["refused"] = "the name must be [a-z0-9_-] (at most 64), then .json or .sh"
         return out, None
     try:
-        st = os.stat(out["path"])
-        if st.st_size > SIZE_MAX:
-            out["refused"] = f"larger than {SIZE_MAX // 1024} KiB"
+        before = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        out["refused"] = _file_refused(before, out["kind"])
+        if out["refused"]:
             return out, None
-        with open(out["path"], "rb") as f:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+        with os.fdopen(fd, "rb") as f:
+            st = os.fstat(f.fileno())
+            out["refused"] = _file_refused(st, out["kind"])
+            if (st.st_dev, st.st_ino) != (before.st_dev, before.st_ino):
+                out["refused"] = "it changed while it was read"
+            if out["refused"]:
+                return out, None
             raw = f.read(SIZE_MAX + 1)
     except OSError as e:
         out["refused"] = f"cannot be read: {e.strerror or e}"
+        return out, None
+    if len(raw) > SIZE_MAX:
+        out["refused"] = f"larger than {SIZE_MAX // 1024} KiB"
         return out, None
     out.update(size=len(raw), mtime=int(st.st_mtime), sha256=hashlib.sha256(raw).hexdigest())
     try:
@@ -253,16 +304,31 @@ def _read(name, folder):
 
 
 def _files():
-    """[(script dict, raw bytes or None)] of the scripts folder, by name;
-    (folder's refusal or None, …)."""
+    """(the folder's refusal or None, [(script dict, raw bytes or None)] by
+    name). Nothing is listed from a folder that is refused: a symlink,
+    someone else's, writable by others, or in a parent others can write to."""
     folder = scripts_dir()
+    parent = os.path.dirname(folder)
     try:
-        names = sorted(os.listdir(folder))
+        st = os.lstat(folder)
+        refused = _folder_refused(st, "the scripts folder") \
+            or _folder_refused(os.stat(parent), f"its parent folder ({parent})", sticky_ok=True)
+        if refused:
+            return refused, []
+        dir_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except FileNotFoundError:
         return None, []
     except OSError as e:
-        return f"cannot be read: {e.strerror or e}", []
-    found = [_read(n, folder) for n in names]
+        return f"the scripts folder cannot be read: {e.strerror or e}", []
+    try:
+        opened = os.fstat(dir_fd)
+        if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
+            return "the scripts folder changed while it was read", []
+        found = [_read(n, folder, dir_fd) for n in sorted(os.listdir(dir_fd))]
+    except OSError as e:
+        return f"the scripts folder cannot be read: {e.strerror or e}", []
+    finally:
+        os.close(dir_fd)
     ids = {}
     for s, _ in found:
         ids.setdefault(s["id"], []).append(s)
