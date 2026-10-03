@@ -954,7 +954,7 @@ def _ended_as(params, code, lines, index, note, tool):
               **_owner(params)}
     if index and index.get("seen"):
         result["seen"] = list(index["seen"])   # the first_seen range of what it added (notify.py)
-    new = f"{added} new post{'' if added == 1 else 's'}"
+    new = notify.plural(added, "new post")
     rename = health.renamed(tool, lines)
     if rename:
         result["rename"] = rename
@@ -984,7 +984,7 @@ def _ended_as(params, code, lines, index, note, tool):
     if result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"
     if added:
-        message += f" ({added} new post{'' if added == 1 else 's'} before it stopped)"
+        message += f" ({notify.plural(added, 'new post')} before it stopped)"
     message += unread
     old = _outdated(tool)
     if old:
@@ -1140,20 +1140,19 @@ def _notify(conn, job, sid, before):
         src = sources.get(conn, sid)
         account = src["account"] or r.get("account")
         who = _who(src)
+        common = {"job": job["id"], "source": sid, "person": src["person"] and src["person"]["id"],
+                  "account": account and (account["platform"], account["id"]), "state": said,
+                  "scheduled": scheduled}
         if state == "done":
             seen = r.get("seen")
-            nid = notify.add(conn, "new", notify.new_text(r["added"], who), job=job["id"], source=sid,
-                             person=src["person"] and src["person"]["id"],
-                             account=account and (account["platform"], account["id"]), state=said,
-                             count=r["added"], folder=job["rescan"], seen=tuple(seen) if seen else None,
-                             scheduled=scheduled)
+            text = notify.new_text(r["added"], who)
+            nid = notify.add(conn, "new", text, count=r["added"], folder=job["rescan"],
+                             seen=tuple(seen) if seen else None, **common)
         else:
-            nid = notify.add(conn, "failed", notify.failed_text(who, said, job["message"]), job=job["id"],
-                             source=sid, person=src["person"] and src["person"]["id"],
-                             account=account and (account["platform"], account["id"]), state=said,
-                             scheduled=scheduled)
+            text = notify.failed_text(who, said, job["message"])
+            nid = notify.add(conn, "failed", text, **common)
         jobs.amend(job["id"], {"notification": nid})
-        notify.desktop(conn.execute("SELECT text FROM notifications WHERE id = ?", (nid,)).fetchone()[0])
+        notify.desktop(text)
     except Exception as e:                     # only the list misses it: the sync ended as it went
         print(f"[sync] source {sid}: no notification: {e}")
 

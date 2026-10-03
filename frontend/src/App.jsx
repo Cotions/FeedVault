@@ -191,7 +191,10 @@ export default function App() {
     }
     if (changed) setRefreshKey(k => k + 1);
   }, [toast]);
-  const pollJobs = useCallback(() => getJobs(desktopRef.current).then(applyJobs, () => {}), [applyJobs]);
+  // A visible tab has its toasts, a hidden one its desktop notifications: either
+  // way notify-send waits (docs/API.md "Notifications").
+  const pollJobs = useCallback(() => getJobs(desktopRef.current || !document.hidden).then(applyJobs, () => {}),
+    [applyJobs]);
   // Poll now: the job may be over in less than a second.
   const jobStarted = useCallback(() => { pollJobs(); }, [pollJobs]);
 

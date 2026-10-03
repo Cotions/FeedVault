@@ -297,6 +297,9 @@ input[type="text"].header-search:focus {
      viewport so the fade reaches the bottom. */
   position: sticky;
   top: var(--header-h);
+  /* Sticky makes it a stacking context: above main, so the bell's panel
+     shows over the page; under the header. */
+  z-index: 35;
   align-self: flex-start;
   height: calc(100vh - var(--header-h));
   overflow-y: auto;

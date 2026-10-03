@@ -14,8 +14,8 @@ seen since.
 
 Desktop notifications (off by default, ``desktop_notifications`` in the
 config): an open dashboard tab shows each new entry with the browser's
-Notification API, and says so on its jobs poll (``tab_shows``). When none
-has for TAB_QUIET seconds, a new entry goes to ``notify-send`` instead,
+Notification API, or its toast while it is visible, and says so on its
+jobs poll (``tab_shows``). When none has for TAB_QUIET seconds, a new entry goes to ``notify-send`` instead,
 when it is installed (else nothing, quietly): a fixed argument list, no
 shell, the text one argument, scrubbed, markup escaped and length-capped,
 in a thread that gives it SEND_TIMEOUT seconds.
@@ -109,8 +109,23 @@ def tab_shows():
     _tab_at = time.monotonic()
 
 
+_setting = (None, False)                       # (config file's stat, the setting), for every jobs poll
+
+
 def enabled(cfg=None):
-    return (cfg or config.load()).get("desktop_notifications") is True
+    """The desktop notifications setting. Without ``cfg``, read again only
+    when the config file changed (each jobs poll asks)."""
+    global _setting
+    if cfg is not None:
+        return cfg.get("desktop_notifications") is True
+    try:
+        st = os.stat(config.config_path())
+        stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        stamp = None
+    if stamp is None or stamp != _setting[0]:
+        _setting = (stamp, config.load().get("desktop_notifications") is True)
+    return _setting[1]
 
 
 def _escape(text):

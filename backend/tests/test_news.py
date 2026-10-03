@@ -476,3 +476,25 @@ def test_mutes_are_user_data_and_survive_a_rebuild(env, client):
     # A person deleted takes its mute with it.
     assert client.delete(f"/api/people/{pid}", headers=H).status_code == 200
     assert news.muted(conn)["people"] == []
+
+
+def test_mute_edge_cases(env, client):
+    pid, global_mark = _two_creators(env, client)
+    dana = {"platform": "instagram", "id": "888"}
+    # Muted while unlinked, then linked: it can still be unmuted.
+    mute(client, {"account": dana, "muted": True})
+    assert client.post(f"/api/people/{pid}/accounts", headers=H, json={"add": [dana]}).status_code == 200
+    assert mute(client, {"account": dana, "muted": False})["muted"]["accounts"] == []
+    # A merge keeps a muted person's mute on the one they join.
+    other = client.post("/api/people", headers=H, json={"name": "Erin"}).get_json()["person"]["id"]
+    mute(client, {"person": other, "muted": True})
+    merged = client.post("/api/people/merge", headers=H, json={"ids": [pid, other], "accounts": []}).get_json()
+    assert merged["ok"] and news.muted(db.connect())["people"] == [pid]
+    # A muted account's own "Mark seen" never puts it below the global mark.
+    mute(client, {"person": pid, "muted": False})
+    client.post(f"/api/people/{pid}/accounts", headers=H, json={"remove": [dana]})
+    mute(client, {"account": dana, "muted": True})
+    mark(client, {"account": dana, "at": 0})
+    assert len(ids(client, new="1", author="888")) == 2
+    row = db.connect().execute("SELECT at FROM seen_marks WHERE author_id = '888'").fetchone()
+    assert row[0] == global_mark

@@ -257,9 +257,9 @@ the config, Settings → Sync). On, a new entry pops up on the desktop:
 - An open dashboard tab shows it with the browser's Notification API (text
   only; a click opens what the entry leads to) while it is hidden or not
   focused; a focused tab has its toast. The browser asks for permission
-  only when the switch is turned on, never on load. Such a tab polls
-  `GET /api/jobs?desktop=1` (once a minute while hidden), which tells the
-  backend a tab shows them.
+  only when the switch is turned on, never on load. Such a tab, and any
+  visible tab (it has its toasts), polls `GET /api/jobs?desktop=1` (a
+  hidden one once a minute), which tells the backend a tab tells of them.
 - When no tab has said so for 150 seconds, the backend runs `notify-send`
   instead, if it is on the PATH (else nothing, quietly): the argument list
   is fixed (`notify-send --app-name=FeedVault -- FeedVault <text>`), no

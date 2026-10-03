@@ -194,7 +194,8 @@ def mute():
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
-    if account is not None:
+    if account is not None and body["muted"]:
+        # Unmuting one is always allowed: it may have been muted before it was linked.
         owner = db.accounts(conn)[people.canonical(conn, *account)]["person"]
         if owner:
             return jsonify({"ok": False, "error": f"that account is {owner['name']}'s: mute the person"}), 400
@@ -821,10 +822,13 @@ def merge_people():
     found = {r[0] for r in conn.execute(f"SELECT id FROM people WHERE id IN ({', '.join('?' for _ in ids)})", ids)}
     if found != set(ids):
         return jsonify({"ok": False, "error": "no such person"}), 404
+    muted = any(news.is_muted(conn, person=i) for i in ids)
     try:
         p = people.merge(conn, ids, name, accounts, int(time.time()))
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    if muted:                                  # a muted one's accounts stay muted in the one they join
+        news.mute(conn, True, person=p["id"])
     _people_changed(names=True)
     userdata.changed("sources")                # the others' sources moved to the first
     return jsonify({"ok": True, "person": p})

@@ -78,7 +78,9 @@ def mark_seen(conn, at=None, person=None, account=None):
     keys = people.account_set(conn, person) if person is not None else account_keys(conn, *account)
     if keys:
         with conn:
-            conn.executemany("INSERT INTO seen_marks(platform, author_id, at) VALUES (?, ?, ?) "
+            # An account without a mark of its own is at the global one: never below it.
+            conn.executemany("INSERT INTO seen_marks(platform, author_id, at) "
+                             "VALUES (?, ?, MAX(?, COALESCE((SELECT at FROM seen_at WHERE id = 1), 0))) "
                              "ON CONFLICT(platform, author_id) DO UPDATE SET at = MAX(at, excluded.at)",
                              [(p, a, at) for p, a in sorted(keys)])
             _prune(conn)
