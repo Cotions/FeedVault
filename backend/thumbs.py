@@ -12,6 +12,8 @@ import tempfile
 
 from PIL import Image, ImageOps
 
+import config
+
 WIDTH = 480
 MAX_HEIGHT = 1200      # 9:16 at WIDTH is 853; taller panoramas get cropped by the grid anyway
 QUALITY = 82
@@ -52,7 +54,7 @@ def _save_image(src, out):
 
 
 def _atomic_save(out, write):
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    config.make_private_dir(os.path.dirname(out))
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), suffix=".part")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -68,7 +70,7 @@ def _atomic_save(out, write):
 
 def _video_frame(src, out):
     """One frame, a second in (or the first frame of a very short clip)."""
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    config.make_private_dir(os.path.dirname(out))
     fd, frame = tempfile.mkstemp(dir=os.path.dirname(out), suffix=".png")
     os.close(fd)
     try:
@@ -113,7 +115,7 @@ def thumb_for(data_dir, row):
         return None
     if _video_frame(src, out):
         return out
-    os.makedirs(os.path.dirname(failed), exist_ok=True)
+    config.make_private_dir(os.path.dirname(failed))
     open(failed, "w").close()
     return None
 
@@ -140,7 +142,7 @@ def move(data_dir, old_path, new_path):
     old, new = _cache_path(data_dir, old_path), _cache_path(data_dir, new_path)
     for a, b in ((old, new), (old + ".failed", new + ".failed")):
         try:
-            os.makedirs(os.path.dirname(b), exist_ok=True)
+            config.make_private_dir(os.path.dirname(b))
             os.replace(a, b)
         except OSError:
             pass

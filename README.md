@@ -286,7 +286,10 @@ or refused fails that sync with the reason, never running the built-in one.
 A file is refused, with the reason shown, and never run when it is a
 symlink, someone else's, writable by group or others (as is the folder,
 or a folder above it that is not sticky or not root's or yours),
-over 64 KiB, not named `[a-z0-9_-].json` / `.sh`, or malformed. A script
+over 64 KiB, not named `[a-z0-9_-].json` / `.sh`, or malformed; a mode
+refusal says the `chmod go-w '<path>'` to run. FeedVault makes its own
+folders `0700` whatever the umask, and tightens its config and scripts
+folders on start if they were left group-writable. A script
 changed between queueing and starting fails its run. Inputs are checked:
 a link must be `http(s)://`, an Instagram target a profile name or
 shortcode, and nothing may start with `-`. Details:

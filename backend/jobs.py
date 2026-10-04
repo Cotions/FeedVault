@@ -308,7 +308,7 @@ def submit(kind_name, params):
         # configured, symlinks and all, and so must a rescan.
         rescan = os.path.normpath(os.path.abspath(rescan))
     cwd = spec.get("cwd") or cfg["data_directory"]
-    os.makedirs(cwd, exist_ok=True)
+    config.make_private_dir(cwd)
     if _closing:
         raise BadRequest("FeedVault is stopping")
     now = int(time.time())

@@ -3290,7 +3290,7 @@ def test_a_folder_above_the_scripts_folder_writable_by_others_is_refused(env, de
     assert scripts.get("mine")["refused"] is None
     deep.chmod(0o777)
     refused = scripts.listing()["dir_refused"]
-    assert refused == f"a folder above it ({deep}) is writable by group or others (chmod go-w)"
+    assert refused == f"a folder above it ({deep}) is writable by group or others (chmod go-w '{deep}')"
     assert scripts.get("mine") is None
     with pytest.raises(jobs.BadRequest, match="writable by group or others"):
         scripts.runnable("mine")
@@ -3321,6 +3321,6 @@ def test_a_folder_above_the_scripts_folder_through_a_symlink_is_checked_where_it
     (deep / "mid").chmod(0o777)
     try:
         assert scripts.listing()["dir_refused"] == \
-            f"a folder above it ({deep / 'mid'}) is writable by group or others (chmod go-w)"
+            f"a folder above it ({deep / 'mid'}) is writable by group or others (chmod go-w '{deep / 'mid'}')"
     finally:
         (deep / "mid").chmod(0o755)

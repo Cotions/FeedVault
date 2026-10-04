@@ -14,6 +14,7 @@ import string
 import threading
 import time
 
+import config
 import thumbs
 
 # Version 1: the schema as first released. Its CREATE statements are kept as
@@ -513,7 +514,7 @@ _path = None
 def init(path):
     """Open (and create or migrate) the database at ``path`` for this process."""
     global _path
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    config.make_private_dir(os.path.dirname(path))
     migrate(path)
     _path = path
     _local.__dict__.clear()

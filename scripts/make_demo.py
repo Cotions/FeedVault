@@ -535,6 +535,11 @@ def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     root = os.path.abspath(sys.argv[1])
+    # The demo's config folder (its scripts folder's parent) and its tools'
+    # folder: not group-writable whatever the umask, or they are refused (#75).
+    for folder in (root, os.path.join(root, "bin")):
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        os.chmod(folder, 0o700)
     media = os.path.join(root, "media")
     if os.path.exists(media):
         shutil.rmtree(media)

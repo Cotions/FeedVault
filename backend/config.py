@@ -63,9 +63,61 @@ def load():
 
 def save(cfg):
     path = config_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    make_private_dir(os.path.dirname(path))
     with _lock:
         write_private(path, lambda f: json.dump(cfg, f, indent=2))
+
+
+def make_private_dir(path):
+    """Create the folder ``path`` and its missing parents, each 0700 whatever
+    the umask (002 would leave them group-writable, and then refused: a
+    scripts folder, a folder above it). A folder already there is left as
+    it is, and so is one another process makes at the same time. Returns
+    ``path``."""
+    missing, p = [], os.path.abspath(path)
+    while not os.path.isdir(p):
+        missing.append(p)
+        up = os.path.dirname(p)
+        if up == p:
+            break
+        p = up
+    for p in reversed(missing):
+        try:
+            os.mkdir(p, 0o700)
+        except FileExistsError:
+            if not os.path.isdir(p):
+                raise
+            continue
+        # mkdir's mode is masked by the umask: one that drops the owner's bits too.
+        fd = os.open(p, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            os.fchmod(fd, 0o700)
+        finally:
+            os.close(fd)
+    return path
+
+
+def tighten_private_dir(path):
+    """``chmod go-w`` the folder ``path`` when it is ours, a real folder (not
+    a symlink) and writable by group or others. Nothing else, nothing above
+    it. Returns the mode it had when it was changed, else None."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if st.st_uid != os.getuid() or not st.st_mode & 0o022:
+            return None
+        os.fchmod(fd, stat.S_IMODE(st.st_mode) & ~0o022)
+        return stat.S_IMODE(st.st_mode)
+    finally:
+        os.close(fd)
+
+
+def chmod_hint(path, how="go-w"):
+    """The command that fixes ``path``'s mode, its path single-quoted for a shell."""
+    return "chmod " + how + " '" + path.replace("'", "'\\''") + "'"
 
 
 def write_private(path, dump):
@@ -156,7 +208,7 @@ def ancestors_refused(path):
             return f"{what} belongs to another user"
         # A sticky folder (/tmp) lets nobody else rename or remove what is ours.
         if st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX:
-            return f"{what} is writable by group or others (chmod go-w)"
+            return f"{what} is writable by group or others ({chmod_hint(p)})"
     return None
 
 
@@ -180,7 +232,7 @@ def tool_refused(path):
         if st.st_uid not in (0, os.getuid()):
             return f"{what} ({p}) belongs to another user"
         if st.st_mode & 0o022:
-            return f"{what} ({p}) is writable by group or others (chmod go-w)"
+            return f"{what} ({p}) is writable by group or others ({chmod_hint(p)})"
     return ancestors_refused(os.path.dirname(real)) or ancestors_refused(os.path.dirname(os.path.abspath(path)))
 
 

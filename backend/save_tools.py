@@ -171,7 +171,7 @@ def _start(params, note, argv=None):
     link_of(params)
     stage = staging(params)
     save._clear(stage)
-    os.makedirs(stage)
+    config.make_private_dir(stage)
 
 
 def _strip_cookies(job, note):

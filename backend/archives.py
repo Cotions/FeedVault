@@ -34,6 +34,7 @@ import subprocess
 import tempfile
 import threading
 
+import config
 import db
 
 TOOLS = ("gallery-dl", "yt-dlp")
@@ -322,7 +323,7 @@ def media_entries(post, media):
 # ---------------------------------------------------------------------------
 
 def _sqlite(p):
-    os.makedirs(os.path.dirname(p), exist_ok=True)
+    config.make_private_dir(os.path.dirname(p))
     conn = sqlite3.connect(p, timeout=60)
     conn.execute("CREATE TABLE IF NOT EXISTS archive (entry TEXT PRIMARY KEY) WITHOUT ROWID")
     return conn
@@ -330,7 +331,7 @@ def _sqlite(p):
 
 def _locked(p):
     """The yt-dlp archive, opened for reading and writing under an exclusive flock()."""
-    os.makedirs(os.path.dirname(p), exist_ok=True)
+    config.make_private_dir(os.path.dirname(p))
     f = open(p, "a+", encoding="utf-8")
     fcntl.flock(f, fcntl.LOCK_EX)
     f.seek(0)
