@@ -83,3 +83,27 @@ def test_no_page_of_feedvault_can_be_framed(env, client):
               client.get("/userscript/feedvault.user.js"), client.get("/media/1")):
         assert r.headers["X-Frame-Options"] == "DENY"
         assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
+
+
+def test_media_refused_to_other_sites(env, client):
+    # <img src="http://localhost:3380/media/N/thumb"> on any site: the Host
+    # is ours, so only the browser's own word on who asks tells them apart.
+    # Refused before any work: no thumbnail made, nothing to time or measure.
+    gallery_dl_case("twitter/photo", env["media"])
+    scanner.scan(env["roots"])
+    thumbs_dir = env["tmp"] / "data" / "thumbs"
+    for url in ("/media/1/thumb", "/media/1", "/media/1/poster", "/media/copy/1/thumb",
+                "/trash/0123456789abcdef0123/thumb"):
+        for headers in ({"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"},
+                        {"Origin": "https://evil.example"}):
+            assert client.get(url, headers=headers).status_code == 403, (url, headers)
+    assert not thumbs_dir.exists()
+    for headers in ({}, {"Sec-Fetch-Site": "same-origin"}, {"Sec-Fetch-Site": "none"}):
+        r = client.get("/media/1/thumb", headers=headers)
+        assert r.status_code == 200
+        assert r.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+    # The userscript is installed from a link anywhere.
+    assert client.get("/userscript/feedvault.user.js", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
+    # The dashboard's own pages still open from a link anywhere.
+    assert client.get("/trash", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
+    assert client.get("/trash/x", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200

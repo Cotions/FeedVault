@@ -53,8 +53,8 @@ app = Flask(__name__, static_folder=None)
 #      and no CORS is ever granted. The dashboard is same-origin and the
 #      userscript uses GM_xmlhttpRequest, so both can send it.
 #
-# /media is exempt because <img> and <video> cannot send headers; a
-# cross-origin page cannot read those bytes anyway.
+# /media is exempt because <img> and <video> cannot send headers; it is
+# refused instead when the browser says another site asks (_foreign_origin).
 # ---------------------------------------------------------------------------
 
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
@@ -75,6 +75,11 @@ def _origin_guard():
     if request.path.startswith("/api/") and request.method != "OPTIONS" \
             and not request.headers.get(CSRF_HEADER):
         return jsonify({"ok": False, "error": f"missing {CSRF_HEADER} header"}), 403
+    # Media cannot send a header, so another site's <img> or link reaches it:
+    # refused when the browser says the page is not ours, before any work.
+    if (request.path.startswith("/media/") or request.path.startswith("/trash/") and request.path.endswith("/thumb")) \
+            and _foreign_origin():
+        abort(403)
     return None
 
 
@@ -1527,6 +1532,7 @@ def _send(path, sniff=False):
                      conditional=True, max_age=3600)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+    resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
     return resp
 
 
