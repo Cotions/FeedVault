@@ -268,6 +268,7 @@ history). The folder is read again each time, so an edit counts at once.
   its folder (up to the last `/`) keeps a value as it is, and a run whose
   value puts a `$` there (expanded) or `\f` in the name is refused.
   So is one whose link or target puts a `..` or leading `~` there, or a `..`, `~` or `$` in a path option (`-D`, `-o`, env's `-C`…).
+  After `--` nothing is an option, as the tools read it: what follows is never checked or escaped.
 - **A shell script**, `my-script.sh`, executable, with a `#!` line and a
   `# needs: url` (or `target`, `none`) header. It gets its inputs only as
   `FV_TARGET`, `FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE` in a

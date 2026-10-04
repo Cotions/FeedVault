@@ -446,7 +446,7 @@ def test_only_print_to_file_takes_a_file(env, argv, want):
     ["/usr/local/bin/gallery-dl", "--print-to-file", "{id}", "/tmp/{url}", "{url}"],
 ])
 def test_a_downloader_by_its_path_or_behind_env_is_escaped_too(env, argv):
-    """As _check_shell reads it (_program); env's own items are not gallery-dl's."""
+    """As _check_shell reads it (_walk); env's own items are not gallery-dl's."""
     script = {"id": "ids", "tool": argv[0], "argv": argv}
     vals = scripts.values(script, config.load(), "/m/{x}", url=LINK)
     assert scripts.command(script, vals) == [*argv[:-2], "/tmp/https://x.com/a/{{_env[HOME]}}", LINK]
@@ -609,7 +609,7 @@ def test_a_value_starting_a_print_to_file_with_tilde_is_refused(env):
     ("yt-dlp", ["--print-to-file=%(id)s", "/tmp/{url}/ids.txt"], "--print-to-file"),
 ])
 def test_a_link_s_dotdot_in_a_path_option_is_refused(env, tool, args, option):
-    """#68: the tool's other options whose value is a path (scripts.PATHS),
+    """#68: the tool's other options whose value is a path (scripts.TOOLS' PATH),
     expanded and used as it is: a link's .. there leads out of the folder
     written, as in --print-to-file's; its $ is expanded (~ too)."""
     script = {"tool": tool, "argv": [tool, *args, "--", "{url}"]}
