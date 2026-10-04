@@ -44,6 +44,10 @@ def test_media_types_by_their_own_name(env, client):
     assert "sandbox" in r.headers["Content-Security-Policy"]
     assert app._type_of("x.MP4") == "video/mp4" and app._type_of("x.opus") == "audio/ogg"
     assert app._type_of("x.svg") is None and app._type_of("x.html") is None
+    # Every extension the scanner indexes plays in the dashboard.
+    from parsers import MEDIA_EXT
+    from parsers.yt_dlp import AUDIO_EXT
+    assert all(app._type_of("x." + e) for e in MEDIA_EXT | AUDIO_EXT)
 
 
 EPS = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\nshowpage\n%%EOF\n"
@@ -126,14 +130,20 @@ def test_restore_moves_nothing_a_manifest_line_points_outside(env):
         {"from": str(outside / "autostart.desktop"), "to": str(tdir / "a.jpg"), "post": "p1", "batch": "b"},
         {"from": str(root / "stolen.jpg"), "to": str(outside / "secret"), "post": "p2", "batch": "b"},
         {"from": str(tdir / "again.jpg"), "to": str(tdir / "a.jpg"), "post": "p3", "batch": "b"},
+        {"from": str(root / "a\0b.jpg"), "to": str(tdir / "a.jpg"), "post": "p4", "batch": "b"},
+        {"from": str(root / "all"), "to": str(tdir), "post": "p5", "batch": "b"},
+        {"from": str(root / "sub"), "to": str(tdir / "sub"), "post": "p6", "batch": "b"},
     ]
+    (tdir / "sub").mkdir()
+    (tdir / "sub" / "b.jpg").write_bytes(b"b")
     (tdir / trash.MANIFEST).write_text("".join(json.dumps(x) + "\n" for x in lines))
-    report = trash.restore(["p1", "p2", "p3"], env["roots"])
+    report = trash.restore(["p1", "p2", "p3", "p4", "p5", "p6"], env["roots"])
     assert not (outside / "autostart.desktop").exists()
     assert (outside / "secret").read_bytes() == b"s" and not (root / "stolen.jpg").exists()
     assert (tdir / "a.jpg").exists()
-    assert report["files"] == 0 and len(report["errors"]) == 3
-    assert len(trash._read_manifest(str(root))) == 3                   # kept, as any line that failed
+    assert (tdir / "sub" / "b.jpg").exists() and not (root / "sub").exists() and not (root / "all").exists()
+    assert report["files"] == 0 and len(report["errors"]) == 6
+    assert len(trash._read_manifest(str(root))) == 6                   # kept, as any line that failed
 
 
 def test_dashboard_fallback_says_nothing_of_files_outside_it(env, client, monkeypatch):

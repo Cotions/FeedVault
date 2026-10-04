@@ -792,7 +792,8 @@ def restore(post_ids, roots, data_dir=None, keys=None):
                 src, dest = e.get("to"), e.get("from")
                 try:
                     # Read back, never trusted: out of this root's trash, into this root.
-                    if not (isinstance(src, str) and isinstance(dest, str) and _removable(src, root)):
+                    if not (isinstance(src, str) and isinstance(dest, str) and "\0" not in src + dest
+                            and _removable(src, root)) or os.path.isdir(src) and not os.path.islink(src):
                         raise TrashError("not a file in this root's trash")
                     _root_for(dest, [root])
                     if os.path.lexists(dest):

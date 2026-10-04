@@ -78,8 +78,9 @@ def _origin_guard():
         return jsonify({"ok": False, "error": f"missing {CSRF_HEADER} header"}), 403
     # Media cannot send a header, so another site's <img> or link reaches it:
     # refused when the browser says the page is not ours, before any work.
-    if (request.path.startswith("/media/") or request.path.startswith("/trash/") and request.path.endswith("/thumb")) \
-            and _foreign_origin():
+    media = request.path.startswith("/media/")
+    trash_thumb = request.path.startswith("/trash/") and request.path.endswith("/thumb")
+    if (media or trash_thumb) and _foreign_origin():
         abort(403)
     return None
 
