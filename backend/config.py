@@ -3,9 +3,12 @@
 The config lives in ~/.config/feedvault/config.json (or FEEDVAULT_CONFIG), never
 next to the code, so the repo holds the app only and a frozen binary works too.
 """
+import errno
 import json
 import os
+import stat
 import sys
+import tempfile
 import threading
 
 FROZEN     = getattr(sys, "frozen", False)
@@ -23,6 +26,8 @@ DEFAULT_DATA = os.path.join(
 )
 
 _lock = threading.Lock()
+# Held over a whole load, edit and save of config.json (POST /api/config).
+editing = threading.Lock()
 
 
 def config_path():
@@ -59,11 +64,42 @@ def load():
 def save(cfg):
     path = config_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
     with _lock:
-        with open(tmp, "w") as f:
-            json.dump(cfg, f, indent=2)
+        write_private(path, lambda f: json.dump(cfg, f, indent=2))
+
+
+def write_private(path, dump):
+    """Write ``path`` atomically, readable by its owner only (0600): ``dump(f)``
+    writes into a temp file of a unique name in its folder (mkstemp:
+    O_CREAT|O_EXCL, so never through a symlink left there), fsynced, renamed
+    over ``path``, then the folder fsynced. A file that was more open is
+    replaced by a 0600 one."""
+    folder = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)[:100]}.", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), 0o600)
+            dump(f)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    # The rename made durable. Some file systems (FUSE, CIFS, 9p) refuse to
+    # fsync a folder: the file is written all the same.
+    try:
+        dir_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError as e:
+        if e.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EACCES):
+            raise
 
 
 def clean_roots(roots):
@@ -92,10 +128,67 @@ def is_executable(path):
     return os.path.isabs(path) and os.path.isfile(path) and os.access(path, os.X_OK)
 
 
+def ancestors_refused(path):
+    """Why a folder above ``path`` (each one up to /, along its path as
+    written and as resolved) lets someone else swap what is below it: not
+    root's nor ours, or writable by group or others and not sticky. Else
+    None."""
+    seen, out = set(), []
+    for start in (os.path.dirname(os.path.abspath(path)), os.path.realpath(os.path.dirname(path))):
+        p = start
+        while p not in seen:
+            seen.add(p)
+            out.append(p)
+            up = os.path.dirname(p)
+            if up == p:
+                break
+            p = up
+    parent = os.path.dirname(os.path.abspath(path))
+    for p in out:
+        try:
+            st = os.stat(p)
+        except OSError as e:
+            return f"cannot read {p}: {e.strerror or e}"
+        what = f"its parent folder ({p})" if p == parent else f"a folder above it ({p})"
+        if not stat.S_ISDIR(st.st_mode):
+            return f"{what} is not a folder"
+        if st.st_uid not in (0, os.getuid()):
+            return f"{what} belongs to another user"
+        # A sticky folder (/tmp) lets nobody else rename or remove what is ours.
+        if st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX:
+            return f"{what} is writable by group or others (chmod go-w)"
+    return None
+
+
+def tool_refused(path):
+    """Why a tool's path from Settings may not run, else None: it must be an
+    executable file, and the file and its folder (where the path leads, and
+    the folder it is written in) root's or ours, not writable by group or
+    others, and the folders above those as ancestors_refused says: someone
+    else could swap the program FeedVault runs."""
+    if not is_executable(path):
+        return f"not an executable file: {path}"
+    real = os.path.realpath(path)
+    checks = [(real, "the file"), (os.path.dirname(real), "its folder")]
+    if os.path.dirname(path) != os.path.dirname(real):
+        checks.append((os.path.dirname(path), "its folder"))
+    for p, what in checks:
+        try:
+            st = os.stat(p)
+        except OSError as e:
+            return f"cannot read {p}: {e.strerror or e}"
+        if st.st_uid not in (0, os.getuid()):
+            return f"{what} ({p}) belongs to another user"
+        if st.st_mode & 0o022:
+            return f"{what} ({p}) is writable by group or others (chmod go-w)"
+    return ancestors_refused(os.path.dirname(real)) or ancestors_refused(os.path.dirname(os.path.abspath(path)))
+
+
 def clean_tools(tools, known):
     """Check {tool: path} from Settings: each a known tool, and a path to an
-    executable file named after it (``yt-dlp``, ``yt-dlp_linux``), or empty
-    to use PATH again. Returns (tools, error)."""
+    executable file named after it (``yt-dlp``, ``yt-dlp_linux``) that
+    nobody else can swap (tool_refused), or empty to use PATH again.
+    Returns (tools, error)."""
     if not isinstance(tools, dict) or not all(isinstance(v, str) or v is None for v in tools.values()):
         return None, "tools must map a tool name to a path"
     out = {}
@@ -110,6 +203,9 @@ def clean_tools(tools, known):
             return None, f"{name}: not an executable file: {path}"
         if not os.path.basename(path).lower().startswith(name):
             return None, f"{name}: the file must be named {name} (or start with it): {path}"
+        refused = tool_refused(path)
+        if refused:
+            return None, f"{name}: {refused}"
         out[name] = path
     return out, None
 

@@ -146,6 +146,9 @@ def _offline_root(folder, roots, conn):
 def _skipped(row, roots, conn):
     """Why a due source cannot run now, or None."""
     if jobs.tool_path(row["tool"]) is None:
+        why = jobs.tool_lookup(row["tool"])[1]
+        if why and "refused" in why:           # the path set in Settings: say why
+            return f"skipped: {why} (Settings → Downloaders)"
         return f"skipped: {row['tool']} was not found (Settings → Downloaders)"
     root = _offline_root(row["folder"], roots, conn)
     if root is not None:

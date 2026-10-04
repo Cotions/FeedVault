@@ -164,6 +164,7 @@ def test_a_script_of_another_owner_is_refused(client, folder, monkeypatch):
     # The folder is then someone else's too: nothing in it is listed.
     assert "belongs to another user" in body["dir_refused"]
     monkeypatch.setattr(scripts, "_folder_refused", lambda *a, **k: None)
+    monkeypatch.setattr(scripts, "_ancestors_refused", lambda *a, **k: None)
     assert "belongs to another user" in refusal(client, "theirs")
 
 
@@ -1042,6 +1043,7 @@ def test_refused_scripts_are_never_run(client, folder, runner, env, tmp_path, mo
     got = client.get("/api/scripts/theirs", headers=H)
     assert got.status_code == 404 and "the scripts folder belongs to another user" in got.get_json()["error"]
     monkeypatch.setattr(scripts, "_folder_refused", lambda *a, **k: None)
+    monkeypatch.setattr(scripts, "_ancestors_refused", lambda *a, **k: None)
     assert "belongs to another user" in run(client, "theirs", status=400, target="x")["error"]
     assert runner.runs() == [] and jobs.active() == []
 
@@ -3225,3 +3227,100 @@ def test_a_placeholder_in_an_instaloader_filter_is_refused(args):
     _, error = scripts.parse_command(json.dumps({"needs": "target", "argv": ["instaloader", *args, "--", "{target}"]}))
     assert error.startswith(f"{args[0].partition('=')[0]}'s value can reach Python (instaloader evaluates it)")
     assert "the post's own attributes" in error
+
+
+# ---------------------------------------------------------------------------
+# Hardening (#73)
+# ---------------------------------------------------------------------------
+
+def test_a_shell_script_runs_the_bytes_that_were_checked(client, folder, runner, env, monkeypatch):
+    """Swapped after its SHA-256 was checked, right before it starts: what
+    was checked runs, never the new file."""
+    out = env["tmp"] / "out.txt"
+    path = write(folder, "swap.sh", f"#!/bin/sh\n# needs: none\necho checked > {out}\n", 0o755)
+    say = scripts._say
+
+    def swap_after_check(script, vals, note):
+        got = say(script, vals, note)
+        swapped = folder / "swapped.tmp"
+        swapped.write_text(f"#!/bin/sh\n# needs: none\necho swapped > {out}\n")
+        swapped.chmod(0o755)
+        os.replace(swapped, path)
+        return got
+
+    monkeypatch.setattr(scripts, "_say", swap_after_check)
+    job = run(client, "swap")["job"]
+    assert ended(job["id"])["state"] == "done"
+    assert out.read_text() == "checked\n"
+
+
+def test_a_shell_scripts_dollar_zero_and_fv_script(client, folder, runner, env):
+    out = env["tmp"] / "out.txt"
+    path = write(folder, "who.sh", f"#!/bin/sh\n# needs: none\nprintf '%s\\n' \"$0\" \"$FV_SCRIPT\" > {out}\n", 0o755)
+    job = run(client, "who")["job"]
+    assert ended(job["id"])["state"] == "done"
+    zero, fv_script = out.read_text().splitlines()
+    assert re.fullmatch(r"/dev/fd/\d+", zero) and fv_script == str(path)
+    assert f"[feedvault] FV_SCRIPT={path}" in log_of(client, job["id"])
+
+
+def test_the_kernels_reading_of_a_shebang():
+    assert jobs._interpreter(b"#!/bin/sh\necho") == ["/bin/sh"]
+    assert jobs._interpreter(b"#! /usr/bin/env  python3 -u \n") == ["/usr/bin/env", "python3 -u"]
+    assert jobs._interpreter(b"#!/bin/sh\t-e\n") == ["/bin/sh", "-e"]
+    for bad in (b"echo hi\n", b"#!sh\n", b"#!\n", b"#!/bin/sh\0x\n"):
+        assert jobs._interpreter(bad) is None
+
+
+@pytest.fixture
+def deep(tmp_path, monkeypatch):
+    """A config folder two levels below ``tmp_path/top``, its scripts folder
+    holding one command."""
+    top = tmp_path / "top"
+    (top / "mid" / "cfg" / "scripts").mkdir(parents=True)
+    for d in (top, top / "mid", top / "mid" / "cfg", top / "mid" / "cfg" / "scripts"):
+        d.chmod(0o755)
+    monkeypatch.setenv("FEEDVAULT_CONFIG", str(top / "mid" / "cfg" / "config.json"))
+    write(top / "mid" / "cfg" / "scripts", "mine.json", COMMAND)
+    yield top
+    top.chmod(0o755)
+
+
+def test_a_folder_above_the_scripts_folder_writable_by_others_is_refused(env, deep):
+    assert scripts.get("mine")["refused"] is None
+    deep.chmod(0o777)
+    refused = scripts.listing()["dir_refused"]
+    assert refused == f"a folder above it ({deep}) is writable by group or others (chmod go-w)"
+    assert scripts.get("mine") is None
+    with pytest.raises(jobs.BadRequest, match="writable by group or others"):
+        scripts.runnable("mine")
+    deep.chmod(0o1777)                         # sticky: nobody else can swap what is ours in it
+    assert scripts.get("mine")["refused"] is None
+
+
+def test_a_folder_above_the_scripts_folder_of_another_user_is_refused(env, deep, monkeypatch):
+    real_stat = os.stat
+
+    def theirs(path, *a, **k):
+        st = real_stat(path, *a, **k)
+        if os.fspath(path) == str(deep):
+            return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, os.getuid() + 1, *st[5:10]))
+        return st
+
+    monkeypatch.setattr(scripts.os, "stat", theirs)
+    assert scripts.listing()["dir_refused"] == f"a folder above it ({deep}) belongs to another user"
+
+
+def test_a_folder_above_the_scripts_folder_through_a_symlink_is_checked_where_it_leads(env, deep, tmp_path,
+                                                                                      monkeypatch):
+    # cfg is reached through a link in a safe folder; where it leads is open to others.
+    (tmp_path / "safe").mkdir(mode=0o755)
+    (tmp_path / "safe" / "cfg").symlink_to(deep / "mid" / "cfg")
+    monkeypatch.setenv("FEEDVAULT_CONFIG", str(tmp_path / "safe" / "cfg" / "config.json"))
+    assert scripts.get("mine")["refused"] is None
+    (deep / "mid").chmod(0o777)
+    try:
+        assert scripts.listing()["dir_refused"] == \
+            f"a folder above it ({deep / 'mid'}) is writable by group or others (chmod go-w)"
+    finally:
+        (deep / "mid").chmod(0o755)

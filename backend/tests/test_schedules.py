@@ -527,3 +527,14 @@ def test_one_reading_of_a_stored_last_result():
     for v in (None, "", "not json", "[1]", "3", "null"):
         assert sources.last_result(row(v)) is None
     assert sources.last_result(None) is None
+
+
+def test_a_refused_tool_path_is_the_reason_a_due_source_is_skipped(env, client, queued, monkeypatch):
+    """#73 review: not "was not found" when the path set in Settings is refused."""
+    s = add(client, X, schedule="hourly")
+    why = "gallery-dl: the path set in Settings is refused: the file (/x/gallery-dl) is writable by group or others"
+    monkeypatch.setattr(jobs, "tool_path", lambda name: None)
+    monkeypatch.setattr(jobs, "tool_lookup", lambda name: (None, why))
+    assert scheduler.tick() == []
+    got = client.get(f"/api/sources/{s['id']}", headers=H).get_json()["schedule"]
+    assert got["skipped"] == f"skipped: {why} (Settings → Downloaders)"

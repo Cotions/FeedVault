@@ -111,6 +111,15 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
 
+A media file (its poster, what a thumbnail is made from) is served only when
+what it opens as, symlinks followed, is inside a media root and outside its
+`.feedvault-trash`: else 404. It is opened once and that is what is checked
+and sent, so a file swapped for a symlink meanwhile is not served. A scan
+never indexes a symlink that leads out of every media root or into a trash;
+it is listed as unmatched ("a symlink that leads out of the media roots (or
+into a trash): not indexed"). A symlink that stays inside a media root (its
+own or another) is indexed and served as any file.
+
 ## New posts
 
 A post is **new** when the index first had it after the user last marked
@@ -467,7 +476,10 @@ A post can be marked **kept**. Deciding to trash it is just `/api/delete`.
 Decisions live in their own table, untouched by rescans, and are also written
 to `<data_directory>/userdata/decisions.json` (2 s after the last change) so
 they survive rebuilding the index. An older `<data_directory>/decisions.json`
-is still read when the new file does not exist.
+is still read when the new file does not exist. Every `userdata/*.json` file,
+like `config.json`, is written readable by you only (0600, a file that was
+more open is tightened on its next write), through a temp file of a unique
+name in the same folder, fsynced, renamed over it, the folder fsynced.
 
 | Method | Path | Returns |
 |---|---|---|
@@ -2095,14 +2107,23 @@ are not exported to `userdata/`.
 
 ### Tools
 
-`instaloader`, `gallery-dl`, `yt-dlp` and `ffmpeg` are found on `PATH`, or
-at the path set for them in Settings (`tools` in `config.json`, for a tool
+`instaloader`, `gallery-dl`, `yt-dlp` and `ffmpeg` are found on `PATH` (its
+absolute folders only: an empty or relative entry, `.`, is skipped, so a
+tool is never looked up in a job's working folder), or at the path set for
+them in Settings (`tools` in `config.json`, for a tool
 installed in a virtualenv). `POST /api/config` with `{ "tools": { "yt-dlp":
 "/abs/path" } }` sets one (an empty string clears it, back to `PATH`); the
 other tools are left as they are. A path must be absolute, an executable
-file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); anything else is
-refused. A set path that stops working makes jobs fail with "not found"
-rather than fall back to `PATH`.
+file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); the file and its
+folder (the one it is in, and where it leads when it is a symlink) must be
+root's or yours and not writable by group or others, and every folder above
+those root's or yours and not writable by group or others unless sticky
+(`/tmp`), so nobody else can swap the program FeedVault runs; anything else
+is refused. This is checked
+again each time the tool is looked for: a set path that stops working, or
+that someone else could swap by now, makes jobs fail with the reason
+("not found at the path set in Settings", "the path set in Settings is
+refused: …") rather than fall back to `PATH`.
 
 ### Downloaders
 
@@ -2122,6 +2143,7 @@ A tool:
   "path": "/home/me/.local/bin/yt-dlp",
   "real_path": "/home/me/.local/share/pipx/venvs/yt-dlp/bin/yt-dlp",
   "configured": null,
+  "path_error": null,
   "install": "pipx",
   "venv": "/home/me/.local/share/pipx/venvs/yt-dlp",
   "version": "2026.08.06",
@@ -2136,8 +2158,11 @@ A tool:
 
 - `path`: the executable a job would run (the path set in Settings, else the
   first on `PATH`); `null` when there is none, or the path set no longer
-  works. `real_path`: where it really is when `path` is a symlink, else `null`.
+  works or is refused (see [Tools](#tools)). `real_path`: where it really is
+  when `path` is a symlink, else `null`.
 - `configured`: the path set in Settings, or `null`.
+- `path_error`: why the path set in Settings is not used (shown in
+  Settings instead of "not found"), else `null`.
 - `install`, read from `real_path`: `venv` (in the `bin/` folder of a
   virtualenv: `pyvenv.cfg` beside that folder), `pipx` (the same, the
   virtualenv inside pipx's `venvs` folder: `$PIPX_HOME/venvs`, else
@@ -2288,9 +2313,13 @@ be run as they are, or copied into a file.
 echo "$FV_URL" | while read -r l; do echo "got: $l"; done
 ```
 
-It is run as the file itself, never as `sh -c` of its text. Its inputs
-are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
-`FV_DATA_DIR` and `FV_ARCHIVE`. The rest of its environment is minimal:
+It runs from the exact bytes whose SHA-256 was checked right before it
+starts, never from its file again (nor as `sh -c` of its text): they are
+put in a sealed memfd, and its `#!` interpreter (read as the kernel reads
+it: the path, then at most one argument, the rest of the line) runs
+`/dev/fd/N`. So `$0` is `/dev/fd/N`, not the file's path; `FV_SCRIPT` is
+the file's path. Its inputs are only environment variables: `FV_TARGET`,
+`FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE`. The rest of its environment is minimal:
 `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME`,
 `TMPDIR` and the `XDG_*_HOME` folders. The header keys are `name`,
 `description`, `needs` and `rescan`; `needs` is required.
@@ -2317,7 +2346,9 @@ are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
 **Refused**, listed with `refused` saying why and never run:
 
 - the folder itself when it is a symlink, someone else's, or writable by
-  group or others;
+  group or others, or when a folder above it, up to `/` (along its path as
+  written and as resolved), is neither root's nor yours, or is writable by
+  group or others without being sticky (`/tmp`);
 - a file that is a symlink, not a regular file, someone else's, writable
   by group or others, over 64 KiB, or named otherwise than
   `[a-z0-9_-]{1,64}` + `.json` / `.sh` (anything else in the folder is
@@ -2380,7 +2411,8 @@ could not be read.
 - `argv` is the command as run, or the script's path. `argv` and `params`
   are scrubbed as output is (`health.scrub`).
 - The log starts with `[feedvault]` lines: the script's path, its
-  SHA-256 and, for a shell script, each `FV_*` value it was given.
+  SHA-256 and, for a shell script, each `FV_*` value it was given
+  (`FV_SCRIPT` too).
 - The `rescan` folder is indexed once it exits 0, as for any job.
 
 **On a source.** A source's `script` option (a script id, or `null`; see

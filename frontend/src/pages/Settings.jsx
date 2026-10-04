@@ -351,7 +351,7 @@ function DownloaderRow({ info, saved, test, update, onSaved, shownLog, showLog }
         <code className="tool-name">{tool}</code>
         <span className={`chip dl-install dl-install-${info.install}`}>{info.install}</span>
         <span className={`tool-status${info.version ? " is-ok" : " is-err"}`}>
-          {info.version || (info.found ? info.version_error || "no version" : "not found")}
+          {info.version || (info.found ? info.version_error || "no version" : info.path_error || "not found")}
         </span>
         {latest && (latest.version
           ? (info.outdated

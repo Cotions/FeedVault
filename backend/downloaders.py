@@ -133,8 +133,8 @@ def detect(tool, cfg=None):
     version, error = run_version(path, tool) if path else (None, None)
     real = os.path.realpath(path) if path else None
     return {"tool": tool, "found": path is not None, "path": path, "real_path": real if real != path else None,
-            "configured": configured or None, "install": kind, "venv": venv,
-            "version": version, "version_error": error}
+            "configured": configured or None, "path_error": jobs.tool_lookup(tool)[1] if path is None and configured else None,
+            "install": kind, "venv": venv, "version": version, "version_error": error}
 
 
 _lock = threading.Lock()                       # the cache

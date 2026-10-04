@@ -11,6 +11,11 @@ const BACKEND = 'http://127.0.0.1:3380'
 export default defineConfig({
   plugins: [react()],
   server: {
+    // No CORS: Vite's default answers any localhost origin, so a page on
+    // another localhost port could call the proxied /api (changeOrigin
+    // rewrites Host). And always this port, never another one.
+    cors: false,
+    strictPort: true,
     proxy: {
       '/api':   { target: BACKEND, changeOrigin: true },
       '/media': { target: BACKEND, changeOrigin: true },

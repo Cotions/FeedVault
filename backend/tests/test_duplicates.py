@@ -562,11 +562,11 @@ def test_resolve_partial_failure_keeps_the_copy(env, client):
 def test_resolve_never_follows_a_symlink_out_of_the_roots(env, client, tmp_path):
     outside = tmp_path / "outside.jpg"
     _, copy_base = two_folders(env, kind="image")
-    shutil.copyfile(copy_base + ".jpg", outside)
-    os.remove(copy_base + ".jpg")
-    os.symlink(outside, copy_base + ".jpg")
+    # Swapped for a symlink after the scan (a scan would not index it: #73).
     run_scan(env)
     hashing.run_pass(db.connect())
+    os.rename(copy_base + ".jpg", outside)    # the same file, unchanged since it was hashed
+    os.symlink(outside, copy_base + ".jpg")
     g = listing(client)["groups"][0]
     assert g["identical"] is True
     r = client.post("/api/duplicates/resolve", json={"group": g["id"], "keep": "instagram:P1"}, headers=H).get_json()

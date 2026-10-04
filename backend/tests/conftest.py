@@ -16,7 +16,8 @@ import toolguard  # noqa: E402
 # ---------------------------------------------------------------------------
 # Where the backend finds or starts a program:
 #   jobs.tool_path              the path set in Settings, else shutil.which (the four TOOLS, pipx)
-#   jobs._run                   Popen([exe, *args]): every job (syncs, tool-version, test, update)
+#   jobs._run                   Popen([exe, *args]): every job (syncs, tool-version, test, update);
+#                               a shell script: Popen([its #! interpreter, /dev/fd/N]) of a memfd
 #   downloaders.run_version     Popen([path, --version]) of what tool_path found
 #   downloaders.update_plan     shutil.which("pipx"); the update job runs pip or pipx through jobs
 #   archives._read_formats      Popen([gallery-dl's own Python, -c]) from its shebang
@@ -107,6 +108,15 @@ def tool_guard(tmp_path, tmp_path_factory, monkeypatch):
     if guard.violations:
         pytest.fail("reached a program or the network outside the fakes:\n" + "\n".join(guard.violations),
                     pytrace=False)
+
+
+@pytest.fixture(autouse=True)
+def umask():
+    """The usual 022 whatever the shell's (002 makes every folder a test
+    creates group-writable, which a tool path from Settings may not be: #73)."""
+    old = os.umask(0o022)
+    yield
+    os.umask(old)
 
 
 def pytest_sessionfinish(session, exitstatus):

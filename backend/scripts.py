@@ -11,15 +11,19 @@ A script's id is its file name without the suffix. Two kinds:
   "argv"}``, ``argv`` a list run as it is (see substitute), its first item
   a downloader (found through jobs.tool_path) or an absolute path;
 - a shell script, ``<id>.sh``: an executable file with an absolute ``#!``,
-  and a header of comment lines (``# needs: url``). It is run as the file
-  itself; its inputs are FV_* environment variables only.
+  and a header of comment lines (``# needs: url``). It runs from the bytes
+  whose SHA-256 was checked right before it starts, never from its file
+  again: its ``#!`` interpreter is given them as /dev/fd/N (a sealed memfd,
+  jobs.Script), so ``$0`` is /dev/fd/N and FV_SCRIPT its file's path. Its
+  inputs are FV_* environment variables only.
 
 ``needs`` (target, url or none) says which input it takes; ``rescan`` the
 folder indexed once it has run.
 
 Read strictly, and listed with the reason when refused, never run: the
 folder must be a folder (no symlink), ours, not writable by group or
-others, nor its parent (unless sticky); a file must be a regular file
+others, and every folder above it (as written and as resolved) root's or
+ours, not writable by group or others unless sticky; a file must be a regular file
 directly in it (opened without following a symlink, checked again on what
 was opened), ours, not writable by group or others, at most SIZE_MAX,
 named ``[a-z0-9_-]{1,64}`` + ``.json`` / ``.sh``; a shell script
@@ -129,6 +133,7 @@ SHELL_TEMPLATE = """#!/bin/sh
 #
 # Its inputs are environment variables only, never pasted into this text:
 # FV_TARGET FV_URL FV_ROOT FV_DATA_DIR FV_ARCHIVE. Quote them: "$FV_URL".
+# $0 is /dev/fd/N (the bytes FeedVault checked); FV_SCRIPT is this file's path.
 set -eu
 echo "downloading $FV_URL into $FV_ROOT"
 """
@@ -583,7 +588,7 @@ def _entry(name, folder):
             "mtime": None}
 
 
-def _folder_refused(st, what, sticky_ok=False):
+def _folder_refused(st, what):
     """Why a folder (its lstat) may not hold scripts, else None."""
     if stat.S_ISLNK(st.st_mode):
         return f"{what} is a symlink"
@@ -591,10 +596,14 @@ def _folder_refused(st, what, sticky_ok=False):
         return f"{what} is not a folder"
     if st.st_uid != os.getuid():
         return f"{what} belongs to another user"
-    # A sticky folder (/tmp) lets nobody else rename or remove what is ours.
-    if st.st_mode & 0o022 and not (sticky_ok and st.st_mode & stat.S_ISVTX):
+    if st.st_mode & 0o022:
         return f"{what} is writable by group or others (chmod go-w)"
     return None
+
+
+def _ancestors_refused(folder):
+    """config.ancestors_refused: the folders above the scripts folder."""
+    return config.ancestors_refused(folder)
 
 
 def _file_refused(st, kind):
@@ -660,13 +669,12 @@ def _read(name, folder, dir_fd):
 def _files():
     """(the folder's refusal or None, [(script dict, raw bytes or None)] by
     name). Nothing is listed from a folder that is refused: a symlink,
-    someone else's, writable by others, or in a parent others can write to."""
+    someone else's, writable by others, or below a folder others can write
+    to (_ancestors_refused)."""
     folder = scripts_dir()
-    parent = os.path.dirname(folder)
     try:
         st = os.lstat(folder)
-        refused = _folder_refused(st, "the scripts folder") \
-            or _folder_refused(os.stat(parent), f"its parent folder ({parent})", sticky_ok=True)
+        refused = _folder_refused(st, "the scripts folder") or _ancestors_refused(folder)
         if refused:
             return refused, []
         dir_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -729,10 +737,11 @@ def listing():
             "scripts": [_builtin(n) for n in BUILTINS] + [s for s, _ in found]}
 
 
-def lookup(sid, content=False):
+def lookup(sid, content=False, raw=False):
     """(one script by id, read now, or None; the scripts folder's refusal
     or None). ``content``: with its text (the file's, or a built-in's JSON
-    as a file would hold it)."""
+    as a file would hold it); ``raw``: with its bytes as read ("raw", None
+    for a built-in), the ones its sha256 is of."""
     if not isinstance(sid, str) or not ID_RE.fullmatch(sid):
         return None, None
     if sid.startswith(BUILTIN):
@@ -744,11 +753,13 @@ def lookup(sid, content=False):
             out["content"] = template(name)
         return out, None
     refused, found = _read_folder()
-    for s, raw in found:
+    for s, data in found:
         if s["id"] == sid and s["kind"] is not None:
             s = dict(s)                        # its own: the read may be read_once's, shared
             if content:
-                s["content"] = raw.decode("utf-8", "replace") if raw is not None else None
+                s["content"] = data.decode("utf-8", "replace") if data is not None else None
+            if raw:
+                s["raw"] = data
             return s, None
     return None, refused
 
@@ -988,14 +999,16 @@ def _spec(script, vals, cfg, rescan):
     if script["kind"] == "command":
         argv = command(script, vals)
         return {"tool": argv[0], "args": argv[1:], "cwd": cwd, "rescan": rescan, "group": group(script)}
-    return {"tool": script["path"], "args": [], "env": shell_env(vals), "cwd": cwd, "rescan": rescan,
-            "group": group(script)}
+    # Shown as its path; what runs is the check's jobs.Script, its bytes.
+    return {"tool": script["path"], "args": [], "env": {**shell_env(vals), "FV_SCRIPT": script["path"]},
+            "cwd": cwd, "rescan": rescan, "group": group(script)}
 
 
-def runnable(sid, sha256=None):
+def runnable(sid, sha256=None, raw=False):
     """The script ``sid``, read now, when it may run (and is still the one
-    whose SHA-256 is ``sha256``, when given). Raises jobs.BadRequest."""
-    script, refused = lookup(sid)
+    whose SHA-256 is ``sha256``, when given; ``raw``: with the bytes that
+    is of, see lookup). Raises jobs.BadRequest."""
+    script, refused = lookup(sid, raw=raw)
     if script is None:
         raise jobs.BadRequest(missing(sid, refused))
     return _usable(script, sha256)
@@ -1013,14 +1026,19 @@ def _usable(script, sha256=None):
 
 
 def _say(script, vals, note):
-    """The log's first lines: what runs, and a shell script's inputs."""
+    """The log's first lines: what runs, and a shell script's inputs. What
+    the check returns: a shell script's jobs.Script (the bytes just checked,
+    which run), else None."""
     if script["builtin"]:
         note(f"built-in script {script['id']}")
     else:
         note(f"script {script['path']} (sha256 {script['sha256'][:16]}…)")
-    if script["kind"] == "shell":
-        for k, v in vals.items():
-            note(f"FV_{k.upper()}={v}")
+    if script["kind"] != "shell":
+        return None
+    for k, v in vals.items():
+        note(f"FV_{k.upper()}={v}")
+    note(f"FV_SCRIPT={script['path']}")
+    return jobs.Script(script["path"], script["raw"])
 
 
 # ---------------------------------------------------------------------------
@@ -1082,11 +1100,11 @@ def _check(params, note):
     """Right before it starts: the script is read again, and must be the
     one it was queued with."""
     try:
-        script = runnable(params["script"], params.get("sha256"))
+        script = runnable(params["script"], params.get("sha256"), raw=True)
     except jobs.BadRequest as e:
         note(str(e))
         raise
-    _say(script, _vals(script, params, config.load()), note)
+    return _say(script, _vals(script, params, config.load()), note)
 
 
 def _tool_pause(tool):
@@ -1220,12 +1238,12 @@ def _sync_check(params, note):
             runnable(params["script"])
             why = params.get("why") or "it could not be run"
             raise jobs.BadRequest(f"{why}; that was when the sync was queued, it can run now: sync again")
-        script = runnable(params["script"], params["sha256"])
+        script = runnable(params["script"], params["sha256"], raw=True)
     except jobs.BadRequest as e:
         message = f"the source's script: {e}"
         note(message)
         raise jobs.BadRequest(message)
-    _say(script, _source_values(script, src, config.load()), note)
+    return _say(script, _source_values(script, src, config.load()), note)
 
 
 def _tool(params):
