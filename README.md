@@ -264,6 +264,9 @@ history). The folder is read again each time, so an edit counts at once.
   `{_path}`) or a shell script. So is one in a gallery-dl format string
   that starts with `\f` (`-f "\fE …"`, `--print "post:\fF …"`: Python or
   a template file); a plain one (`-f "{url}"`) is fine, the value's braces escaped.
+  In `--print-to-file FORMAT FILE` only FILE's name is a format string:
+  its folder (up to the last `/`) keeps a value as it is, and a run whose
+  value puts a `$` there (expanded) or `\f` in the name is refused.
 - **A shell script**, `my-script.sh`, executable, with a `#!` line and a
   `# needs: url` (or `target`, `none`) header. It gets its inputs only as
   `FV_TARGET`, `FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE` in a
