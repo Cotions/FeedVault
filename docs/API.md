@@ -112,11 +112,13 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
 
 A media file (its poster, what a thumbnail is made from) is served only when
-its real path, symlinks followed, is inside a media root and outside its
-`.feedvault-trash`: else 404. A scan never indexes a symlink that leads out
-of its root or into its trash; it is listed as unmatched ("a symlink that
-leads out of the media root (or into its trash): not indexed"). A symlink
-that stays inside its root is indexed and served as any file.
+what it opens as, symlinks followed, is inside a media root and outside its
+`.feedvault-trash`: else 404. It is opened once and that is what is checked
+and sent, so a file swapped for a symlink meanwhile is not served. A scan
+never indexes a symlink that leads out of every media root or into a trash;
+it is listed as unmatched ("a symlink that leads out of the media roots (or
+into a trash): not indexed"). A symlink that stays inside a media root (its
+own or another) is indexed and served as any file.
 
 ## New posts
 
@@ -2114,8 +2116,10 @@ installed in a virtualenv). `POST /api/config` with `{ "tools": { "yt-dlp":
 other tools are left as they are. A path must be absolute, an executable
 file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); the file and its
 folder (the one it is in, and where it leads when it is a symlink) must be
-root's or yours and not writable by group or others, so nobody else can
-swap the program FeedVault runs; anything else is refused. This is checked
+root's or yours and not writable by group or others, and every folder above
+those root's or yours and not writable by group or others unless sticky
+(`/tmp`), so nobody else can swap the program FeedVault runs; anything else
+is refused. This is checked
 again each time the tool is looked for: a set path that stops working, or
 that someone else could swap by now, makes jobs fail with the reason
 ("not found at the path set in Settings", "the path set in Settings is

@@ -902,3 +902,18 @@ def test_absolute_path_entries_beside_relative_ones_still_count(runner, monkeypa
     monkeypatch.setenv("PATH", f".::{tool.parent}")
     assert jobs.tool_path("yt-dlp") == str(tool)
     assert jobs.tool_path(str(tool)) == str(tool)
+
+
+def test_a_tool_path_below_a_folder_others_can_write_to_is_refused(env, client):
+    """#73 review: the folders above the tool's folder count too (sticky ones excepted)."""
+    top = env["tmp"] / "tools"
+    (top / "venv").mkdir(parents=True)
+    tool = _own_tool(top / "venv" / "bin")
+    top.chmod(0o777)
+    try:
+        r = client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()
+        assert r["error"] == f"yt-dlp: a folder above it ({top}) is writable by group or others (chmod go-w)"
+        top.chmod(0o1777)
+        assert client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()["ok"]
+    finally:
+        top.chmod(0o755)

@@ -602,32 +602,8 @@ def _folder_refused(st, what):
 
 
 def _ancestors_refused(folder):
-    """Why a folder above ``folder`` (each one up to /, along its path as
-    written and as resolved) lets someone else swap what is in it: not
-    root's nor ours, or writable by group or others and not sticky. Else
-    None."""
-    seen, out = set(), []
-    for start in (os.path.dirname(os.path.abspath(folder)), os.path.realpath(os.path.dirname(folder))):
-        p = start
-        while p not in seen:
-            seen.add(p)
-            out.append(p)
-            up = os.path.dirname(p)
-            if up == p:
-                break
-            p = up
-    parent = os.path.dirname(os.path.abspath(folder))
-    for p in out:
-        st = os.stat(p)
-        what = f"its parent folder ({p})" if p == parent else f"a folder above it ({p})"
-        if not stat.S_ISDIR(st.st_mode):
-            return f"{what} is not a folder"
-        if st.st_uid not in (0, os.getuid()):
-            return f"{what} belongs to another user"
-        # A sticky folder (/tmp) lets nobody else rename or remove what is ours.
-        if st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX:
-            return f"{what} is writable by group or others (chmod go-w)"
-    return None
+    """config.ancestors_refused: the folders above the scripts folder."""
+    return config.ancestors_refused(folder)
 
 
 def _file_refused(st, kind):

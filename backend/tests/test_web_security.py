@@ -257,3 +257,53 @@ def test_the_scanner_skips_a_symlink_that_leads_out_of_the_root(env, client, tmp
     scanner.index_dirs(env["roots"], [str(env["media"] / "alice")], new=True)
     assert conn.execute("SELECT 1 FROM posts WHERE id = 'instagram:P2'").fetchone() is None
     assert base + ".jpg" not in {r[0] for r in conn.execute("SELECT path FROM media")}
+
+
+def test_a_file_swapped_for_a_symlink_after_the_check_is_not_served(env, client, tmp_path, monkeypatch):
+    """#73 review: what is checked is what was opened, never the path again."""
+    import app
+    base = _one_post(env)
+    [m] = _media_of(client, "instagram/P1")
+    original = open(base + ".jpg", "rb").read()
+    secret = tmp_path / "secret.jpg"
+    secret.write_bytes(b"secret")
+    in_roots = scanner.in_roots
+
+    def swap_after_check(path, roots):
+        ok = in_roots(path, roots)
+        if os.path.exists(base + ".jpg") and not os.path.islink(base + ".jpg"):
+            os.rename(base + ".jpg", tmp_path / "was.jpg")
+            os.symlink(secret, base + ".jpg")
+        return ok
+
+    monkeypatch.setattr(app.scanner, "in_roots", swap_after_check)
+    r = client.get(f"/media/{m['id']}")
+    assert r.status_code == 200 and r.data == original
+
+
+def test_a_range_request_still_works(env, client):
+    base = _one_post(env)
+    [m] = _media_of(client, "instagram/P1")
+    data = open(base + ".jpg", "rb").read()
+    r = client.get(f"/media/{m['id']}", headers={"Range": "bytes=2-5"})
+    assert r.status_code == 206 and r.data == data[2:6]
+    assert r.headers["Content-Range"] == f"bytes 2-5/{len(data)}"
+    etag = client.get(f"/media/{m['id']}").headers["ETag"]
+    assert client.get(f"/media/{m['id']}", headers={"If-None-Match": etag}).status_code == 304
+
+
+def test_a_symlink_into_another_media_root_is_indexed_and_served(env, client, tmp_path):
+    """#73 review: one root's symlink into another root is in the media roots."""
+    import config
+    from fakes import owner, write_post
+    other = tmp_path / "other-root"
+    other.mkdir()
+    cfg = config.load()
+    cfg["media_roots"] = [str(env["media"]), str(other)]
+    config.save(cfg)
+    base = write_post(env["media"] / "alice", "P1", 1717243200, owner("alice.example", 111), "image")
+    shutil.move(base + ".jpg", other / "p1.jpg")
+    os.symlink(other / "p1.jpg", base + ".jpg")
+    scanner.scan(cfg["media_roots"])
+    [m] = _media_of(client, "instagram/P1")
+    assert client.get(f"/media/{m['id']}").status_code == 200

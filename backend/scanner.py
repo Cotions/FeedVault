@@ -9,8 +9,8 @@ replaced database), or builds a media root's part of it from nothing (a root
 just added, with nothing indexed under it yet), or files come back from the
 trash or a duplicate move: those were there before.
 
-A file whose real path (symlinks followed) is outside its media root, or in
-the root's trash, is never indexed: it is listed as unmatched with the
+A file whose real path (symlinks followed) is outside every media root, or
+in a root's trash, is never indexed: it is listed as unmatched with the
 reason (LEADS_OUT), and /media never serves one (in_roots).
 """
 import json
@@ -28,7 +28,7 @@ import userdata
 # (Dot-folders, including FeedVault's own .feedvault-trash, are skipped too.)
 _SKIP_DIRS = {"venv", "node_modules", "__pycache__", "site-packages"}
 TRASH_NAME = ".feedvault-trash"                # trash.py's trash folder, in each root
-LEADS_OUT = "a symlink that leads out of the media root (or into its trash): not indexed"
+LEADS_OUT = "a symlink that leads out of the media roots (or into a trash): not indexed"
 
 _lock = threading.Lock()
 _state = {"running": False, "last": None}
@@ -63,27 +63,26 @@ def run(roots):
     return status()["last"]
 
 
-def inside(path, root):
-    """Whether ``path``, symlinks followed, is inside ``root`` (resolved too)
-    and not in its trash."""
-    real, r = os.path.realpath(path), os.path.realpath(root)
-    return real.startswith(r.rstrip(os.sep) + os.sep) and not real.startswith(os.path.join(r, TRASH_NAME) + os.sep)
-
-
 def in_roots(path, roots):
-    """Whether ``path``, symlinks followed, is inside one of ``roots`` and
-    not in its trash."""
-    return any(inside(path, r) for r in roots)
+    """Whether ``path``, symlinks followed, is inside one of ``roots`` (no
+    root is inside another: config.clean_roots) and not in its trash."""
+    real = os.path.realpath(path)
+    for root in roots:
+        r = os.path.realpath(root)
+        if real.startswith(r.rstrip(os.sep) + os.sep):
+            return not real.startswith(os.path.join(r, TRASH_NAME) + os.sep)
+    return False
 
 
-def _leading_out(root, dirpath, names):
-    """(``names`` in ``dirpath`` that stay in ``root``, [(path, LEADS_OUT)]
-    for the symlinks among them that lead out of it or into its trash).
-    os.walk never enters a symlinked folder: only files are looked at."""
+def _leading_out(roots, dirpath, names):
+    """(``names`` in ``dirpath`` that stay in the media roots, [(path,
+    LEADS_OUT)] for the symlinks among them that lead out of every root or
+    into a trash). os.walk never enters a symlinked folder: only files are
+    looked at."""
     kept, out = [], []
     for n in names:
         path = os.path.join(dirpath, n)
-        if os.path.islink(path) and not inside(path, root):
+        if os.path.islink(path) and not in_roots(path, roots):
             out.append((path, LEADS_OUT))
         else:
             kept.append(n)
@@ -154,7 +153,7 @@ def _scan(roots):
                 dirnames[:] = []
                 continue
             dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS)
-            names, out = _leading_out(root, dirpath, [n for n in filenames if not n.startswith(".")])
+            names, out = _leading_out(roots, dirpath, [n for n in filenames if not n.startswith(".")])
             unmatched.extend((path, *_size_mtime(path), reason) for path, reason in out)
             if not names:
                 continue
@@ -291,7 +290,7 @@ def index_dirs(roots, dirs, new=False, since=None):
             if root is None or not os.path.isdir(d):
                 continue
             names = [n for n in os.listdir(d) if not n.startswith(".") and os.path.isfile(os.path.join(d, n))]
-            names, out = _leading_out(root, d, names)
+            names, out = _leading_out(roots, d, names)
             unmatched.extend((path, *_size_mtime(path), reason) for path, reason in out)
             result = parsers.parse_dir(root, d, names)
             profiles.extend(result.profiles)

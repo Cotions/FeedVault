@@ -130,3 +130,21 @@ def test_two_settings_saves_at_once_keep_both_changes(env, client, monkeypatch):
     monkeypatch.setattr(config, "load", load)
     saved = config.load()
     assert saved.get("check_updates") is True and saved.get("youtube_max_seconds") == 77
+
+
+@pytest.mark.parametrize("code", ["EINVAL", "ENOTSUP"])
+def test_a_folder_that_cannot_be_fsynced_still_saves(env, monkeypatch, code):
+    """#73 review: some file systems (FUSE, CIFS, 9p) refuse to fsync a folder."""
+    import errno
+    fsync = os.fsync
+
+    def no_dir_fsync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(getattr(errno, code), os.strerror(getattr(errno, code)))
+        fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", no_dir_fsync)
+    cfg = config.load()
+    cfg["check_updates"] = True
+    config.save(cfg)
+    assert config.load()["check_updates"] is True

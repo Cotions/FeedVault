@@ -423,9 +423,10 @@ def test_saved_symlink_is_moved_as_a_link(env, client, fake, tmp_path):
     outside = tmp_path / "outside.jpg"
     outside.write_bytes(b"outside")
     link = saved / f"stranger-2024-06-11-{CODE}_2.jpg"
+    # Swapped for a symlink after the scan (a scan would not index it: #73).
+    scanner.scan(env["roots"])
     link.unlink()
     link.symlink_to(outside)
-    scanner.scan(env["roots"])
     src = {"tool": "instaloader", "platform": "instagram", "author_id": "4242", "target": "stranger",
            "folder": str(env["media"] / "stranger")}
     assert save.gather(db.connect(), src, env["roots"], lambda t: None) == [f"instagram:{CODE}"]

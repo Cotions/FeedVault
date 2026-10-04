@@ -4,6 +4,7 @@ Run from source with ./run.sh, or directly: python backend/app.py
 """
 import atexit
 import os
+import stat
 import shutil
 import signal
 import socket
@@ -15,6 +16,7 @@ import webbrowser
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.security import safe_join
+from zlib import adler32
 
 import archives
 import config
@@ -1532,16 +1534,31 @@ def _type_of(path):
     return _TYPES.get(os.path.splitext(path)[1][1:].lower())
 
 
-def _send(path, sniff=False, media=True):
-    """Serve a file. ``media``: a path the scanner recorded, which must
-    resolve inside a media root and outside its trash (a symlink there that
-    leads elsewhere is never served: scanner.in_roots); False for FeedVault's
-    own files (a cached thumbnail, a trash thumbnail checked by trash.thumb)."""
-    if not path or not os.path.isfile(path) or media and not scanner.in_roots(path, _roots()):
+def _send(path, sniff=False, media=True, roots=None):
+    """Serve a file, from what it is opened as once. ``media``: a path the
+    scanner recorded, which must be inside a media root and outside its
+    trash once opened (/proc/self/fd/N: a symlink there that leads
+    elsewhere, or a file swapped for one, is never served; scanner.in_roots
+    of ``roots``, else config's); False for FeedVault's own files (a cached
+    thumbnail, a trash thumbnail checked by trash.thumb)."""
+    if not path:
         abort(404)
-    mimetype = _sniff(path) if sniff and path.endswith(".image") else _type_of(path)
-    resp = send_file(path, mimetype=mimetype or "application/octet-stream", as_attachment=mimetype is None,
-                     conditional=True, max_age=3600)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        abort(404)
+    try:
+        st, opened = os.fstat(fd), f"/proc/self/fd/{fd}"
+        if not stat.S_ISREG(st.st_mode) \
+                or media and not scanner.in_roots(os.readlink(opened), _roots() if roots is None else roots):
+            abort(404)
+        mimetype = _sniff(opened) if sniff and path.endswith(".image") else _type_of(path)
+        # Read through the fd, named and tagged as the file (Werkzeug's etag for its path).
+        resp = send_file(opened, mimetype=mimetype or "application/octet-stream", as_attachment=mimetype is None,
+                         download_name=os.path.basename(path), conditional=True, max_age=3600,
+                         etag=f"{st.st_mtime}-{st.st_size}-{adler32(path.encode()) & 0xFFFFFFFF}")
+    finally:
+        os.close(fd)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
     resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
@@ -1554,10 +1571,9 @@ def serve_media(media_id):
     return _send(row["path"] if row else None)
 
 
-def _sources_in_roots(row):
+def _sources_in_roots(row, roots):
     """Whether what a thumbnail is made from (the file, its poster) resolves
     inside a media root and outside its trash: never one of a file elsewhere."""
-    roots = _roots()
     return all(scanner.in_roots(p, roots) for p in (row["path"], row["poster_path"]) if p)
 
 
@@ -1565,13 +1581,14 @@ def _sources_in_roots(row):
 def serve_thumb(media_id):
     """Small JPEG for grids. Falls back to the original image if one cannot be made."""
     row = db.media_row(db.connect(), media_id)
-    if row is None or not _sources_in_roots(row):
+    cfg = config.load()
+    if row is None or not _sources_in_roots(row, cfg["media_roots"]):
         abort(404)
-    path = thumbs.thumb_for(config.load()["data_directory"], row)
+    path = thumbs.thumb_for(cfg["data_directory"], row)
     if path:
         return _send(path, media=False)
     if row["kind"] == "image":
-        return _send(row["path"])
+        return _send(row["path"], roots=cfg["media_roots"])
     abort(404)
 
 
@@ -1589,13 +1606,14 @@ def serve_copy_thumb(copy_id):
     if copy is None or not copy["media"]:
         abort(404)
     first = min(copy["media"], key=lambda m: m["idx"])
-    if not _sources_in_roots(first):
+    cfg = config.load()
+    if not _sources_in_roots(first, cfg["media_roots"]):
         abort(404)
-    path = thumbs.thumb_for(config.load()["data_directory"], first)
+    path = thumbs.thumb_for(cfg["data_directory"], first)
     if path:
         return _send(path, media=False)
     if first["kind"] == "image":
-        return _send(first["path"])
+        return _send(first["path"], roots=cfg["media_roots"])
     abort(404)
 
 

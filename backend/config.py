@@ -3,8 +3,10 @@
 The config lives in ~/.config/feedvault/config.json (or FEEDVAULT_CONFIG), never
 next to the code, so the repo holds the app only and a frozen binary works too.
 """
+import errno
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -87,11 +89,17 @@ def write_private(path, dump):
         except OSError:
             pass
         raise
-    dir_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    # The rename made durable. Some file systems (FUSE, CIFS, 9p) refuse to
+    # fsync a folder: the file is written all the same.
     try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
+        dir_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError as e:
+        if e.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EACCES):
+            raise
 
 
 def clean_roots(roots):
@@ -120,11 +128,44 @@ def is_executable(path):
     return os.path.isabs(path) and os.path.isfile(path) and os.access(path, os.X_OK)
 
 
+def ancestors_refused(path):
+    """Why a folder above ``path`` (each one up to /, along its path as
+    written and as resolved) lets someone else swap what is below it: not
+    root's nor ours, or writable by group or others and not sticky. Else
+    None."""
+    seen, out = set(), []
+    for start in (os.path.dirname(os.path.abspath(path)), os.path.realpath(os.path.dirname(path))):
+        p = start
+        while p not in seen:
+            seen.add(p)
+            out.append(p)
+            up = os.path.dirname(p)
+            if up == p:
+                break
+            p = up
+    parent = os.path.dirname(os.path.abspath(path))
+    for p in out:
+        try:
+            st = os.stat(p)
+        except OSError as e:
+            return f"cannot read {p}: {e.strerror or e}"
+        what = f"its parent folder ({p})" if p == parent else f"a folder above it ({p})"
+        if not stat.S_ISDIR(st.st_mode):
+            return f"{what} is not a folder"
+        if st.st_uid not in (0, os.getuid()):
+            return f"{what} belongs to another user"
+        # A sticky folder (/tmp) lets nobody else rename or remove what is ours.
+        if st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX:
+            return f"{what} is writable by group or others (chmod go-w)"
+    return None
+
+
 def tool_refused(path):
     """Why a tool's path from Settings may not run, else None: it must be an
     executable file, and the file and its folder (where the path leads, and
     the folder it is written in) root's or ours, not writable by group or
-    others: someone else could swap the program FeedVault runs."""
+    others, and the folders above those as ancestors_refused says: someone
+    else could swap the program FeedVault runs."""
     if not is_executable(path):
         return f"not an executable file: {path}"
     real = os.path.realpath(path)
@@ -140,7 +181,7 @@ def tool_refused(path):
             return f"{what} ({p}) belongs to another user"
         if st.st_mode & 0o022:
             return f"{what} ({p}) is writable by group or others (chmod go-w)"
-    return None
+    return ancestors_refused(os.path.dirname(real)) or ancestors_refused(os.path.dirname(os.path.abspath(path)))
 
 
 def clean_tools(tools, known):
