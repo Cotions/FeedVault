@@ -24,7 +24,10 @@ import toolguard  # noqa: E402
 #   notify.desktop              shutil.which("notify-send"), subprocess.run of it
 #   app.browse                  shutil.which("zenity"), subprocess.run(["zenity", ...]) by name
 #   app.main                    webbrowser.open (not reached from a test)
-#   thumbs / hashing            shutil.which and subprocess.run of ffmpeg / ffprobe by name
+#   thumbs.ffmpeg_path          jobs.tool_path("ffmpeg"): Settings' path, else PATH's absolute folders
+#   thumbs.ffprobe_path         jobs._which("ffprobe"): PATH's absolute folders (shutil.which)
+#   thumbs._video_frame         subprocess.run([ffmpeg_path(), ...]); never a bare name
+#   hashing.video_size          subprocess.run([ffprobe_path(), ...]); never a bare name
 #   sync.py, hashing.py         ctypes: statfs and ioprio_set syscalls, no program
 # No os.exec*, os.spawn*, os.system or posix_spawn; gallery_dl is only
 # imported by gallery-dl's own Python (archives), never in this process.

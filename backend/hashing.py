@@ -27,7 +27,6 @@ wait on it.
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import threading
@@ -196,10 +195,14 @@ def from_db(value):
 
 
 def video_size(path):
-    """(width, height) of a video's first video stream from ffprobe, or None."""
+    """(width, height) of a video's first video stream from ffprobe, or None
+    (None too when there is no ffprobe: thumbs.ffprobe_path)."""
+    ffprobe = thumbs.ffprobe_path()
+    if ffprobe is None:
+        return None
     try:
         r = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+            [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
              "-of", "csv=p=0:s=x", path],
             capture_output=True, text=True, timeout=30)
         w, h = r.stdout.strip().splitlines()[0].split("x")[:2]
@@ -306,7 +309,7 @@ def run_pass(conn, restart=None, data_dir=None):
         if not _hash_all(conn, list(pics), "dhash", restart, _fresh(known, 4),
                          lambda path, st: _dhash_row(path, st, *pics[path], data_dir), PICTURE_WORKERS):
             return False
-        if shutil.which("ffprobe"):
+        if thumbs.ffprobe_path():
             import duplicates                     # it imports this module
             if not _hash_all(conn, duplicates.videos_to_measure(conn), "probe", restart,
                              lambda path, st: False, _probe_row, PICTURE_WORKERS):

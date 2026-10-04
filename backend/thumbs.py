@@ -6,7 +6,6 @@ it is installed.
 """
 import hashlib
 import os
-import shutil
 import subprocess
 import tempfile
 
@@ -26,8 +25,23 @@ def open_image(path):
     return Image.open(path, formats=FORMATS)
 
 
+def ffmpeg_path():
+    """The ffmpeg to run, or None: the path set in Settings, else the first
+    in PATH's absolute folders, as for the downloaders (jobs.tool_path:
+    never a bare name, nor a relative result)."""
+    import jobs                                # it imports db, which imports this module
+    return jobs.tool_path("ffmpeg")
+
+
+def ffprobe_path():
+    """The ffprobe to run, or None: the first in PATH's absolute folders
+    (jobs._which; it is not one of Settings' tools)."""
+    import jobs
+    return jobs._which("ffprobe")
+
+
 def have_ffmpeg():
-    return shutil.which("ffmpeg") is not None
+    return ffmpeg_path() is not None
 
 
 def _cache_path(data_dir, media_path):
@@ -69,14 +83,18 @@ def _atomic_save(out, write):
 
 
 def _video_frame(src, out):
-    """One frame, a second in (or the first frame of a very short clip)."""
+    """One frame, a second in (or the first frame of a very short clip).
+    False when there is no ffmpeg to run."""
+    ffmpeg = ffmpeg_path()
+    if ffmpeg is None:
+        return False
     config.make_private_dir(os.path.dirname(out))
     fd, frame = tempfile.mkstemp(dir=os.path.dirname(out), suffix=".png")
     os.close(fd)
     try:
         for seek in ("1", "0"):
             r = subprocess.run(
-                ["ffmpeg", "-loglevel", "error", "-y", "-ss", seek, "-i", src,
+                [ffmpeg, "-loglevel", "error", "-y", "-ss", seek, "-i", src,
                  "-frames:v", "1", frame],
                 capture_output=True, timeout=30,
             )
