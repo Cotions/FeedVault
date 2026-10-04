@@ -23,8 +23,10 @@ process a killed FeedVault left running is stopped, when its pid, start time
 and executable all still match.
 """
 import collections
+import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -51,6 +53,14 @@ INTERRUPTED = "FeedVault stopped while it ran"
 
 class BadRequest(ValueError):
     """Unknown kind or bad parameters: the API answers 400."""
+
+
+class Script(collections.namedtuple("Script", "path data")):
+    """What a kind's check returns to run a script from the bytes it checked
+    (``data``), never from its file again: they are put in a sealed memfd,
+    and its #! interpreter (read as the kernel reads it) runs /dev/fd/N,
+    so $0 is /dev/fd/N. ``path``: the file they were read from, the memfd's
+    name (shown in /proc/<pid>/fd)."""
 
 
 class Cancelled(Exception):
@@ -83,9 +93,10 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
                "env": the process's whole environment (else FeedVault's own),
                "group": a lock group, instead of ``group``'s}
     group:     lock group, or a function of the params returning one
-    check:     optional, (params, note) -> None, run in the job's thread
-               before anything else (before its tool is looked for); an
-               exception fails the job with its message, Cancelled cancels it
+    check:     optional, (params, note) -> None or a Script, run in the job's
+               thread before anything else (before its tool is looked for); an
+               exception fails the job with its message, Cancelled cancels it.
+               A Script runs instead of the tool, from the bytes it holds
     summarize: optional, output lines -> (result dict, message) for a job
                that exited 0 and has no rescan target
     start:     optional, (params, note, argv) -> None or a new argument list
@@ -348,9 +359,10 @@ def _killpg(proc, sig):
 def _run(job):
     try:
         kind = _kinds[job.kind]
+        script = None
         if kind.check:
             try:
-                kind.check(job.params, lambda text: _note(job, f"[feedvault] {text}"))
+                script = kind.check(job.params, lambda text: _note(job, f"[feedvault] {text}"))
             except Cancelled as e:
                 _note(job, f"[feedvault] {e}")
                 _finish(job, "cancelled", message=str(e))
@@ -358,7 +370,11 @@ def _run(job):
             except Exception as e:
                 _finish(job, "failed", message=str(e) or type(e).__name__)
                 return
-        exe = tool_path(job.tool)
+        head = _interpreter(script.data) if isinstance(script, Script) else None
+        if isinstance(script, Script) and head is None:
+            _finish(job, "failed", message=f"{script.path}: its first line must be #! and an absolute path")
+            return
+        exe = head[0] if head else tool_path(job.tool)
         if exe is None:
             _finish(job, "failed", result={"error": "missing"}, message=f"{job.tool} not found; set its path in Settings")
             return
@@ -379,14 +395,22 @@ def _run(job):
                 return
         # The downloaders are Python: live output.
         env = {**(os.environ if job.env is None else job.env), "PYTHONUNBUFFERED": "1"}
-        job.began = time.time()
+        fd = None
         try:
-            proc = subprocess.Popen([exe, *job.args], cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
+            argv = [exe, *job.args]
+            if head:
+                fd = _sealed(script)
+                argv = [*head, f"/dev/fd/{fd}", *job.args]
+            job.began = time.time()
+            proc = subprocess.Popen(argv, cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    start_new_session=True)
+                                    start_new_session=True, pass_fds=(fd,) if fd is not None else ())
         except OSError as e:
             _finish(job, "failed", message=f"{job.tool} could not start: {e.strerror or e}")
             return
+        finally:
+            if fd is not None:
+                os.close(fd)
         with _lock:
             job.proc = proc
             stop = job.cancelled or job.interrupted
@@ -436,6 +460,38 @@ def _run(job):
             _finish(job, "done", message="finished")
     except Exception as e:                     # keep the app alive; show it in the UI
         _finish(job, "failed", message=f"job runner error: {e}")
+
+
+_SHEBANG = re.compile(rb"#![ \t]*([^ \t\n]+)[ \t]*([^\n]*)")
+
+
+def _interpreter(data):
+    """[interpreter, its one argument if any] of a script's #! line, read as
+    the kernel does (binfmt_script: split at the first space or tab, the
+    rest of the line one argument), else None (not an absolute path)."""
+    m = _SHEBANG.match(data)
+    if m is None or not m.group(1).startswith(b"/") or b"\0" in m.group(0):
+        return None
+    arg = m.group(2).rstrip(b" \t")
+    return [os.fsdecode(m.group(1)), *([os.fsdecode(arg)] if arg else [])]
+
+
+def _sealed(script):
+    """A memfd holding ``script.data``, sealed (nobody can change it, the
+    script itself neither), its offset back at 0."""
+    name = script.path if len(os.fsencode(script.path)) <= 249 else "feedvault-script"
+    fd = os.memfd_create(name, os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    try:
+        view = memoryview(script.data)
+        while view:
+            view = view[os.write(fd, view):]
+        fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
+                    fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE)
+        os.lseek(fd, 0, os.SEEK_SET)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 PROC = "/proc"                                 # Linux only: without it, no process is ever stopped at startup

@@ -2288,9 +2288,13 @@ be run as they are, or copied into a file.
 echo "$FV_URL" | while read -r l; do echo "got: $l"; done
 ```
 
-It is run as the file itself, never as `sh -c` of its text. Its inputs
-are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
-`FV_DATA_DIR` and `FV_ARCHIVE`. The rest of its environment is minimal:
+It runs from the exact bytes whose SHA-256 was checked right before it
+starts, never from its file again (nor as `sh -c` of its text): they are
+put in a sealed memfd, and its `#!` interpreter (read as the kernel reads
+it: the path, then at most one argument, the rest of the line) runs
+`/dev/fd/N`. So `$0` is `/dev/fd/N`, not the file's path; `FV_SCRIPT` is
+the file's path. Its inputs are only environment variables: `FV_TARGET`,
+`FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE`. The rest of its environment is minimal:
 `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME`,
 `TMPDIR` and the `XDG_*_HOME` folders. The header keys are `name`,
 `description`, `needs` and `rescan`; `needs` is required.
@@ -2317,7 +2321,9 @@ are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
 **Refused**, listed with `refused` saying why and never run:
 
 - the folder itself when it is a symlink, someone else's, or writable by
-  group or others;
+  group or others, or when a folder above it, up to `/` (along its path as
+  written and as resolved), is neither root's nor yours, or is writable by
+  group or others without being sticky (`/tmp`);
 - a file that is a symlink, not a regular file, someone else's, writable
   by group or others, over 64 KiB, or named otherwise than
   `[a-z0-9_-]{1,64}` + `.json` / `.sh` (anything else in the folder is
@@ -2380,7 +2386,8 @@ could not be read.
 - `argv` is the command as run, or the script's path. `argv` and `params`
   are scrubbed as output is (`health.scrub`).
 - The log starts with `[feedvault]` lines: the script's path, its
-  SHA-256 and, for a shell script, each `FV_*` value it was given.
+  SHA-256 and, for a shell script, each `FV_*` value it was given
+  (`FV_SCRIPT` too).
 - The `rescan` folder is indexed once it exits 0, as for any job.
 
 **On a source.** A source's `script` option (a script id, or `null`; see

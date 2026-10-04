@@ -152,3 +152,28 @@ def test_home_and_xdg_folders_are_the_tests(env, tool_guard):
     assert all(under_tmp(p) for p in json.loads(seen.read_text()))
     assert os.environ["PATH"] == str(tool_guard.dir / "bin") and not os.listdir(os.environ["PATH"])
     assert jobs.tool_path("instaloader") is None
+
+
+def test_a_script_run_from_a_memfd_is_checked_as_its_file_is(env, elsewhere, tool_guard):
+    """jobs.Script (#73): the guard reads the memfd's name and #! line."""
+    ran = elsewhere / "ran"
+
+    def run_memfd(path, data, exe):
+        fd = jobs._sealed(jobs.Script(str(path), data))
+        try:
+            return subprocess.run([exe, f"/dev/fd/{fd}"], pass_fds=(fd,), capture_output=True, text=True)
+        finally:
+            os.close(fd)
+
+    mark = f"open({str(ran)!r}, 'a').write('memfd')\n".encode()
+    # Read from a file outside the tmp dir: refused, as that file would be.
+    out = refused(tool_guard, lambda: run_memfd(elsewhere / "x.sh", b"#!" + sys.executable.encode() + b"\n" + mark,
+                                                sys.executable))
+    assert out == [f"run a memfd script read from {elsewhere / 'x.sh'}"]
+    # An interpreter its #! does not name: refused.
+    out = refused(tool_guard, lambda: run_memfd(env["tmp"] / "x.sh", b"#!/bin/true\n" + mark, "/bin/sh"))
+    assert out and "whose #! is not it" in out[0]
+    assert not ran.exists()
+    # From a file in the tmp dir, its own #!: runs, /bin/sh as an interpreter only.
+    got = run_memfd(env["tmp"] / "ok.sh", b"#!/bin/sh\necho \"ok $0\"\n", "/bin/sh")
+    assert got.stdout.startswith("ok /dev/fd/") and tool_guard.violations == []

@@ -16,7 +16,8 @@ import toolguard  # noqa: E402
 # ---------------------------------------------------------------------------
 # Where the backend finds or starts a program:
 #   jobs.tool_path              the path set in Settings, else shutil.which (the four TOOLS, pipx)
-#   jobs._run                   Popen([exe, *args]): every job (syncs, tool-version, test, update)
+#   jobs._run                   Popen([exe, *args]): every job (syncs, tool-version, test, update);
+#                               a shell script: Popen([its #! interpreter, /dev/fd/N]) of a memfd
 #   downloaders.run_version     Popen([path, --version]) of what tool_path found
 #   downloaders.update_plan     shutil.which("pipx"); the update job runs pip or pipx through jobs
 #   archives._read_formats      Popen([gallery-dl's own Python, -c]) from its shebang

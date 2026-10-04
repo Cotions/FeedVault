@@ -3,7 +3,8 @@ every Python it starts (guard_site/sitecustomize.py, on their PYTHONPATH).
 
 A Guard refuses, by raising ToolGuardError: starting a program (Popen, exec,
 posix_spawn, spawn, os.system) whose real path is outside its roots unless
-it is allowed, a script whose shebang's interpreter is not; importing a
+it is allowed, a script whose shebang's interpreter is not (a script run
+from a memfd, jobs.Script, too: named after the file it was read from); importing a
 downloader's (or pip's) Python package found outside its roots; a connection or a name lookup to
 anything but this machine. Every refusal is also written to its log file,
 where a forked or started child's refusals reach the test too.
@@ -101,6 +102,35 @@ class Guard:
             if words and depth < 3:            # the kernel runs the interpreter: it must pass too
                 self.check_run(words[0], env, cwd, depth + 1)
 
+    def check_memfd(self, exe, argv, env, cwd):
+        """A script run from a memfd (jobs.Script: [interpreter, its argument
+        if any, /dev/fd/N]): True when it is one, checked as check_run checks
+        a script file: the file its bytes were read from (the memfd's name)
+        must be allowed, and the interpreter must be its #!'s, one that may
+        run as such. False for anything else (check_run's then)."""
+        if isinstance(argv, (str, bytes)) or len(argv) < 2:
+            return False
+        script = next((os.fsdecode(a) for a in argv[1:3] if os.fsdecode(a).startswith("/dev/fd/")), None)
+        if script is None or not script[len("/dev/fd/"):].isdigit():
+            return False
+        try:
+            target = os.readlink(f"/proc/self/fd/{script[len('/dev/fd/'):]}")
+            with open(f"/proc/self/fd/{script[len('/dev/fd/'):]}", "rb") as f:
+                first = f.readline(256)
+        except OSError:
+            return False
+        if not (target.startswith("/memfd:") and target.endswith(" (deleted)")):
+            return False
+        name = target[len("/memfd:"):-len(" (deleted)")]
+        self.runs.append(name)
+        if not self.allows(name):
+            self.refuse(f"run a memfd script read from {name}")
+        words = first[2:].decode("utf-8", "replace").split() if first.startswith(b"#!") else []
+        if not words or words[0] != os.fsdecode(exe):
+            self.refuse(f"run {os.fsdecode(exe)} on a memfd script whose #! is not it ({name})")
+        self.check_run(exe, env, cwd, 1)
+        return True
+
     def check_address(self, host, what):
         if not isinstance(host, (str, bytes)) or not host or host in ("localhost", b"localhost"):
             return                             # None, "", or not an internet address (netlink...)
@@ -118,7 +148,8 @@ class Guard:
             elif event == "os.spawn":          # (mode, path, args, env); not raised on Linux: os.exec is
                 self.check_run(args[1], args[3], None)
             elif event == "subprocess.Popen":  # (executable, args, cwd, env)
-                self.check_run(args[0], args[3], args[2])
+                if not self.check_memfd(args[0], args[1], args[3], args[2]):
+                    self.check_run(args[0], args[3], args[2])
             else:                              # (path, args, env)
                 self.check_run(args[0], args[2], None)
         elif event == "socket.getaddrinfo":    # (host, port, family, type, proto)

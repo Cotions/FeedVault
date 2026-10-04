@@ -272,7 +272,9 @@ history). The folder is read again each time, so an edit counts at once.
 - **A shell script**, `my-script.sh`, executable, with a `#!` line and a
   `# needs: url` (or `target`, `none`) header. It gets its inputs only as
   `FV_TARGET`, `FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE` in a
-  minimal environment: quote them (`"$FV_URL"`).
+  minimal environment: quote them (`"$FV_URL"`). It runs from the bytes
+  that were checked (its interpreter reads them from `/dev/fd/N`, so `$0`
+  is `/dev/fd/N`; `FV_SCRIPT` is the file's path).
 
 **Copy template** on a built-in (instaloader profile, saved posts, one post,
 stories and highlights; gallery-dl profile media, one link; yt-dlp one
@@ -282,7 +284,8 @@ schedule) runs instead of the tool's own command; a script that is missing
 or refused fails that sync with the reason, never running the built-in one.
 
 A file is refused, with the reason shown, and never run when it is a
-symlink, someone else's, writable by group or others (as is the folder),
+symlink, someone else's, writable by group or others (as is the folder,
+or a folder above it that is not sticky or not root's or yours),
 over 64 KiB, not named `[a-z0-9_-].json` / `.sh`, or malformed. A script
 changed between queueing and starting fails its run. Inputs are checked:
 a link must be `http(s)://`, an Instagram target a profile name or
