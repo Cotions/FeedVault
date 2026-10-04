@@ -2265,6 +2265,8 @@ be run as they are, or copied into a file.
   option. In an option the tool formats, a value is escaped as the tool's
   own sync does: instaloader's patterns, yt-dlp `-o` and `--exec` (`%`),
   gallery-dl `-f`, `-N`, `--Print`, `--print-to-file`, `--rename` (`{`, `}`).
+  `--print-to-file` / `--Print-to-file` FILE: only what lands after its
+  last `/` (the file name gallery-dl formats); its folder is left as it is.
 - `needs`: `target`, `url` or `none`. A script that uses `{target}` or
   `{url}` without needing it is refused.
 - `rescan`: a folder template indexed once it has run (it must be inside
