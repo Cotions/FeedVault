@@ -2262,7 +2262,9 @@ be run as they are, or copied into a file.
   `{archive}` are replaced inside the element they are in. Every other
   `{…}` stays as it is (instaloader's `{profile}`). The list is run as it
   is: a value is never split, joined into a shell string or read as an
-  option.
+  option. In an option the tool formats, a value is escaped as the tool's
+  own sync does: instaloader's patterns, yt-dlp `-o` and `--exec` (`%`),
+  gallery-dl `-f`, `-N`, `--Print`, `--print-to-file`, `--rename` (`{`, `}`).
 - `needs`: `target`, `url` or `none`. A script that uses `{target}` or
   `{url}` without needing it is refused.
 - `rescan`: a folder template indexed once it has run (it must be inside
@@ -2299,7 +2301,7 @@ are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
   or control characters.
 - `target`, by the program run:
   - instaloader: a profile name or a post's shortcode;
-  - gallery-dl and yt-dlp: a link, as for `url`;
+  - gallery-dl and yt-dlp (by name, path or behind `env`): a link, as for `url`;
   - a shell script or a program by absolute path: any text of 1 to 200
     characters, without control characters.
 

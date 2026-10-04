@@ -375,6 +375,13 @@ def test_a_folder_in_an_option_its_tool_formats_is_escaped(env, name, root, want
     ("yt-dlp", ["--output-na-placeholder={root}", "-P{root}"], ["--output-na-placeholder=/m/{x} 50%", "-P/m/{x} 50%"]),
     # An option as the value of a formatted one is that value.
     ("yt-dlp", ["-o", "-o", "{root}"], ["-o", "-o", "/m/{x} 50%"]),
+    # gallery-dl's format strings (#64), its flags before a short option, prefixes.
+    ("gallery-dl", ["-f", "{root}_{id}"], ["-f", "/m/{{x}} 50%_{id}"]),
+    ("gallery-dl", ["-qN{root}"], ["-qN/m/{{x}} 50%"]),
+    ("gallery-dl", ["--print=post:{root}"], ["--print=post:/m/{{x}} 50%"]),
+    ("gallery-dl", ["--filen", "{root}", "--rename-to={root}"], ["--filen", "/m/{{x}} 50%", "--rename-to=/m/{{x}} 50%"]),
+    ("gallery-dl", ["--print-to-file", "{root}", "{root}/out.txt", "-D", "{root}"],
+     ["--print-to-file", "/m/{{x}} 50%", "/m/{x} 50%/out.txt", "-D", "/m/{x} 50%"]),
 ])
 def test_a_folder_in_a_joined_option_is_escaped_too(env, tool, argv, want):
     """#59: --opt=value (and yt-dlp's -ovalue) as the separate form, for a root with {x} and %."""
@@ -555,6 +562,10 @@ def test_a_placeholder_in_an_evaluated_format_is_refused_and_never_run(client, f
     (["-qf\fE '{url}'"], "-f's value"),
     (["-qf", "\fE '{url}'"], "-f's value"),
     (["-f", "\\fE '{url}'"], "-f's value"),           # "\\f" is read as \f too
+    (["-f=\\fE '{url}'"], "-f's value"),           # argparse drops the "="
+    (["-qf=\fE '{url}'"], "-f's value"),
+    (["-N=\\fE '{url}'"], "-N's value"),
+    (["-qN=\fE '{url}'"], "-N's value"),
     (["-f", "\fT {root}/name.txt"], "-f's value"),
     (["-N", "post:\fF {url}"], "-N's value"),
     (["-qNpost:\fF {url}"], "-N's value"),
@@ -583,6 +594,31 @@ def test_a_placeholder_in_a_format_another_formatter_reads_is_refused(args, opti
 def test_plain_formats_and_formats_without_a_placeholder_are_accepted(args):
     _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": ["gallery-dl", *args, "--", "{url}"]}))
     assert error is None
+
+
+def test_a_link_in_a_gallery_dl_format_is_escaped(client, folder, runner):
+    """A link's braces are text to gallery-dl's formatter, never a field ({_env[…]})."""
+    runner.install_as("gallery-dl")
+    write(folder, "print.json", {"needs": "url", "argv": ["gallery-dl", "-N", "post:{url}", "--", "{url}"]})
+    job = run(client, "print", url="https://example.com/{_env[HOME]}")["job"]
+    assert ended(job["id"])["state"] == "done"
+    assert runner.runs()[-1]["args"] == ["-N", "post:https://example.com/{{_env[HOME]}}", "--",
+                                         "https://example.com/{_env[HOME]}"]
+
+
+@pytest.mark.parametrize("argv", [
+    ["{bin}/gallery-dl", "-f", "{target}"],
+    ["/usr/bin/env", "-i", "{bin}/gallery-dl", "-N", "{target}"],
+])
+def test_a_downloader_by_its_path_takes_a_link_as_its_target(client, folder, runner, argv):
+    """Else a target of "\\fE …" would start the format gallery-dl evaluates."""
+    runner.install_as("gallery-dl")
+    write(folder, "path.json", {"needs": "target", "argv": [a.format(bin=runner.bin, target="{target}")
+                                                            for a in argv] + ["https://example.com/a"]})
+    assert listed(client)["path"]["refused"] is None
+    error = run(client, "path", status=400, target="\\fE __import__('os').getpid()")["error"]
+    assert error == "target must be an http(s) link for gallery-dl"
+    assert runner.runs() == [] and jobs.active() == []
 
 
 def test_print_to_file_with_a_target_in_its_file_is_accepted():

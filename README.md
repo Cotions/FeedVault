@@ -263,7 +263,7 @@ history). The folder is read again each time, so an edit counts at once.
   or `-iS`, …) is refused: use the tool's own fields (`%(webpage_url)q`,
   `{_path}`) or a shell script. So is one in a gallery-dl format string
   that starts with `\f` (`-f "\fE …"`, `--print "post:\fF …"`: Python or
-  a template file); a plain one (`-f "{url}"`) is fine.
+  a template file); a plain one (`-f "{url}"`) is fine, the value's braces escaped.
 - **A shell script**, `my-script.sh`, executable, with a `#!` line and a
   `# needs: url` (or `target`, `none`) header. It gets its inputs only as
   `FV_TARGET`, `FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE` in a
