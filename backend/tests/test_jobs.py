@@ -881,3 +881,24 @@ def test_a_tool_path_others_can_swap_by_now_is_not_run(runner, client, monkeypat
     # Settings → Downloaders says why.
     info = downloaders.detect("yt-dlp", config.load())
     assert (info["found"], info["path_error"]) == (False, why)
+
+
+@pytest.mark.parametrize("path", ["", ".", "bin", "./bin", ":bin", "bin:"])
+def test_a_relative_path_entry_finds_nothing(runner, monkeypatch, path):
+    """Popen would look a relative result up again, in the job's folder."""
+    _own_tool(runner["tmp"] / "bin")
+    _own_tool(runner["tmp"], "yt-dlp")
+    monkeypatch.chdir(runner["tmp"])
+    monkeypatch.setenv("PATH", path)
+    assert jobs.tool_path("yt-dlp") is None
+    assert jobs.tool_lookup("yt-dlp") == (None, "yt-dlp not found; set its path in Settings")
+    assert jobs.tool_path("./yt-dlp") is None and jobs.tool_path("bin/yt-dlp") is None
+
+
+def test_absolute_path_entries_beside_relative_ones_still_count(runner, monkeypatch):
+    tool = _own_tool(runner["tmp"] / "bin")
+    _own_tool(runner["tmp"], "yt-dlp")
+    monkeypatch.chdir(runner["tmp"])
+    monkeypatch.setenv("PATH", f".::{tool.parent}")
+    assert jobs.tool_path("yt-dlp") == str(tool)
+    assert jobs.tool_path(str(tool)) == str(tool)

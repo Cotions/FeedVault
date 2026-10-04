@@ -168,8 +168,18 @@ def tool_lookup(name):
             if refused:
                 return None, f"{name}: the path set in Settings is refused: {refused}"
             return configured, None
-    found = shutil.which(name)
+    found = _which(name)
     return (found, None) if found else (None, f"{name} not found; set its path in Settings")
+
+
+def _which(name):
+    """shutil.which over PATH's absolute folders only: an empty or relative
+    entry ("", ".") would give a relative path, which Popen looks up again
+    in the job's folder. Never a relative result (a relative ``name`` with a
+    "/" in it is not looked up)."""
+    folders = [d for d in os.environ.get("PATH", os.defpath).split(os.pathsep) if os.path.isabs(d)]
+    found = shutil.which(name, path=os.pathsep.join(folders)) if folders else None
+    return found if found and os.path.isabs(found) else None
 
 
 def tool_path(name):

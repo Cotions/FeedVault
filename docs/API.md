@@ -2095,8 +2095,10 @@ are not exported to `userdata/`.
 
 ### Tools
 
-`instaloader`, `gallery-dl`, `yt-dlp` and `ffmpeg` are found on `PATH`, or
-at the path set for them in Settings (`tools` in `config.json`, for a tool
+`instaloader`, `gallery-dl`, `yt-dlp` and `ffmpeg` are found on `PATH` (its
+absolute folders only: an empty or relative entry, `.`, is skipped, so a
+tool is never looked up in a job's working folder), or at the path set for
+them in Settings (`tools` in `config.json`, for a tool
 installed in a virtualenv). `POST /api/config` with `{ "tools": { "yt-dlp":
 "/abs/path" } }` sets one (an empty string clears it, back to `PATH`); the
 other tools are left as they are. A path must be absolute, an executable
