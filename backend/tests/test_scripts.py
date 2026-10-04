@@ -390,6 +390,63 @@ def test_a_folder_in_a_joined_option_is_escaped_too(env, tool, argv, want):
     assert scripts.command(script, vals) == [tool, *want]
 
 
+LINK = "https://x.com/a/{_env[HOME]}"
+
+
+@pytest.mark.parametrize("option", [["--print-to-file", "{id}"], ["--Print-to-file", "{id}"],
+                                    ["--print-to-file={id}"], ["--Print-to-file={id}"],
+                                    ["--print-to", "{id}"], ["--Print-to", "{id}"], ["--print-to-f={id}"]])
+def test_a_link_in_a_print_to_file_name_is_escaped(env, option):
+    """#66: gallery-dl formats FILE's name (after its last "/"), never its folder."""
+    script = {"tool": "gallery-dl", "argv": ["gallery-dl", *option, "/tmp/{url}", "{url}"]}
+    vals = scripts.values(script, config.load(), "/m/{x}", url=LINK)
+    assert scripts.command(script, vals) == ["gallery-dl", *option, "/tmp/https://x.com/a/{{_env[HOME]}}", LINK]
+
+
+@pytest.mark.parametrize("option", [["--print-to-file", "{id}-{url}"], ["--Print-to-file", "{id}-{url}"],
+                                    ["--print-to-file={id}-{url}"], ["--print-to", "{id}-{url}"]])
+def test_a_root_in_a_print_to_file_folder_stays_as_it_is(env, option):
+    """The link brings its own "/", which moves the split: what of it comes before stays too."""
+    script = {"tool": "gallery-dl", "argv": ["gallery-dl", *option, "{root}/out-{url}.txt", "--", "{url}"]}
+    vals = scripts.values(script, config.load(), "/m/{x}", url=LINK)
+    *_, fmt, file, dash, link = scripts.command(script, vals)
+    assert fmt.endswith("{id}-https://x.com/a/{{_env[HOME]}}")
+    assert (file, dash, link) == ("/m/{x}/out-https://x.com/a/{{_env[HOME]}}.txt", "--", LINK)
+
+
+@pytest.mark.parametrize("file, want", [
+    ("{id}-{url}", "{id}-https://x.com/a/{{_env[HOME]}}"),
+    ("{url}/{url}", f"{LINK}/https://x.com/a/{{{{_env[HOME]}}}}"),
+    ("{root}/{id}.txt", "/m/{x}/{id}.txt"),
+    ("{url}/", f"{LINK}/"),
+])
+def test_only_what_lands_after_the_last_slash_is_escaped(env, file, want):
+    script = {"tool": "gallery-dl", "argv": ["gallery-dl", "--print-to-file", "{id}", file]}
+    vals = scripts.values(script, config.load(), "/m/{x}", url=LINK)
+    assert scripts.command(script, vals)[-1] == want
+
+
+@pytest.mark.parametrize("argv, want", [
+    # Not FILE: one value only, or an option that is not --print-to-file.
+    (["--print", "{url}", "{url}"], ["--print", "https://x.com/a/{{_env[HOME]}}", LINK]),
+    # An option as FORMAT is that FORMAT, so the item after it is FILE.
+    (["--print-to-file", "-f", "{url}", "{url}"], ["--print-to-file", "-f", "https://x.com/a/{{_env[HOME]}}", LINK]),
+    (["-f", "{url}", "/tmp/{url}"], ["-f", "https://x.com/a/{{_env[HOME]}}", f"/tmp/{LINK}"]),
+    (["--print-to-files", "{url}", "{url}"], ["--print-to-files", LINK, LINK]),
+])
+def test_only_print_to_file_takes_a_file(env, argv, want):
+    script = {"tool": "gallery-dl", "argv": ["gallery-dl", *argv]}
+    vals = scripts.values(script, config.load(), "/m/{x}", url=LINK)
+    assert scripts.command(script, vals) == ["gallery-dl", *want]
+
+
+def test_built_in_templates_are_filled_in_as_before(env):
+    for name in scripts.BUILTINS:
+        script = scripts.get("builtin:" + name)
+        vals = scripts.values(script, config.load(), "/m/x", "carol", "https://example.com/v")
+        assert scripts.command(script, vals) == [scripts.substitute(a, vals) for a in script["argv"]]
+
+
 EXEC_URL = {"needs": "url", "argv": ["yt-dlp", "--exec", "notify-send done {url}", "--", "{url}"]}
 
 
