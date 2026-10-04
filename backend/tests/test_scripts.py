@@ -499,6 +499,98 @@ def test_the_builtins_hold_no_placeholder_in_a_shell_run_option():
         assert scripts._check_shell(scripts.BUILTINS[name]["argv"]) is None
 
 
+@pytest.mark.parametrize("args", [
+    ["-iS", "yt-dlp --exec \"echo {url}\" {url}"],
+    ["-vS", "yt-dlp {url}"],
+    ["-0S", "yt-dlp {url}"],
+    ["-i0S", "yt-dlp {url}"],
+    ["-iSyt-dlp {url}"],
+    ["-u", "NAME", "-S", "yt-dlp {url}"],
+    ["-uNAME", "-iS", "yt-dlp {url}"],
+    ["--split-string=yt-dlp {url}"],
+    ["--split", "yt-dlp {url}"],
+])
+def test_env_splitting_a_text_in_a_cluster_is_refused(args):
+    """#64: env reads its options as getopt does, so S in a cluster splits too."""
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": ["/usr/bin/env", *args]}))
+    assert error and error.startswith("env -S splits its text")
+
+
+@pytest.mark.parametrize("args", [
+    ["-i"],
+    ["-u", "NAME"],
+    ["-C", "/tmp"],
+    ["-uS"],                                    # S is -u's value here
+    ["-iu", "S", "--chdir", "/tmp"],
+])
+def test_env_options_that_split_nothing_reach_the_programs_checks(args):
+    argv = ["/usr/bin/env", *args, "yt-dlp"]
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": [*argv, "{url}"]}))
+    assert error is None
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": [*argv, "--exec", "echo {url}", "{url}"]}))
+    assert error and error.startswith("--exec's value can reach a shell")
+
+
+EVAL_URL = {"needs": "url", "argv": ["gallery-dl", "-f", "\fE '{url}'", "--", "{url}"]}
+
+
+def test_a_placeholder_in_an_evaluated_format_is_refused_and_never_run(client, folder, runner, source):
+    """#64: the issue's example, through Run and through a source's Sync."""
+    runner.install_as("gallery-dl")
+    write(folder, "eval.json", EVAL_URL)
+    refused = listed(client)["eval"]["refused"]
+    assert refused.startswith("-f's value is a format string that gallery-dl evaluates as Python") \
+        and "{_path}" in refused and "FV_*" in refused and "{url}" in refused
+    error = run(client, "eval", status=400, url="https://example.com/a")["error"]
+    assert "is refused" in error and "-f's value" in error
+    assert "-f's value" in attach(client, source["id"], "eval", status=400)["error"]
+    assert runner.runs() == [] and jobs.active() == []
+
+
+@pytest.mark.parametrize("args, option", [
+    (["-f", "\fE '{url}'"], "-f's value"),
+    (["-f\fE '{url}'"], "-f's value"),
+    (["--filename=\fE '{url}'"], "--filename's value"),
+    (["--filen", "\fE '{url}'"], "--filename's value"),
+    (["-qf\fE '{url}'"], "-f's value"),
+    (["-qf", "\fE '{url}'"], "-f's value"),
+    (["-f", "\\fE '{url}'"], "-f's value"),           # "\\f" is read as \f too
+    (["-f", "\fT {root}/name.txt"], "-f's value"),
+    (["-N", "post:\fF {url}"], "-N's value"),
+    (["-qNpost:\fF {url}"], "-N's value"),
+    (["--print", "\fM {root}/mod.py:f"], "--print's value"),
+    (["--Print", "\fE '{url}'"], "--Print's value"),
+    (["--Print", "file:\\fE '{url}'"], "--Print's value"),
+    (["--print-to-file", "\fE '{url}'", "out.txt"], "--print-to-file's value"),
+    (["--Print-to-file", "after:\fJ {url}", "out.txt"], "--Print-to-file's value"),
+    (["--print-to-file", "{id}", "/tmp/\fE {url}"], "--print-to-file's FILE"),
+    (["--rename-to", "\fE '{url}'"], "--rename-to's value"),
+])
+def test_a_placeholder_in_a_format_another_formatter_reads_is_refused(args, option):
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": ["gallery-dl", *args, "--", "{url}"]}))
+    assert error and error.startswith(f"{option} is a format string that gallery-dl evaluates as Python")
+
+
+@pytest.mark.parametrize("args", [
+    ["-f", "{url}"],                            # a plain format string
+    ["-f", "\fE title"],                        # no FeedVault placeholder
+    ["-N", "post:{id} {url}"],
+    ["--print-to-file", "{id}", "{root}/out.txt"],
+    ["--print", "{url}", "-f", "\fF {title}"],
+    ["--print-traffic", "-D", "{root}"],
+    ["--mtime", "date", "-D", "{root}"],
+])
+def test_plain_formats_and_formats_without_a_placeholder_are_accepted(args):
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": ["gallery-dl", *args, "--", "{url}"]}))
+    assert error is None
+
+
+def test_print_to_file_with_a_target_in_its_file_is_accepted():
+    _, error = scripts.parse_command(json.dumps({"needs": "target", "argv": [
+        "gallery-dl", "--print-to-file", "{id}", "{target}/out.txt", "https://example.com/a"]}))
+    assert error is None
+
+
 def test_a_folder_with_a_dollar_is_refused_to_gallery_dl_and_yt_dlp(client, folder, runner, env):
     write(folder, "gdl.json", {"needs": "url", "argv": ["gallery-dl", "-D", "{root}", "--", "{url}"]})
     error = run(client, "gdl", status=400, url="https://example.com/a", folder=f"{env['media']}/a$HOME")["error"]
