@@ -200,6 +200,7 @@ SPLIT = "another program's arguments, split at spaces"
 FORMAT, PRINT, PRINT_FILE, FILE = "format", "print", "print to file", "file"
 FORMATS = (FORMAT, PRINT, PRINT_FILE, FILE)
 _FORMATTER = ("\f", "\\f")
+PRINT_FILES = ("--print-to-file", "--Print-to-file")
 SHELL_RUN = {
     "yt-dlp": ({"--exec": SHELL, "--exec-before-download": SHELL, "--netrc-cmd": SHELL,
                 "--use-postprocessor": SHELL, "--downloader-args": SPLIT, "--external-downloader-args": SPLIT,
@@ -722,7 +723,9 @@ def _rescan(script, vals, roots):
 # come before (-qf…). instaloader and gallery-dl (argparse) also take a long
 # option's unique prefix (--dirname); yt-dlp's are never unique
 # (--output-na-placeholder, --exec-before-download). gallery-dl's
-# --print-to-file FILE is left as it is: its folder is no format string.
+# --print-to-file and --Print-to-file take FORMAT FILE: FILE's folder is a
+# plain path, its file name a format string (option.py's PrintAction,
+# metadata.py), so only the file name's values are escaped (_file_name).
 FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern", "--title-pattern"), (), True,
                              sync._escape, ""),
              "yt-dlp": (("--output", "--exec"), ("-o",), False, lambda v: v.replace("%", "%%"), ""),
@@ -747,21 +750,53 @@ def _formatted(a, longs, shorts, prefixes, flags):
     return None
 
 
+def _prints_to_file(option, longs):
+    """Whether ``option`` (the option part _formatted found) names one of
+    gallery-dl's --print-to-file and --Print-to-file, or a prefix of only
+    those (argparse refuses a prefix that is not unique)."""
+    name = option.rstrip("=")
+    if not name.startswith("--") or name in longs and name not in PRINT_FILES:
+        return False
+    return all(o in PRINT_FILES for o in longs if o.startswith(name))
+
+
+def _file_name(text, vals, escape):
+    """``text``, a --print-to-file FILE, its placeholders filled in and
+    escaped only where they land after the item's last "/": gallery-dl
+    splits FILE there (os.path.split) and formats the file name alone; its
+    folder is a plain path, where an escaped brace would be a second one. A
+    value that brings its own "/" moves that split, so the split is found
+    on the filled-in item: what of the value comes before it stays as it is."""
+    parts = _PLACEHOLDER_RE.split(text)
+    filled = [vals[p] if i % 2 else p for i, p in enumerate(parts)]
+    cut, at, out = "".join(filled).rfind("/") + 1, 0, []
+    for i, p in enumerate(filled):
+        keep = max(cut - at, 0)
+        out.append(p[:keep] + escape(p[keep:]) if i % 2 else p)
+        at += len(p)
+    return "".join(out)
+
+
 def command(script, vals):
     """A command's argument list, its placeholders filled in: escaped in
     the value of an option its tool formats."""
     longs, shorts, prefixes, escape, flags = FORMATTED.get(script["tool"], ((), (), False, None, ""))
     escaped = {k: escape(v) for k, v in vals.items()} if escape else vals
-    argv, formatted = [], False
+    argv, pending = [], []
     for a in script["argv"]:
-        option = None if formatted else _formatted(a, longs, shorts, prefixes, flags)
-        if formatted:
-            argv.append(substitute(a, escaped))
+        option = None if pending else _formatted(a, longs, shorts, prefixes, flags)
+        if pending:
+            argv.append(_file_name(a, vals, escape) if pending.pop(0) == FILE else substitute(a, escaped))
         elif option and option[1] is not None:
             argv.append(option[0] + substitute(option[1], escaped))
         else:
             argv.append(substitute(a, vals))
-        formatted = option is not None and option[1] is None
+        if option is not None:
+            # FORMAT next unless joined (argparse then refuses nargs=2's
+            # --print-to-file=FORMAT, but FILE is still escaped), then FILE.
+            pending = [FORMAT] if option[1] is None else []
+            if _prints_to_file(option[0], longs):
+                pending.append(FILE)
     return argv
 
 
