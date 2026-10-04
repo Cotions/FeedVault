@@ -184,9 +184,22 @@ def _check_needs(meta, texts):
 # counts, unless it is another option's whole name (yt-dlp's --netrc,
 # gallery-dl's --postprocessor). gallery-dl's -o and -O may follow its
 # flags in one item (-qo…), their value after them or in the next item.
+# gallery-dl's options whose value is a format string (formatter.parse):
+# one starting with \f<kind> and a space picks another formatter (E a
+# Python expression, F an f-string, J Jinja, M a module's function, T, TF,
+# TJ a template file), so a placeholder in it would be read as code or as
+# a file's path; refused there only. -f (path.py, "\\f" read as \f too by
+# __init__.py), --rename, --rename-to (rename.py), and the [EVENT:]FORMAT of
+# -N, --Print, --print-to-file, --Print-to-file (PrintAction, "\\f" too;
+# split at the first ":", which a placeholder before it may move, so the
+# text after any ":" counts), whose FILE's name is a format string too
+# (metadata.py). Not in it: -D (a path), --mtime (its NAME put in {…}).
 SHELL = "a shell"
 PYTHON = "Python (gallery-dl evaluates it)"
 SPLIT = "another program's arguments, split at spaces"
+FORMAT, PRINT, PRINT_FILE, FILE = "format", "print", "print to file", "file"
+FORMATS = (FORMAT, PRINT, PRINT_FILE, FILE)
+_FORMATTER = ("\f", "\\f")
 SHELL_RUN = {
     "yt-dlp": ({"--exec": SHELL, "--exec-before-download": SHELL, "--netrc-cmd": SHELL,
                 "--use-postprocessor": SHELL, "--downloader-args": SPLIT, "--external-downloader-args": SPLIT,
@@ -195,22 +208,35 @@ SHELL_RUN = {
                "yt-dlp's own fields (%(webpage_url)q, %(filepath)q)"),
     "gallery-dl": ({"--exec": SHELL, "--exec-after": SHELL, "--option": SHELL, "--postprocessor-option": SHELL,
                     "--filter": PYTHON, "--post-filter": PYTHON, "--child-filter": PYTHON,
-                    "--file-filter": PYTHON, "--image-filter": PYTHON, "--chapter-filter": PYTHON},
-                   ("--postprocessor",), {"o": SHELL, "O": SHELL}, "hqwvgGjJsEKSU46",
+                    "--file-filter": PYTHON, "--image-filter": PYTHON, "--chapter-filter": PYTHON,
+                    "--filename": FORMAT, "--rename": FORMAT, "--rename-to": FORMAT, "--print": PRINT,
+                    "--Print": PRINT, "--print-to-file": PRINT_FILE, "--Print-to-file": PRINT_FILE},
+                   ("--postprocessor",), {"o": SHELL, "O": SHELL, "f": FORMAT, "N": PRINT}, "hqwvgGjJsEKSU46",
                    "gallery-dl's own fields ({_path}, {_directory}), -D {root}, --download-archive {archive}"),
 }
 # yt-dlp's --alias puts what follows it into the options it expands to (--exec too).
 ALIAS = "--alias"
-# A shell's -c text is read as code; env runs the program after its own options.
+# A shell's -c text is read as code; env runs the program after its own
+# options (-S and --split-string split a text into it).
 SHELLS = ("sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish")
-_ENV_VALUE = ("-u", "--unset", "-C", "--chdir")
+# env reads its options as getopt does (+a:C:iS:u:v0): a short item is a
+# cluster of flags (i, v, 0) that may end in S (split) or in an option that
+# takes a value (u, C, a), the rest of the item or else the next one; a
+# long one may be a unique prefix.
+_ENV_LONGS = {"--split-string": "S", "--unset": "u", "--chdir": "C", "--argv0": "a"}
+_ENV_SHORTS = "SuCa"
+_ENV_FLAGS = "iv0"
 
 
-def _shell_option(a, longs, others, shorts, flags):
+def _shell_option(a, longs, others, shorts, flags, argparse=False):
     """(the option ``a`` names, its value or None when the value is the
-    next item) when ``a`` names one of ``longs`` or ``shorts``, else None."""
+    next item) when ``a`` names one of ``longs`` or ``shorts``, else None.
+    ``argparse``: a short option's joined value drops one "=" before it
+    (-f=… is the value "…"; optparse and getopt keep it)."""
     if a.startswith("--"):
         name, eq, value = a.partition("=")
+        if name in longs:
+            return name, value if eq else None
         if len(name) > 2 and name not in others:
             for o in longs:
                 if o.startswith(name):
@@ -219,7 +245,10 @@ def _shell_option(a, longs, others, shorts, flags):
     if a.startswith("-"):
         for i, c in enumerate(a[1:], 1):
             if c in shorts:
-                return "-" + c, a[i + 1:] or None
+                value = a[i + 1:]
+                if argparse and value.startswith("=") and len(value) > 1:
+                    value = value[1:]
+                return "-" + c, value or None
             if c not in flags:
                 return None
     return None
@@ -232,9 +261,12 @@ def _program(argv):
     while os.path.basename(argv[i]) == "env":
         i += 1
         while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i]):
-            if argv[i].startswith(("-S", "--split-string")) or (len(argv[i]) > 2 and "--split-string".startswith(argv[i])):
+            found = _shell_option(argv[i], _ENV_LONGS, (), _ENV_SHORTS, _ENV_FLAGS)
+            i += 1
+            if found and found[0] in ("--split-string", "-S"):
                 return None
-            i += 2 if argv[i] in _ENV_VALUE else 1
+            if found and found[1] is None:
+                i += 1
         if i >= len(argv):
             return len(argv) - 1
     return i
@@ -265,6 +297,15 @@ def _check_sh(argv):
     return None
 
 
+def _formatter(value, how):
+    """Whether gallery-dl may read ``value``, a format string, with another
+    formatter than its plain one (see SHELL_RUN)."""
+    if how == FILE:
+        return "\f" in value
+    starts = [value] if how == FORMAT else [value, *value.split(":")[1:]]
+    return any(s.startswith(_FORMATTER) for s in starts)
+
+
 def _check_shell(argv):
     """Why a FeedVault placeholder would be read as code through one of the
     tool's options, else None."""
@@ -285,21 +326,29 @@ def _check_shell(argv):
             return (f"{ALIAS} carries what follows it into the options it expands to, a shell's too: "
                     "not in a command with a FeedVault placeholder (use a shell script)")
         if pending:
-            option, value, pending = pending, a, None
+            (option, how), value, pending = pending, a, None
         else:
-            found = _shell_option(a, longs, others, shorts, flags)
+            found = _shell_option(a, longs, others, shorts, flags, tool == "gallery-dl")
             if found is None:
                 continue
             option, value = found
-            if value is None:
-                pending = option
-                continue
-        used = _used([value])
-        if used:
             how = longs.get(option) or shorts[option[1]]
-            return (f"{option}'s value can reach {how}, so it may not hold a FeedVault placeholder: use "
-                    f"{fields}, or a shell script (its inputs are FV_* variables); "
-                    f"found {{{sorted(used)[0]}}} in {value!r}")
+            if value is None:
+                pending = option, how
+                continue
+        if how == PRINT_FILE:
+            pending = f"{option}'s FILE", FILE
+        used = _used([value])
+        if not used or how in FORMATS and not _formatter(value, how):
+            continue
+        found = f"found {{{sorted(used)[0]}}} in {value!r}"
+        if how in FORMATS:
+            what = option if how == FILE else f"{option}'s value"
+            return (f"{what} is a format string that gallery-dl evaluates as Python or reads "
+                    "as a template file when it starts with \\f, so there it may not hold a FeedVault "
+                    f"placeholder: use {fields}, or a shell script (its inputs are FV_* variables); {found}")
+        return (f"{option}'s value can reach {how}, so it may not hold a FeedVault placeholder: use "
+                f"{fields}, or a shell script (its inputs are FV_* variables); {found}")
     return None
 
 
@@ -583,12 +632,20 @@ def check_url(value):
     return value if parts.scheme.lower() in ("http", "https") and host else None
 
 
+def program(script):
+    """The name of the program a command runs (a downloader named by its
+    path or behind env too), else the script's tool."""
+    argv = script.get("argv")
+    i = _program(argv) if script["kind"] == "command" and argv else None
+    return script["tool"] if i is None else os.path.basename(argv[i])
+
+
 def check_target(script, value):
     """(target, None) when ``value`` is one for the program the script runs
     (instaloader: a profile name or shortcode; gallery-dl and yt-dlp: a
     link; anything else: text without control characters), else (None,
     why). Never starting with "-": no target reads as an option."""
-    tool = script["tool"]
+    tool = program(script)
     if tool == "instaloader":
         if isinstance(value, str) and _INSTALOADER_TARGET.fullmatch(value):
             return value, None
@@ -658,37 +715,46 @@ def _rescan(script, vals, roots):
 
 
 # The options whose value a tool formats (instaloader: str.format, yt-dlp:
-# %), and how a value put in one is escaped, as sync.py does for its own.
-# The value is the next item, or in the same one: after "=" for a long
-# option (--output=…), right after a short one (-o…; -o=… is the value "=…").
-# instaloader (argparse) also takes a long option's unique prefix (--dirname);
-# yt-dlp's are never unique (--output-na-placeholder, --exec-before-download).
+# %, gallery-dl: its formatter, str.format's syntax), and how a value put in
+# one is escaped, as sync.py does for its own. The value is the next item,
+# or in the same one: after "=" for a long option (--output=…), right after
+# a short one (-o…; -o=… is the value "=…"), which gallery-dl's flags may
+# come before (-qf…). instaloader and gallery-dl (argparse) also take a long
+# option's unique prefix (--dirname); yt-dlp's are never unique
+# (--output-na-placeholder, --exec-before-download). gallery-dl's
+# --print-to-file FILE is left as it is: its folder is no format string.
 FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern", "--title-pattern"), (), True,
-                             sync._escape),
-             "yt-dlp": (("--output", "--exec"), ("-o",), False, lambda v: v.replace("%", "%%"))}
+                             sync._escape, ""),
+             "yt-dlp": (("--output", "--exec"), ("-o",), False, lambda v: v.replace("%", "%%"), ""),
+             "gallery-dl": (("--filename", "--rename", "--rename-to", "--print", "--Print", "--print-to-file",
+                             "--Print-to-file"), ("-f", "-N"), True,
+                            lambda v: v.replace("{", "{{").replace("}", "}}"), SHELL_RUN["gallery-dl"][3])}
 
 
-def _formatted(a, longs, shorts, prefixes):
+def _formatted(a, longs, shorts, prefixes, flags):
     """(the option part of ``a``, its value or None when the value is the
     next item) when ``a`` names an option its tool formats, else None."""
     name, eq, value = a.partition("=")
     if len(name) > 2 and name.startswith("--") \
             and any(o == name or (prefixes and o.startswith(name)) for o in longs):
         return name + eq, value if eq else None
-    for o in shorts:
-        if a.startswith(o):
-            return o, a[len(o):] or None
+    if a.startswith("-") and not a.startswith("--"):
+        for i, c in enumerate(a[1:], 1):
+            if "-" + c in shorts:
+                return a[:i + 1], a[i + 1:] or None
+            if c not in flags:
+                return None
     return None
 
 
 def command(script, vals):
     """A command's argument list, its placeholders filled in: escaped in
     the value of an option its tool formats."""
-    longs, shorts, prefixes, escape = FORMATTED.get(script["tool"], ((), (), False, None))
+    longs, shorts, prefixes, escape, flags = FORMATTED.get(script["tool"], ((), (), False, None, ""))
     escaped = {k: escape(v) for k, v in vals.items()} if escape else vals
     argv, formatted = [], False
     for a in script["argv"]:
-        option = None if formatted else _formatted(a, longs, shorts, prefixes)
+        option = None if formatted else _formatted(a, longs, shorts, prefixes, flags)
         if formatted:
             argv.append(substitute(a, escaped))
         elif option and option[1] is not None:
@@ -780,8 +846,9 @@ def _vals(script, params, cfg):
     target, url = _inputs(script, params)
     root = _root(params.get("folder"), cfg)
     # Both expand $NAME in the folder they are given (as sync._archive_source says).
-    if script["tool"] in ("gallery-dl", "yt-dlp") and "$" in root:
-        raise jobs.BadRequest(f"the folder holds a $, which {script['tool']} would expand")
+    tool = program(script)
+    if tool in ("gallery-dl", "yt-dlp") and "$" in root:
+        raise jobs.BadRequest(f"the folder holds a $, which {tool} would expand")
     return values(script, cfg, root, target, url)
 
 
