@@ -154,14 +154,27 @@ def _check_params(kind, params):
     return out
 
 
-def tool_path(name):
-    """The executable to run for a tool: the path set in Settings when there
-    is one (None if it no longer works), else the first on PATH."""
+def tool_lookup(name):
+    """(the executable to run for a tool, or None; why there is none, or
+    None): the path set in Settings when there is one (None when it no
+    longer works or someone else could swap it: config.tool_refused), else
+    the first on PATH."""
     if name in TOOLS:
         configured = (config.load().get("tools") or {}).get(name)
         if configured:
-            return configured if config.is_executable(configured) else None
-    return shutil.which(name)
+            if not config.is_executable(configured):
+                return None, f"{name} not found at the path set in Settings ({configured})"
+            refused = config.tool_refused(configured)
+            if refused:
+                return None, f"{name}: the path set in Settings is refused: {refused}"
+            return configured, None
+    found = shutil.which(name)
+    return (found, None) if found else (None, f"{name} not found; set its path in Settings")
+
+
+def tool_path(name):
+    """The executable to run for a tool (tool_lookup), or None."""
+    return tool_lookup(name)[0]
 
 
 def version_line(texts):
@@ -376,7 +389,7 @@ def _run(job):
             return
         exe = head[0] if head else tool_path(job.tool)
         if exe is None:
-            _finish(job, "failed", result={"error": "missing"}, message=f"{job.tool} not found; set its path in Settings")
+            _finish(job, "failed", result={"error": "missing"}, message=tool_lookup(job.tool)[1])
             return
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")

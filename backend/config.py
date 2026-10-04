@@ -92,10 +92,34 @@ def is_executable(path):
     return os.path.isabs(path) and os.path.isfile(path) and os.access(path, os.X_OK)
 
 
+def tool_refused(path):
+    """Why a tool's path from Settings may not run, else None: it must be an
+    executable file, and the file and its folder (where the path leads, and
+    the folder it is written in) root's or ours, not writable by group or
+    others: someone else could swap the program FeedVault runs."""
+    if not is_executable(path):
+        return f"not an executable file: {path}"
+    real = os.path.realpath(path)
+    checks = [(real, "the file"), (os.path.dirname(real), "its folder")]
+    if os.path.dirname(path) != os.path.dirname(real):
+        checks.append((os.path.dirname(path), "its folder"))
+    for p, what in checks:
+        try:
+            st = os.stat(p)
+        except OSError as e:
+            return f"cannot read {p}: {e.strerror or e}"
+        if st.st_uid not in (0, os.getuid()):
+            return f"{what} ({p}) belongs to another user"
+        if st.st_mode & 0o022:
+            return f"{what} ({p}) is writable by group or others (chmod go-w)"
+    return None
+
+
 def clean_tools(tools, known):
     """Check {tool: path} from Settings: each a known tool, and a path to an
-    executable file named after it (``yt-dlp``, ``yt-dlp_linux``), or empty
-    to use PATH again. Returns (tools, error)."""
+    executable file named after it (``yt-dlp``, ``yt-dlp_linux``) that
+    nobody else can swap (tool_refused), or empty to use PATH again.
+    Returns (tools, error)."""
     if not isinstance(tools, dict) or not all(isinstance(v, str) or v is None for v in tools.values()):
         return None, "tools must map a tool name to a path"
     out = {}
@@ -110,6 +134,9 @@ def clean_tools(tools, known):
             return None, f"{name}: not an executable file: {path}"
         if not os.path.basename(path).lower().startswith(name):
             return None, f"{name}: the file must be named {name} (or start with it): {path}"
+        refused = tool_refused(path)
+        if refused:
+            return None, f"{name}: {refused}"
         out[name] = path
     return out, None
 

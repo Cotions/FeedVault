@@ -2100,9 +2100,14 @@ at the path set for them in Settings (`tools` in `config.json`, for a tool
 installed in a virtualenv). `POST /api/config` with `{ "tools": { "yt-dlp":
 "/abs/path" } }` sets one (an empty string clears it, back to `PATH`); the
 other tools are left as they are. A path must be absolute, an executable
-file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); anything else is
-refused. A set path that stops working makes jobs fail with "not found"
-rather than fall back to `PATH`.
+file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); the file and its
+folder (the one it is in, and where it leads when it is a symlink) must be
+root's or yours and not writable by group or others, so nobody else can
+swap the program FeedVault runs; anything else is refused. This is checked
+again each time the tool is looked for: a set path that stops working, or
+that someone else could swap by now, makes jobs fail with the reason
+("not found at the path set in Settings", "the path set in Settings is
+refused: …") rather than fall back to `PATH`.
 
 ### Downloaders
 
@@ -2122,6 +2127,7 @@ A tool:
   "path": "/home/me/.local/bin/yt-dlp",
   "real_path": "/home/me/.local/share/pipx/venvs/yt-dlp/bin/yt-dlp",
   "configured": null,
+  "path_error": null,
   "install": "pipx",
   "venv": "/home/me/.local/share/pipx/venvs/yt-dlp",
   "version": "2026.08.06",
@@ -2136,8 +2142,11 @@ A tool:
 
 - `path`: the executable a job would run (the path set in Settings, else the
   first on `PATH`); `null` when there is none, or the path set no longer
-  works. `real_path`: where it really is when `path` is a symlink, else `null`.
+  works or is refused (see [Tools](#tools)). `real_path`: where it really is
+  when `path` is a symlink, else `null`.
 - `configured`: the path set in Settings, or `null`.
+- `path_error`: why the path set in Settings is not used (shown in
+  Settings instead of "not found"), else `null`.
 - `install`, read from `real_path`: `venv` (in the `bin/` folder of a
   virtualenv: `pyvenv.cfg` beside that folder), `pipx` (the same, the
   virtualenv inside pipx's `venvs` folder: `$PIPX_HOME/venvs`, else

@@ -110,6 +110,15 @@ def tool_guard(tmp_path, tmp_path_factory, monkeypatch):
                     pytrace=False)
 
 
+@pytest.fixture(autouse=True)
+def umask():
+    """The usual 022 whatever the shell's (002 makes every folder a test
+    creates group-writable, which a tool path from Settings may not be: #73)."""
+    old = os.umask(0o022)
+    yield
+    os.umask(old)
+
+
 def pytest_sessionfinish(session, exitstatus):
     # Refused outside a test (a thread a test left running, say): the run fails too.
     stray = toolguard.current().stray

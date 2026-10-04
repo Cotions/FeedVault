@@ -811,3 +811,73 @@ def test_a_failed_job_s_message_is_scrubbed(runner):
     job = ended(jobs.submit("leaky-fails", {})["id"])
     assert job["state"] == "failed" and "FAKESESSION0001" not in job["message"]
     assert "/.config/instaloader" not in job["message"]
+
+
+# ---------------------------------------------------------------------------
+# Hardening (#73)
+# ---------------------------------------------------------------------------
+
+def _own_tool(folder, name="yt-dlp"):
+    folder.mkdir(mode=0o755, exist_ok=True)
+    tool = folder / name
+    tool.write_text(f"#!{sys.executable}\nprint('2099.01.01')\n")
+    tool.chmod(0o755)
+    return tool
+
+
+@pytest.mark.parametrize("open_up, says", [
+    (lambda tool: tool.chmod(0o775), "the file ({tool}) is writable by group or others"),
+    (lambda tool: tool.chmod(0o757), "the file ({tool}) is writable by group or others"),
+    (lambda tool: tool.parent.chmod(0o775), "its folder ({folder}) is writable by group or others"),
+    (lambda tool: tool.parent.chmod(0o777), "its folder ({folder}) is writable by group or others"),
+])
+def test_a_tool_path_others_can_swap_is_refused_when_saved(env, client, open_up, says):
+    tool = _own_tool(env["tmp"] / "tools")
+    open_up(tool)
+    r = client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()
+    assert r["ok"] is False
+    assert r["error"] == "yt-dlp: " + says.format(tool=tool, folder=tool.parent) + " (chmod go-w)"
+
+
+def test_a_tool_path_of_another_user_is_refused(env, client, monkeypatch):
+    import config
+    tool = _own_tool(env["tmp"] / "tools")
+    real_stat = os.stat
+
+    def theirs(path, *a, **k):
+        st = real_stat(path, *a, **k)
+        if os.fspath(path) == str(tool):
+            return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, os.getuid() + 1, *st[5:10]))
+        return st
+
+    monkeypatch.setattr(config.os, "stat", theirs)
+    r = client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()
+    assert r["ok"] is False and r["error"] == f"yt-dlp: the file ({tool}) belongs to another user"
+
+
+def test_a_tool_path_through_a_symlink_is_checked_where_it_leads(env, client):
+    tool = _own_tool(env["tmp"] / "real")
+    (env["tmp"] / "bin").mkdir(mode=0o755)
+    link = env["tmp"] / "bin" / "yt-dlp"
+    link.symlink_to(tool)
+    assert client.post("/api/config", json={"tools": {"yt-dlp": str(link)}}, headers=H).get_json()["ok"]
+    tool.parent.chmod(0o777)
+    r = client.post("/api/config", json={"tools": {"yt-dlp": str(link)}}, headers=H).get_json()
+    assert r["error"] == f"yt-dlp: its folder ({tool.parent}) is writable by group or others (chmod go-w)"
+
+
+def test_a_tool_path_others_can_swap_by_now_is_not_run(runner, client, monkeypatch):
+    import config
+    import downloaders
+    tool = _own_tool(runner["tmp"] / "tools")
+    monkeypatch.setenv("PATH", "")
+    assert client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()["ok"]
+    assert ended(jobs.submit("tool-version", {"tool": "yt-dlp"})["id"])["state"] == "done"
+    tool.chmod(0o777)                          # after it was saved
+    why = f"yt-dlp: the path set in Settings is refused: the file ({tool}) is writable by group or others (chmod go-w)"
+    assert jobs.tool_path("yt-dlp") is None and jobs.tool_lookup("yt-dlp") == (None, why)
+    job = ended(jobs.submit("tool-version", {"tool": "yt-dlp"})["id"])
+    assert (job["state"], job["message"], job["exit_code"]) == ("failed", why, None)
+    # Settings → Downloaders says why.
+    info = downloaders.detect("yt-dlp", config.load())
+    assert (info["found"], info["path_error"]) == (False, why)
