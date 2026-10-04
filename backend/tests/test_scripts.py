@@ -479,10 +479,169 @@ def test_a_link_gallery_dl_would_expand_is_refused_and_never_run(client, folder,
     assert runner.runs() == [] and jobs.active() == []
 
 
+DOTDOT = "https://x.com/../../etc"
+DOTDOT_WHY = "{url} puts a .. in --print-to-file's folder, which would lead out of the folder written there"
+DOTDOT_IDS = {"needs": "url", "argv": ["gallery-dl", "--print-to-file", "{id}", "/tmp/{url}/out.txt", "{url}"]}
+
+
+def test_a_link_s_dotdot_in_a_print_to_file_folder_is_refused_and_never_run(client, folder, runner):
+    """#68: the issue's example, through Run. gallery-dl would make
+    /tmp/https:/x.com/../../etc its base-directory and append to out.txt there."""
+    runner.install_as("gallery-dl")
+    write(folder, "ids.json", DOTDOT_IDS)
+    assert run(client, "ids", status=400, url=DOTDOT)["error"] == DOTDOT_WHY
+    assert runner.runs() == [] and jobs.active() == []
+
+
+def test_a_source_s_dotdot_link_is_refused_and_never_run(client, folder, runner):
+    """#68, through a source's sync. Its link is checked first (sources.parse_url
+    refuses a .. segment, sources.json edited by hand too), so that refusal
+    comes before command()'s."""
+    runner.install_as("gallery-dl")
+    write(folder, "ids.json", {**DOTDOT_IDS, "needs": "target",
+                               "argv": ["gallery-dl", "--print-to-file", "{id}", "/tmp/{target}/out.txt", "{target}"]})
+    src = client.post("/api/sources", json={"target": "https://x.com/someone"}, headers=H).get_json()["source"]
+    assert src["tool"] == "gallery-dl"
+    attach(client, src["id"], "ids")
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE sources SET target = ? WHERE id = ?", (DOTDOT, src["id"]))
+    assert "not a profile link" in sync_now(client, src["id"], status=400)["error"]
+    assert runner.runs() == [] and jobs.active() == []
+    # A link the source check takes as it is: command() refuses it all the same.
+    script = scripts.get("ids")
+    vals = scripts.values(script, config.load(), "/m/x", DOTDOT, DOTDOT)
+    with pytest.raises(jobs.BadRequest, match=re.escape(DOTDOT_WHY.replace("{url}", "{target}"))):
+        scripts.command(script, vals)
+
+
+@pytest.mark.parametrize("file, url, want", [
+    # The author's own .. stays.
+    ("{root}/../x/out.txt", "https://x.com/a", "/m/x/../x/out.txt"),
+    ("/tmp/../{url}/out.txt", "https://x.com/a", "/tmp/../https://x.com/a/out.txt"),
+    # A link's .. in the file name only (after the last "/"): no folder, escaped as #67 does.
+    ("{root}/{url}", "https://x.com/..", "/m/x/https://x.com/.."),
+    ("{root}/{url}", "https://x.com/..{id}", "/m/x/https://x.com/..{{id}}"),
+    ("{root}/out-{url}", "https://x.com/a..b/c", "/m/x/out-https://x.com/a..b/c"),
+    # gallery-dl never decodes a path (os.path.split, util.expand_path, open):
+    # %2e%2e is a folder with that name, not a step up.
+    ("/tmp/{url}/out.txt", "https://x.com/%2e%2e/%2E%2E/etc", "/tmp/https://x.com/%2e%2e/%2E%2E/etc/out.txt"),
+])
+def test_a_print_to_file_folder_the_link_stays_in_is_accepted(env, file, url, want):
+    script = {"tool": "gallery-dl", "argv": ["gallery-dl", "--print-to-file", "{id}", file, "{url}"]}
+    vals = scripts.values(script, config.load(), "/m/x", url=url)
+    assert scripts.command(script, vals)[-2:] == [want, url]
+
+
+@pytest.mark.parametrize("option", [["--print-to-file", "{id}"], ["--Print-to-file", "{id}"],
+                                    ["--print-to-file={id}"], ["--Print-to", "{id}"]])
+@pytest.mark.parametrize("file, url", [
+    ("/tmp/{url}/out.txt", DOTDOT),
+    ("/tmp/{url}/out.txt", "https://x.com/a/.."),
+    # Joined with the author's text up to the "/" around it.
+    ("/tmp/{url}./out.txt", "https://x.com/a/."),
+])
+def test_a_link_s_dotdot_in_any_print_to_file_folder_is_refused(env, option, file, url):
+    script = {"tool": "gallery-dl", "argv": ["gallery-dl", *option, file, "{url}"]}
+    name = "--Print-to-file" if "--P" in option[0] else "--print-to-file"
+    with pytest.raises(jobs.BadRequest, match=re.escape(DOTDOT_WHY.replace("--print-to-file", name))):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", url=url))
+
+
+def test_a_value_starting_a_print_to_file_with_tilde_is_refused(env):
+    """gallery-dl runs expanduser on FILE's folder (util.expand_path). A link
+    never starts with ~ (check_url, check_target), nor does {root},
+    {data_dir} or {archive} (absolute paths): this is the check on its own."""
+    script = {"tool": "gallery-dl", "argv": ["gallery-dl", "--print-to-file", "{id}", "{url}/.bashrc"]}
+    with pytest.raises(jobs.BadRequest, match=re.escape("{url} starts --print-to-file's folder with ~, "
+                                                        "which gallery-dl would expand")):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", url="~"))
+    # A ~ further on, or in the file name alone, is never expanded.
+    script["argv"][-1] = "/tmp/{url}/x"
+    assert scripts.command(script, scripts.values(script, config.load(), "/m/x", url="~a"))[-1] == "/tmp/~a/x"
+    script["argv"][-1] = "{url}"
+    assert scripts.command(script, scripts.values(script, config.load(), "/m/x", url="~a"))[-1] == "~a"
+
+
+@pytest.mark.parametrize("tool, args, option", [
+    ("gallery-dl", ["-d", "/tmp/{url}"], "-d"),
+    ("gallery-dl", ["--destination=/tmp/{url}"], "--destination"),
+    ("gallery-dl", ["-D", "/tmp/{url}"], "-D"),
+    ("gallery-dl", ["-qD/tmp/{url}"], "-D"),
+    ("gallery-dl", ["--directory", "/tmp/{url}"], "--directory"),
+    ("gallery-dl", ["--dir=/tmp/{url}"], "--directory"),
+    ("gallery-dl", ["--download-archive", "/tmp/{url}/a.sqlite3"], "--download-archive"),
+    ("gallery-dl", ["-e", "/tmp/{url}/errors.txt"], "-e"),
+    ("gallery-dl", ["--error-file", "/tmp/{url}/errors.txt"], "--error-file"),
+    ("gallery-dl", ["--write-log", "/tmp/{url}/log.txt"], "--write-log"),
+    ("gallery-dl", ["--write-unsupported=/tmp/{url}/u.txt"], "--write-unsupported"),
+    ("gallery-dl", ["-c", "/tmp/{url}/c.json"], "-c"),
+    ("gallery-dl", ["--config-json", "/tmp/{url}/c.json"], "--config-json"),
+    ("gallery-dl", ["--config-yaml", "/tmp/{url}/c.yaml"], "--config-yaml"),
+    ("gallery-dl", ["--config-toml", "/tmp/{url}/c.toml"], "--config-toml"),
+    ("gallery-dl", ["-C", "/tmp/{url}/cookies.txt"], "-C"),
+    ("gallery-dl", ["--cookies-export", "/tmp/{url}/cookies.txt"], "--cookies-export"),
+    ("gallery-dl", ["-i", "/tmp/{url}/in.txt"], "-i"),
+    ("gallery-dl", ["-I", "/tmp/{url}/in.txt"], "-I"),
+    ("gallery-dl", ["--input-file-delete=/tmp/{url}/in.txt"], "--input-file-delete"),
+    ("yt-dlp", ["-P", "/tmp/{url}"], "-P"),
+    ("yt-dlp", ["--paths", "temp:/tmp/{url}"], "--paths"),
+    ("yt-dlp", ["-o", "/tmp/{url}/%(id)s.%(ext)s"], "-o"),
+    ("yt-dlp", ["--output=/tmp/{url}/%(id)s.%(ext)s"], "--output"),
+    ("yt-dlp", ["--download-archive", "/tmp/{url}/a.txt"], "--download-archive"),
+    ("yt-dlp", ["--cookies", "/tmp/{url}/cookies.txt"], "--cookies"),
+    ("yt-dlp", ["-a", "/tmp/{url}/in.txt"], "-a"),
+    ("yt-dlp", ["--batch-file=/tmp/{url}/in.txt"], "--batch-file"),
+    ("yt-dlp", ["--load-info-json", "/tmp/{url}/i.json"], "--load-info-json"),
+])
+def test_a_link_s_dotdot_in_a_path_option_is_refused(env, tool, args, option):
+    """#68: the tool's other options whose value is a path (scripts.PATHS),
+    expanded and used as it is: a link's .. there leads out of the folder
+    written, as in --print-to-file's; its $ is expanded (~ too)."""
+    script = {"tool": tool, "argv": [tool, *args, "--", "{url}"]}
+    for url, why in [(DOTDOT, f"{{url}} puts a .. in {option}'s path, which would lead out of the folder "
+                              "written there"),
+                     ("https://x.com/$HOME", f"{{url}} puts a $ in {option}'s path, which {tool} would expand")]:
+        with pytest.raises(jobs.BadRequest, match=re.escape(why)):
+            scripts.command(script, scripts.values(script, config.load(), "/m/x", url=url))
+    # %2e%2e is no step up (neither tool decodes a path); the author's own .. stays.
+    vals = scripts.values(script, config.load(), "/m/x", url="https://x.com/%2e%2e/a")
+    assert scripts.command(script, vals)[-1] == "https://x.com/%2e%2e/a"
+    script["argv"][1:-2] = [a.replace("/tmp/{url}", "{root}/../x") for a in args]
+    assert "/m/x/../x" in "".join(scripts.command(script, scripts.values(script, config.load(), "/m/x",
+                                                                           url=DOTDOT)))
+
+
+def test_a_link_s_dotdot_in_a_path_option_is_refused_and_never_run(client, folder, runner):
+    runner.install_as("gallery-dl")
+    write(folder, "dl.json", {"needs": "url", "argv": ["gallery-dl", "-D", "/tmp/{url}", "--", "{url}"]})
+    assert run(client, "dl", status=400, url=DOTDOT)["error"] \
+        == "{url} puts a .. in -D's path, which would lead out of the folder written there"
+    assert runner.runs() == [] and jobs.active() == []
+
+
+@pytest.mark.parametrize("tool, args", [
+    # Not a path option: a link's .. is text there, or a positional link.
+    ("gallery-dl", ["--filename", "{url}", "{url}"]),
+    ("gallery-dl", ["-D", "{root}", "--download-archive", "{archive}", "{url}"]),
+    ("gallery-dl", ["--print-to-file", "-D", "/tmp/{root}", "{url}"]),
+    ("yt-dlp", ["--paths", "{root}", "-o", "%(id)s.%(ext)s", "--", "{url}"]),
+    ("instaloader", ["--dirname-pattern", "/tmp/{url}", "--", "{url}"]),
+    ("/usr/bin/env", ["-C", "/tmp/{url}", "gallery-dl", "{url}"]),
+])
+def test_a_link_s_dotdot_elsewhere_is_left_as_it_is(env, tool, args):
+    script = {"id": "mine", "tool": tool, "argv": [tool, *args]}
+    vals = scripts.values(script, config.load(), "/m/x", url=DOTDOT)
+    assert DOTDOT in scripts.command(script, vals)
+
+
 def test_built_in_templates_are_filled_in_as_before(env):
     for name in scripts.BUILTINS:
         script = scripts.get("builtin:" + name)
         vals = scripts.values(script, config.load(), "/m/x", "carol", "https://example.com/v")
+        assert scripts.command(script, vals) == [scripts.substitute(a, vals) for a in script["argv"]]
+        # #68: a link reaches none of their path options, so a .. in it is never refused.
+        vals = scripts.values(script, config.load(), "/m/x", DOTDOT, DOTDOT)
         assert scripts.command(script, vals) == [scripts.substitute(a, vals) for a in script["argv"]]
 
 
