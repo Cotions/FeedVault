@@ -3091,7 +3091,7 @@ def test_every_argv_form_reads_as_pinned(argv, why, got):
 
 def walked(argv):
     start, found = scripts._walk(argv)
-    return start, [(f.index, f.given, [o for o, _ in f.options], f.values) for f in found]
+    return start, [(f.index, f.given, [o for o, _ in f.options], f.values, f.maybe) for f in found]
 
 
 def probe(argv, item, at, text):
@@ -3106,29 +3106,31 @@ def probe(argv, item, at, text):
 
 @pytest.mark.parametrize("argv", [row[0] for row in PINNED], ids=range(len(PINNED)))
 def test_the_check_and_command_agree_on_every_pinned_form(argv):
-    """#69: each item of a pinned form after the program (and env's option
-    values) holding a link in turn: command() escapes it exactly when the
-    walker marks it a value its tool formats (and gallery-dl's check reads
-    it as a format string: the same items), checks it as a path exactly
-    when it is a path (or FILE) value, and _check_shell refuses it as code
-    or a format string exactly when it is one."""
+    """#69: each value or positional item of a pinned form (env's option
+    values too) holding a link in turn: command() escapes it exactly when
+    the walker reads it as a value its tool formats (and gallery-dl's
+    check reads it as a format string: the same items), refuses a link's
+    .. there exactly when either reading has it a path (or FILE) value,
+    and _check_shell refuses it as code or a format string exactly when
+    either reading has it one. An item naming an option is never given a
+    link: that would change how the command reads."""
     start, found = scripts._walk(argv)
     if start is None or os.path.basename(argv[start]) not in scripts.TOOLS:
         return
     tool = os.path.basename(argv[start])
-    values = {item: (f, n, at) for f in found for n, (item, at) in enumerate(f.values)}
-    # Every item but an option's own (unless its value is joined) and the
-    # "--" that ends them; those after it too.
-    ends = next((n for n in range(start + 1, len(argv)) if argv[n] == "--" and n not in values), None)
-    names = {f.index for f in found if not f.values or f.values[0][0] != f.index}
-    items = sorted({*values, *range(start + 1, len(argv))} - names - {ends})
+    claims = collections.defaultdict(list)
+    for f in found:
+        for n, (item, at) in enumerate(f.values):
+            claims[item].append((f, n, at))
+    items = {item for item, c in claims.items() if c[0][2] or not argv[item].startswith("-")}
+    items |= {n for n in range(start + 1, len(argv)) if n not in claims and not argv[n].startswith("-")}
     vals = {"target": "https://x.com/{a}%", "url": "https://x.com/{a}%", "root": "/m/x", "data_dir": "/d",
             "archive": "/d/a"}
     # yt-dlp's --alias refuses any placeholder: no item of the check's own.
     alias = any(scripts.ALIAS in f.kinds(0) for f in found)
     escaped, paths, formats, code = set(), set(), set(), set()
-    for item in items:
-        at = values[item][2] if item in values else 0
+    for item in sorted(items):
+        at = claims[item][0][2] if item in claims else 0
         argv2 = probe(argv, item, at, "{url}")
         if scripts.command({"tool": argv[0], "argv": argv2}, vals)[item] != scripts.substitute(argv2[item], vals):
             escaped.add(item)
@@ -3144,15 +3146,82 @@ def test_the_check_and_command_agree_on_every_pinned_form(argv):
             formats.add(item)
         elif why:
             code.add(item)
-    marked = {item: f.kinds(n) for item, (f, n, _) in values.items()}
-    sure = {item: f.sure(n) for item, (f, n, _) in values.items() if f.index > start}
-    assert escaped == {i for i, k in sure.items() if k & {*scripts.ESCAPED, scripts.FILE}}
-    assert paths == {i for i, k in marked.items() if scripts.PATH in k} | {i for i, k in sure.items()
-                                                                            if scripts.FILE in k}
+    marked = {i: set().union(*(f.kinds(n) for f, n, _ in claims[i])) for i in items & set(claims)}
+    sure = {i: f.sure(n) for i in items & set(claims) for f, n, _ in claims[i] if f.index > start and not f.maybe}
+    assert escaped == {i for i, k in sure.items() if k & (scripts.ESCAPED | {scripts.FILE})}
+    assert paths == {i for i, k in marked.items() if k & {scripts.PATH, scripts.FILE}}
     if alias:
         return
-    assert formats == {i for i, k in marked.items() if k & set(scripts.FORMATS)} - code
-    assert code == {i for i, k in marked.items() if k & set(scripts.CODE)}
+    assert code == {i for i, k in marked.items() if k & scripts.CODE}
+    assert formats == {i for i, k in marked.items() if k & scripts.FORMATS} - code
     if tool == "gallery-dl":
-        # What the check reads as a format string is what command() escapes, and the reverse.
-        assert formats == escaped
+        # What the check reads as a format string (on the one reading
+        # command() escapes by) is what command() escapes, and the reverse.
+        read = {i for i, k in sure.items() if k & scripts.FORMATS}
+        assert read == escaped and read <= formats
+
+
+@pytest.mark.parametrize("args, why", [
+    # An option the table lacks may take the next item as its value
+    # (optparse takes any item): -P, --paths, -o are then that value, and
+    # --exec an option.
+    (["--referer", "-P", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--referer", "--paths", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--print", "-o", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    # A "--" yt-dlp may read as such an option's value ends nothing.
+    (["--referer", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--no-playlist", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--replace-in-metadata", "title", "a", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    # Nor one after such an option, further back, put the walker out of step.
+    (["--referer", "-P", "--user-agent", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--referer", "--cookies", "--print-to-file", "A", "--", "--exec", "echo {url}"],
+     "--exec's value can reach a shell"),
+    (["-O", "-P", "--user-agent", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    # After the program, a value or flags it is one.
+    (["--", "--exec", "echo {url}"], None),
+    (["-iq", "--", "--exec", "echo {url}"], None),
+    (["-o", "%(id)s", "--", "--exec", "echo {url}"], None),
+    (["--referer=x", "-P", "/d", "--", "--exec", "echo {url}"], None),
+])
+def test_an_option_the_table_lacks_never_hides_one_it_has(args, why):
+    """Review of #69: the checks read every item naming an option as one."""
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": ["yt-dlp", *args, "--", "{url}"]}))
+    assert error == why if why is None else error.startswith(why)
+
+
+@pytest.mark.parametrize("tool, args, why", [
+    ("yt-dlp", ["--referer", "-P", "-o", "/tmp/{url}/%(id)s"], "{url} puts a .. in -o's path"),
+    ("yt-dlp", ["--js-runtimes", "deno:{root}/{url}"], "{url} puts a .. in --js-runtimes's path"),
+    ("gallery-dl", ["-X", "{root}/{url}"], "{url} puts a .. in -X's path"),
+    ("gallery-dl", ["--extractors={root}/{url}"], "{url} puts a .. in --extractors's path"),
+    ("gallery-dl", ["--cache-file", "{root}/{url}/c.sqlite3"], "{url} puts a .. in --cache-file's path"),
+])
+def test_a_link_s_dotdot_in_a_path_option_on_either_reading_is_refused(env, tool, args, why):
+    script = {"tool": tool, "argv": [tool, *args, "--", "{url}"]}
+    assert scripts.parse_command(json.dumps({"needs": "url", "argv": script["argv"]}))[1] is None
+    with pytest.raises(jobs.BadRequest, match=re.escape(why)):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", url=DOTDOT))
+
+
+def test_instaloader_s_latest_stamps_takes_a_value_only_when_one_follows(env):
+    """argparse's nargs="?": an option or "--" after it is no value of its."""
+    script = {"tool": "instaloader", "argv": ["instaloader", "--latest-stamps", "--dirname-pattern",
+                                              "{root}/{target}", "--", "{target}"]}
+    with pytest.raises(jobs.BadRequest, match=re.escape("{target} puts a .. in --dirname-pattern's path")):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", ".."))
+    vals = scripts.values(script, config.load(), "/m/{x}", "carol")
+    assert scripts.command(script, vals)[3] == "/m/{{x}}/carol"
+    script["argv"] = ["instaloader", "--latest-stamps", "--", "--dirname-pattern", "{root}/{target}"]
+    assert scripts.command(script, vals)[-1] == "/m/{x}/carol"
+    script["argv"] = ["instaloader", "--latest-stamps", "{root}/{target}", "--", "x"]
+    with pytest.raises(jobs.BadRequest, match=re.escape("{target} puts a .. in --latest-stamps's path")):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", ".."))
+
+
+@pytest.mark.parametrize("args", [["--post-filter", "{target}"], ["--only-if={target}"],
+                                  ["--storyitem-filter", "likes > 0 and {target}"]])
+def test_a_placeholder_in_an_instaloader_filter_is_refused(args):
+    """instaloader compiles and evaluates the filter against each post."""
+    _, error = scripts.parse_command(json.dumps({"needs": "target", "argv": ["instaloader", *args, "--", "{target}"]}))
+    assert error.startswith(f"{args[0].partition('=')[0]}'s value can reach Python (instaloader evaluates it)")
+    assert "the post's own attributes" in error

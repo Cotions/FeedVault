@@ -182,8 +182,10 @@ def _check_needs(meta, texts):
 #   --postprocessor-args (shlex.split, then aria2c's or ffmpeg's argv).
 #   gallery-dl: --exec, --exec-after, and -o / -O, whose KEY=VALUE can set
 #   an exec post processor's command (a string runs in a shell); the
-#   --filter options (eval). Not in it: yt-dlp's --downloader (a program's
-#   name or path), its --match-filters (its own syntax, never eval).
+#   --filter options (eval). instaloader: --post-filter, --only-if,
+#   --storyitem-filter (compiled and evaluated against a post: EVAL). Not
+#   in it: yt-dlp's --downloader (a program's name or path), its
+#   --match-filters (its own syntax, never eval).
 # - FORMAT, PRINT, FILE: gallery-dl's format strings (formatter.parse): one
 #   starting with \f<kind> and a space picks another formatter (E a Python
 #   expression, F an f-string, J Jinja, M a module's function, T, TF, TJ a
@@ -210,26 +212,31 @@ def _check_needs(meta, texts):
 #   --download-archive (archive.py), -c, --config, --config-json,
 #   --config-yaml, --config-toml (config.load), -C, --cookies,
 #   --cookies-export (extractor/common.py), -i, -I, -x, --input-file,
-#   --input-file-comment, --input-file-delete (the last two rewrite it).
+#   --input-file-comment, --input-file-delete (the last two rewrite it),
+#   -X, --extractors (modules loaded from it), --cache-file (cache.py).
 #   yt-dlp (utils.expand_path): -P, --paths, -o, --output ([TYPES:] before
 #   it, which a link never starts: "https" is no type), --print-to-file's
 #   FILE (appended to), --download-archive, --cookies, -a, --batch-file,
 #   --load-info-json, --cache-dir, --config-locations, --netrc-location,
-#   --plugin-dirs (code loaded from it), --ffmpeg-location (a program run).
+#   --plugin-dirs (code loaded from it), --ffmpeg-location and
+#   --js-runtimes' RUNTIME[:PATH] (a program run).
 #   instaloader (no expansion): its three patterns (formatted, then made:
 #   its own fields are sanitized, FeedVault's text is not),
 #   --resume-prefix, --latest-stamps, -B, --cookiefile, -f, --sessionfile
 #   (written). env: -C, --chdir (the folder the program runs in).
+# - No kind: yt-dlp's --replace-in-metadata (nargs=3), followed so that a
+#   "--" among its values ends nothing.
 # - ALIAS: yt-dlp's --alias puts what follows it into the options it
 #   expands to (--exec too): refused in a command with a placeholder.
 SHELL = "a shell"
 PYTHON = "Python (gallery-dl evaluates it)"
+EVAL = "Python (instaloader evaluates it)"
 SPLIT = "another program's arguments, split at spaces"
 FORMAT, PRINT, FILE = "format", "print", "file"
 PATH, TEMPLATE, ALIAS = "path", "template", "alias"
-CODE = (SHELL, PYTHON, SPLIT)
-FORMATS = (FORMAT, PRINT, FILE)
-ESCAPED = (FORMAT, PRINT, TEMPLATE)
+CODE = frozenset((SHELL, PYTHON, EVAL, SPLIT))
+FORMATS = frozenset((FORMAT, PRINT, FILE))
+ESCAPED = frozenset((FORMAT, PRINT, TEMPLATE))
 _FORMATTER = ("\f", "\\f")
 # A tool's options: {name: one tuple of kinds per value it takes} for its
 # long ones and its short ones (by letter), an empty tuple for an "other":
@@ -239,6 +246,8 @@ _FORMATTER = ("\f", "\\f")
 # before one that does in one item (-qo…, -io…). ``argparse``: a short
 # option's joined value drops one "=" before it (-f=… is the value "…";
 # optparse and getopt keep it). ``expands``: ~ and $NAME in a path.
+# ``optional``: the options whose one value may be left out (argparse's
+# nargs="?": taken only when the next item is no option, nor "--").
 # Every one takes a long option's unique prefix (optparse's
 # _match_long_opt, argparse, getopt_long); a prefix that names several
 # (which the tool refuses) is checked as any of them and escaped only as
@@ -248,7 +257,13 @@ _FORMATTER = ("\f", "\\f")
 # _parse_known_args: "--" and all after it positional); an option's value
 # is its value though, "--" or an option's name too (optparse takes it,
 # argparse refuses to run).
-Tool = collections.namedtuple("Tool", "longs shorts flags argparse expands escape fields")
+# These are the options FeedVault reads, not all of them: one missing that
+# takes a value would put the walker out of step (yt-dlp --referer -P
+# --exec …: -P is the referer). So what is refused (code, a format, a
+# path) is also looked for as if every item naming an option were one,
+# and past a "--" yt-dlp may read as such an option's value; what is
+# escaped follows the one reading.
+Tool = collections.namedtuple("Tool", "longs shorts flags argparse expands escape fields optional")
 TOOLS = {
     "yt-dlp": Tool(
         {"--exec": ((SHELL, TEMPLATE),), "--exec-before-download": ((SHELL,),), "--netrc-cmd": ((SHELL,),),
@@ -259,11 +274,12 @@ TOOLS = {
          "--download-archive": ((PATH,),), "--cookies": ((PATH,),), "--batch-file": ((PATH,),),
          "--load-info-json": ((PATH,),), "--cache-dir": ((PATH,),), "--config-locations": ((PATH,),),
          "--netrc-location": ((PATH,),), "--plugin-dirs": ((PATH,),), "--ffmpeg-location": ((PATH,),),
+         "--js-runtimes": ((PATH,),), "--replace-in-metadata": ((), (), ()),
          "--netrc": (), "--downloader": (), "--external-downloader": (), "--print": (),
          "--output-na-placeholder": ()},
         {"o": ((TEMPLATE, PATH),), "P": ((PATH,),), "a": ((PATH,),)},
         "46FJUceghijknqsvwx", False, True, lambda v: v.replace("%", "%%"),
-        "yt-dlp's own fields (%(webpage_url)q, %(filepath)q)"),
+        "yt-dlp's own fields (%(webpage_url)q, %(filepath)q)", ()),
     "gallery-dl": Tool(
         {"--exec": ((SHELL,),), "--exec-after": ((SHELL,),), "--option": ((SHELL,),),
          "--postprocessor-option": ((SHELL,),), "--filter": ((PYTHON,),), "--post-filter": ((PYTHON,),),
@@ -276,17 +292,20 @@ TOOLS = {
          "--config": ((PATH,),), "--config-json": ((PATH,),), "--config-yaml": ((PATH,),),
          "--config-toml": ((PATH,),), "--cookies": ((PATH,),), "--cookies-export": ((PATH,),),
          "--input-file": ((PATH,),), "--input-file-comment": ((PATH,),), "--input-file-delete": ((PATH,),),
+         "--extractors": ((PATH,),), "--cache-file": ((PATH,),),
          "--postprocessor": ()},
         {"o": ((SHELL,),), "O": ((SHELL,),), "f": ((FORMAT,),), "N": ((PRINT,),), "d": ((PATH,),),
          "D": ((PATH,),), "e": ((PATH,),), "c": ((PATH,),), "C": ((PATH,),), "i": ((PATH,),), "I": ((PATH,),),
-         "x": ((PATH,),)},
+         "x": ((PATH,),), "X": ((PATH,),)},
         "hqwvgGjJsEKSU46", True, True, lambda v: v.replace("{", "{{").replace("}", "}}"),
-        "gallery-dl's own fields ({_path}, {_directory}), -D {root}, --download-archive {archive}"),
+        "gallery-dl's own fields ({_path}, {_directory}), -D {root}, --download-archive {archive}", ()),
     "instaloader": Tool(
         {"--dirname-pattern": ((TEMPLATE, PATH),), "--filename-pattern": ((TEMPLATE, PATH),),
          "--title-pattern": ((TEMPLATE, PATH),), "--resume-prefix": ((PATH,),), "--latest-stamps": ((PATH,),),
-         "--cookiefile": ((PATH,),), "--sessionfile": ((PATH,),)},
-        {"B": ((PATH,),), "f": ((PATH,),)}, "CFGPSVhqs", True, False, sync._escape, None),
+         "--cookiefile": ((PATH,),), "--sessionfile": ((PATH,),), "--post-filter": ((EVAL,),),
+         "--only-if": ((EVAL,),), "--storyitem-filter": ((EVAL,),)},
+        {"B": ((PATH,),), "f": ((PATH,),)}, "CFGPSVhqs", True, False, sync._escape,
+        "the post's own attributes (likes, date_utc)", ("--latest-stamps",)),
 }
 # env reads its options as getopt does (+a:C:iS:u:v0): a short item is a
 # cluster of flags (i, v, 0) that may end in S (split) or in an option that
@@ -294,21 +313,26 @@ TOOLS = {
 # long one may be a unique prefix. -S and --split-string split a text into
 # the command it runs.
 ENV = Tool({"--split-string": ((SPLIT,),), "--unset": ((),), "--chdir": ((PATH,),), "--argv0": ((),)},
-           {"S": ((SPLIT,),), "u": ((),), "C": ((PATH,),), "a": ((),)}, "iv0", False, False, None, None)
+           {"S": ((SPLIT,),), "u": ((),), "C": ((PATH,),), "a": ((),)}, "iv0", False, False, None, None, ())
 # A shell's -c text is read as code.
 SHELLS = ("sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish")
 
 
-class Found(collections.namedtuple("Found", "index given options values")):
+class Found(collections.namedtuple("Found", "index given options values maybe", defaults=(False,))):
     """An option of env's or of the program's in a command's argv: its
     item's index, its name as given (-o, --outp), [(name, kinds per value)]
-    the options it may name (one, unless a prefix of several), and
+    the options it may name (one, unless a prefix of several),
     [(item's index, offset)] where its values start (the same item past
-    "=" or a short option, then the next ones)."""
+    "=" or a short option, then the next ones), and ``maybe``: read so
+    only by the checks (see Tool)."""
 
     def kinds(self, n):
         """The kinds of its n-th value: those of any option it may name."""
-        return {k for _, spec in self.options if len(spec) > n for k in spec[n]}
+        return {k for _, k in self.pairs(n)}
+
+    def pairs(self, n):
+        """(option, kind) of its n-th value, for each option it may name."""
+        return [(o, k) for o, spec in self.options if len(spec) > n for k in spec[n]]
 
     def sure(self, n):
         """The kinds of its n-th value that every option it may name has."""
@@ -318,7 +342,7 @@ class Found(collections.namedtuple("Found", "index given options values")):
         """The option whose n-th value has ``kind``, named in full: the
         first that has it (a path's or FILE's: the only one, else the
         name as given)."""
-        named = [o for o, spec in self.options if len(spec) > n and kind in spec[n]]
+        named = [o for o, k in self.pairs(n) if k == kind]
         return named[0] if len(named) == 1 or kind not in (PATH, FILE) else self.given
 
 
@@ -347,14 +371,33 @@ def _match(a, tool):
     return None
 
 
-def _found(argv, n, match):
+def _found(argv, n, match, tool):
     """The Found of ``match`` at item ``n``, and the index of the item after
     its values (past the end when they are missing)."""
     given, options, at = match
     joined = at is not None
-    after = n + 1 + min(len(spec) for _, spec in options if spec) - joined
-    values = [(n, at)] * joined + [(m, 0) for m in range(n + 1, min(after, len(argv)))]
-    return Found(n, given, options, values), after
+    count = min(len(spec) for _, spec in options if spec) - joined
+    if count and all(o in tool.optional for o, spec in options if spec) \
+            and (n + 1 >= len(argv) or argv[n + 1].startswith("-") and argv[n + 1] != "-"):
+        count = 0
+    values = [(n, at)] * joined + [(m, 0) for m in range(n + 1, min(n + 1 + count, len(argv)))]
+    return Found(n, given, options, values), n + 1 + count
+
+
+def _ends(argv, end, start, found, tool):
+    """Whether the "--" at ``end`` ends the options however the tool reads
+    the items before it: argparse never takes it as a value; optparse does,
+    for an option missing from TOOLS (yt-dlp --referer --), and the items
+    after one are read out of step (--referer -P --user-agent --: -P is the
+    referer, "--" the user agent), so it ends them only when none is where
+    an option goes (no Found's name nor value) but its value's joined to it
+    or it is a cluster of flags."""
+    taken = {m for f in found for m, _ in f.values} | {f.index for f in found}
+    return tool.argparse or not any(
+        m not in taken and argv[m].startswith("-") and argv[m] != "-"
+        and not (argv[m].startswith("--") and "=" in argv[m])
+        and (argv[m].startswith("--") or not all(c in tool.flags for c in argv[m][1:]))
+        for m in range(start + 1, end))
 
 
 def _walk(argv):
@@ -369,22 +412,32 @@ def _walk(argv):
             if match is None:
                 i += 1
                 continue
-            f, i = _found(argv, i, match)
+            f, i = _found(argv, i, match, ENV)
             found.append(f)
             if SPLIT in f.kinds(0):
                 return None, found
         if i >= len(argv):
             return len(argv) - 1, found
     tool = TOOLS.get(os.path.basename(argv[i]))
-    n = i + 1
-    while tool and n < len(argv) and argv[n] != "--":
+    if tool is None:
+        return i, found
+    read, n, end = [], i + 1, None
+    while n < len(argv):
+        if argv[n] == "--":
+            end = n
+            break
         match = _match(argv[n], tool)
         if match is None:
             n += 1
             continue
-        f, n = _found(argv, n, match)
-        found.append(f)
-    return i, found
+        f, n = _found(argv, n, match, tool)
+        read.append(f)
+    # The checks' reading too (see Tool): every other item naming an option.
+    last = end if end is not None and _ends(argv, end, i, read, tool) else len(argv)
+    names = {f.index for f in read} | {end}
+    maybe = [_found(argv, m, match, tool)[0]._replace(maybe=True) for m in range(i + 1, last)
+             if m not in names and (match := _match(argv[m], tool))]
+    return i, found + sorted(read + maybe)
 
 
 def _check_sh(argv):
@@ -442,7 +495,7 @@ def _check_shell(argv):
             used = _used([value])
             if not used:
                 continue
-            for option, how in ((o, k) for o, spec in f.options if len(spec) > n for k in spec[n]):
+            for option, how in f.pairs(n):
                 if how in CODE or how in FORMATS and _formatter(value, how):
                     return _code(option, how, value, used, TOOLS[tool].fields)
     return None
@@ -921,10 +974,11 @@ def command(script, vals):
             head, value = argv[item][:at], argv[item][at:]
             if PATH in f.kinds(n):
                 _check_path(value, vals, f.name(PATH, n), expands if f.index > start else None)
-            sure = f.sure(n)
+            file = _file_name(value, vals, spec.escape, f.name(FILE, n)) if FILE in f.kinds(n) else None
+            sure = set() if f.maybe else f.sure(n)
             if FILE in sure:
-                out[item] = head + _file_name(value, vals, spec.escape, f.name(FILE, n))
-            elif sure & set(ESCAPED):
+                out[item] = head + file
+            elif sure & ESCAPED:
                 out[item] = head + substitute(value, escaped)
     return out
 
