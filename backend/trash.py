@@ -789,8 +789,13 @@ def restore(post_ids, roots, data_dir=None, keys=None):
                         and _line_key(root, e) not in wanted_keys:
                     keep.append(e)
                     continue
-                src, dest = e["to"], e["from"]
+                src, dest = e.get("to"), e.get("from")
                 try:
+                    # Read back, never trusted: out of this root's trash, into this root.
+                    if not (isinstance(src, str) and isinstance(dest, str) and "\0" not in src + dest
+                            and _removable(src, root)) or os.path.isdir(src) and not os.path.islink(src):
+                        raise TrashError("not a file in this root's trash")
+                    _root_for(dest, [root])
                     if os.path.lexists(dest):
                         raise TrashError("a file is already back at the original place")
                     if not os.path.lexists(src):
@@ -808,7 +813,7 @@ def restore(post_ids, roots, data_dir=None, keys=None):
                     if pid not in report["posts"]:
                         report["posts"].append(pid)
                 except (TrashError, OSError) as err:
-                    report["errors"].append({"path": dest, "error": str(err)})
+                    report["errors"].append({"path": dest if isinstance(dest, str) else None, "error": str(err)})
                     keep.append(e)
             if len(keep) != len(lines):
                 _write_manifest(root, keep)

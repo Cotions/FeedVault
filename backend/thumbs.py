@@ -15,6 +15,13 @@ from PIL import Image, ImageOps
 WIDTH = 480
 MAX_HEIGHT = 1200      # 9:16 at WIDTH is 853; taller panoramas get cropped by the grid anyway
 QUALITY = 82
+# The formats a downloaded picture is opened as. Pillow picks one by content,
+# not by name: without this an EPS saved as .jpg is rendered by Ghostscript.
+FORMATS = ("JPEG", "PNG", "WEBP", "GIF", "AVIF")
+
+
+def open_image(path):
+    return Image.open(path, formats=FORMATS)
 
 
 def have_ffmpeg():
@@ -36,7 +43,7 @@ def _fresh(out, src):
 
 
 def _save_image(src, out):
-    with Image.open(src) as img:
+    with open_image(src) as img:
         img = ImageOps.exif_transpose(img)
         img.thumbnail((WIDTH, MAX_HEIGHT))
         if img.mode != "RGB":

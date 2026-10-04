@@ -14,6 +14,7 @@ import time
 import webbrowser
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from werkzeug.security import safe_join
 
 import archives
 import config
@@ -53,8 +54,8 @@ app = Flask(__name__, static_folder=None)
 #      and no CORS is ever granted. The dashboard is same-origin and the
 #      userscript uses GM_xmlhttpRequest, so both can send it.
 #
-# /media is exempt because <img> and <video> cannot send headers; a
-# cross-origin page cannot read those bytes anyway.
+# /media is exempt because <img> and <video> cannot send headers; it is
+# refused instead when the browser says another site asks (_foreign_origin).
 # ---------------------------------------------------------------------------
 
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
@@ -75,7 +76,26 @@ def _origin_guard():
     if request.path.startswith("/api/") and request.method != "OPTIONS" \
             and not request.headers.get(CSRF_HEADER):
         return jsonify({"ok": False, "error": f"missing {CSRF_HEADER} header"}), 403
+    # Media cannot send a header, so another site's <img> or link reaches it:
+    # refused when the browser says the page is not ours, before any work.
+    media = request.path.startswith("/media/")
+    trash_thumb = request.path.startswith("/trash/") and request.path.endswith("/thumb")
+    if (media or trash_thumb) and _foreign_origin():
+        abort(403)
     return None
+
+
+# No page of FeedVault's may be framed: under another site's page, a click
+# on the dashboard (Empty trash, Run) would pass every check above.
+NO_FRAMES = "frame-ancestors 'none'"
+
+
+@app.after_request
+def _no_frames(resp):
+    resp.headers["X-Frame-Options"] = "DENY"
+    csp = resp.headers.get("Content-Security-Policy")
+    resp.headers["Content-Security-Policy"] = f"{csp}; {NO_FRAMES}" if csp else NO_FRAMES
+    return resp
 
 
 def _roots():
@@ -1488,12 +1508,33 @@ def _sniff(path):
     return None
 
 
+# The only types a file is served as, by its own name: never what a JSON
+# beside it says (a gallery-dl item is typed by its "extension"), so a page
+# saved as x.html is never run as one on this origin. Anything else is a
+# download.
+_TYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif",
+    "heic": "image/heic", "avif": "image/avif",
+    "mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime", "webm": "video/webm",
+    "mkv": "video/x-matroska",
+    "m4a": "audio/mp4", "mp3": "audio/mpeg", "opus": "audio/ogg", "ogg": "audio/ogg", "oga": "audio/ogg",
+    "wav": "audio/wav", "flac": "audio/flac", "aac": "audio/aac",
+}
+
+
+def _type_of(path):
+    return _TYPES.get(os.path.splitext(path)[1][1:].lower())
+
+
 def _send(path, sniff=False):
     if not path or not os.path.isfile(path):
         abort(404)
-    mimetype = _sniff(path) if sniff and path.endswith(".image") else None
-    resp = send_file(path, mimetype=mimetype, conditional=True, max_age=3600)
+    mimetype = _sniff(path) if sniff and path.endswith(".image") else _type_of(path)
+    resp = send_file(path, mimetype=mimetype or "application/octet-stream", as_attachment=mimetype is None,
+                     conditional=True, max_age=3600)
     resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+    resp.headers["Cross-Origin-Resource-Policy"] = "same-origin"
     return resp
 
 
@@ -1569,7 +1610,10 @@ def spa(path):
     if static is None:
         return ("FeedVault backend is running, but the dashboard is not built. "
                 "Run ./run.sh --build.", 200, {"Content-Type": "text/plain"})
-    if path and os.path.isfile(os.path.join(static, path)):
+    # Joined safely before anything is looked up: a path out of the folder
+    # (%2f is not resolved by the browser) is the dashboard, whatever is there.
+    file = safe_join(static, path) if path else None
+    if file and os.path.isfile(file):
         return send_from_directory(static, path)
     return send_from_directory(static, "index.html")
 
