@@ -1575,7 +1575,8 @@ def pin_needs(argv):
 # put in as it is; "plain" alone when all are). Written down from the code
 # as it was before the walker, never computed here: every form this file
 # runs through parse_command or command() (a recorder's path as
-# /opt/bin/<name>), and options after "--".
+# /opt/bin/<name>), and options after "--": positional since the walker,
+# as the tools read them (#69).
 PINNED = [
     (['gallery-dl', '--write-metadata', '--download-archive', '{archive}', '-o', 'skip=abort:5', '-D', '{root}',
       '--', '{url}'],
@@ -3054,18 +3055,8 @@ PINNED = [
       'env': 'plain',
       'formfeed': 'plain',
       'template': 'plain'}),
-    (['yt-dlp', '--', '-P', '/tmp/{url}'], None,
-     {'brace_root': 'plain',
-      'dollar': "400: {url} puts a $ in -P's path, which yt-dlp would expand",
-      'dotdot': "400: {url} puts a .. in -P's path, which would lead out of the folder written there",
-      'env': 'plain',
-      'formfeed': 'plain',
-      'template': 'plain'}),
-    (['yt-dlp', '--', '--exec', 'echo {url}'],
-     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
-     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'echo "
-     "{url}'",
-     None),
+    (['yt-dlp', '--', '-P', '/tmp/{url}'], None, 'plain'),
+    (['yt-dlp', '--', '--exec', 'echo {url}'], None, 'plain'),
     (['yt-dlp', '-P', '--', '-P', '/tmp/{url}'], None,
      {'brace_root': 'plain',
       'dollar': "400: {url} puts a $ in -P's path, which yt-dlp would expand",
@@ -3073,34 +3064,10 @@ PINNED = [
       'env': 'plain',
       'formfeed': 'plain',
       'template': 'plain'}),
-    (['gallery-dl', '--', '-D', '/tmp/{url}'], None,
-     {'brace_root': 'plain',
-      'dollar': "400: {url} puts a $ in -D's path, which gallery-dl would expand",
-      'dotdot': "400: {url} puts a .. in -D's path, which would lead out of the folder written there",
-      'env': 'plain',
-      'formfeed': 'plain',
-      'template': 'plain'}),
-    (['gallery-dl', '--', '-f', "\x0cE '{url}'"],
-     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
-     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
-     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
-     'found {url} in "\\x0cE \'{url}\'"',
-     None),
-    (['gallery-dl', '-D', '{root}', '--', '--', '-D', '/tmp/{url}'], None,
-     {'brace_root': 'plain',
-      'dollar': "400: {url} puts a $ in -D's path, which gallery-dl would expand",
-      'dotdot': "400: {url} puts a .. in -D's path, which would lead out of the folder written there",
-      'env': 'plain',
-      'formfeed': 'plain',
-      'template': 'plain'}),
-    (['instaloader', '--', '--dirname-pattern', '{root}/{target}'], None,
-     {'brace_root': ['instaloader', '--', '--dirname-pattern', '/m/{{x/https://x.com/a'],
-      'dollar': 'plain',
-      'dotdot': "400: {target} puts a .. in --dirname-pattern's path, which would lead out of the folder written "
-                'there',
-      'env': ['instaloader', '--', '--dirname-pattern', '/m/x/https://x.com/a/{{_env[HOME]}}'],
-      'formfeed': 'plain',
-      'template': 'plain'}),
+    (['gallery-dl', '--', '-D', '/tmp/{url}'], None, 'plain'),
+    (['gallery-dl', '--', '-f', "\x0cE '{url}'"], None, 'plain'),
+    (['gallery-dl', '-D', '{root}', '--', '--', '-D', '/tmp/{url}'], None, 'plain'),
+    (['instaloader', '--', '--dirname-pattern', '{root}/{target}'], None, 'plain'),
 ]
 
 
