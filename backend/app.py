@@ -14,6 +14,7 @@ import time
 import webbrowser
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from werkzeug.security import safe_join
 
 import archives
 import config
@@ -1608,7 +1609,10 @@ def spa(path):
     if static is None:
         return ("FeedVault backend is running, but the dashboard is not built. "
                 "Run ./run.sh --build.", 200, {"Content-Type": "text/plain"})
-    if path and os.path.isfile(os.path.join(static, path)):
+    # Joined safely before anything is looked up: a path out of the folder
+    # (%2f is not resolved by the browser) is the dashboard, whatever is there.
+    file = safe_join(static, path) if path else None
+    if file and os.path.isfile(file):
         return send_from_directory(static, path)
     return send_from_directory(static, "index.html")
 

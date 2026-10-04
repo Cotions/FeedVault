@@ -134,3 +134,21 @@ def test_restore_moves_nothing_a_manifest_line_points_outside(env):
     assert (tdir / "a.jpg").exists()
     assert report["files"] == 0 and len(report["errors"]) == 3
     assert len(trash._read_manifest(str(root))) == 3                   # kept, as any line that failed
+
+
+def test_dashboard_fallback_says_nothing_of_files_outside_it(env, client, monkeypatch):
+    # The catch-all checked os.path.join(static, path) before any safe join:
+    # /assets%2f..%2f..%2f<file> (a browser does not resolve %2f) answered 404 for
+    # a file that exists and the dashboard for one that does not.
+    import config
+    static = env["tmp"] / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<p>dashboard</p>")
+    (static / "assets").mkdir()
+    (static / "assets" / "app.js").write_text("1")
+    monkeypatch.setattr(config, "static_dir", lambda: str(static))
+    (env["tmp"] / "here").write_text("x")
+    up = "assets%2f..%2f..%2f"
+    there, missing = client.get(f"/{up}here"), client.get(f"/{up}not-here")
+    assert (there.status_code, there.data) == (missing.status_code, missing.data) == (200, b"<p>dashboard</p>")
+    assert client.get("/assets/app.js").data == b"1"
