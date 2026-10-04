@@ -6,6 +6,7 @@ next to the code, so the repo holds the app only and a frozen binary works too.
 import json
 import os
 import sys
+import tempfile
 import threading
 
 FROZEN     = getattr(sys, "frozen", False)
@@ -59,11 +60,36 @@ def load():
 def save(cfg):
     path = config_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
     with _lock:
-        with open(tmp, "w") as f:
-            json.dump(cfg, f, indent=2)
+        write_private(path, lambda f: json.dump(cfg, f, indent=2))
+
+
+def write_private(path, dump):
+    """Write ``path`` atomically, readable by its owner only (0600): ``dump(f)``
+    writes into a temp file of a unique name in its folder (mkstemp:
+    O_CREAT|O_EXCL, so never through a symlink left there), fsynced, renamed
+    over ``path``, then the folder fsynced. A file that was more open is
+    replaced by a 0600 one."""
+    folder = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)[:100]}.", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), 0o600)
+            dump(f)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    dir_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def clean_roots(roots):

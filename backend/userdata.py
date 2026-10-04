@@ -128,16 +128,15 @@ def path(data_dir, name):
 
 
 def export(conn, name, data_dir):
-    """Write one table to its JSON file (atomically). Returns the row count."""
+    """Write one table to its JSON file (atomically, 0600: config.write_private).
+    Returns the row count."""
     t = REGISTRY[name]
     rows = conn.execute(t.select or f"SELECT {', '.join(t.columns)} FROM {t.table} "
                                     f"ORDER BY {', '.join(t.key)}").fetchall()
     out = path(data_dir, name)
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    tmp = out + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"version": FORMAT_VERSION, "rows": [dict(zip(t.columns, r)) for r in rows]}, f)
-    os.replace(tmp, out)
+    config.write_private(out, lambda f: json.dump(
+        {"version": FORMAT_VERSION, "rows": [dict(zip(t.columns, r)) for r in rows]}, f))
     return len(rows)
 
 
@@ -210,7 +209,7 @@ def restore_all(conn, data_dir):
 
 _timers = {}
 _lock = threading.Lock()
-_writing = threading.Lock()     # one export at a time: they share the .tmp name
+_writing = threading.Lock()     # one export at a time
 
 
 def _write(name):

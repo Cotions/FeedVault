@@ -467,7 +467,10 @@ A post can be marked **kept**. Deciding to trash it is just `/api/delete`.
 Decisions live in their own table, untouched by rescans, and are also written
 to `<data_directory>/userdata/decisions.json` (2 s after the last change) so
 they survive rebuilding the index. An older `<data_directory>/decisions.json`
-is still read when the new file does not exist.
+is still read when the new file does not exist. Every `userdata/*.json` file,
+like `config.json`, is written readable by you only (0600, a file that was
+more open is tightened on its next write), through a temp file of a unique
+name in the same folder, fsynced, renamed over it, the folder fsynced.
 
 | Method | Path | Returns |
 |---|---|---|
