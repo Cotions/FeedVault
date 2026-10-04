@@ -44,3 +44,31 @@ def test_media_types_by_their_own_name(env, client):
     assert "sandbox" in r.headers["Content-Security-Policy"]
     assert app._type_of("x.MP4") == "video/mp4" and app._type_of("x.opus") == "audio/ogg"
     assert app._type_of("x.svg") is None and app._type_of("x.html") is None
+
+
+EPS = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\nshowpage\n%%EOF\n"
+
+
+def test_a_downloaded_picture_never_reaches_ghostscript(tmp_path, monkeypatch):
+    # Pillow picks the format by content: an EPS saved as .jpg would be
+    # rendered by Ghostscript (gs) on the thumbnail and on every hash pass.
+    from PIL import EpsImagePlugin
+
+    import hashing
+    import thumbs
+    calls = []
+
+    def ghostscript(*a, **kw):
+        calls.append(a)
+        raise OSError("ghostscript")
+    monkeypatch.setattr(EpsImagePlugin, "Ghostscript", ghostscript)
+    src = tmp_path / "x.jpg"
+    src.write_bytes(EPS)
+    for run in (lambda: thumbs._save_image(str(src), str(tmp_path / "t" / "x.jpg")),
+                lambda: hashing.dhash(str(src))):
+        try:
+            run()
+        except Exception:
+            pass
+    assert calls == []
+    assert hashing.dimensions(str(src)) == (None, None)

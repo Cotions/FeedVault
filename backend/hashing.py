@@ -163,8 +163,7 @@ def dimensions(path):
     if ext_of(path) not in IMAGE_EXT:
         return None, None
     try:
-        from PIL import Image
-        with Image.open(path) as im:
+        with thumbs.open_image(path) as im:
             return im.size
     except Exception:                            # not an image after all, or Pillow missing
         return None, None
@@ -176,7 +175,7 @@ def dhash(path):
     recompression leave it nearly unchanged; a crop or a filter moves a few
     bits. The decoder skips detail it does not need (JPEG at 1/8 scale)."""
     from PIL import Image, ImageOps
-    with Image.open(path) as im:
+    with thumbs.open_image(path) as im:
         im.draft("L", (64, 64))
         small = ImageOps.exif_transpose(im).convert("L").resize((9, 8), Image.Resampling.LANCZOS)
     px = small.tobytes()
