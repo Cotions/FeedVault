@@ -3087,3 +3087,72 @@ def test_every_argv_form_reads_as_pinned(argv, why, got):
         if want == "plain":
             want = [scripts.substitute(a, vals) for a in argv]
         assert out == want, key
+
+
+def walked(argv):
+    start, found = scripts._walk(argv)
+    return start, [(f.index, f.given, [o for o, _ in f.options], f.values) for f in found]
+
+
+def probe(argv, item, at, text):
+    """``argv`` with item ``item``'s text from ``at`` on replaced by ``text``,
+    and FeedVault's placeholders anywhere else made plain text: the walker
+    must read it as it reads ``argv``."""
+    out = [a if n == item else re.sub(r"\{(target|url|root|data_dir|archive)\}", "x", a) for n, a in enumerate(argv)]
+    out[item] = argv[item][:at] + text
+    assert walked(out) == walked(argv)
+    return out
+
+
+@pytest.mark.parametrize("argv", [row[0] for row in PINNED], ids=range(len(PINNED)))
+def test_the_check_and_command_agree_on_every_pinned_form(argv):
+    """#69: each item of a pinned form after the program (and env's option
+    values) holding a link in turn: command() escapes it exactly when the
+    walker marks it a value its tool formats (and gallery-dl's check reads
+    it as a format string: the same items), checks it as a path exactly
+    when it is a path (or FILE) value, and _check_shell refuses it as code
+    or a format string exactly when it is one."""
+    start, found = scripts._walk(argv)
+    if start is None or os.path.basename(argv[start]) not in scripts.TOOLS:
+        return
+    tool = os.path.basename(argv[start])
+    values = {item: (f, n, at) for f in found for n, (item, at) in enumerate(f.values)}
+    # Every item but an option's own (unless its value is joined) and the
+    # "--" that ends them; those after it too.
+    ends = next((n for n in range(start + 1, len(argv)) if argv[n] == "--" and n not in values), None)
+    names = {f.index for f in found if not f.values or f.values[0][0] != f.index}
+    items = sorted({*values, *range(start + 1, len(argv))} - names - {ends})
+    vals = {"target": "https://x.com/{a}%", "url": "https://x.com/{a}%", "root": "/m/x", "data_dir": "/d",
+            "archive": "/d/a"}
+    # yt-dlp's --alias refuses any placeholder: no item of the check's own.
+    alias = any(scripts.ALIAS in f.kinds(0) for f in found)
+    escaped, paths, formats, code = set(), set(), set(), set()
+    for item in items:
+        at = values[item][2] if item in values else 0
+        argv2 = probe(argv, item, at, "{url}")
+        if scripts.command({"tool": argv[0], "argv": argv2}, vals)[item] != scripts.substitute(argv2[item], vals):
+            escaped.add(item)
+        try:
+            scripts.command({"tool": argv[0], "argv": argv2}, {**vals, "url": DOTDOT})
+        except jobs.BadRequest as e:
+            assert re.fullmatch(r"\{url\} puts a \.\. in \S+'s (path|folder), .*", str(e))
+            paths.add(item)
+        if alias:
+            continue
+        why = scripts._check_shell(probe(argv, item, at, "\fE {url}"))
+        if why and "is a format string" in why:
+            formats.add(item)
+        elif why:
+            code.add(item)
+    marked = {item: f.kinds(n) for item, (f, n, _) in values.items()}
+    sure = {item: f.sure(n) for item, (f, n, _) in values.items() if f.index > start}
+    assert escaped == {i for i, k in sure.items() if k & {*scripts.ESCAPED, scripts.FILE}}
+    assert paths == {i for i, k in marked.items() if scripts.PATH in k} | {i for i, k in sure.items()
+                                                                            if scripts.FILE in k}
+    if alias:
+        return
+    assert formats == {i for i, k in marked.items() if k & set(scripts.FORMATS)} - code
+    assert code == {i for i, k in marked.items() if k & set(scripts.CODE)}
+    if tool == "gallery-dl":
+        # What the check reads as a format string is what command() escapes, and the reverse.
+        assert formats == escaped
