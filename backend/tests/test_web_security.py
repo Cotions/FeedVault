@@ -72,3 +72,14 @@ def test_a_downloaded_picture_never_reaches_ghostscript(tmp_path, monkeypatch):
             pass
     assert calls == []
     assert hashing.dimensions(str(src)) == (None, None)
+
+
+def test_no_page_of_feedvault_can_be_framed(env, client):
+    # Framed under another site's page, the dashboard's own clicks (Empty
+    # trash, Run) would pass every origin check.
+    gallery_dl_case("twitter/photo", env["media"])
+    scanner.scan(env["roots"])
+    for r in (client.get("/"), client.get("/settings"), client.get("/api/stats", headers=H),
+              client.get("/userscript/feedvault.user.js"), client.get("/media/1")):
+        assert r.headers["X-Frame-Options"] == "DENY"
+        assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]

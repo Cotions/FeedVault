@@ -78,6 +78,19 @@ def _origin_guard():
     return None
 
 
+# No page of FeedVault's may be framed: under another site's page, a click
+# on the dashboard (Empty trash, Run) would pass every check above.
+NO_FRAMES = "frame-ancestors 'none'"
+
+
+@app.after_request
+def _no_frames(resp):
+    resp.headers["X-Frame-Options"] = "DENY"
+    csp = resp.headers.get("Content-Security-Policy")
+    resp.headers["Content-Security-Policy"] = f"{csp}; {NO_FRAMES}" if csp else NO_FRAMES
+    return resp
+
+
 def _roots():
     return config.load()["media_roots"]
 
