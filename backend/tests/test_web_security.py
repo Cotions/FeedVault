@@ -107,3 +107,30 @@ def test_media_refused_to_other_sites(env, client):
     # The dashboard's own pages still open from a link anywhere.
     assert client.get("/trash", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
     assert client.get("/trash/x", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
+
+
+def test_restore_moves_nothing_a_manifest_line_points_outside(env):
+    # A manifest line is only read back, never trusted: restore moves a file
+    # from inside the root's trash to a place inside the root, or not at all.
+    import json
+
+    import trash
+    root = env["media"]
+    tdir = root / trash.TRASH_NAME
+    tdir.mkdir()
+    (tdir / "a.jpg").write_bytes(b"a")
+    outside = env["tmp"] / "outside"
+    outside.mkdir()
+    (outside / "secret").write_bytes(b"s")
+    lines = [
+        {"from": str(outside / "autostart.desktop"), "to": str(tdir / "a.jpg"), "post": "p1", "batch": "b"},
+        {"from": str(root / "stolen.jpg"), "to": str(outside / "secret"), "post": "p2", "batch": "b"},
+        {"from": str(tdir / "again.jpg"), "to": str(tdir / "a.jpg"), "post": "p3", "batch": "b"},
+    ]
+    (tdir / trash.MANIFEST).write_text("".join(json.dumps(x) + "\n" for x in lines))
+    report = trash.restore(["p1", "p2", "p3"], env["roots"])
+    assert not (outside / "autostart.desktop").exists()
+    assert (outside / "secret").read_bytes() == b"s" and not (root / "stolen.jpg").exists()
+    assert (tdir / "a.jpg").exists()
+    assert report["files"] == 0 and len(report["errors"]) == 3
+    assert len(trash._read_manifest(str(root))) == 3                   # kept, as any line that failed
