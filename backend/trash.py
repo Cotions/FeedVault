@@ -34,7 +34,7 @@ import scanner
 import thumbs
 from parsers import IMAGE_EXT, VIDEO_EXT, ext_of
 
-TRASH_NAME = ".feedvault-trash"
+TRASH_NAME = scanner.TRASH_NAME
 MANIFEST = ".manifest.jsonl"
 # instaloader side files that live next to a post's metadata JSON.
 _SIDE_SUFFIXES = (".txt", "_location.txt", "_comments.json")

@@ -1532,8 +1532,12 @@ def _type_of(path):
     return _TYPES.get(os.path.splitext(path)[1][1:].lower())
 
 
-def _send(path, sniff=False):
-    if not path or not os.path.isfile(path):
+def _send(path, sniff=False, media=True):
+    """Serve a file. ``media``: a path the scanner recorded, which must
+    resolve inside a media root and outside its trash (a symlink there that
+    leads elsewhere is never served: scanner.in_roots); False for FeedVault's
+    own files (a cached thumbnail, a trash thumbnail checked by trash.thumb)."""
+    if not path or not os.path.isfile(path) or media and not scanner.in_roots(path, _roots()):
         abort(404)
     mimetype = _sniff(path) if sniff and path.endswith(".image") else _type_of(path)
     resp = send_file(path, mimetype=mimetype or "application/octet-stream", as_attachment=mimetype is None,
@@ -1550,15 +1554,22 @@ def serve_media(media_id):
     return _send(row["path"] if row else None)
 
 
+def _sources_in_roots(row):
+    """Whether what a thumbnail is made from (the file, its poster) resolves
+    inside a media root and outside its trash: never one of a file elsewhere."""
+    roots = _roots()
+    return all(scanner.in_roots(p, roots) for p in (row["path"], row["poster_path"]) if p)
+
+
 @app.get("/media/<int:media_id>/thumb")
 def serve_thumb(media_id):
     """Small JPEG for grids. Falls back to the original image if one cannot be made."""
     row = db.media_row(db.connect(), media_id)
-    if row is None:
+    if row is None or not _sources_in_roots(row):
         abort(404)
     path = thumbs.thumb_for(config.load()["data_directory"], row)
     if path:
-        return _send(path)
+        return _send(path, media=False)
     if row["kind"] == "image":
         return _send(row["path"])
     abort(404)
@@ -1578,9 +1589,11 @@ def serve_copy_thumb(copy_id):
     if copy is None or not copy["media"]:
         abort(404)
     first = min(copy["media"], key=lambda m: m["idx"])
+    if not _sources_in_roots(first):
+        abort(404)
     path = thumbs.thumb_for(config.load()["data_directory"], first)
     if path:
-        return _send(path)
+        return _send(path, media=False)
     if first["kind"] == "image":
         return _send(first["path"])
     abort(404)
@@ -1593,7 +1606,7 @@ def serve_trash_thumb(key):
     if len(key) != 20 or not all(c in "0123456789abcdef" for c in key):
         abort(404)
     cfg = config.load()
-    return _send(trash.thumb(cfg["media_roots"], key, cfg["data_directory"]))
+    return _send(trash.thumb(cfg["media_roots"], key, cfg["data_directory"]), media=False)
 
 
 @app.get("/userscript/feedvault.user.js")

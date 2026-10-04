@@ -162,3 +162,98 @@ def test_dashboard_fallback_says_nothing_of_files_outside_it(env, client, monkey
     there, missing = client.get(f"/{up}here"), client.get(f"/{up}not-here")
     assert (there.status_code, there.data) == (missing.status_code, missing.data) == (200, b"<p>dashboard</p>")
     assert client.get("/assets/app.js").data == b"1"
+
+
+# ---------------------------------------------------------------------------
+# /media and symlinks (#73)
+# ---------------------------------------------------------------------------
+
+def _media_of(client, post_id):
+    return client.get(f"/api/posts/{post_id}", headers=H).get_json()["media"]
+
+
+def _one_post(env, kind="image"):
+    from fakes import owner, write_post
+    base = write_post(env["media"] / "alice", "P1", 1717243200, owner("alice.example", 111), kind)
+    scanner.scan(env["roots"])
+    return base
+
+
+def _swap_for_link(path, target):
+    os.remove(path)
+    os.symlink(target, path)
+
+
+def test_a_recorded_file_swapped_for_a_symlink_out_of_the_roots_is_never_served(env, client, tmp_path):
+    base = _one_post(env)
+    [m] = _media_of(client, "instagram/P1")
+    assert client.get(f"/media/{m['id']}").status_code == 200
+    secret = tmp_path / "secret.jpg"
+    shutil.copyfile(base + ".jpg", secret)
+    _swap_for_link(base + ".jpg", secret)
+    shutil.rmtree(env["tmp"] / "data" / "thumbs", ignore_errors=True)
+    for url in (f"/media/{m['id']}", f"/media/{m['id']}/thumb"):
+        assert client.get(url).status_code == 404, url
+    assert not os.path.exists(env["tmp"] / "data" / "thumbs")     # no thumbnail made of it either
+
+
+def test_a_poster_swapped_for_a_symlink_out_of_the_roots_is_never_served(env, client, tmp_path):
+    base = _one_post(env, "video")
+    [m] = _media_of(client, "instagram/P1")
+    assert db.media_row(db.connect(), m["id"])["poster_path"] == base + ".jpg"
+    assert client.get(f"/media/{m['id']}/poster").status_code == 200
+    secret = tmp_path / "secret.jpg"
+    shutil.copyfile(base + ".jpg", secret)
+    _swap_for_link(base + ".jpg", secret)
+    assert client.get(f"/media/{m['id']}/poster").status_code == 404
+    assert client.get(f"/media/{m['id']}/thumb").status_code == 404
+    assert client.get(f"/media/{m['id']}").status_code == 200       # the video itself is in the root
+
+
+def test_a_symlink_into_the_trash_is_never_served(env, client):
+    base = _one_post(env)
+    [m] = _media_of(client, "instagram/P1")
+    trashed = env["media"] / ".feedvault-trash" / "alice" / "x.jpg"
+    trashed.parent.mkdir(parents=True)
+    shutil.copyfile(base + ".jpg", trashed)
+    _swap_for_link(base + ".jpg", trashed)
+    assert client.get(f"/media/{m['id']}").status_code == 404
+
+
+def test_a_symlink_that_stays_in_the_root_is_indexed_and_served(env, client):
+    from fakes import owner, write_post
+    base = write_post(env["media"] / "alice", "P1", 1717243200, owner("alice.example", 111), "image")
+    kept = env["media"] / "store" / "p1.jpg"
+    kept.parent.mkdir()
+    shutil.move(base + ".jpg", kept)
+    os.symlink(kept, base + ".jpg")
+    scanner.scan(env["roots"])
+    [m] = _media_of(client, "instagram/P1")
+    r = client.get(f"/media/{m['id']}")
+    assert r.status_code == 200 and r.data == kept.read_bytes()
+    assert client.get(f"/media/{m['id']}/thumb").status_code == 200
+
+
+def test_the_scanner_skips_a_symlink_that_leads_out_of_the_root(env, client, tmp_path):
+    from fakes import owner, write_post
+    base = write_post(env["media"] / "alice", "P1", 1717243200, owner("alice.example", 111), "image")
+    secret = tmp_path / "secret.jpg"
+    shutil.move(base + ".jpg", secret)
+    os.symlink(secret, base + ".jpg")
+    # A whole post (its metadata) through a link too.
+    other = write_post(tmp_path / "elsewhere", "P2", 1717243300, owner("alice.example", 111), "image")
+    for suffix in (".json", ".jpg"):
+        os.symlink(other + suffix, str(env["media"] / "alice" / os.path.basename(other)) + suffix)
+    report = scanner.scan(env["roots"])
+    conn = db.connect()
+    paths = {r[0] for r in conn.execute("SELECT path FROM media")}
+    assert base + ".jpg" not in paths
+    assert conn.execute("SELECT 1 FROM posts WHERE id = 'instagram:P2'").fetchone() is None
+    unmatched = dict(conn.execute("SELECT path, reason FROM unmatched").fetchall())
+    for p in (base + ".jpg", str(env["media"] / "alice" / os.path.basename(other)) + ".json"):
+        assert unmatched[p] == scanner.LEADS_OUT
+    assert report["unmatched"] >= 3
+    # The same through a re-index of the folder (after a download).
+    scanner.index_dirs(env["roots"], [str(env["media"] / "alice")], new=True)
+    assert conn.execute("SELECT 1 FROM posts WHERE id = 'instagram:P2'").fetchone() is None
+    assert base + ".jpg" not in {r[0] for r in conn.execute("SELECT path FROM media")}

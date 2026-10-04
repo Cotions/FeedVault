@@ -111,6 +111,13 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
 
+A media file (its poster, what a thumbnail is made from) is served only when
+its real path, symlinks followed, is inside a media root and outside its
+`.feedvault-trash`: else 404. A scan never indexes a symlink that leads out
+of its root or into its trash; it is listed as unmatched ("a symlink that
+leads out of the media root (or into its trash): not indexed"). A symlink
+that stays inside its root is indexed and served as any file.
+
 ## New posts
 
 A post is **new** when the index first had it after the user last marked
