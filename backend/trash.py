@@ -28,6 +28,7 @@ import time
 import uuid
 
 import archives
+import config
 import db
 import organize
 import scanner
@@ -449,12 +450,13 @@ def _read_manifest(root):
 
 
 def _write_manifest(root, lines):
-    path = _manifest_path(root)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    """config.write_private: a temp file of a unique name, never through a
+    symlink left in the trash folder, fsynced, renamed over the manifest
+    (no fchmod: the trash is in a media root, maybe a network share)."""
+    def dump(f):
         for line in lines:
             f.write(json.dumps(line) + "\n")
-    os.replace(tmp, path)
+    config.write_private(_manifest_path(root), dump, private=False)
 
 
 def entry_key(root, post, batch):

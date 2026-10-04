@@ -489,10 +489,7 @@ def _options(src):
 
 def _write_stamps(stamps, path):
     config.make_private_dir(os.path.dirname(path))
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        stamps.write(f)
-    os.replace(tmp, path)
+    config.write_private(path, stamps.write)
 
 
 FILENAMES = "instaloader (filenames)"           # parsers.instaloader's tool for posts rebuilt from names
@@ -593,10 +590,7 @@ def _keep_trashed(sid, ids):
             pass
         return
     config.make_private_dir(os.path.dirname(path))
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "posts": sorted(ids)}, f)
-    os.replace(tmp, path)
+    config.write_private(path, lambda f: json.dump({"version": 1, "posts": sorted(ids)}, f))
 
 
 def _kept_trashed(sid):

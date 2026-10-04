@@ -276,9 +276,7 @@ def latest(cfg=None):
         path = _pypi_path(cfg)
         try:
             config.make_private_dir(os.path.dirname(path))
-            with open(path + ".tmp", "w", encoding="utf-8") as f:
-                json.dump(saved, f, indent=1)
-            os.replace(path + ".tmp", path)
+            config.write_private(path, lambda f: json.dump(saved, f, indent=1))
         except OSError as e:                   # still shown; asked again on the next start
             print(f"[downloaders] could not save {path}: {e}")
         return saved

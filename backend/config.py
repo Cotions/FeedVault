@@ -120,17 +120,20 @@ def chmod_hint(path, how="go-w"):
     return "chmod " + how + " '" + path.replace("'", "'\\''") + "'"
 
 
-def write_private(path, dump):
+def write_private(path, dump, private=True):
     """Write ``path`` atomically, readable by its owner only (0600): ``dump(f)``
     writes into a temp file of a unique name in its folder (mkstemp:
     O_CREAT|O_EXCL, so never through a symlink left there), fsynced, renamed
     over ``path``, then the folder fsynced. A file that was more open is
-    replaced by a 0600 one."""
+    replaced by a 0600 one. ``private=False``: the same without the
+    fchmod, for a file in a media root, whose file system (CIFS, FUSE) may
+    refuse it; mkstemp makes it 0600 where modes are kept."""
     folder = os.path.dirname(path)
     fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)[:100]}.", suffix=".tmp", dir=folder)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            os.fchmod(f.fileno(), 0o600)
+            if private:
+                os.fchmod(f.fileno(), 0o600)
             dump(f)
             f.flush()
             os.fsync(f.fileno())
