@@ -2325,9 +2325,14 @@ are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
   exec post processor's command), or a `--filter` option (Python). The
   downloader may be named by its path or run through `env`; joined
   (`--exec=…`, `-o…`) and abbreviated forms count. Also a shell's `-c` text
-  (`sh`, `bash`, …: pass the value after it, as `"$1"`) and `env -S`. Use
+  (`sh`, `bash`, …: pass the value after it, as `"$1"`) and `env -S`
+  (`-iS` and other clusters, `--split-string=…` too). Use
   the tool's own fields (`%(webpage_url)q`, `{_path}`), or a shell script
   and its `FV_*` variables;
+- a gallery-dl format string starting with `\f` (Python, a template file)
+  that holds a placeholder: `-f` / `--filename`, `--rename`, `--rename-to`,
+  and `-N` / `--print`, `--Print`, `--print-to-file`, `--Print-to-file`
+  (the FORMAT after `EVENT:`, and FILE's name). Plain format strings stay;
 - a shell script that is not executable, has no absolute `#!` or has no
   `needs`.
 
