@@ -1234,6 +1234,12 @@ def get_config():
 @app.post("/api/config")
 def set_config():
     body = request.get_json(silent=True) or {}
+    # One read-modify-write at a time: two saves at once each keep the other's change.
+    with config.editing:
+        return _set_config(body)
+
+
+def _set_config(body):
     cfg = config.load()
     tools = roots = insta = None
     changes = {}                               # config key -> new value, saved as they are

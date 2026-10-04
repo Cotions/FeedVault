@@ -95,3 +95,38 @@ def test_a_failed_write_leaves_the_old_file_and_no_temp_file(env, monkeypatch):
         config.save(config.load())
     assert open(path).read() == before
     assert [n for n in os.listdir(os.path.dirname(path)) if n.endswith(".tmp")] == []
+
+
+def test_two_settings_saves_at_once_keep_both_changes(env, client, monkeypatch):
+    """POST /api/config: load, edit and save under one lock (#73)."""
+    import threading
+
+    import app as app_module
+    from conftest import H
+    both_loaded = threading.Barrier(2, timeout=1)
+    load = config.load
+
+    def slow_load():
+        cfg = load()
+        try:                                   # on main both get here with the same file
+            both_loaded.wait()
+        except threading.BrokenBarrierError:   # one at a time: the other never comes
+            pass
+        return cfg
+
+    monkeypatch.setattr(config, "load", slow_load)
+    results = {}
+
+    def post(key, value):
+        results[key] = app_module.app.test_client().post(
+            "/api/config", json={key: value}, headers={**H, "Host": "localhost:3380"}).get_json()
+
+    threads = [threading.Thread(target=post, args=a) for a in (("check_updates", True), ("youtube_max_seconds", 77))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert results["check_updates"]["ok"] and results["youtube_max_seconds"]["ok"]
+    monkeypatch.setattr(config, "load", load)
+    saved = config.load()
+    assert saved.get("check_updates") is True and saved.get("youtube_max_seconds") == 77

@@ -24,6 +24,8 @@ DEFAULT_DATA = os.path.join(
 )
 
 _lock = threading.Lock()
+# Held over a whole load, edit and save of config.json (POST /api/config).
+editing = threading.Lock()
 
 
 def config_path():
