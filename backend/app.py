@@ -1488,12 +1488,32 @@ def _sniff(path):
     return None
 
 
+# The only types a file is served as, by its own name: never what a JSON
+# beside it says (a gallery-dl item is typed by its "extension"), so a page
+# saved as x.html is never run as one on this origin. Anything else is a
+# download.
+_TYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif",
+    "heic": "image/heic", "avif": "image/avif",
+    "mp4": "video/mp4", "m4v": "video/mp4", "mov": "video/quicktime", "webm": "video/webm",
+    "mkv": "video/x-matroska",
+    "m4a": "audio/mp4", "mp3": "audio/mpeg", "opus": "audio/ogg", "ogg": "audio/ogg", "oga": "audio/ogg",
+    "wav": "audio/wav", "flac": "audio/flac", "aac": "audio/aac",
+}
+
+
+def _type_of(path):
+    return _TYPES.get(os.path.splitext(path)[1][1:].lower())
+
+
 def _send(path, sniff=False):
     if not path or not os.path.isfile(path):
         abort(404)
-    mimetype = _sniff(path) if sniff and path.endswith(".image") else None
-    resp = send_file(path, mimetype=mimetype, conditional=True, max_age=3600)
+    mimetype = _sniff(path) if sniff and path.endswith(".image") else _type_of(path)
+    resp = send_file(path, mimetype=mimetype or "application/octet-stream", as_attachment=mimetype is None,
+                     conditional=True, max_age=3600)
     resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
     return resp
 
 
