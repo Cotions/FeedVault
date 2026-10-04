@@ -201,9 +201,15 @@ SHELL_RUN = {
 }
 # yt-dlp's --alias puts what follows it into the options it expands to (--exec too).
 ALIAS = "--alias"
-# A shell's -c text is read as code; env runs the program after its own options.
+# A shell's -c text is read as code; env runs the program after its own
+# options (-S and --split-string split a text into it).
 SHELLS = ("sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish")
-_ENV_VALUE = ("-u", "--unset", "-C", "--chdir")
+# env reads its options as getopt does (+a:C:iS:u:v0): a short item is a
+# cluster of flags (i, v, 0) that may end in S (split) or in an option that
+# takes a value (u, C, a), the rest of the item or else the next one.
+_ENV_FLAGS = "iv0"
+_ENV_VALUE = "uCa"
+_ENV_LONG_VALUE = ("--unset", "--chdir", "--argv0")
 
 
 def _shell_option(a, longs, others, shorts, flags):
@@ -232,9 +238,24 @@ def _program(argv):
     while os.path.basename(argv[i]) == "env":
         i += 1
         while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i]):
-            if argv[i].startswith(("-S", "--split-string")) or (len(argv[i]) > 2 and "--split-string".startswith(argv[i])):
-                return None
-            i += 2 if argv[i] in _ENV_VALUE else 1
+            a = argv[i]
+            i += 1
+            if a.startswith("--"):
+                name, eq, _ = a.partition("=")
+                if len(name) > 2 and "--split-string".startswith(name):
+                    return None
+                if len(name) > 2 and not eq and any(o.startswith(name) for o in _ENV_LONG_VALUE):
+                    i += 1
+            elif a.startswith("-"):
+                for j, c in enumerate(a[1:], 1):
+                    if c == "S":
+                        return None
+                    if c in _ENV_VALUE:
+                        if not a[j + 1:]:
+                            i += 1
+                        break
+                    if c not in _ENV_FLAGS:
+                        break
         if i >= len(argv):
             return len(argv) - 1
     return i
