@@ -2270,7 +2270,7 @@ be run as they are, or copied into a file.
   A run is refused (400) when a value puts a `$` in that folder (gallery-dl
   expands `$NAME` there) or `\f` in the file name. This holds for a
   gallery-dl named by its path or run behind `env` too.
-  So is a link (`{url}`, `{target}`) putting a `..` or leading `~` in that folder, or in a path option (`-D`, `-o`…).
+  So is a `{url}` or `{target}` putting a `..` or leading `~` in that folder, or a `..`, `~` or `$` in a path option (`-D`, `-o`, env's `-C`…).
 - `needs`: `target`, `url` or `none`. A script that uses `{target}` or
   `{url}` without needing it is refused.
 - `rescan`: a folder template indexed once it has run (it must be inside

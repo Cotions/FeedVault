@@ -719,16 +719,19 @@ def _rescan(script, vals, roots):
 # %, gallery-dl: its formatter, str.format's syntax), and how a value put in
 # one is escaped, as sync.py does for its own. The value is the next item,
 # or in the same one: after "=" for a long option (--output=…), right after
-# a short one (-o…; -o=… is the value "=…"), which gallery-dl's flags may
-# come before (-qf…). instaloader and gallery-dl (argparse) also take a long
+# a short one (-o…; -o=… is the value "=…"), which gallery-dl's or
+# yt-dlp's flags may come before (-qf…, -io…). instaloader and gallery-dl (argparse) also take a long
 # option's unique prefix (--dirname); yt-dlp's are never unique
 # (--output-na-placeholder, --exec-before-download). gallery-dl's
 # --print-to-file and --Print-to-file take FORMAT FILE: FILE's folder is a
 # plain path, its file name a format string (option.py's PrintAction,
 # metadata.py), so only the file name's values are escaped (_file_name).
+# yt-dlp's short options that take no value (options.py), any of them
+# before one that does in one item (-io…, as optparse reads it).
+YT_DLP_FLAGS = "46FJUceghijknqsvwx"
 FORMATTED = {"instaloader": (("--dirname-pattern", "--filename-pattern", "--title-pattern"), (), True,
                              sync._escape, ""),
-             "yt-dlp": (("--output", "--exec"), ("-o",), False, lambda v: v.replace("%", "%%"), ""),
+             "yt-dlp": (("--output", "--exec"), ("-o",), False, lambda v: v.replace("%", "%%"), YT_DLP_FLAGS),
              "gallery-dl": (("--filename", "--rename", "--rename-to", "--print", "--Print", "--print-to-file",
                              "--Print-to-file"), ("-f", "-N"), True,
                             lambda v: v.replace("{", "{{").replace("}", "}}"), SHELL_RUN["gallery-dl"][3])}
@@ -770,39 +773,64 @@ def _named(option, longs):
     return name if name in longs or len(found) != 1 else found[0]
 
 
-# The placeholders whose value is a link (check_url; check_target for
-# gallery-dl and yt-dlp, sources.parse_url for a source's): its text is
-# the site's. {root}, {data_dir} and {archive} are the operator's paths.
+# The placeholders whose value comes from a run's input or a source's
+# target: a link (check_url; check_target for gallery-dl and yt-dlp), or an
+# instaloader profile name, which may be "..". {root}, {data_dir} and
+# {archive} are the operator's paths.
 LINKS = ("target", "url")
-# gallery-dl's and yt-dlp's options whose value is a path the tool expands
-# (~, then $NAME: gallery-dl's util.expand_path, yt-dlp's expand_path) and
-# then reads, writes or appends to, made when missing; gallery-dl's never
-# formatted. gallery-dl (option.py): -d, --destination (base-directory,
-# path.py), -D, --directory (__init__.py: base-directory too), -e,
-# --error-file, --write-log, --write-unsupported (a logging FileHandler,
-# output.py), --download-archive (archive.py), -c, --config, --config-json,
-# --config-yaml, --config-toml (config.load), -C, --cookies,
-# --cookies-export (extractor/common.py), -i, -I, -x, --input-file,
-# --input-file-comment, --input-file-delete (the last two rewrite it).
-# yt-dlp (options.py): -P, --paths, -o, --output ([TYPES:] before it,
-# which a link never starts: "https" is no type), --download-archive,
-# --cookies, -a, --batch-file, --load-info-json. gallery-dl's
-# --print-to-file FILE's folder is one too (_file_name).
+# Each tool's options whose value is a path it reads, writes or appends to
+# (made when missing) as it is: (long options, short ones, its short flags,
+# whether it expands ~ and $NAME there). Every one takes a unique prefix of
+# a long option and a cluster of flags before a short one.
+# gallery-dl (option.py; util.expand_path): -d, --destination
+# (base-directory, path.py), -D, --directory (__init__.py: base-directory
+# too), -e, --error-file, --write-log, --write-unsupported (a logging
+# FileHandler, output.py), --download-archive (archive.py), -c, --config,
+# --config-json, --config-yaml, --config-toml (config.load), -C,
+# --cookies, --cookies-export (extractor/common.py), -i, -I, -x,
+# --input-file, --input-file-comment, --input-file-delete (the last two
+# rewrite it); its --print-to-file FILE's folder too (_file_name).
+# yt-dlp (options.py, optparse: _match_long_opt, _process_short_opts;
+# utils.expand_path): -P, --paths, -o, --output ([TYPES:] before it,
+# which a link never starts: "https" is no type), --print-to-file
+# [WHEN:]TEMPLATE FILE (FILE an output template, appended to),
+# --download-archive, --cookies, -a, --batch-file, --load-info-json,
+# --cache-dir, --config-locations, --netrc-location, --plugin-dirs (code
+# loaded from it), --ffmpeg-location (a program run).
+# instaloader (__main__.py; no expansion): --dirname-pattern,
+# --filename-pattern, --title-pattern (formatted, then made: its own
+# fields are sanitized, FeedVault's text is not), --resume-prefix,
+# --latest-stamps, -B, --cookiefile, -f, --sessionfile (written).
 PATHS = {"gallery-dl": (("--destination", "--directory", "--error-file", "--write-log", "--write-unsupported",
                          "--download-archive", "--config", "--config-json", "--config-yaml", "--config-toml",
                          "--cookies", "--cookies-export", "--input-file", "--input-file-comment",
-                         "--input-file-delete"), ("-d", "-D", "-e", "-c", "-C", "-i", "-I", "-x")),
-         "yt-dlp": (("--paths", "--output", "--download-archive", "--cookies", "--batch-file", "--load-info-json"),
-                    ("-P", "-o", "-a"))}
+                         "--input-file-delete"), ("-d", "-D", "-e", "-c", "-C", "-i", "-I", "-x"),
+                        SHELL_RUN["gallery-dl"][3], True),
+         "yt-dlp": (("--paths", "--output", "--print-to-file", "--download-archive", "--cookies", "--batch-file",
+                     "--load-info-json", "--cache-dir", "--config-locations", "--netrc-location", "--plugin-dirs",
+                     "--ffmpeg-location"), ("-P", "-o", "-a"), YT_DLP_FLAGS, True),
+         "instaloader": (("--dirname-pattern", "--filename-pattern", "--title-pattern", "--resume-prefix",
+                          "--latest-stamps", "--cookiefile", "--sessionfile"), ("-B", "-f"), "CFGPSVhqs", False)}
+# The options that take two values, the path the second (yt-dlp's TEMPLATE FILE).
+PATH_SECOND = ("--print-to-file",)
+# A tool's own options that are a prefix of one of PATHS': themselves, not it.
+PATH_OTHERS = {"yt-dlp": ("--netrc", "--print")}
+
+
+def _filled(text, vals):
+    """(``text`` split at its placeholders, the same with each one's value
+    in its place): what substitute joins."""
+    parts = _PLACEHOLDER_RE.split(text)
+    return parts, [vals[p] if i % 2 else p for i, p in enumerate(parts)]
 
 
 def _check_folder(parts, filled, cut, where, tool):
     """jobs.BadRequest when a link's value in ``filled`` (``parts`` filled
     in) would lead the path before ``cut`` out of the folder its author
     wrote: a .. segment it is part of (alone, or joined with the author's
-    text up to the "/" around it), or a ~ it starts the path with (the
-    tool expands it). The author's own .. stays as it is. %2e%2e is not
-    one: neither tool decodes a path."""
+    text up to the "/" around it), or a ~ it starts the path with (when
+    ``tool`` expands it, else None). The author's own .. stays as it is.
+    %2e%2e is not one: no tool decodes a path."""
     path = "".join(filled)[:cut]
     up, s = [], 0
     for segment in path.split("/"):
@@ -816,21 +844,40 @@ def _check_folder(parts, filled, cut, where, tool):
             if any(s < end and e > at for s, e in up):
                 raise jobs.BadRequest(f"{{{parts[i]}}} puts a .. in {where}, "
                                       "which would lead out of the folder written there")
-            if at == 0 and p.startswith("~"):
+            if tool and at == 0 and p.startswith("~"):
                 raise jobs.BadRequest(f"{{{parts[i]}}} starts {where} with ~, which {tool} would expand")
         at += len(p)
 
 
 def _check_path(text, vals, option, tool):
     """jobs.BadRequest when a link's value would take ``text``, the value of
-    one of PATHS' options, out of its folder (_check_folder), or puts a $
-    in it (the tool expands $NAME)."""
-    parts = _PLACEHOLDER_RE.split(text)
-    filled = [vals[p] if i % 2 else p for i, p in enumerate(parts)]
+    one of PATHS' options (or env's -C), out of its folder (_check_folder),
+    or puts a $ in it where ``tool`` expands $NAME (else None)."""
+    parts, filled = _filled(text, vals)
     for i in range(1, len(parts), 2):
-        if parts[i] in LINKS and "$" in filled[i]:
+        if tool and parts[i] in LINKS and "$" in filled[i]:
             raise jobs.BadRequest(f"{{{parts[i]}}} puts a $ in {option}'s path, which {tool} would expand")
     _check_folder(parts, filled, sum(map(len, filled)), f"{option}'s path", tool)
+
+
+def _check_env(argv, start, vals):
+    """jobs.BadRequest for a link's .. in env's -C (--chdir): the folder
+    the program runs in, its relative paths under it."""
+    value = chdir = None
+    for a in argv[1:start]:
+        if value:
+            if chdir:
+                _check_path(a, vals, chdir, None)
+            value = chdir = None
+            continue
+        found = _shell_option(a, _ENV_LONGS, (), _ENV_SHORTS, _ENV_FLAGS)
+        if found is None:
+            continue
+        chdir = found[0] if found[0] in ("--chdir", "-C") else None
+        if found[1] is None:
+            value = True
+        elif chdir:
+            _check_path(found[1], vals, chdir, None)
 
 
 def _file_name(text, vals, escape, option):
@@ -845,8 +892,7 @@ def _file_name(text, vals, escape, option):
     (_check_folder: gallery-dl makes the folder and appends to the file),
     or \\f in the file name (another formatter). ``option``: the one FILE
     is for, as the reasons name it."""
-    parts = _PLACEHOLDER_RE.split(text)
-    filled = [vals[p] if i % 2 else p for i, p in enumerate(parts)]
+    parts, filled = _filled(text, vals)
     cut, at, out = "".join(filled).rfind("/") + 1, 0, []
     for i, p in enumerate(filled):
         keep = max(cut - at, 0)
@@ -867,28 +913,46 @@ def command(script, vals):
     the value of an option its tool formats (the program's, past env or
     its path, as _check_shell reads it; env's own items as they are).
     jobs.BadRequest for a link's value that would take one of PATHS'
-    options out of its folder (_check_path)."""
+    options, or env's -C, out of its folder (_check_path)."""
     start = _program(script["argv"])
     tool = script["tool"] if start is None else os.path.basename(script["argv"][start])
     longs, shorts, prefixes, escape, flags = FORMATTED.get(tool, ((), (), False, None, ""))
-    paths, path_shorts = PATHS.get(tool, ((), ()))
+    paths, path_shorts, path_flags, expands = PATHS.get(tool, ((), (), "", False))
+    expands = tool if expands else None
     escaped = {k: escape(v) for k, v in vals.items()} if escape else vals
+    if start:
+        _check_env(script["argv"], start, vals)
     argv, pending, path = [], [], None
     for n, a in enumerate(script["argv"]):
         free = not pending and path is None and start is not None and n > start
         option = _formatted(a, longs, shorts, prefixes, flags) if free else None
-        found = _formatted(a, paths, path_shorts, prefixes, flags) if free else None
+        found = _formatted(a, paths, path_shorts, True, path_flags) if free else None
+        if found and found[0].rstrip("=") in PATH_OTHERS.get(tool, ()):
+            found = None
+        # yt-dlp's --print-to-file TEMPLATE FILE: both output templates,
+        # escaped as -o is (a link's %(a|..)s would be a .. once filled in).
+        template = None
         if path is not None:
-            _check_path(a, vals, path, tool)
-            path = None
+            name, skip = path
+            path = (name, skip - 1) if skip else None
+            template = name in PATH_SECOND
+            if not skip:
+                _check_path(a, vals, name, expands)
         elif found is not None:
-            if found[1] is None:
-                path = _named(found[0], paths)
+            name = _named(found[0], paths)
+            skip = int(name in PATH_SECOND)
+            if found[1] is None or skip:
+                path = name, skip - (found[1] is not None)
+                template = found if skip and found[1] is not None else None
             else:
-                _check_path(found[1], vals, _named(found[0], paths), tool)
+                _check_path(found[1], vals, name, expands)
         if pending:
             kind, name = pending.pop(0)
             argv.append(_file_name(a, vals, escape, name) if kind == FILE else substitute(a, escaped))
+        elif template is True:
+            argv.append(substitute(a, escaped))
+        elif template:
+            argv.append(template[0] + substitute(template[1], escaped))
         elif option and option[1] is not None:
             argv.append(option[0] + substitute(option[1], escaped))
         else:

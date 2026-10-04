@@ -593,6 +593,20 @@ def test_a_value_starting_a_print_to_file_with_tilde_is_refused(env):
     ("yt-dlp", ["-a", "/tmp/{url}/in.txt"], "-a"),
     ("yt-dlp", ["--batch-file=/tmp/{url}/in.txt"], "--batch-file"),
     ("yt-dlp", ["--load-info-json", "/tmp/{url}/i.json"], "--load-info-json"),
+    # yt-dlp's optparse takes a unique prefix and flags before a short option too.
+    ("yt-dlp", ["--load-info", "/tmp/{url}/i.json"], "--load-info-json"),
+    ("yt-dlp", ["--batch=/tmp/{url}/in.txt"], "--batch-file"),
+    ("yt-dlp", ["--pat", "/tmp/{url}"], "--paths"),
+    ("yt-dlp", ["-iP", "/tmp/{url}"], "-P"),
+    ("yt-dlp", ["-qio/tmp/{url}/%(id)s"], "-o"),
+    ("yt-dlp", ["--cache-dir", "/tmp/{url}"], "--cache-dir"),
+    ("yt-dlp", ["--config-locations", "/tmp/{url}"], "--config-locations"),
+    ("yt-dlp", ["--netrc-location", "/tmp/{url}"], "--netrc-location"),
+    ("yt-dlp", ["--plugin-dirs", "/tmp/{url}"], "--plugin-dirs"),
+    ("yt-dlp", ["--ffmpeg-location", "/tmp/{url}/ffmpeg"], "--ffmpeg-location"),
+    # TEMPLATE FILE: the path is the second value.
+    ("yt-dlp", ["--print-to-file", "%(id)s", "/tmp/{url}/ids.txt"], "--print-to-file"),
+    ("yt-dlp", ["--print-to-file=%(id)s", "/tmp/{url}/ids.txt"], "--print-to-file"),
 ])
 def test_a_link_s_dotdot_in_a_path_option_is_refused(env, tool, args, option):
     """#68: the tool's other options whose value is a path (scripts.PATHS),
@@ -620,14 +634,72 @@ def test_a_link_s_dotdot_in_a_path_option_is_refused_and_never_run(client, folde
     assert runner.runs() == [] and jobs.active() == []
 
 
+TEMPLATE_DOTDOT = "https://e.com/%(a|..)s/%(a|..)s/home/u/.bashrc"
+
+
+@pytest.mark.parametrize("args, want", [
+    (["--print-to-file", "%(title)s", "{root}/logs/{url}"], ["--print-to-file", "%(title)s", "/m/x/logs/{}"]),
+    (["--print-to", "{url}", "{root}/{url}"], ["--print-to", "{}", "/m/x/{}"]),
+    (["--print-to-file={url}", "{root}/{url}"], ["--print-to-file={}", "/m/x/{}"]),
+])
+def test_a_link_in_yt_dlp_s_print_to_file_is_escaped(env, args, want):
+    """Security review of #68: yt-dlp reads --print-to-file's TEMPLATE and FILE as
+    output templates (options.py); a missing field's default (%(a|..)s) is filled
+    in as it is, so a link's would be a .. no check on the raw text sees."""
+    script = {"tool": "yt-dlp", "argv": ["yt-dlp", *args, "--", "{url}"]}
+    escaped = TEMPLATE_DOTDOT.replace("%", "%%")
+    assert scripts.command(script, scripts.values(script, config.load(), "/m/x", url=TEMPLATE_DOTDOT)) \
+        == ["yt-dlp", *[w.replace("{}", escaped) for w in want], "--", TEMPLATE_DOTDOT]
+
+
+@pytest.mark.parametrize("args, option", [
+    (["--dirname-pattern", "{root}/{target}"], "--dirname-pattern"),
+    (["--dirname={root}/{target}/x"], "--dirname-pattern"),
+    (["--filename-pattern", "{target}/{date_utc}"], "--filename-pattern"),
+    (["--title-pattern", "{target}/{date_utc}"], "--title-pattern"),
+    (["--resume-prefix", "{root}/{target}/r"], "--resume-prefix"),
+    (["--latest-stamps", "{root}/{target}/stamps.ini"], "--latest-stamps"),
+    (["-B", "{root}/{target}/cookies.sqlite"], "-B"),
+    (["--cookiefile={root}/{target}/cookies.sqlite"], "--cookiefile"),
+    (["-Ff", "{root}/{target}/session"], "-f"),
+    (["--sessionfile", "{root}/{target}/session"], "--sessionfile"),
+])
+def test_an_instaloader_target_s_dotdot_in_a_path_option_is_refused(env, args, option):
+    """instaloader's target is a profile name, which may be ".." (check_target);
+    it sanitizes its own fields in a pattern, never FeedVault's text. No ~ or $
+    expansion there: those stay."""
+    script = {"tool": "instaloader", "argv": ["instaloader", *args, "--", "{target}"]}
+    with pytest.raises(jobs.BadRequest, match=re.escape(f"{{target}} puts a .. in {option}'s path")):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", ".."))
+    assert scripts.command(script, scripts.values(script, config.load(), "/m/x", "a..b"))[-1] == "a..b"
+    script["argv"][1:-2] = [a.replace("{root}/", "") for a in args]
+    assert scripts.command(script, scripts.values(script, config.load(), "/m/x", "~$HOME"))[-1] == "~$HOME"
+
+
+@pytest.mark.parametrize("argv, option", [
+    (["/usr/bin/env", "-C", "/tmp/{url}", "gallery-dl", "{url}"], "-C"),
+    (["env", "-i", "-u", "X", "-C/tmp/{url}", "yt-dlp", "{url}"], "-C"),
+    (["env", "--chdir=/tmp/{url}", "instaloader", "x"], "--chdir"),
+])
+def test_a_link_s_dotdot_in_env_s_chdir_is_refused(env, argv, option):
+    """The folder the program runs in, its relative paths (gallery-dl's
+    ./gallery-dl/, yt-dlp's output) under it."""
+    script = {"id": "mine", "tool": argv[0], "argv": argv}
+    with pytest.raises(jobs.BadRequest, match=re.escape(f"{{url}} puts a .. in {option}'s path")):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", url=DOTDOT))
+
+
 @pytest.mark.parametrize("tool, args", [
     # Not a path option: a link's .. is text there, or a positional link.
     ("gallery-dl", ["--filename", "{url}", "{url}"]),
     ("gallery-dl", ["-D", "{root}", "--download-archive", "{archive}", "{url}"]),
     ("gallery-dl", ["--print-to-file", "-D", "/tmp/{root}", "{url}"]),
     ("yt-dlp", ["--paths", "{root}", "-o", "%(id)s.%(ext)s", "--", "{url}"]),
-    ("instaloader", ["--dirname-pattern", "/tmp/{url}", "--", "{url}"]),
-    ("/usr/bin/env", ["-C", "/tmp/{url}", "gallery-dl", "{url}"]),
+    # yt-dlp's own --print and --netrc: no prefix of --print-to-file or --netrc-location there.
+    ("yt-dlp", ["--print", "{url}", "--netrc", "--", "{url}"]),
+    ("yt-dlp", ["--print-to-file", "{url}", "{root}/ids.txt", "--", "{url}"]),
+    # env's own -u takes the next item, -C as its value.
+    ("/usr/bin/env", ["-u", "-C", "gallery-dl", "{url}"]),
 ])
 def test_a_link_s_dotdot_elsewhere_is_left_as_it_is(env, tool, args):
     script = {"id": "mine", "tool": tool, "argv": [tool, *args]}
