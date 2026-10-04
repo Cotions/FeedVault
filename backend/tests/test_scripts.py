@@ -446,7 +446,7 @@ def test_only_print_to_file_takes_a_file(env, argv, want):
     ["/usr/local/bin/gallery-dl", "--print-to-file", "{id}", "/tmp/{url}", "{url}"],
 ])
 def test_a_downloader_by_its_path_or_behind_env_is_escaped_too(env, argv):
-    """As _check_shell reads it (_program); env's own items are not gallery-dl's."""
+    """As _check_shell reads it (_walk); env's own items are not gallery-dl's."""
     script = {"id": "ids", "tool": argv[0], "argv": argv}
     vals = scripts.values(script, config.load(), "/m/{x}", url=LINK)
     assert scripts.command(script, vals) == [*argv[:-2], "/tmp/https://x.com/a/{{_env[HOME]}}", LINK]
@@ -609,7 +609,7 @@ def test_a_value_starting_a_print_to_file_with_tilde_is_refused(env):
     ("yt-dlp", ["--print-to-file=%(id)s", "/tmp/{url}/ids.txt"], "--print-to-file"),
 ])
 def test_a_link_s_dotdot_in_a_path_option_is_refused(env, tool, args, option):
-    """#68: the tool's other options whose value is a path (scripts.PATHS),
+    """#68: the tool's other options whose value is a path (scripts.TOOLS' PATH),
     expanded and used as it is: a link's .. there leads out of the folder
     written, as in --print-to-file's; its $ is expanded (~ too)."""
     script = {"tool": tool, "argv": [tool, *args, "--", "{url}"]}
@@ -1547,3 +1547,1681 @@ def test_no_route_writes_under_the_scripts_folder(client, folder, runner, env):
         _watch["dir"] = None
     assert _watch["seen"] == []
     assert _snapshot(folder) == before
+
+
+# ---------------------------------------------------------------------------
+# Every argv form, as read before one walker reads them all (#69)
+# ---------------------------------------------------------------------------
+
+# The links each accepted form is filled in with (and a root holding "{"):
+# what would be escaped (braces, %), refused (.., $) or read as another
+# formatter (\f) in an option's value.
+PIN_LINKS = {"env": "https://x.com/a/{_env[HOME]}", "template": "https://e.com/%(a|..)s/%(a|..)s/home",
+             "dotdot": "https://x.com/../../etc", "dollar": "https://x.com/$HOME", "formfeed": "https://x.com/\fE x"}
+
+
+def pin_vals(key):
+    link, root = (PIN_LINKS[key], "/m/x") if key in PIN_LINKS else ("https://x.com/a", "/m/{x")
+    return {"target": link, "url": link, "root": root, "data_dir": "/d", "archive": "/d/archive"}
+
+
+def pin_needs(argv):
+    used = scripts._used(argv)
+    return "url" if "url" in used else "target" if "target" in used else "none"
+
+
+# (argv, parse_command's refusal or None, command() for each of PIN_LINKS
+# and "brace_root": its argv, "400: <why>", or "plain" when every value is
+# put in as it is; "plain" alone when all are). Written down from the code
+# as it was before the walker, never computed here: every form this file
+# runs through parse_command or command() (a recorder's path as
+# /opt/bin/<name>), and options after "--": positional since the walker,
+# as the tools read them (#69).
+PINNED = [
+    (['gallery-dl', '--write-metadata', '--download-archive', '{archive}', '-o', 'skip=abort:5', '-D', '{root}',
+      '--', '{url}'],
+     None, 'plain'),
+    (['instaloader', '--no-compress-json', '--dirname-pattern', '{root}/{profile}', '--', '-{target}'], None,
+     {'brace_root': ['instaloader', '--no-compress-json', '--dirname-pattern', '/m/{{x/{profile}', '--',
+                     '-https://x.com/a'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--no-posts', '--no-profile-pic', '--stories', '--highlights', '--no-compress-json',
+      '--dirname-pattern', '{root}', '--', '{target}'],
+     None,
+     {'brace_root': ['instaloader', '--no-posts', '--no-profile-pic', '--stories', '--highlights',
+                     '--no-compress-json', '--dirname-pattern', '/m/{{x', '--', 'https://x.com/a'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--write-info-json', '--write-thumbnail', '--download-archive', '{archive}', '--break-on-existing',
+      '-o', '{root}/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s', '--', '{url}'],
+     None, 'plain'),
+    (['gallery-dl', '--write-metadata', '-D', '{root}', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--write-info-json', '--write-thumbnail', '--no-playlist', '-o',
+      '{root}/%(uploader_id)s-%(upload_date)s-%(id)s.%(ext)s', '--', '{url}'],
+     None, 'plain'),
+    (['instaloader', '--latest-stamps', '{archive}', '--no-compress-json', '--dirname-pattern', '{root}', '--',
+      '{target}'],
+     None,
+     {'brace_root': ['instaloader', '--latest-stamps', '/d/archive', '--no-compress-json', '--dirname-pattern',
+                     '/m/{{x', '--', 'https://x.com/a'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--no-compress-json', '--dirname-pattern', '{root}/{profile}', '--', ':saved'], None,
+     {'brace_root': ['instaloader', '--no-compress-json', '--dirname-pattern', '/m/{{x/{profile}', '--', ':saved'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--no-videos', '--dirname-pattern', '{root}', '--', '{target}'], None,
+     {'brace_root': ['instaloader', '--no-videos', '--dirname-pattern', '/m/{{x', '--', 'https://x.com/a'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['bash', '-c', 'x'],
+     'argv[0] must be one of instaloader, gallery-dl, yt-dlp, ffmpeg (found as in Settings → Downloaders), or an '
+     'absolute path to a program',
+     None),
+    (['{root}/x'],
+     'argv[0] must be one of instaloader, gallery-dl, yt-dlp, ffmpeg (found as in Settings → Downloaders), or an '
+     'absolute path to a program',
+     None),
+    (['yt-dlp', '{url}'], None, 'plain'),
+    (['/opt/bin/recorder', '--flag', '--', '{target}'], None, 'plain'),
+    (['/opt/bin/recorder', '--url={url}', '{url}'], None, 'plain'),
+    (['/opt/bin/recorder', '{root}/x', '{data_dir}', '{archive}', '{profile}', '{target}', '--',
+      '{target}{target}'],
+     None, 'plain'),
+    (['instaloader', '{root}', '--', '{root}'], None, 'plain'),
+    (['yt-dlp', '{root}', '--', '{root}'], None, 'plain'),
+    (['instaloader', '--dirname-pattern', '{root}/{profile}'], None,
+     {'brace_root': ['instaloader', '--dirname-pattern', '/m/{{x/{profile}'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--dirname-pattern={root}/{profile}'], None,
+     {'brace_root': ['instaloader', '--dirname-pattern=/m/{{x/{profile}'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--filename-pattern', '{root}_{date_utc}'], None,
+     {'brace_root': ['instaloader', '--filename-pattern', '/m/{{x_{date_utc}'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--filename-pattern={root}_{date_utc}'], None,
+     {'brace_root': ['instaloader', '--filename-pattern=/m/{{x_{date_utc}'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '-o', '{root}/%(id)s.%(ext)s'], None, 'plain'),
+    (['yt-dlp', '--output', '{root}/%(id)s.%(ext)s'], None, 'plain'),
+    (['yt-dlp', '--output={root}/%(id)s.%(ext)s'], None, 'plain'),
+    (['yt-dlp', '-o{root}/%(id)s.%(ext)s'], None, 'plain'),
+    (['instaloader', '--title-pattern={root}_{date_utc}'], None,
+     {'brace_root': ['instaloader', '--title-pattern=/m/{{x_{date_utc}'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--exec', 'echo {root}/%(id)s'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {root} in 'echo "
+     "{root}/%(id)s'",
+     None),
+    (['yt-dlp', '--exec=echo {root}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {root} in 'echo "
+     "{root}'",
+     None),
+    (['instaloader', '--dirname={root}', '--filename', '{root}'], None,
+     {'brace_root': ['instaloader', '--dirname=/m/{{x', '--filename', '/m/{{x'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--outp={root}', '--exe', '{root}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {root} in '{root}'",
+     None),
+    (['instaloader', '--dirname-patterns={root}', '-d{root}', '--={root}'], None, 'plain'),
+    (['yt-dlp', '--output-na-placeholder={root}', '-P{root}'], None, 'plain'),
+    (['yt-dlp', '-o', '-o', '{root}'], None, 'plain'),
+    (['gallery-dl', '-f', '{root}_{id}'], None,
+     {'brace_root': ['gallery-dl', '-f', '/m/{{x_{id}'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-qN{root}'], None,
+     {'brace_root': ['gallery-dl', '-qN/m/{{x'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print=post:{root}'], None,
+     {'brace_root': ['gallery-dl', '--print=post:/m/{{x'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--filen', '{root}', '--rename-to={root}'], None,
+     {'brace_root': ['gallery-dl', '--filen', '/m/{{x', '--rename-to=/m/{{x'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{root}', '{root}/out.txt', '-D', '{root}'], None,
+     {'brace_root': ['gallery-dl', '--print-to-file', '/m/{{x', '/m/{x/out.txt', '-D', '/m/{x'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '{id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--Print-to-file', '{id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --Print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--Print-to-file', '{id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --Print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file={id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file={id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--Print-to-file={id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --Print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--Print-to-file={id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --Print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to', '{id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to', '{id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--Print-to', '{id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --Print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--Print-to', '{id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --Print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-f={id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-f={id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}-{url}', '{root}/out-{url}.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '{id}-https://x.com/a/{{_env[HOME]}}',
+              '/m/x/out-https://x.com/a/{{_env[HOME]}}.txt', '--', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--Print-to-file', '{id}-{url}', '{root}/out-{url}.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --Print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--Print-to-file', '{id}-https://x.com/a/{{_env[HOME]}}',
+              '/m/x/out-https://x.com/a/{{_env[HOME]}}.txt', '--', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --Print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file={id}-{url}', '{root}/out-{url}.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file={id}-https://x.com/a/{{_env[HOME]}}',
+              '/m/x/out-https://x.com/a/{{_env[HOME]}}.txt', '--', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to', '{id}-{url}', '{root}/out-{url}.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to', '{id}-https://x.com/a/{{_env[HOME]}}',
+              '/m/x/out-https://x.com/a/{{_env[HOME]}}.txt', '--', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{id}-{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '{id}', '{id}-https://x.com/a/{{_env[HOME]}}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{url}/{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '{id}',
+              'https://x.com/a/{_env[HOME]}/https://x.com/a/{{_env[HOME]}}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{root}/{id}.txt'], None, 'plain'),
+    (['gallery-dl', '--print-to-file', '{id}', '{url}/'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print', '{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['gallery-dl', '--print', 'https://x.com/a/{{_env[HOME]}}', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '-f', '{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '-f', 'https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '-f', '{url}', '/tmp/{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['gallery-dl', '-f', 'https://x.com/a/{{_env[HOME]}}', '/tmp/https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-files', '{url}', '{url}'], None, 'plain'),
+    (['/usr/bin/env', '-i', 'gallery-dl', '--print-to-file', '{id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['/usr/bin/env', '-i', 'gallery-dl', '--print-to-file', '{id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['/usr/bin/env', '-u', '-f', 'gallery-dl', '-f', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['/usr/bin/env', '-u', '-f', 'gallery-dl', '-f', 'https://x.com/a/{{_env[HOME]}}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['/usr/local/bin/gallery-dl', '--print-to-file', '{id}', '/tmp/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['/usr/local/bin/gallery-dl', '--print-to-file', '{id}', '/tmp/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/{url}/ids.txt'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '{id}', '/tmp/https://x.com/a/{{_env[HOME]}}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{root}.txt'], None,
+     {'brace_root': ['gallery-dl', '--print-to-file', '{id}', '/m/{{x.txt'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/{url}/ids.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/{url}/out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/{target}/out.txt', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {target} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {target} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{root}/../x/out.txt', '{url}'], None, 'plain'),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/../{url}/out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{root}/{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '{id}', '/m/x/https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{root}/out-{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '{id}', '/m/x/out-https://x.com/a/{{_env[HOME]}}',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '--Print-to-file', '{id}', '/tmp/{url}/out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --Print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --Print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file={id}', '/tmp/{url}/out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--Print-to', '{id}', '/tmp/{url}/out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --Print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --Print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/{url}./out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--Print-to-file', '{id}', '/tmp/{url}./out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --Print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --Print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file={id}', '/tmp/{url}./out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--Print-to', '{id}', '/tmp/{url}./out.txt', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --Print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --Print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{url}/.bashrc'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/{url}/x'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': ['gallery-dl', '--print-to-file', '{id}', 'https://x.com/a/{{_env[HOME]}}'],
+      'formfeed': "400: {url} puts \\f in --print-to-file's file name, which gallery-dl may evaluate as Python",
+      'template': 'plain'}),
+    (['gallery-dl', '-d', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -d's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -d's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-d', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--destination=/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --destination's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --destination's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--destination={root}/../x', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-D', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -D's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -D's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-D', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-qD/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -D's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -D's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-qD{root}/../x', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--directory', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --directory's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --directory's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--directory', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--dir=/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --directory's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --directory's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--dir={root}/../x', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--download-archive', '/tmp/{url}/a.sqlite3', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --download-archive's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --download-archive's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--download-archive', '{root}/../x/a.sqlite3', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-e', '/tmp/{url}/errors.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -e's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -e's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-e', '{root}/../x/errors.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--error-file', '/tmp/{url}/errors.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --error-file's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --error-file's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--error-file', '{root}/../x/errors.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--write-log', '/tmp/{url}/log.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --write-log's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --write-log's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--write-log', '{root}/../x/log.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--write-unsupported=/tmp/{url}/u.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --write-unsupported's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --write-unsupported's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--write-unsupported={root}/../x/u.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-c', '/tmp/{url}/c.json', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -c's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -c's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-c', '{root}/../x/c.json', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--config-json', '/tmp/{url}/c.json', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --config-json's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --config-json's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--config-json', '{root}/../x/c.json', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--config-yaml', '/tmp/{url}/c.yaml', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --config-yaml's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --config-yaml's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--config-yaml', '{root}/../x/c.yaml', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--config-toml', '/tmp/{url}/c.toml', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --config-toml's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --config-toml's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--config-toml', '{root}/../x/c.toml', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-C', '/tmp/{url}/cookies.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -C's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -C's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-C', '{root}/../x/cookies.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--cookies-export', '/tmp/{url}/cookies.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --cookies-export's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --cookies-export's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--cookies-export', '{root}/../x/cookies.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-i', '/tmp/{url}/in.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -i's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -i's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-i', '{root}/../x/in.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-I', '/tmp/{url}/in.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -I's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -I's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-I', '{root}/../x/in.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--input-file-delete=/tmp/{url}/in.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --input-file-delete's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in --input-file-delete's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--input-file-delete={root}/../x/in.txt', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '-P', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -P's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in -P's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '-P', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--paths', 'temp:/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --paths's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --paths's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--paths', 'temp:{root}/../x', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '-o', '/tmp/{url}/%(id)s.%(ext)s', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -o's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in -o's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '-o', '/tmp/https://e.com/%%(a|..)s/%%(a|..)s/home/%(id)s.%(ext)s', '--',
+                   'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['yt-dlp', '-o', '{root}/../x/%(id)s.%(ext)s', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--output=/tmp/{url}/%(id)s.%(ext)s', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --output's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --output's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '--output=/tmp/https://e.com/%%(a|..)s/%%(a|..)s/home/%(id)s.%(ext)s', '--',
+                   'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['yt-dlp', '--output={root}/../x/%(id)s.%(ext)s', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--download-archive', '/tmp/{url}/a.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --download-archive's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --download-archive's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--download-archive', '{root}/../x/a.txt', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--cookies', '/tmp/{url}/cookies.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --cookies's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --cookies's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--cookies', '{root}/../x/cookies.txt', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '-a', '/tmp/{url}/in.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -a's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in -a's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '-a', '{root}/../x/in.txt', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--batch-file=/tmp/{url}/in.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --batch-file's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --batch-file's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--batch-file={root}/../x/in.txt', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--load-info-json', '/tmp/{url}/i.json', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --load-info-json's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --load-info-json's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--load-info-json', '{root}/../x/i.json', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--load-info', '/tmp/{url}/i.json', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --load-info-json's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --load-info-json's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--load-info', '{root}/../x/i.json', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--batch=/tmp/{url}/in.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --batch-file's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --batch-file's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--batch={root}/../x/in.txt', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--pat', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --paths's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --paths's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--pat', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '-iP', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -P's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in -P's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '-iP', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '-qio/tmp/{url}/%(id)s', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -o's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in -o's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '-qio/tmp/https://e.com/%%(a|..)s/%%(a|..)s/home/%(id)s', '--',
+                   'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['yt-dlp', '-qio{root}/../x/%(id)s', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--cache-dir', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --cache-dir's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --cache-dir's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--cache-dir', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--config-locations', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --config-locations's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --config-locations's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--config-locations', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--netrc-location', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --netrc-location's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --netrc-location's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--netrc-location', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--plugin-dirs', '/tmp/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --plugin-dirs's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --plugin-dirs's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--plugin-dirs', '{root}/../x', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--ffmpeg-location', '/tmp/{url}/ffmpeg', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --ffmpeg-location's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --ffmpeg-location's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--ffmpeg-location', '{root}/../x/ffmpeg', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--print-to-file', '%(id)s', '/tmp/{url}/ids.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '--print-to-file', '%(id)s', '/tmp/https://e.com/%%(a|..)s/%%(a|..)s/home/ids.txt',
+                   '--', 'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['yt-dlp', '--print-to-file', '%(id)s', '{root}/../x/ids.txt', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--print-to-file=%(id)s', '/tmp/{url}/ids.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '--print-to-file=%(id)s', '/tmp/https://e.com/%%(a|..)s/%%(a|..)s/home/ids.txt', '--',
+                   'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['yt-dlp', '--print-to-file=%(id)s', '{root}/../x/ids.txt', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--print-to-file', '%(title)s', '{root}/logs/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '--print-to-file', '%(title)s', '/m/x/logs/https://e.com/%%(a|..)s/%%(a|..)s/home',
+                   '--', 'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['yt-dlp', '--print-to', '{url}', '{root}/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '--print-to', 'https://e.com/%%(a|..)s/%%(a|..)s/home',
+                   '/m/x/https://e.com/%%(a|..)s/%%(a|..)s/home', '--', 'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['yt-dlp', '--print-to-file={url}', '{root}/{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in --print-to-file's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in --print-to-file's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '--print-to-file=https://e.com/%%(a|..)s/%%(a|..)s/home',
+                   '/m/x/https://e.com/%%(a|..)s/%%(a|..)s/home', '--', 'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['instaloader', '--dirname-pattern', '{root}/{target}', '--', '{target}'], None,
+     {'brace_root': ['instaloader', '--dirname-pattern', '/m/{{x/https://x.com/a', '--', 'https://x.com/a'],
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --dirname-pattern's path, which would lead out of the folder written "
+                'there',
+      'env': ['instaloader', '--dirname-pattern', '/m/x/https://x.com/a/{{_env[HOME]}}', '--',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--dirname-pattern', '{target}', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --dirname-pattern's path, which would lead out of the folder written "
+                'there',
+      'env': ['instaloader', '--dirname-pattern', 'https://x.com/a/{{_env[HOME]}}', '--',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--dirname={root}/{target}/x', '--', '{target}'], None,
+     {'brace_root': ['instaloader', '--dirname=/m/{{x/https://x.com/a/x', '--', 'https://x.com/a'],
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --dirname-pattern's path, which would lead out of the folder written "
+                'there',
+      'env': ['instaloader', '--dirname=/m/x/https://x.com/a/{{_env[HOME]}}/x', '--',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--dirname={target}/x', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --dirname-pattern's path, which would lead out of the folder written "
+                'there',
+      'env': ['instaloader', '--dirname=https://x.com/a/{{_env[HOME]}}/x', '--', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--filename-pattern', '{target}/{date_utc}', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --filename-pattern's path, which would lead out of the folder written "
+                'there',
+      'env': ['instaloader', '--filename-pattern', 'https://x.com/a/{{_env[HOME]}}/{date_utc}', '--',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--title-pattern', '{target}/{date_utc}', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --title-pattern's path, which would lead out of the folder written "
+                'there',
+      'env': ['instaloader', '--title-pattern', 'https://x.com/a/{{_env[HOME]}}/{date_utc}', '--',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--resume-prefix', '{root}/{target}/r', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --resume-prefix's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--resume-prefix', '{target}/r', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --resume-prefix's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--latest-stamps', '{root}/{target}/stamps.ini', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --latest-stamps's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--latest-stamps', '{target}/stamps.ini', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --latest-stamps's path, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '-B', '{root}/{target}/cookies.sqlite', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in -B's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '-B', '{target}/cookies.sqlite', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in -B's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--cookiefile={root}/{target}/cookies.sqlite', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --cookiefile's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--cookiefile={target}/cookies.sqlite', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --cookiefile's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '-Ff', '{root}/{target}/session', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in -f's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '-Ff', '{target}/session', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in -f's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--sessionfile', '{root}/{target}/session', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --sessionfile's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['instaloader', '--sessionfile', '{target}/session', '--', '{target}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {target} puts a .. in --sessionfile's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['/usr/bin/env', '-C', '/tmp/{url}', 'gallery-dl', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': "400: {url} puts a .. in -C's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['env', '-i', '-u', 'X', '-C/tmp/{url}', 'yt-dlp', '{url}'],
+     'argv[0] must be one of instaloader, gallery-dl, yt-dlp, ffmpeg (found as in Settings → Downloaders), or an '
+     'absolute path to a program',
+     None),
+    (['env', '--chdir=/tmp/{url}', 'instaloader', 'x'],
+     'argv[0] must be one of instaloader, gallery-dl, yt-dlp, ffmpeg (found as in Settings → Downloaders), or an '
+     'absolute path to a program',
+     None),
+    (['gallery-dl', '--filename', '{url}', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['gallery-dl', '--filename', 'https://x.com/a/{{_env[HOME]}}', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-D', '{root}', '--download-archive', '{archive}', '{url}'], None, 'plain'),
+    (['gallery-dl', '--print-to-file', '-D', '/tmp/{root}', '{url}'], None,
+     {'brace_root': ['gallery-dl', '--print-to-file', '-D', '/tmp//m/{{x', 'https://x.com/a'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--paths', '{root}', '-o', '%(id)s.%(ext)s', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--print', '{url}', '--netrc', '--', '{url}'], None, 'plain'),
+    (['yt-dlp', '--print-to-file', '{url}', '{root}/ids.txt', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': ['yt-dlp', '--print-to-file', 'https://e.com/%%(a|..)s/%%(a|..)s/home', '/m/x/ids.txt', '--',
+                   'https://e.com/%(a|..)s/%(a|..)s/home']}),
+    (['/usr/bin/env', '-u', '-C', 'gallery-dl', '{url}'], None, 'plain'),
+    (['instaloader', '--no-videos', '--latest-stamps', '{archive}', '--dirname-pattern', '{root}', '--',
+      '{target}'],
+     None,
+     {'brace_root': ['instaloader', '--no-videos', '--latest-stamps', '/d/archive', '--dirname-pattern', '/m/{{x',
+                     '--', 'https://x.com/a'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--exec', 'notify-send done {url}', '--', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     '(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in '
+     "'notify-send done {url}'",
+     None),
+    (['yt-dlp', '--exec', 'echo {root}', '--', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {root} in 'echo "
+     "{root}'",
+     None),
+    (['yt-dlp', '--exec=echo {url}', '--', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'echo "
+     "{url}'",
+     None),
+    (['yt-dlp', '--exec', 'before_dl:echo {url}', '--', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     '(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in '
+     "'before_dl:echo {url}'",
+     None),
+    (['yt-dlp', '--exec-before-download={archive}', '--', '{url}'],
+     "--exec-before-download's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's "
+     'own fields (%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found '
+     "{archive} in '{archive}'",
+     None),
+    (['yt-dlp', '--exec-b', 'echo {data_dir}', '--', '{url}'],
+     "--exec-before-download's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's "
+     'own fields (%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found '
+     "{data_dir} in 'echo {data_dir}'",
+     None),
+    (['yt-dlp', '--netrc-cmd', 'pass {url}', '--', '{url}'],
+     "--netrc-cmd's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'pass "
+     "{url}'",
+     None),
+    (['yt-dlp', '--use-postprocessor=Exec:exec_cmd=echo {url}', '--', '{url}'],
+     "--use-postprocessor's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own "
+     'fields (%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in '
+     "'Exec:exec_cmd=echo {url}'",
+     None),
+    (['yt-dlp', '--use-p', 'Exec:exec_cmd=echo {url}', '--', '{url}'],
+     "--use-postprocessor's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own "
+     'fields (%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in '
+     "'Exec:exec_cmd=echo {url}'",
+     None),
+    (['gallery-dl', '--exec', 'convert {} {root}/x.png', '--', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {root} in 'convert {} {root}/x.png'",
+     None),
+    (['gallery-dl', '--exec-after={root}', '--', '{url}'],
+     "--exec-after's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own "
+     'fields ({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are '
+     "FV_* variables); found {root} in '{root}'",
+     None),
+    (['gallery-dl', '--exec-a', 'cd {root}', '--', '{url}'],
+     "--exec-after's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own "
+     'fields ({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are '
+     "FV_* variables); found {root} in 'cd {root}'",
+     None),
+    (['gallery-dl', '-o', 'postprocessors=[{"name": "exec", "command": "echo {url}"}]', '--', '{url}'],
+     "-o's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     'variables); found {url} in \'postprocessors=[{"name": "exec", "command": "echo {url}"}]\'',
+     None),
+    (['gallery-dl', '-obase-directory={root}', '--', '{url}'],
+     "-o's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {root} in 'base-directory={root}'",
+     None),
+    (['gallery-dl', '-qo', 'x={root}', '--', '{url}'],
+     "-o's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {root} in 'x={root}'",
+     None),
+    (['gallery-dl', '--opt=x={root}', '--', '{url}'],
+     "--option's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {root} in 'x={root}'",
+     None),
+    (['gallery-dl', '-P', 'exec', '-O', 'command=echo {url}', '--', '{url}'],
+     "-O's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {url} in 'command=echo {url}'",
+     None),
+    (['gallery-dl', '--postprocessor-option', 'command=echo {url}', '--', '{url}'],
+     "--postprocessor-option's value can reach a shell, so it may not hold a FeedVault placeholder: use "
+     "gallery-dl's own fields ({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script "
+     "(its inputs are FV_* variables); found {url} in 'command=echo {url}'",
+     None),
+    (['gallery-dl', '-So', 'x={url}', '--', '{url}'],
+     "-o's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {url} in 'x={url}'",
+     None),
+    (['gallery-dl', '--filter', "'{url}' != ''", '--', '{url}'],
+     "--filter's value can reach Python (gallery-dl evaluates it), so it may not hold a FeedVault placeholder: use "
+     "gallery-dl's own fields ({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script "
+     '(its inputs are FV_* variables); found {url} in "\'{url}\' != \'\'"',
+     None),
+    (['gallery-dl', '--chapter-filter={url}', '--', '{url}'],
+     "--chapter-filter's value can reach Python (gallery-dl evaluates it), so it may not hold a FeedVault "
+     "placeholder: use gallery-dl's own fields ({_path}, {_directory}), -D {root}, --download-archive {archive}, "
+     "or a shell script (its inputs are FV_* variables); found {url} in '{url}'",
+     None),
+    (['yt-dlp', '--downloader-args', 'aria2c:-d {root}', '--', '{url}'],
+     "--downloader-args's value can reach another program's arguments, split at spaces, so it may not hold a "
+     "FeedVault placeholder: use yt-dlp's own fields (%(webpage_url)q, %(filepath)q), or a shell script (its "
+     "inputs are FV_* variables); found {root} in 'aria2c:-d {root}'",
+     None),
+    (['yt-dlp', '--external-downloader-args={root}', '--', '{url}'],
+     "--external-downloader-args's value can reach another program's arguments, split at spaces, so it may not "
+     "hold a FeedVault placeholder: use yt-dlp's own fields (%(webpage_url)q, %(filepath)q), or a shell script "
+     "(its inputs are FV_* variables); found {root} in '{root}'",
+     None),
+    (['yt-dlp', '--ppa', 'ffmpeg:-metadata url={url}', '--', '{url}'],
+     "--ppa's value can reach another program's arguments, split at spaces, so it may not hold a FeedVault "
+     "placeholder: use yt-dlp's own fields (%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* "
+     "variables); found {url} in 'ffmpeg:-metadata url={url}'",
+     None),
+    (['yt-dlp', '--postprocessor-args', '{root}', '--', '{url}'],
+     "--postprocessor-args's value can reach another program's arguments, split at spaces, so it may not hold a "
+     "FeedVault placeholder: use yt-dlp's own fields (%(webpage_url)q, %(filepath)q), or a shell script (its "
+     "inputs are FV_* variables); found {root} in '{root}'",
+     None),
+    (['/usr/local/bin/yt-dlp', '--exec', 'echo {url}', '--', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'echo "
+     "{url}'",
+     None),
+    (['/usr/bin/env', 'A=1', '-u', 'B', 'gallery-dl', '--exec', 'echo {url}', '--', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {url} in 'echo {url}'",
+     None),
+    (['/bin/sh', '-c', 'notify-send {url}'],
+     "a shell's -c text is read as code, so it may not hold a FeedVault placeholder: pass it after the text (sh -c "
+     '\'… "$1"\' sh {url}), or use a shell script (its inputs are FV_* variables)',
+     None),
+    (['/bin/bash', '-ec', 'echo {url}', 'bash'],
+     "a shell's -c text is read as code, so it may not hold a FeedVault placeholder: pass it after the text (sh -c "
+     '\'… "$1"\' sh {url}), or use a shell script (its inputs are FV_* variables)',
+     None),
+    (['/bin/sh', '-o', 'errexit', '-c', 'echo {url}'],
+     "a shell's -c text is read as code, so it may not hold a FeedVault placeholder: pass it after the text (sh -c "
+     '\'… "$1"\' sh {url}), or use a shell script (its inputs are FV_* variables)',
+     None),
+    (['/bin/bash', '--rcfile', 'x', '-c', 'echo {url}'],
+     "a shell's -c text is read as code, so it may not hold a FeedVault placeholder: pass it after the text (sh -c "
+     '\'… "$1"\' sh {url}), or use a shell script (its inputs are FV_* variables)',
+     None),
+    (['/bin/sh', '-o', '{url}', '-c', 'x'], "'{url}': a placeholder may not be among a shell's options", None),
+    (['/usr/bin/env', '-S', 'yt-dlp --exec x', '{url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '--split-string=yt-dlp {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['yt-dlp', '--exec', 'notify-send done %(webpage_url)q'], None, 'plain'),
+    (['yt-dlp', '--exec=echo %(filepath)q'], None, 'plain'),
+    (['gallery-dl', '--exec', 'convert {} {}.png && rm {_path}'], None, 'plain'),
+    (['gallery-dl', '-o', 'skip=abort:5', '-O', 'command=echo {_path}'], None, 'plain'),
+    (['yt-dlp', '--netrc', '{url}'], None, 'plain'),
+    (['gallery-dl', '--postprocessor', 'metadata', '-D', '{root}'], None, 'plain'),
+    (['yt-dlp', '--downloader', 'aria2c', '--external-downloader', '{root}/aria2c'], None, 'plain'),
+    (['yt-dlp', '-P', '{root}', '--download-archive', '{archive}', '--match-filters', 'id!={url}'], None, 'plain'),
+    (['gallery-dl', '-D', '{root}', '--download-archive', '{archive}', '-q'], None, 'plain'),
+    (['gallery-dl', '-D{root}o{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -D's path, which gallery-dl would expand",
+      'dotdot': "400: {url} puts a .. in -D's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--alias', 'n', '--exec {0}', 'https://example.com/a'], None, 'plain'),
+    (['/usr/local/bin/other', '--exec', '{url}'], None, 'plain'),
+    (['/bin/sh', '-ec', 'notify-send done "$1"', 'sh', '{url}'], None, 'plain'),
+    (['/bin/bash', '/home/me/fetch.sh', '{url}'], None, 'plain'),
+    (['yt-dlp', '--alias', 'n', '--exec "echo {0}"', '--n', '{url}'],
+     "--alias carries what follows it into the options it expands to, a shell's too: not in a command with a "
+     'FeedVault placeholder (use a shell script)',
+     None),
+    (['yt-dlp', '--exec', 'notify-send done %(webpage_url)q', '--', '{url}'], None, 'plain'),
+    (['/usr/bin/env', '-iS', 'yt-dlp --exec "echo {url}" {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '-vS', 'yt-dlp {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '-0S', 'yt-dlp {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '-i0S', 'yt-dlp {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '-iSyt-dlp {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '-u', 'NAME', '-S', 'yt-dlp {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '-uNAME', '-iS', 'yt-dlp {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '--split', 'yt-dlp {url}'],
+     'env -S splits its text into a command: not in a command with a FeedVault placeholder', None),
+    (['/usr/bin/env', '-i', 'yt-dlp', '{url}'], None, 'plain'),
+    (['/usr/bin/env', '-i', 'yt-dlp', '--exec', 'echo {url}', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'echo "
+     "{url}'",
+     None),
+    (['/usr/bin/env', '-u', 'NAME', 'yt-dlp', '{url}'], None, 'plain'),
+    (['/usr/bin/env', '-u', 'NAME', 'yt-dlp', '--exec', 'echo {url}', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'echo "
+     "{url}'",
+     None),
+    (['/usr/bin/env', '-C', '/tmp', 'yt-dlp', '{url}'], None, 'plain'),
+    (['/usr/bin/env', '-C', '/tmp', 'yt-dlp', '--exec', 'echo {url}', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'echo "
+     "{url}'",
+     None),
+    (['/usr/bin/env', '-uS', 'yt-dlp', '{url}'], None, 'plain'),
+    (['/usr/bin/env', '-uS', 'yt-dlp', '--exec', 'echo {url}', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'echo "
+     "{url}'",
+     None),
+    (['/usr/bin/env', '-iu', 'S', '--chdir', '/tmp', 'yt-dlp', '{url}'], None, 'plain'),
+    (['/usr/bin/env', '-iu', 'S', '--chdir', '/tmp', 'yt-dlp', '--exec', 'echo {url}', '{url}'],
+     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use yt-dlp's own fields "
+     "(%(webpage_url)q, %(filepath)q), or a shell script (its inputs are FV_* variables); found {url} in 'echo "
+     "{url}'",
+     None),
+    (['gallery-dl', '-f', "\x0cE '{url}'", '--', '{url}'],
+     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', "-f\x0cE '{url}'", '--', '{url}'],
+     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', "--filename=\x0cE '{url}'", '--', '{url}'],
+     "--filename's value is a format string that gallery-dl evaluates as Python or reads as a template file when "
+     "it starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', '--filen', "\x0cE '{url}'", '--', '{url}'],
+     "--filename's value is a format string that gallery-dl evaluates as Python or reads as a template file when "
+     "it starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', "-qf\x0cE '{url}'", '--', '{url}'],
+     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', '-qf', "\x0cE '{url}'", '--', '{url}'],
+     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', '-f', "\\fE '{url}'", '--', '{url}'],
+     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\\\fE \'{url}\'"',
+     None),
+    (['gallery-dl', "-f=\\fE '{url}'", '--', '{url}'],
+     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\\\fE \'{url}\'"',
+     None),
+    (['gallery-dl', "-qf=\x0cE '{url}'", '--', '{url}'],
+     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', "-N=\\fE '{url}'", '--', '{url}'],
+     "-N's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\\\fE \'{url}\'"',
+     None),
+    (['gallery-dl', "-qN=\x0cE '{url}'", '--', '{url}'],
+     "-N's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', '-f', '\x0cT {root}/name.txt', '--', '{url}'],
+     "-f's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     "found {root} in '\\x0cT {root}/name.txt'",
+     None),
+    (['gallery-dl', '-N', 'post:\x0cF {url}', '--', '{url}'],
+     "-N's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     "found {url} in 'post:\\x0cF {url}'",
+     None),
+    (['gallery-dl', '-qNpost:\x0cF {url}', '--', '{url}'],
+     "-N's value is a format string that gallery-dl evaluates as Python or reads as a template file when it starts "
+     "with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     "found {url} in 'post:\\x0cF {url}'",
+     None),
+    (['gallery-dl', '--print', '\x0cM {root}/mod.py:f', '--', '{url}'],
+     "--print's value is a format string that gallery-dl evaluates as Python or reads as a template file when it "
+     "starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     "found {root} in '\\x0cM {root}/mod.py:f'",
+     None),
+    (['gallery-dl', '--Print', "\x0cE '{url}'", '--', '{url}'],
+     "--Print's value is a format string that gallery-dl evaluates as Python or reads as a template file when it "
+     "starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', '--Print', "file:\\fE '{url}'", '--', '{url}'],
+     "--Print's value is a format string that gallery-dl evaluates as Python or reads as a template file when it "
+     "starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "file:\\\\fE \'{url}\'"',
+     None),
+    (['gallery-dl', '--print-to-file', "\x0cE '{url}'", 'out.txt', '--', '{url}'],
+     "--print-to-file's value is a format string that gallery-dl evaluates as Python or reads as a template file "
+     "when it starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     'variables); found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', '--Print-to-file', 'after:\x0cJ {url}', 'out.txt', '--', '{url}'],
+     "--Print-to-file's value is a format string that gallery-dl evaluates as Python or reads as a template file "
+     "when it starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {url} in 'after:\\x0cJ {url}'",
+     None),
+    (['gallery-dl', '--print-to-file', '{id}', '/tmp/\x0cE {url}', '--', '{url}'],
+     "--print-to-file's FILE is a format string that gallery-dl evaluates as Python or reads as a template file "
+     "when it starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields "
+     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
+     "variables); found {url} in '/tmp/\\x0cE {url}'",
+     None),
+    (['gallery-dl', '--rename-to', "\x0cE '{url}'", '--', '{url}'],
+     "--rename-to's value is a format string that gallery-dl evaluates as Python or reads as a template file when "
+     "it starts with \\f, so there it may not hold a FeedVault placeholder: use gallery-dl's own fields ({_path}, "
+     '{_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* variables); '
+     'found {url} in "\\x0cE \'{url}\'"',
+     None),
+    (['gallery-dl', '-f', '{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['gallery-dl', '-f', 'https://x.com/a/{{_env[HOME]}}', '--', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-f', '\x0cE title', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-N', 'post:{id} {url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['gallery-dl', '-N', 'post:{id} https://x.com/a/{{_env[HOME]}}', '--', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{root}/out.txt', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--print', '{url}', '-f', '\x0cF {title}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['gallery-dl', '--print', 'https://x.com/a/{{_env[HOME]}}', '-f', '\x0cF {title}', '--',
+              'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-traffic', '-D', '{root}', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '--mtime', 'date', '-D', '{root}', '--', '{url}'], None, 'plain'),
+    (['gallery-dl', '-N', 'post:{url}', '--', '{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['gallery-dl', '-N', 'post:https://x.com/a/{{_env[HOME]}}', '--', 'https://x.com/a/{_env[HOME]}'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['/opt/bin/gallery-dl', '-f', '{target}', 'https://example.com/a'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['/opt/bin/gallery-dl', '-f', 'https://x.com/a/{{_env[HOME]}}', 'https://example.com/a'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['/usr/bin/env', '-i', '/opt/bin/gallery-dl', '-N', '{target}', 'https://example.com/a'], None,
+     {'brace_root': 'plain',
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': ['/usr/bin/env', '-i', '/opt/bin/gallery-dl', '-N', 'https://x.com/a/{{_env[HOME]}}',
+              'https://example.com/a'],
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--print-to-file', '{id}', '{target}/out.txt', 'https://example.com/a'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {target} puts a $ in --print-to-file's folder, which gallery-dl would expand",
+      'dotdot': "400: {target} puts a .. in --print-to-file's folder, which would lead out of the folder written "
+                'there',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '-D', '{root}', '--', '{url}'], None, 'plain'),
+    (['instaloader', '--', '{target}'], None, 'plain'),
+    (['/opt/bin/recorder', '{target}'], None, 'plain'),
+    (['/opt/bin/recorder', '{url}'], None, 'plain'),
+    (['yt-dlp', '--', '{target}'], None, 'plain'),
+    (['/opt/bin/recorder', '--evil', '{target}'], None, 'plain'),
+    (['/opt/bin/recorder', '--post', '{root}/carol.cooks'], None, 'plain'),
+    (['/opt/bin/recorder'], None, 'plain'),
+    (['instaloader', '--hold'], None, 'plain'),
+    (['instaloader', '--no-videos', '--latest-stamps', '{archive}', '--dirname-pattern', '{root}', '--', '{target}',
+      '--extra'],
+     None,
+     {'brace_root': ['instaloader', '--no-videos', '--latest-stamps', '/d/archive', '--dirname-pattern', '/m/{{x',
+                     '--', 'https://x.com/a', '--extra'],
+      'dollar': 'plain',
+      'dotdot': 'plain',
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['yt-dlp', '--', '-P', '/tmp/{url}'], None, 'plain'),
+    (['yt-dlp', '--', '--exec', 'echo {url}'], None, 'plain'),
+    (['yt-dlp', '-P', '--', '-P', '/tmp/{url}'], None,
+     {'brace_root': 'plain',
+      'dollar': "400: {url} puts a $ in -P's path, which yt-dlp would expand",
+      'dotdot': "400: {url} puts a .. in -P's path, which would lead out of the folder written there",
+      'env': 'plain',
+      'formfeed': 'plain',
+      'template': 'plain'}),
+    (['gallery-dl', '--', '-D', '/tmp/{url}'], None, 'plain'),
+    (['gallery-dl', '--', '-f', "\x0cE '{url}'"], None, 'plain'),
+    (['gallery-dl', '-D', '{root}', '--', '--', '-D', '/tmp/{url}'], None, 'plain'),
+    (['instaloader', '--', '--dirname-pattern', '{root}/{target}'], None, 'plain'),
+]
+
+
+@pytest.mark.parametrize("argv, why, got", PINNED, ids=range(len(PINNED)))
+def test_every_argv_form_reads_as_pinned(argv, why, got):
+    _, error = scripts.parse_command(json.dumps({"needs": pin_needs(argv), "argv": argv}))
+    assert error == why
+    if why is not None:
+        return
+    for key in [*PIN_LINKS, "brace_root"]:
+        vals = pin_vals(key)
+        want = got if got == "plain" else got[key]
+        try:
+            out = scripts.command({"tool": argv[0], "argv": argv}, vals)
+        except jobs.BadRequest as e:
+            out = f"400: {e}"
+        if want == "plain":
+            want = [scripts.substitute(a, vals) for a in argv]
+        assert out == want, key
+
+
+def walked(argv):
+    start, found = scripts._walk(argv)
+    return start, [(f.index, f.given, [o for o, _ in f.options], f.values, f.maybe) for f in found]
+
+
+def probe(argv, item, at, text):
+    """``argv`` with item ``item``'s text from ``at`` on replaced by ``text``,
+    and FeedVault's placeholders anywhere else made plain text: the walker
+    must read it as it reads ``argv``."""
+    out = [a if n == item else re.sub(r"\{(target|url|root|data_dir|archive)\}", "x", a) for n, a in enumerate(argv)]
+    out[item] = argv[item][:at] + text
+    assert walked(out) == walked(argv)
+    return out
+
+
+@pytest.mark.parametrize("argv", [row[0] for row in PINNED], ids=range(len(PINNED)))
+def test_the_check_and_command_agree_on_every_pinned_form(argv):
+    """#69: each value or positional item of a pinned form (env's option
+    values too) holding a link in turn: command() escapes it exactly when
+    the walker reads it as a value its tool formats (and gallery-dl's
+    check reads it as a format string: the same items), refuses a link's
+    .. there exactly when either reading has it a path (or FILE) value,
+    and _check_shell refuses it as code or a format string exactly when
+    either reading has it one. An item naming an option is never given a
+    link: that would change how the command reads."""
+    start, found = scripts._walk(argv)
+    if start is None or os.path.basename(argv[start]) not in scripts.TOOLS:
+        return
+    tool = os.path.basename(argv[start])
+    claims = collections.defaultdict(list)
+    for f in found:
+        for n, (item, at) in enumerate(f.values):
+            claims[item].append((f, n, at))
+    items = {item for item, c in claims.items() if c[0][2] or not argv[item].startswith("-")}
+    items |= {n for n in range(start + 1, len(argv)) if n not in claims and not argv[n].startswith("-")}
+    vals = {"target": "https://x.com/{a}%", "url": "https://x.com/{a}%", "root": "/m/x", "data_dir": "/d",
+            "archive": "/d/a"}
+    # yt-dlp's --alias refuses any placeholder: no item of the check's own.
+    alias = any(scripts.ALIAS in f.kinds(0) for f in found)
+    escaped, paths, formats, code = set(), set(), set(), set()
+    for item in sorted(items):
+        at = claims[item][0][2] if item in claims else 0
+        argv2 = probe(argv, item, at, "{url}")
+        if scripts.command({"tool": argv[0], "argv": argv2}, vals)[item] != scripts.substitute(argv2[item], vals):
+            escaped.add(item)
+        try:
+            scripts.command({"tool": argv[0], "argv": argv2}, {**vals, "url": DOTDOT})
+        except jobs.BadRequest as e:
+            assert re.fullmatch(r"\{url\} puts a \.\. in \S+'s (path|folder), .*", str(e))
+            paths.add(item)
+        if alias:
+            continue
+        why = scripts._check_shell(probe(argv, item, at, "\fE {url}"))
+        if why and "is a format string" in why:
+            formats.add(item)
+        elif why:
+            code.add(item)
+    marked = {i: set().union(*(f.kinds(n) for f, n, _ in claims[i])) for i in items & set(claims)}
+    sure = {i: f.sure(n) for i in items & set(claims) for f, n, _ in claims[i] if f.index > start and not f.maybe}
+    assert escaped == {i for i, k in sure.items() if k & (scripts.ESCAPED | {scripts.FILE})}
+    assert paths == {i for i, k in marked.items() if k & {scripts.PATH, scripts.FILE}}
+    if alias:
+        return
+    assert code == {i for i, k in marked.items() if k & scripts.CODE}
+    assert formats == {i for i, k in marked.items() if k & scripts.FORMATS} - code
+    if tool == "gallery-dl":
+        # What the check reads as a format string (on the one reading
+        # command() escapes by) is what command() escapes, and the reverse.
+        read = {i for i, k in sure.items() if k & scripts.FORMATS}
+        assert read == escaped and read <= formats
+
+
+@pytest.mark.parametrize("args, why", [
+    # An option the table lacks may take the next item as its value
+    # (optparse takes any item): -P, --paths, -o are then that value, and
+    # --exec an option.
+    (["--referer", "-P", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--referer", "--paths", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--print", "-o", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    # A "--" yt-dlp may read as such an option's value ends nothing.
+    (["--referer", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--no-playlist", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--replace-in-metadata", "title", "a", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    # Nor one after such an option, further back, put the walker out of step.
+    (["--referer", "-P", "--user-agent", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    (["--referer", "--cookies", "--print-to-file", "A", "--", "--exec", "echo {url}"],
+     "--exec's value can reach a shell"),
+    (["-O", "-P", "--user-agent", "--", "--exec", "echo {url}"], "--exec's value can reach a shell"),
+    # After the program, a value or flags it is one.
+    (["--", "--exec", "echo {url}"], None),
+    (["-iq", "--", "--exec", "echo {url}"], None),
+    (["-o", "%(id)s", "--", "--exec", "echo {url}"], None),
+    (["--referer=x", "-P", "/d", "--", "--exec", "echo {url}"], None),
+])
+def test_an_option_the_table_lacks_never_hides_one_it_has(args, why):
+    """Review of #69: the checks read every item naming an option as one."""
+    _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": ["yt-dlp", *args, "--", "{url}"]}))
+    assert error == why if why is None else error.startswith(why)
+
+
+@pytest.mark.parametrize("tool, args, why", [
+    ("yt-dlp", ["--referer", "-P", "-o", "/tmp/{url}/%(id)s"], "{url} puts a .. in -o's path"),
+    ("yt-dlp", ["--js-runtimes", "deno:{root}/{url}"], "{url} puts a .. in --js-runtimes's path"),
+    ("gallery-dl", ["-X", "{root}/{url}"], "{url} puts a .. in -X's path"),
+    ("gallery-dl", ["--extractors={root}/{url}"], "{url} puts a .. in --extractors's path"),
+    ("gallery-dl", ["--cache-file", "{root}/{url}/c.sqlite3"], "{url} puts a .. in --cache-file's path"),
+])
+def test_a_link_s_dotdot_in_a_path_option_on_either_reading_is_refused(env, tool, args, why):
+    script = {"tool": tool, "argv": [tool, *args, "--", "{url}"]}
+    assert scripts.parse_command(json.dumps({"needs": "url", "argv": script["argv"]}))[1] is None
+    with pytest.raises(jobs.BadRequest, match=re.escape(why)):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", url=DOTDOT))
+
+
+def test_instaloader_s_latest_stamps_takes_a_value_only_when_one_follows(env):
+    """argparse's nargs="?": an option or "--" after it is no value of its."""
+    script = {"tool": "instaloader", "argv": ["instaloader", "--latest-stamps", "--dirname-pattern",
+                                              "{root}/{target}", "--", "{target}"]}
+    with pytest.raises(jobs.BadRequest, match=re.escape("{target} puts a .. in --dirname-pattern's path")):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", ".."))
+    vals = scripts.values(script, config.load(), "/m/{x}", "carol")
+    assert scripts.command(script, vals)[3] == "/m/{{x}}/carol"
+    script["argv"] = ["instaloader", "--latest-stamps", "--", "--dirname-pattern", "{root}/{target}"]
+    assert scripts.command(script, vals)[-1] == "/m/{x}/carol"
+    script["argv"] = ["instaloader", "--latest-stamps", "{root}/{target}", "--", "x"]
+    with pytest.raises(jobs.BadRequest, match=re.escape("{target} puts a .. in --latest-stamps's path")):
+        scripts.command(script, scripts.values(script, config.load(), "/m/x", ".."))
+
+
+@pytest.mark.parametrize("args", [["--post-filter", "{target}"], ["--only-if={target}"],
+                                  ["--storyitem-filter", "likes > 0 and {target}"]])
+def test_a_placeholder_in_an_instaloader_filter_is_refused(args):
+    """instaloader compiles and evaluates the filter against each post."""
+    _, error = scripts.parse_command(json.dumps({"needs": "target", "argv": ["instaloader", *args, "--", "{target}"]}))
+    assert error.startswith(f"{args[0].partition('=')[0]}'s value can reach Python (instaloader evaluates it)")
+    assert "the post's own attributes" in error

@@ -2332,7 +2332,9 @@ are only environment variables: `FV_TARGET`, `FV_URL`, `FV_ROOT`,
   `-o` / `--option` and `-O` / `--postprocessor-option` (either can set an
   exec post processor's command), or a `--filter` option (Python). The
   downloader may be named by its path or run through `env`; joined
-  (`--exec=…`, `-o…`) and abbreviated forms count. Also a shell's `-c` text
+  (`--exec=…`, `-o…`) and abbreviated forms count; after `--` nothing is
+  an option (yt-dlp's optparse and gallery-dl's and instaloader's
+  argparse read it so), there or in a run's escaping and path checks. Also a shell's `-c` text
   (`sh`, `bash`, …: pass the value after it, as `"$1"`) and `env -S`
   (`-iS` and other clusters, `--split-string=…` too). Use
   the tool's own fields (`%(webpage_url)q`, `{_path}`), or a shell script
