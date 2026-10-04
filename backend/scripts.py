@@ -200,7 +200,6 @@ SPLIT = "another program's arguments, split at spaces"
 FORMAT, PRINT, PRINT_FILE, FILE = "format", "print", "print to file", "file"
 FORMATS = (FORMAT, PRINT, PRINT_FILE, FILE)
 _FORMATTER = ("\f", "\\f")
-PRINT_FILES = ("--print-to-file", "--Print-to-file")
 SHELL_RUN = {
     "yt-dlp": ({"--exec": SHELL, "--exec-before-download": SHELL, "--netrc-cmd": SHELL,
                 "--use-postprocessor": SHELL, "--downloader-args": SPLIT, "--external-downloader-args": SPLIT,
@@ -215,6 +214,7 @@ SHELL_RUN = {
                    ("--postprocessor",), {"o": SHELL, "O": SHELL, "f": FORMAT, "N": PRINT}, "hqwvgGjJsEKSU46",
                    "gallery-dl's own fields ({_path}, {_directory}), -D {root}, --download-archive {archive}"),
 }
+PRINT_FILES = tuple(o for o, how in SHELL_RUN["gallery-dl"][0].items() if how == PRINT_FILE)
 # yt-dlp's --alias puts what follows it into the options it expands to (--exec too).
 ALIAS = "--alias"
 # A shell's -c text is read as code; env runs the program after its own
@@ -766,12 +766,20 @@ def _file_name(text, vals, escape):
     splits FILE there (os.path.split) and formats the file name alone; its
     folder is a plain path, where an escaped brace would be a second one. A
     value that brings its own "/" moves that split, so the split is found
-    on the filled-in item: what of the value comes before it stays as it is."""
+    on the filled-in item: what of the value comes before it stays as it is.
+    jobs.BadRequest for a value's $ in the folder (gallery-dl expands $NAME
+    there: util.expand_path) or \\f in the file name (another formatter)."""
     parts = _PLACEHOLDER_RE.split(text)
     filled = [vals[p] if i % 2 else p for i, p in enumerate(parts)]
     cut, at, out = "".join(filled).rfind("/") + 1, 0, []
     for i, p in enumerate(filled):
         keep = max(cut - at, 0)
+        if i % 2 and "$" in p[:keep]:
+            raise jobs.BadRequest(f"{{{parts[i]}}} puts a $ in --print-to-file's folder, "
+                                  "which gallery-dl would expand")
+        if i % 2 and "\f" in p[keep:]:
+            raise jobs.BadRequest(f"{{{parts[i]}}} puts \\f in --print-to-file's file name, "
+                                  "which gallery-dl may evaluate as Python")
         out.append(p[:keep] + escape(p[keep:]) if i % 2 else p)
         at += len(p)
     return "".join(out)
@@ -779,12 +787,16 @@ def _file_name(text, vals, escape):
 
 def command(script, vals):
     """A command's argument list, its placeholders filled in: escaped in
-    the value of an option its tool formats."""
-    longs, shorts, prefixes, escape, flags = FORMATTED.get(script["tool"], ((), (), False, None, ""))
+    the value of an option its tool formats (the program's, past env or
+    its path, as _check_shell reads it; env's own items as they are)."""
+    start = _program(script["argv"])
+    tool = script["tool"] if start is None else os.path.basename(script["argv"][start])
+    longs, shorts, prefixes, escape, flags = FORMATTED.get(tool, ((), (), False, None, ""))
     escaped = {k: escape(v) for k, v in vals.items()} if escape else vals
     argv, pending = [], []
-    for a in script["argv"]:
-        option = None if pending else _formatted(a, longs, shorts, prefixes, flags)
+    for n, a in enumerate(script["argv"]):
+        option = None if pending or start is None or n <= start \
+            else _formatted(a, longs, shorts, prefixes, flags)
         if pending:
             argv.append(_file_name(a, vals, escape) if pending.pop(0) == FILE else substitute(a, escaped))
         elif option and option[1] is not None:
