@@ -2670,7 +2670,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   font-size: 12px; color: var(--text-dim);
 }
 .source-status .icon { color: var(--blue); }
-.source-message { color: #ffb3b5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.source-message, .source-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.source-message { color: #ffb3b5; }
 .source-setup { white-space: nowrap; }
 .source-badge { flex-shrink: 0; }
 .source-sync { font-size: 12px; padding: 6px 11px; flex-shrink: 0; }
@@ -2696,7 +2697,9 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   .source-row { flex-wrap: wrap; }
   .source-id { flex-basis: 100%; }
   .source-row .source-status { flex-wrap: wrap; max-width: 100%; }
-  .source-message { max-width: 100%; }
+  .source-message, .source-note { max-width: 100%; }
+  /* The row wraps here, so the whole message fits on its own lines. */
+  .source-note { white-space: normal; }
 }
 
 /* Settings: instaloader */
