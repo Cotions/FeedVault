@@ -28,6 +28,19 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
     {
+      // Layout rules at four desktop sizes (the spec sets each in turn).
+      name: "layout",
+      testMatch: /layout\.spec\.js$/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+    },
+    {
+      // 1440x900 at 125% browser zoom: a 1152x720 CSS viewport at a device
+      // pixel ratio of 1.25, what the page sees under the browser's zoom.
+      name: "layout-zoom",
+      testMatch: /layout\.spec\.js$/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1152, height: 720 }, deviceScaleFactor: 1.25 },
+    },
+    {
       name: "phone",
       testMatch: /(phone|safe-area)\.spec\.js$/,
       // 375x812 with touch (the iPhone X profile), in Chromium: the only browser installed.

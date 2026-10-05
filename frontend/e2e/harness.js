@@ -166,7 +166,9 @@ async function ask(base, url) {
 }
 
 // Builds the demo vault and starts the backend; resolves to the instance.
-export async function startInstance({ log = () => {} } = {}) {
+// ``stress``: the demo with make_demo.py's worst cases for the layout
+// checks (--stress), in this throwaway vault only.
+export async function startInstance({ log = () => {}, stress = false } = {}) {
   const port = await pickPort();
   checkSafe({ port });                        // before anything is made
   if (await portBusy(port)) throw new Error(`e2e: refusing port ${port}: something already listens there`);
@@ -186,7 +188,8 @@ export async function startInstance({ log = () => {} } = {}) {
 
     await probeGuard(python, env, root);
     log(`e2e: building the demo vault in ${vault}`);
-    await run(python, [path.join(REPO, "scripts", "make_demo.py"), vault], { env, cwd: root });
+    const demoArgs = [path.join(REPO, "scripts", "make_demo.py"), ...(stress ? ["--stress"] : []), vault];
+    await run(python, demoArgs, { env, cwd: root });
     const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
     // Every tool the instance knows is one of the demo's fakes.
     for (const [tool, exe] of Object.entries(cfg.tools || {})) {
