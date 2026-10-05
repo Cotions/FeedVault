@@ -1796,6 +1796,8 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 }
 .post-card.is-selected .select-check { background: var(--glow); border-color: var(--glow); }
 .post-card.is-selecting .missing-badge { left: 40px; }
+/* A text post has no cover under the checkbox: move its text below it. */
+.post-card.is-selecting .post-textbody { padding-top: 40px; }
 .kept-dot {
   width: 7px; height: 7px; flex-shrink: 0;
   border-radius: 50%;
