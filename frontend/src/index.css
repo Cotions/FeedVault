@@ -245,7 +245,9 @@ input[type="text"].header-search:focus {
 @media (max-width: 860px) {
   :root { --header-h: 65px; }
   .header-search-wrap {
-    position: static;
+    /* Relative, not static: the icon and the "/" hint are placed inside it. */
+    position: relative;
+    left: auto;
     transform: none;
     width: auto;
     max-width: none;
