@@ -1015,26 +1015,27 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 /* The filters that fold on a phone: on a desktop, no box of their own, so
    they sit in the row with Sort and the rest. */
 .feed-scope { display: contents; }
-/* A phone: one row with the toggle, Sort and Select; the filters open in
+/* Feed on a phone (.feed-fold: Trash and Duplicates share .feed-filters,
+   not this): one row with the toggle, Sort and Select; the filters open in
    their own rows under it, and the clear button with them. The Person and
    Review links (only there with a creator filter) stay in sight under it. */
 @media (max-width: 640px) {
-  .feed-filters { align-items: center; gap: 8px; }
-  .feed-filters > * { order: 2; }
-  .feed-filters > :is(.filters-toggle, .filter-sort, .page-head-spacer, .select-toggle) { order: 0; }
-  .feed-filters > :is(.filters-toggle, .select-toggle) { height: 40px; flex-shrink: 0; }
-  .feed-filters > .page-head-spacer { display: none; }
+  .feed-fold { align-items: center; gap: 8px; }
+  .feed-fold > * { order: 2; }
+  .feed-fold > :is(.filters-toggle, .filter-sort, .page-head-spacer, .select-toggle) { order: 0; }
+  .feed-fold > :is(.filters-toggle, .select-toggle) { height: 40px; flex-shrink: 0; }
+  .feed-fold > .page-head-spacer { display: none; }
   /* 307px for the three at 375: Sort takes what is left, Select is its
      icon (its label stays for screen readers, and in its title). */
-  .feed-filters > .filter-sort { flex: 1 1 0; min-width: 0; }
-  .feed-filters > .filter-sort .sort-select { min-width: 0; width: 100%; height: 40px; }
-  .feed-filters > .select-toggle { width: 40px; padding: 0; justify-content: center; }
-  :is(.feed-filters > .filter-sort > span, .feed-filters > .select-toggle .select-toggle-label) {
+  .feed-fold > .filter-sort { flex: 1 1 0; min-width: 0; }
+  .feed-fold > .filter-sort .sort-select { min-width: 0; width: 100%; height: 40px; }
+  .feed-fold > .select-toggle { width: 40px; padding: 0; justify-content: center; }
+  :is(.feed-fold > .filter-sort > span, .feed-fold > .select-toggle .select-toggle-label) {
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
   }
-  .feed-filters > :is(.feed-scope, .filter-clear) { order: 1; }
+  .feed-fold > :is(.feed-scope, .filter-clear) { order: 1; }
   .feed-scope { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; flex-basis: 100%; }
-  .feed-filters:not(.is-open) > :is(.feed-scope, .filter-clear) { display: none; }
+  .feed-fold:not(.is-open) > :is(.feed-scope, .filter-clear) { display: none; }
 }
 
 /* ── Masonry ────────────────────────────────────────────── */
@@ -1609,7 +1610,8 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
     content: attr(data-label); content: attr(data-label) / ""; grid-column: 1;
     font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted);
   }
-  .card-table tbody tr:hover td { background: none; }
+  .card-table tbody tr:hover td, .data-table.card-table tbody tr.is-selected td { background: none; }
+  .job-table.card-table tbody tr.is-selected { background: rgba(var(--accent-rgb), 0.08); }
   /* The main cell: on top, whole width, no label. */
   .data-table.card-table tbody tr td.cell-main { order: -1; display: block; padding-bottom: 4px; border-bottom: 1px solid var(--border-soft); }
   .card-table td.cell-main::before { content: none; }
@@ -2991,4 +2993,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 @media (max-width: 860px) {
   .page-head { flex-wrap: wrap; }
   .collection-new input[type="text"] { min-width: 0; }
+  /* The field's own width (16px text on a touch screen) set the form's
+     least width: at 375 it pushed the page 10px sideways. */
+  .collection-new { flex: 1 1 220px; min-width: 0; }
+  .collection-new input[type="text"] { width: 0; }
 }

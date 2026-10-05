@@ -289,8 +289,9 @@ export default function Feed() {
   // Sort's choices in short there, so they fit beside the toggle.
   const phone = usePhone();
   // Counted as Review counts them: a creator account sets its platform too,
-  // and every tag is one filter. Sort is not: it stays in sight.
-  const activeFilters = [author || person || platform, kind, tagFilter.length || untagged, collection, review, newOnly, notification]
+  // so the two are one filter (a person and a platform are two). Each tag
+  // counts. Sort does not: it stays in sight, as does the header's search.
+  const activeFilters = [author || person, !author && platform, ...tagFilter, untagged, kind, collection, review, newOnly, notification]
     .filter(Boolean).length;
 
   function clearFilters() {
@@ -332,7 +333,7 @@ export default function Feed() {
         )}
       </div>
 
-      <div className={`feed-filters${filtersOpen ? " is-open" : ""}`} role="group" aria-label="Filters">
+      <div className={`feed-filters feed-fold${filtersOpen ? " is-open" : ""}`} role="group" aria-label="Filters">
         <FiltersToggle open={filtersOpen} onToggle={() => setFiltersOpen(v => !v)} active={activeFilters} controls="feed-scope" />
         <div className="feed-scope" id="feed-scope">
           <button

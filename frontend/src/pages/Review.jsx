@@ -663,8 +663,9 @@ export default function Review() {
   const scopeKey = JSON.stringify(scope);
 
   const [filtersOpen, setFiltersOpen] = useFiltersOpen();
-  // A creator account sets its platform too: one filter, not two.
-  const active = [author || person || platform, kind, tag || untagged, collection, newOnly, order === "asc"].filter(Boolean).length;
+  // A creator account sets its platform too: one filter, not two (a person
+  // and a platform are two).
+  const active = [author || person, !author && platform, kind, tag || untagged, collection, newOnly, order === "asc"].filter(Boolean).length;
 
   const { data: authorsData } = useApi(getAuthors, 0);
   const { data: peopleData } = useApi(getPeople, 0);
