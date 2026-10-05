@@ -132,6 +132,8 @@ export default function Feed() {
   const selectedPosts = sel.selectedItems;
   const selectedCount = sel.count;
   const selectedBytes = selectedPosts.reduce((n, p) => n + (p.bytes || 0), 0);
+  // Text-only posts have none: their dialog says no "(0 media, 0 B)".
+  const selectedMedia = selectedPosts.reduce((n, p) => n + (p.media_count || 0), 0);
 
   const [keeping, setKeeping] = useState(false);
   async function runKeep() {
@@ -567,7 +569,7 @@ export default function Feed() {
         <p>
           Move {selectedCount === 1 ? "this post" : `these ${selectedCount} posts`} and
           all {selectedCount === 1 ? "its" : "their"} files
-          ({selectedPosts.reduce((n, p) => n + (p.media_count || 0), 0)} media, {fmtBytes(selectedBytes)}) to the trash?
+          {selectedMedia > 0 && ` (${selectedMedia} media, ${fmtBytes(selectedBytes)})`} to the trash?
           You can restore {selectedCount === 1 ? "it" : "them"} from the Trash page.
         </p>
       </ConfirmDialog>
