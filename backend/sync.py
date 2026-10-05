@@ -129,6 +129,7 @@ them (config ``<tool>.pause``).
 import configparser
 import contextlib
 import json
+import lzma
 import os
 import re
 import threading
@@ -150,7 +151,7 @@ import sources
 import trash
 import userdata
 from parsers import is_media, yt_dlp
-from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SPACED_RE, _day_start
+from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SPACED_RE, _day_start, _load
 
 KIND = "instaloader-sync"
 GROUP = "instaloader"
@@ -728,11 +729,13 @@ def _put_back(sid, before, folder, note):
                   & _in_trash(cfg["media_roots"]))
     if not back:
         return []
+    cut = _cut_metadata(db.connect(), back, base)
     report = trash.delete(back, [], cfg["media_roots"], cfg["data_directory"])
     gone = report["posts"]
     if gone:
         note(f"{len(gone)} trashed post{'' if len(gone) == 1 else 's'} came back with this sync "
              f"(instaloader keeps no list of deleted posts): back in the trash")
+        _remove_cut(cut, gone, note)
         try:
             merged = trash.merge_again(cfg["media_roots"], gone, cfg["data_directory"])
         except Exception as e:                 # two entries, as before
@@ -748,6 +751,51 @@ def _put_back(sid, before, folder, note):
         why = report.get("error") or "; ".join(e["error"] for e in report["errors"][:1]) or "unknown error"
         note(f"{left} trashed post{'' if left == 1 else 's'} came back and could not go back to the trash: {why}")
     return gone
+
+
+def _cut_metadata(conn, ids, folder):
+    """{post id: [paths]}: the metadata files beside the posts' media, in
+    ``folder`` (resolved, a trailing separator), that no parser can read
+    (an empty or cut .json): instaloader was stopped (Quit, cancel) while
+    it wrote one. The post was indexed from its file names, and the file
+    would stay behind when the post goes back to the trash."""
+    found = {}
+    for i in range(0, len(ids), 500):
+        part = ids[i:i + 500]
+        for row in conn.execute(f"SELECT post_id, path FROM media WHERE post_id IN ({','.join('?' * len(part))})",
+                                part).fetchall():
+            where, name = os.path.split(row["path"])
+            stem = os.path.splitext(name)[0]
+            slide = re.fullmatch(r"(.+)_\d+", stem)
+            for base in {stem, *([slide.group(1)] if slide else [])}:
+                for path in (os.path.join(where, base + ".json"), os.path.join(where, base + ".json.xz")):
+                    if path in found.get(row["post_id"], ()) or os.path.islink(path) or not os.path.isfile(path) \
+                            or not os.path.realpath(path).startswith(folder):
+                        continue
+                    try:
+                        _load(path)
+                    except (OSError, ValueError, EOFError, lzma.LZMAError):
+                        found.setdefault(row["post_id"], []).append(path)
+    return found
+
+
+def _remove_cut(cut, gone, note):
+    """Remove the unreadable metadata files (_cut_metadata) of the posts
+    that went back to the trash: what is left of the copy this sync was
+    downloading."""
+    removed = 0
+    for pid in gone:
+        for path in cut.get(pid, ()):
+            try:
+                os.remove(path)
+                removed += 1
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                note(f"could not remove {os.path.basename(path)}: {e.strerror or e}")
+    if removed:
+        note(f"{removed} unreadable metadata file{'' if removed == 1 else 's'} instaloader left half-written "
+             f"beside {'it' if len(gone) == 1 else 'them'}: removed")
 
 
 # A stamp before every post: the sync walks the whole profile, without
