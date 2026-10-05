@@ -68,7 +68,7 @@ export default function PostCard({ post, index = 0, selectMode = false, selected
               onError={() => setBroken(true)}
             />
           )}
-          {isVideo && (
+          {isVideo && !broken && (
             <span className="post-play" aria-hidden="true"><Icon name="play" size={18} className="icon-fill" /></span>
           )}
           {post.media_count > 1 && (
