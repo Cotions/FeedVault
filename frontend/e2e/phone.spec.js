@@ -1,14 +1,19 @@
 // Phone, 375x812 with touch: no page scrolls sideways, the menu drawer,
 // Review's bar, the Feed's folded filters, and Storage's cards.
-import { test, expect, PAGES, openPage, reviewLeft, UNDO_COVER_404 } from "./fixtures.js";
+import { test, expect, PAGES, openPage, keepTrashUndo } from "./fixtures.js";
 
 test.describe("no page scrolls sideways", () => {
   for (const p of PAGES) {
     test(p.name, async ({ page }) => {
       await openPage(page, p);
-      const { scrollWidth, innerWidth } = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
-      expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
+      // Against the emulated width too: a mobile viewport can widen to fit
+      // what overflows, and innerWidth with it.
+      const width = page.viewportSize().width;
+      const m = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth, innerWidth: window.innerWidth }));
+      expect(m.innerWidth).toBe(width);
+      expect(m.scrollWidth).toBeLessThanOrEqual(m.clientWidth);
+      expect(m.scrollWidth).toBeLessThanOrEqual(width);
     });
   }
 });
@@ -44,32 +49,13 @@ test("Review: Keep is on screen without a scroll; keep, trash and undo by tap", 
   await openPage(page, { name: "Review", path: "/review" });
   const bar = page.locator(".review-actions");
   const keep = bar.getByRole("button", { name: /^Keep/ });
-  const trash = bar.getByRole("button", { name: /^Trash post/ });
-  const undo = bar.getByRole("button", { name: /^Undo/ });
-  const session = page.locator(".review-session");
-  const open = page.locator(".review-open");
-
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   await expect(keep).toBeInViewport({ ratio: 1 });
-
-  const left = await reviewLeft(page);
-  expect(left).toBeGreaterThan(2);
-  const first = await open.getAttribute("href");
-  await keep.tap();
-  await expect(session).toHaveText("1 kept · 0 trashed");
-  await expect(page.locator(".review-left")).toHaveText(String(left - 1));
-  await expect(open).not.toHaveAttribute("href", first);
-  const second = await open.getAttribute("href");
-
-  await trash.tap();
-  await expect(session).toHaveText("1 kept · 1 trashed");
-  await expect(page.locator(".review-left")).toHaveText(String(left - 2));
-
-  pageErrors.allow(UNDO_COVER_404);                 // #90
-  await undo.tap();
-  await expect(session).toHaveText("1 kept · 0 trashed");
-  await expect(page.locator(".review-left")).toHaveText(String(left - 1));
-  await expect(open).toHaveAttribute("href", second);
+  await keepTrashUndo(page, pageErrors, {
+    keep: () => keep.tap(),
+    trash: () => bar.getByRole("button", { name: /^Trash post/ }).tap(),
+    undo: () => bar.getByRole("button", { name: /^Undo/ }).tap(),
+  });
 });
 
 test("the Feed's filters fold behind their toggle, and count what is set", async ({ page }) => {

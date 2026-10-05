@@ -71,3 +71,33 @@ export async function reviewLeft(page) {
 // #90: undoing a trash in Review shows the post's old cover URL for a moment,
 // a 404 since the restore gave its media new ids.
 export const UNDO_COVER_404 = /^console: Failed to load resource: the server responded with a status of 404 \(NOT FOUND\) \(http:\/\/127\.0\.0\.1:\d+\/media\/\d+\/thumb\)$/;
+
+// Review: keep, trash, undo, by the actions given (keys or taps), checked by
+// the session's counts, the count left and which post is current.
+export async function keepTrashUndo(page, pageErrors, { keep, trash, undo }) {
+  const session = page.locator(".review-session");
+  const leftNow = page.locator(".review-left");
+  const open = page.locator(".review-open");          // the current post's own page: one per post
+  const left = await reviewLeft(page);
+  expect(left).toBeGreaterThan(2);
+  await expect(session).toHaveText("0 kept · 0 trashed");
+  const first = await open.getAttribute("href");
+
+  await keep();
+  await expect(session).toHaveText("1 kept · 0 trashed");
+  await expect(leftNow).toHaveText(String(left - 1));
+  await expect(open).not.toHaveAttribute("href", first);
+  const second = await open.getAttribute("href");
+
+  await trash();
+  await expect(session).toHaveText("1 kept · 1 trashed");
+  await expect(leftNow).toHaveText(String(left - 2));
+  await expect(open).not.toHaveAttribute("href", second);
+
+  // Undo brings the trashed post back, as the current one.
+  pageErrors.allow(UNDO_COVER_404);                 // #90
+  await undo();
+  await expect(session).toHaveText("1 kept · 0 trashed");
+  await expect(leftNow).toHaveText(String(left - 1));
+  await expect(open).toHaveAttribute("href", second);
+}

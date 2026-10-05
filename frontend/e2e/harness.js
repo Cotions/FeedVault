@@ -37,7 +37,8 @@ export function protectedDirs(env = process.env, home = os.homedir()) {
     path.join(configHome, "feedvault"),
     path.join(home, ".cache", "feedvault-demo"),
     path.join(cacheHome, "feedvault-demo"),
-  ].map(p => path.resolve(p)))];
+    env.FEEDVAULT_DEMO_DIR,                   // testapp.sh --demo's, moved
+  ].filter(Boolean).map(p => path.resolve(p)))];
 }
 
 function real(p) {
@@ -69,6 +70,24 @@ export function checkSafe({ port, configPath, root }, env = process.env, home = 
       if (within(p, dir) || within(dir, p)) throw new Error(`e2e: refusing ${p}: it touches ${dir}`);
     }
   }
+}
+
+// Whether something already listens on ``port``: another FeedVault on a
+// moved port (FEEDVAULT_PORT, FEEDVAULT_TEST_PORT) is refused that way.
+export function portBusy(port) {
+  return new Promise(resolve => {
+    const sock = net.connect({ port, host: "127.0.0.1" });
+    sock.once("connect", () => { sock.destroy(); resolve(true); });
+    sock.once("error", () => resolve(false));
+  });
+}
+
+// FEEDVAULT_E2E_PORT when set (checked, never ignored), else a free port.
+export async function pickPort(env = process.env) {
+  if (env.FEEDVAULT_E2E_PORT === undefined || env.FEEDVAULT_E2E_PORT === "") return freePort();
+  const port = /^\d+$/.test(env.FEEDVAULT_E2E_PORT) ? Number(env.FEEDVAULT_E2E_PORT) : NaN;
+  checkSafe({ port });
+  return port;
 }
 
 export function freePort() {
@@ -148,8 +167,9 @@ async function ask(base, url) {
 
 // Builds the demo vault and starts the backend; resolves to the instance.
 export async function startInstance({ log = () => {} } = {}) {
-  const port = Number(process.env.FEEDVAULT_E2E_PORT) || await freePort();
+  const port = await pickPort();
   checkSafe({ port });                        // before anything is made
+  if (await portBusy(port)) throw new Error(`e2e: refusing port ${port}: something already listens there`);
   const dist = path.join(REPO, "frontend", "dist", "index.html");
   if (!fs.existsSync(dist)) throw new Error("e2e: the UI is not built (npm run build)");
   const python = findPython();
@@ -174,20 +194,26 @@ export async function startInstance({ log = () => {} } = {}) {
     }
     // No scheduled sync starts while the tests run: the pages hold still.
     cfg.schedules_paused = true;
-    fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+    fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
 
     const out = fs.openSync(inst.logFile, "a");
     inst.proc = spawn(python, [path.join(REPO, "backend", "app.py")], {
       cwd: root,
       env: { ...env, FEEDVAULT_CONFIG: configPath, FEEDVAULT_PORT: String(port), FEEDVAULT_NO_BROWSER: "1" },
       stdio: ["ignore", out, out],
-      detached: true,                         // its own process group: what it starts goes with it
+      // Not detached: a Ctrl+C reaches it too. What it starts in sessions of
+      // its own is found by stopInstance.
     });
     fs.closeSync(out);
     inst.pid = inst.proc.pid;
     inst.url = `http://127.0.0.1:${port}`;
     log(`e2e: backend pid ${inst.pid} on ${inst.url}`);
     await waitReady(inst);
+    // The server that answers is this one, not another on the same port.
+    const answered = (await ask(inst.url, "/api/config")).data_directory;
+    if (!answered || !within(answered, vault) || !within(vault, path.dirname(answered))) {
+      throw new Error(`e2e: the server on ${inst.url} is not this instance (data in ${answered})`);
+    }
     return inst;
   } catch (e) {
     const tail = fs.existsSync(inst.logFile) ? fs.readFileSync(inst.logFile, "utf8").slice(-4000) : "";
@@ -215,13 +241,27 @@ async function waitReady(inst) {
   throw new Error(`e2e: the backend was not ready within ${READY_MS / 1000} s (${last?.message})`);
 }
 
-function alive(pid) {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+// PIDs of this user's processes whose working folder or command line is in
+// ``root`` (Linux's /proc; none elsewhere): what the backend started in
+// sessions of their own (jobs, tool probes) and left behind.
+export function pidsIn(root) {
+  let entries;
+  try { entries = fs.readdirSync("/proc"); } catch { return []; }
+  const out = [];
+  for (const e of entries) {
+    if (!/^\d+$/.test(e) || Number(e) === process.pid) continue;
+    try {
+      const cwd = fs.readlinkSync(`/proc/${e}/cwd`);
+      const cmd = fs.readFileSync(`/proc/${e}/cmdline`, "utf8").split("\0");
+      if ([cwd, ...cmd].some(x => x === root || x.startsWith(root + path.sep))) out.push(Number(e));
+    } catch { /* gone, or not ours */ }
+  }
+  return out;
 }
 
-// Stops the backend by its PID (SIGTERM, then SIGKILL), then its group's
-// leftovers, checks the guard's log, and deletes the tmp dir. ``saveLog``:
-// where to copy the backend's log first.
+// Stops the backend by its PID (SIGTERM, then SIGKILL), then anything left
+// running in the tmp dir, by PID; checks the guard's log, and deletes the
+// tmp dir. ``saveLog``: where to copy the backend's log first.
 export async function stopInstance(inst, { saveLog } = {}) {
   if (!inst) return;
   const { pid, root } = inst;
@@ -234,9 +274,15 @@ export async function stopInstance(inst, { saveLog } = {}) {
       await exited;
     }
   }
-  if (pid) {
-    try { process.kill(-pid, "SIGKILL"); } catch { /* no process left in its group */ }
-    if (alive(pid)) throw new Error(`e2e: backend pid ${pid} is still running`);
+  if (pid && inst.proc.exitCode === null && inst.proc.signalCode === null) {
+    throw new Error(`e2e: backend pid ${pid} is still running`);
+  }
+  if (root) {
+    for (const left of pidsIn(root)) {
+      try { process.kill(left, "SIGKILL"); } catch { /* gone already */ }
+    }
+    const still = pidsIn(root);
+    if (still.length) throw new Error(`e2e: still running in ${root}: pids ${still.join(", ")}`);
   }
   let violations = "";
   if (root && path.basename(root).startsWith(TMP_PREFIX) && within(root, os.tmpdir())) {

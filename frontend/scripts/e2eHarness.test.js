@@ -4,7 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { checkSafe, freePort, protectedDirs, startInstance } from "../e2e/harness.js";
+import net from "node:net";
+import { checkSafe, freePort, pickPort, portBusy, protectedDirs, startInstance } from "../e2e/harness.js";
 
 const HOME = "/home/someone";
 const ENV = {};                                   // no XDG overrides
@@ -70,4 +71,25 @@ test("startInstance refuses FEEDVAULT_E2E_PORT=3380 or 3389 before making anythi
     if (before === undefined) delete process.env.FEEDVAULT_E2E_PORT;
     else process.env.FEEDVAULT_E2E_PORT = before;
   }
+});
+
+test("a FEEDVAULT_E2E_PORT that is not a port is refused, not ignored", async () => {
+  for (const v of ["0", "34o00", "-1", "99999"]) {
+    await assert.rejects(pickPort({ FEEDVAULT_E2E_PORT: v }), /bad port/);
+  }
+  assert.equal(await pickPort({ FEEDVAULT_E2E_PORT: "45123" }), 45123);
+});
+
+test("a port something listens on is busy", async () => {
+  const srv = net.createServer().listen(0, "127.0.0.1");
+  await new Promise(r => srv.once("listening", r));
+  try {
+    assert.equal(await portBusy(srv.address().port), true);
+  } finally {
+    srv.close();
+  }
+});
+
+test("a moved demo folder (FEEDVAULT_DEMO_DIR) is refused", () => {
+  assert.throws(() => checkSafe({ ...ok, root: "/srv/fv-demo/x" }, { FEEDVAULT_DEMO_DIR: "/srv/fv-demo" }, HOME), /refusing/);
 });
