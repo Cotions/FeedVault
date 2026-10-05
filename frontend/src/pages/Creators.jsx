@@ -490,7 +490,7 @@ export default function Creators() {
         <h2 className="page-title">Creators</h2>
         <span className="page-count">
           {data && peopleApi.data
-            ? `${fmtInt(peopleAll.length)} people · ${fmtInt(data.length)} accounts · ${fmtInt(total)} posts`
+            ? `${plural(peopleAll.length, "person", "people")} · ${plural(data.length, "account")} · ${plural(total, "post")}`
             : "…"}
         </span>
         <div className="page-head-spacer" />

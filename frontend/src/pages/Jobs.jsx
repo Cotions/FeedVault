@@ -142,7 +142,7 @@ export default function Jobs() {
         <code className="job-argv" title={j.argv.join(" ")}>{j.argv.join(" ")}</code>
         <span className="dim mono job-when" title={fmtFullDate(j.started_at ?? j.created_at)}>
           {j.state === "running" ? `started ${fmtAgo(j.started_at)}`
-            : j.waits_until ? `pause, starts at ${new Date(j.waits_until * 1000).toLocaleTimeString()}`
+            : j.waits_until ? `pausing between downloads, starts at ${new Date(j.waits_until * 1000).toLocaleTimeString()}`
             : `queued ${fmtAgo(j.created_at)}`}
         </span>
         {j.id !== shown?.id && (

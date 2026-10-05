@@ -5,7 +5,7 @@ import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
-import { albumLabel, excerpt, fmt, fmtBytes, fmtFullDate, fmtIso, platformLabel, safeUrl, authorFeedPath } from "../lib/fmt";
+import { albumLabel, excerpt, fmt, fmtBytes, fmtFullDate, fmtIso, platformLabel, plural, safeUrl, authorFeedPath } from "../lib/fmt";
 import MediaCarousel from "../components/MediaCarousel";
 import RichText from "../components/RichText";
 import Icon from "../components/Icon";
@@ -102,7 +102,7 @@ export default function PostPage() {
         if (!r?.ok && !r?.posts?.length) { setDlgError(r?.error || "Nothing could be deleted."); return; }
         if (r.posts?.includes(post.id)) {
           setConfirm(null);
-          toast(`Post moved to the trash (${r.files ?? 0} file${r.files === 1 ? "" : "s"}, ${fmtBytes(r.bytes ?? 0)}).`);
+          toast(`Post moved to the trash (${plural(r.files ?? 0, "file")} including metadata, ${fmtBytes(r.bytes ?? 0)}).`);
           back();
           return;
         }
@@ -194,12 +194,12 @@ export default function PostPage() {
           <p>
             Move item {confirm.index + 1} of {media.length} ({confirm.item.kind}
             {confirm.item.size != null ? `, ${fmtBytes(confirm.item.size)}` : ""}) to the trash?
-            The rest of the post stays. You can empty the trash from Settings.
+            The rest of the post stays. You can restore it from the Trash page; the space is freed once the trash is emptied.
           </p>
         ) : (
           <p>
             Move this post ({media.length} media item{media.length === 1 ? "" : "s"}, {fmtBytes(totalBytes)},
-            plus its thumbnails and metadata files) to the trash? You can empty the trash from Settings.
+            plus its thumbnails and metadata files) to the trash? You can restore it from the Trash page; the space is freed once the trash is emptied.
           </p>
         )}
       </ConfirmDialog>

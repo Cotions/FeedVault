@@ -42,7 +42,7 @@ export function SourceStatus({ source: s, job, compact = false }) {
     <span className="source-status" title={title}>
       {badge && <span className={`chip job-state-${badge.tone} source-badge`}>{badge.label}</span>}
       {(r.state === "cancelled" || r.state === "interrupted") && <span className="chip job-state-interrupted source-badge">{r.state}</span>}
-      {!compact && r.state === "done" && <span>{r.message}</span>}
+      {!compact && r.state === "done" && <span className="source-note">{r.message}</span>}
       {!compact && failed && <span className="source-message">{r.message}</span>}
       {!compact && failed && (SETUP_ERRORS.has(r.error) || r.outdated) && (
         <Link to="/settings#downloaders" className="text-link source-setup">Settings → Downloaders</Link>

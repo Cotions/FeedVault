@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test scripts/theme.test.js scripts/sourceOptions.test.js scripts/health.test.js scripts/userscript.test.js scripts/viteServer.test.js",
+    "test": "node --test scripts/fmt.test.js scripts/theme.test.js scripts/sourceOptions.test.js scripts/health.test.js scripts/userscript.test.js scripts/viteServer.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

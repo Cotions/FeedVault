@@ -4,7 +4,7 @@ import { getStorage, getConfig, getPeople, deleteItems } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
-import { fmtBytes, fmtInt, platformLabel, authorFeedPath } from "../lib/fmt";
+import { fmtBytes, fmtInt, platformLabel, plural, authorFeedPath } from "../lib/fmt";
 import Bars from "../components/Bars";
 import StatsHero from "../components/StatsHero";
 import Icon from "../components/Icon";
@@ -191,7 +191,7 @@ export default function Storage() {
       if (done) {
         setGone(prev => new Set(prev).add(item.media_id));
         const post = (r.posts || []).includes(item.post) ? " The post had no other files and went with it." : "";
-        toast(`Moved to the trash (${r.files ?? 0} file${r.files === 1 ? "" : "s"}, ${fmtBytes(r.bytes ?? 0)}).${post}`);
+        toast(`Moved to the trash (${plural(r.files ?? 0, "file")}, ${fmtBytes(r.bytes ?? 0)}).${post}`);
       }
       reload();
     } catch (e) {
@@ -262,7 +262,7 @@ export default function Storage() {
     { num: fmtBytes(s.totals.bytes), label: "on disk" },
     { num: fmtInt(s.totals.media),   label: "media files" },
     { num: fmtInt(s.totals.posts),   label: "posts" },
-    { num: fmtBytes(s.trash.bytes),  label: `in the trash · ${fmtInt(s.trash.files)} files`, warn: s.trash.bytes > 0, to: "/trash", title: "See what is in the trash" },
+    { num: fmtBytes(s.trash.bytes),  label: `in the trash · ${plural(s.trash.files, "file")}`, warn: s.trash.bytes > 0, to: "/trash", title: "See what is in the trash" },
   ];
 
   return (
@@ -324,7 +324,7 @@ export default function Storage() {
         {pending && (
           <p>
             Move this {pending.kind} by @{pending.author?.handle || pending.author?.id} ({fmtBytes(pending.bytes)}) to
-            the trash? If it is the post's only file, the whole post goes with it. You can empty the trash from Settings.
+            the trash? If it is the post's only file, the whole post goes with it. You can restore it from the Trash page; the space is freed once the trash is emptied.
           </p>
         )}
       </ConfirmDialog>
