@@ -17,9 +17,9 @@ test("the Feed shows posts", async ({ page }) => {
   expect(await page.locator("article.post-card").count()).toBeGreaterThan(1);
 });
 
-test("Review: K keeps, D trashes, Z undoes", async ({ page, pageErrors }) => {
+test("Review: K keeps, D trashes, Z undoes", async ({ page }) => {
   await openPage(page, { name: "Review", path: "/review" });
-  await keepTrashUndo(page, pageErrors, {
+  await keepTrashUndo(page, {
     keep: () => page.keyboard.press("k"),
     trash: () => page.keyboard.press("d"),
     undo: () => page.keyboard.press("z"),
