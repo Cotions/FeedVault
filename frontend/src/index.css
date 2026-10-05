@@ -33,8 +33,9 @@
   /* fx */
   /* The sticky header: 14px padding x2 + the 28px brand mark + 1px border
      (65px at <=860px, where the 36px search box sets it). The sidebar pins
-     flush under it and card anchors land below it. */
-  --header-h: 57px;
+     flush under it and card anchors land below it. Plus the notch, when
+     index.html's viewport-fit=cover lets the page reach under it (0 elsewhere). */
+  --header-h: calc(57px + env(safe-area-inset-top));
   --ring: 0 0 0 1px rgba(var(--glow-rgb), 0.45), 0 0 22px -4px rgba(var(--glow-rgb), 0.4);
   --lift: 0 12px 30px -16px rgba(0, 0, 0, 0.85);
 }
@@ -131,7 +132,11 @@ header {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 24px;
+  /* A phone on its side: the bar reaches the screen's edges, its content
+     keeps out of the notch's side. */
+  padding:
+    calc(14px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right))
+    14px calc(24px + env(safe-area-inset-left));
   border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(20, 23, 31, 0.92), rgba(13, 16, 23, 0.86));
   backdrop-filter: blur(14px) saturate(1.2);
@@ -243,7 +248,7 @@ input[type="text"].header-search:focus {
 }
 
 @media (max-width: 860px) {
-  :root { --header-h: 65px; }
+  :root { --header-h: calc(65px + env(safe-area-inset-top)); }
   .header-search-wrap {
     /* Relative, not static: the icon and the "/" hint are placed inside it. */
     position: relative;
@@ -280,16 +285,20 @@ input[type="text"].header-search:focus {
   display: flex;
   align-items: stretch;
   min-height: calc(100vh - var(--header-h));
+  /* Out of a side notch; the fixed parts (drawer, bars, toasts, dialogs)
+     pad themselves. */
+  padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
   /* Full-height column divider at the sidebar's 200px edge. The sidebar is
      sticky (shrinks to content) so its own border can't span the page. */
-  background: linear-gradient(90deg, transparent 199px, var(--border) 199px, var(--border) 200px, transparent 200px);
+  background: linear-gradient(90deg, transparent 199px, var(--border) 199px, var(--border) 200px, transparent 200px) content-box no-repeat;
 }
 
 /* ── Sidebar ────────────────────────────────────────────── */
 .sidebar {
   flex-shrink: 0;
   width: 200px;
-  padding: 18px 12px;
+  /* Clear of the home indicator when a phone on its side shows it. */
+  padding: 18px 12px calc(18px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -411,7 +420,6 @@ main {
   /* Nothing wider than a phone: the search box, a page's head and the
      source form shrink or wrap. */
   .header-search-wrap, input[type="text"].header-search { min-width: 0; }
-  .page-head { flex-wrap: wrap; }
   input[type="text"].page-filter { min-width: 0; }
   .sources-panel > .source-add { flex-basis: 100%; min-width: 0; }
   .source-add .page-filter { flex-basis: 100%; max-width: none; }
@@ -423,7 +431,12 @@ main {
      jobs and the status dot. 8px + 36px search + 8px + 1px border, under
      the notch when there is one. */
   :root { --header-h: calc(53px + env(safe-area-inset-top)); }
-  header { gap: 8px; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; }
+  header {
+    gap: 8px;
+    padding:
+      calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right))
+      8px calc(12px + env(safe-area-inset-left));
+  }
   header h1 {
     position: absolute; width: 1px; height: 1px; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap;
@@ -438,10 +451,13 @@ main {
     display: flex;
     position: fixed;
     top: 0; bottom: 0; left: 0;
+    /* The column's flex-start would size a fixed box to its content too:
+       the screen's height, so the rows scroll inside it. */
+    align-self: stretch;
     z-index: 110;
     width: min(280px, 86vw);
     height: auto;
-    padding: calc(10px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom));
+    padding: calc(10px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
     background: rgba(13, 16, 23, 0.98);
     border-right: 1px solid var(--border);
     box-shadow: 18px 0 40px -20px rgba(0, 0, 0, 0.9);
@@ -1749,7 +1765,10 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   position: fixed; inset: 0;
   z-index: 100;
   display: flex; align-items: center; justify-content: center;
-  padding: 20px;
+  /* 20px of air, plus whatever the notch and the home indicator take. */
+  padding:
+    calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
+    calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
   background: rgba(5, 7, 11, 0.72);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -1757,7 +1776,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 }
 .modal {
   width: 480px; max-width: 100%;
-  max-height: calc(100vh - 40px);
+  max-height: calc(100vh - 40px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   overflow-y: auto;
   display: flex; flex-direction: column; gap: 14px;
   padding: 22px 24px;
@@ -1780,7 +1799,9 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 
 /* ── Toasts ─────────────────────────────────────────────── */
 .toasts {
-  position: fixed; right: 20px; bottom: 20px; z-index: 120;
+  position: fixed; z-index: 120;
+  right: calc(20px + env(safe-area-inset-right));
+  bottom: calc(20px + env(safe-area-inset-bottom));
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
   pointer-events: none;
 }
@@ -1861,7 +1882,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   align-self: center;
 }
 .select-bar {
-  position: sticky; bottom: 16px; z-index: 30;
+  position: sticky; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 30;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin-top: 16px;
   padding: 10px 12px 10px 16px;
@@ -1991,6 +2012,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .review-help {
   position: fixed; inset: 0; z-index: 110;
   display: flex; align-items: center; justify-content: center;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: rgba(5, 7, 11, 0.72); backdrop-filter: blur(6px);
 }
 .review-help-box {
@@ -2036,7 +2058,9 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
     display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px;
     margin: 0;
-    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    padding:
+      8px calc(10px + env(safe-area-inset-right))
+      calc(8px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left));
     background: rgba(12, 14, 20, 0.96);
     border-top: 1px solid var(--border);
     box-shadow: 0 -12px 28px -18px rgba(0, 0, 0, 0.9);
@@ -2817,9 +2841,9 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .side-bell { position: relative; }
 .notif-panel {
   position: fixed; z-index: 105;
-  top: calc(var(--header-h) + 12px); left: 208px;
-  width: min(380px, calc(100vw - 224px));
-  max-height: calc(100vh - var(--header-h) - 32px);
+  top: calc(var(--header-h) + 12px); left: calc(208px + env(safe-area-inset-left));
+  width: min(380px, calc(100vw - 224px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  max-height: calc(100vh - var(--header-h) - 32px - env(safe-area-inset-bottom));
   display: flex; flex-direction: column;
   background: rgba(20, 23, 31, 0.97);
   border: 1px solid var(--border); border-radius: 12px;
@@ -2843,7 +2867,42 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .notif-when { grid-column: 2; font-size: 11px; color: var(--muted); }
 .notif-entry.is-unread { color: var(--text); background: rgba(var(--accent-rgb), 0.08); }
 @media (max-width: 640px) {
-  .notif-panel { left: 8px; right: 8px; width: auto; top: calc(var(--header-h) + 8px); }
+  .notif-panel {
+    left: calc(8px + env(safe-area-inset-left)); right: calc(8px + env(safe-area-inset-right));
+    width: auto; top: calc(var(--header-h) + 8px);
+  }
 }
 .creator-mute { margin-right: 6px; flex-shrink: 0; }
 .creator-mute.is-muted { color: var(--glow); }
+
+/* ── Phone pass (#85) ───────────────────────────────────── */
+/* A phone, or any touch screen (a phone on its side is wider than 640px). */
+@media (max-width: 640px), (pointer: coarse) {
+  /* iOS Safari zooms the page into any field under 16px when it takes focus,
+     and leaves it zoomed. Every kind of field, whatever its own rule says. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]), select, textarea { font-size: 16px !important; }
+  /* 34px: the height of the buttons in the same filter rows. */
+  input[type="text"], input[type="date"], select { min-height: 34px; }
+  /* The bigger text makes fields wider: a long choice (a collection's name)
+     or a page's head wraps instead of pushing the page sideways. */
+  .filter, .filter .sort-select { max-width: 100%; }
+  .page-head { flex-wrap: wrap; }
+  /* Tap-sized: the small text buttons (Rename, Delete, Options, Not a
+     duplicate, Tag, Collection…) and the icon buttons on rows and tiles. */
+  .btn-ghost { min-height: 32px; }
+  .del-btn { min-width: 32px; min-height: 32px; }
+  .creator-tools .icon-btn, .big-file-trash, .icon-btn-sm { width: 34px; height: 34px; }
+  .source-sync { min-height: 32px; }
+  .source-rename .btn-link { padding: 8px 4px; }
+  .review-open { padding: 8px 0; }
+}
+@media (max-width: 640px) {
+  /* Two tiles a row (Trash, Storage's biggest files), not one screen-high tile. */
+  .big-files { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+}
+/* A phone on its side (641-860px, the sidebar still showing): a page's head
+   wraps like it does under 640px instead of pushing the page sideways. */
+@media (max-width: 860px) {
+  .page-head { flex-wrap: wrap; }
+  .collection-new input[type="text"] { min-width: 0; }
+}
