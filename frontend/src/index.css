@@ -1820,6 +1820,9 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .select-count { font-size: 13px; color: var(--text-dim); margin-right: 6px; }
 .select-count b { font-family: var(--mono); color: var(--glow); font-size: 15px; }
 .select-hint { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+/* Shift and Esc mean nothing on a phone, and the line made the bar a row taller
+   over the list it selects from. */
+@media (max-width: 640px), (pointer: coarse) { .select-hint { display: none; } }
 .select-bar .btn-danger, .select-bar .btn-keep { padding: 8px 14px; }
 
 /* ── Creators review link ───────────────────────────────── */
