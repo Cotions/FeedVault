@@ -414,7 +414,8 @@ main {
   input[type="text"].page-filter { min-width: 0; }
   .sources-panel > .source-add { flex-basis: 100%; min-width: 0; }
   .source-add .page-filter { flex-basis: 100%; max-width: none; }
-  .app-body { flex-direction: column; }
+  /* No sidebar column, so no divider at its edge either. */
+  .app-body { flex-direction: column; background: none; }
   /* In a column, auto margins would size it to its content's width. */
   main { width: 100%; }
   .sidebar {
@@ -424,9 +425,20 @@ main {
     height: auto;
     flex-direction: row;
     flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 12px;
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+  /* The links wrap as chips sized to their label, not one full-width row
+     each (that pushed the page a whole screen down). The .sidebar prefix
+     outranks the base rules declared further down. */
+  .sidebar .side-link { width: auto; padding: 7px 10px; white-space: nowrap; }
+  .sidebar .side-row { flex-direction: row; align-items: center; }
+  .sidebar .side-new { position: static; transform: none; }
+  .sidebar .side-sep { display: none; }
+  .sidebar .side-scan-status { padding: 0 6px 0 0; }
 }
 
 /* ── Cards ──────────────────────────────────────────────── */
