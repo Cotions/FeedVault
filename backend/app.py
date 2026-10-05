@@ -14,7 +14,7 @@ import threading
 import time
 import webbrowser
 
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.security import safe_join
 from zlib import adler32
 
@@ -1627,11 +1627,38 @@ def serve_trash_thumb(key):
     return _send(trash.thumb(cfg["media_roots"], key, cfg["data_directory"]), media=False)
 
 
-@app.get("/userscript/feedvault.user.js")
-def serve_userscript():
+# The script as written talks to the default port. Served, it names this
+# instance's port instead, in exactly these three places, so a copy
+# installed from another port (the demo, a changed FEEDVAULT_PORT) talks to
+# the server it came from. The port is the one FeedVault listens on, never
+# anything from the request: a Host header cannot choose where an installed
+# script sends its requests. The host stays localhost, and @connect and
+# @match are left as written.
+USERSCRIPT_ORIGIN = "http://localhost:3380"
+USERSCRIPT_LINES = ("// @updateURL    ", "// @downloadURL  ", 'const API_BASE = "')
+
+
+def _userscript_text(port):
     folder = os.path.join(config.BUNDLE_DIR, "userscript") if config.FROZEN \
         else os.path.join(config.REPO_DIR, "userscript")
-    return send_from_directory(folder, "feedvault.user.js", mimetype="text/javascript", max_age=0)
+    try:
+        with open(os.path.join(folder, "feedvault.user.js"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        abort(404)
+    origin = f"http://localhost:{int(port)}"
+    for line in USERSCRIPT_LINES:
+        text = text.replace(line + USERSCRIPT_ORIGIN, line + origin, 1)
+    return text
+
+
+@app.get("/userscript/feedvault.user.js")
+def serve_userscript():
+    resp = Response(_userscript_text(config.PORT), mimetype="text/javascript",
+                    headers={"Cache-Control": "no-cache"})
+    # An update check with the ETag it has gets a 304, as from a file.
+    resp.add_etag()
+    return resp.make_conditional(request)
 
 
 # ---------------------------------------------------------------------------

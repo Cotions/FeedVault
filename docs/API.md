@@ -110,6 +110,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
+| GET | `/userscript/feedvault.user.js` | the userscript (no header needed), with this instance's port in `API_BASE`, `@updateURL` and `@downloadURL`, see [Save from the browser](#save-from-the-browser-userscript) |
 
 A media file (its poster, what a thumbnail is made from) is served only when
 what it opens as, symlinks followed, is inside a media root and outside its
@@ -1745,6 +1746,17 @@ never sends the real request. Without the header, the request is a 403. A
 DNS-rebinding page has the wrong `Host`: a 403. `GM_xmlhttpRequest` runs
 in the extension, outside the page's origin, so CORS does not apply to it:
 that is what lets the userscript, and only it, send the header.
+
+**Where it comes from.** Settings › About links to
+`/userscript/feedvault.user.js`, which serves `userscript/feedvault.user.js`
+with `http://localhost:3380` replaced, in `API_BASE`, `@updateURL` and
+`@downloadURL` only, by `http://localhost:<port>`, the port FeedVault
+listens on (`FEEDVAULT_PORT`, 3380 by default; the demo's 3389). On 3380 it
+is the file as written. The port never comes from the request: the `Host`
+header, forwarding headers and the query are not read, so a request cannot
+choose where an installed script sends its calls, and a `Host` not naming
+this machine is a 403 as for any URL. The host stays `localhost`, and
+`@connect` (localhost, 127.0.0.1) and `@match` are served as written.
 
 | Method | Path | Returns |
 |---|---|---|

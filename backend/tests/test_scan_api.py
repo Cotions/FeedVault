@@ -151,6 +151,84 @@ def test_userscript_served_without_header(client):
     assert r.status_code == 200 and b"==UserScript==" in r.data
 
 
+USERSCRIPT = os.path.join(os.path.dirname(__file__), "..", "..", "userscript", "feedvault.user.js")
+
+
+def _userscript_source():
+    with open(USERSCRIPT, encoding="utf-8") as f:
+        return f.read()
+
+
+def _header_lines(text, key):
+    return [l for l in text.splitlines() if l.startswith(f"// {key} ")]
+
+
+def test_userscript_on_the_default_port_is_the_file(client, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "PORT", 3380)
+    r = client.get("/userscript/feedvault.user.js")
+    assert r.status_code == 200
+    assert r.mimetype == "text/javascript"
+    assert r.headers["Cache-Control"] == "no-cache"
+    assert r.get_data(as_text=True) == _userscript_source()
+
+
+def test_userscript_names_this_instances_port(client, monkeypatch):
+    # Installed from another port (the demo on 3389), it talks to that
+    # instance: API_BASE and both update URLs, and nothing else changes.
+    import config
+    monkeypatch.setattr(config, "PORT", 3389)
+    text = client.get("/userscript/feedvault.user.js", headers={"Host": "localhost:3389"}).get_data(as_text=True)
+    source = _userscript_source()
+    assert 'const API_BASE = "http://localhost:3389";' in text
+    assert "// @updateURL    http://localhost:3389/userscript/feedvault.user.js" in text
+    assert "// @downloadURL  http://localhost:3389/userscript/feedvault.user.js" in text
+    assert "3380" not in text
+    assert text.count("3389") == 3
+    assert text == source.replace("http://localhost:3380", "http://localhost:3389")
+    for key in ("@match", "@connect", "@grant", "@name", "@namespace"):
+        assert _header_lines(text, key) == _header_lines(source, key)
+    assert _header_lines(text, "@connect") == ["// @connect      localhost", "// @connect      127.0.0.1"]
+
+
+def test_userscript_update_check_and_missing_file(client, monkeypatch):
+    import app as app_module
+    import config
+    monkeypatch.setattr(config, "PORT", 3389)
+    r = client.get("/userscript/feedvault.user.js")
+    etag = r.headers["ETag"]
+    again = client.get("/userscript/feedvault.user.js", headers={"If-None-Match": etag})
+    assert again.status_code == 304 and again.data == b""
+    # Another port's text has another ETag: no 304 across instances.
+    monkeypatch.setattr(config, "PORT", 3390)
+    assert client.get("/userscript/feedvault.user.js", headers={"If-None-Match": etag}).status_code == 200
+    # No file (a bundle built without it): a 404, not a 500.
+    monkeypatch.setattr(config, "REPO_DIR", "/nonexistent-feedvault")
+    monkeypatch.setattr(config, "FROZEN", False)
+    assert client.get("/userscript/feedvault.user.js").status_code == 404
+    assert app_module.USERSCRIPT_ORIGIN == "http://localhost:3380"
+
+
+def test_userscript_port_never_comes_from_the_request(client, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "PORT", 3389)
+    expected = _userscript_source().replace("http://localhost:3380", "http://localhost:3389")
+    # A Host naming this machine on another port, forwarding headers, a
+    # query: the script still names the port FeedVault listens on.
+    for headers, url in (({"Host": "localhost:9999"}, "/userscript/feedvault.user.js"),
+                         ({"Host": "127.0.0.1:1"}, "/userscript/feedvault.user.js?port=4444"),
+                         ({"X-Forwarded-Host": "evil.example:4444", "X-Forwarded-Port": "4444",
+                           "Forwarded": "host=evil.example:4444"}, "/userscript/feedvault.user.js")):
+        r = client.get(url, headers=headers)
+        assert r.status_code == 200
+        assert r.get_data(as_text=True) == expected
+    # A hostile Host is refused before anything is served.
+    for host in ("evil.example", "evil.example:3389", "localhost.evil.example:3389"):
+        r = client.get("/userscript/feedvault.user.js", headers={"Host": host})
+        assert r.status_code == 403
+        assert b"UserScript" not in r.data and b"evil" not in r.data
+
+
 def test_spa_fallback_never_swallows_api(client):
     assert client.get("/api/nope", headers=H).status_code == 404
 

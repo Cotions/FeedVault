@@ -405,6 +405,7 @@ main {
      trapping fixed descendants inside it. */
   to   { opacity: 1; }
 }
+@keyframes pageFade { from { opacity: 0; } }
 
 @media (max-width: 640px) {
   /* Nothing wider than a phone: the search box, a page's head and the
@@ -1968,6 +1969,46 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 @media (max-width: 1000px) {
   .review { grid-template-columns: minmax(0, 1fr); height: auto; }
   .review-stage { height: 62vh; }
+}
+/* The filters' toggle shows on a phone only: on a desktop they are always open. */
+.review-filters-toggle { display: none; }
+/* A phone: the filters fold behind their toggle, the stage takes what the
+   first screen has left (Review.jsx sets --stage-h, at most 55vh), and the
+   decision buttons are a bar fixed at the bottom, clear of the home
+   indicator, so every decision is a tap with no scroll. */
+@media (max-width: 640px) {
+  /* pageIn moves <main>, and a transform, even a finished one held by its
+     fill mode, makes <main> the bar's containing block: here it fades only. */
+  main:has(> .review) { animation-name: pageFade; }
+  /* --review-bar-h: the bar's height, measured by Review.jsx. */
+  .review { padding-bottom: calc(var(--review-bar-h, 120px) + 12px); }
+  .review-stage { height: var(--stage-h, 55vh); }
+  .review-filters { display: flex; flex-direction: column; gap: 8px; }
+  .review-filters-toggle { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start; min-height: 40px; }
+  .review-filters-toggle .chip { margin-left: 2px; }
+  .review-filters-chev { transition: transform 0.15s ease; }
+  .review-filters.is-open .review-filters-chev { transform: rotate(180deg); }
+  .review-filters:not(.is-open) .review-scope { display: none; }
+  /* A backdrop filter would make the panel the bar's containing block. */
+  .review-side { backdrop-filter: none; background: rgba(20, 23, 31, 0.92); }
+  .review-actions {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px;
+    margin: 0;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    background: rgba(12, 14, 20, 0.96);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -12px 28px -18px rgba(0, 0, 0, 0.9);
+  }
+  .review-actions > button { grid-column: span 3; justify-content: center; min-height: 46px; padding: 8px 10px; }
+  .review-actions:has(.btn-danger-soft) > button { grid-column: span 2; font-size: 12.5px; }
+  .review-actions-row { display: contents; }
+  .review-actions-row .btn-secondary { min-height: 40px; padding: 6px 4px; }
+  /* No keyboard on a phone: no key hints. */
+  .review-side .kbd { display: none; }
+  .review-wide { display: none; }
+  /* Toasts ("Kept", "Undone") above the bar, not over its buttons. */
+  body:has(.review-actions) .toasts { bottom: calc(var(--review-bar-h, 120px) + 12px); }
 }
 
 /* ── Scrollbar ──────────────────────────────────────────── */
