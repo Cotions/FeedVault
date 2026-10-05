@@ -28,7 +28,6 @@ export default function CreatorPicker({
   const [open,   setOpen]   = useState(false);
   const [query,  setQuery]  = useState("");
   const [active, setActive] = useState(0);
-  const [toLeft, setToLeft] = useState(false);
   const inputRef = useRef(null);
   const listRef = useRef(null);
   const listId = useId();
@@ -45,16 +44,27 @@ export default function CreatorPicker({
     return out.slice(0, MAX_SHOWN);
   }, [people, accounts, platform, exclude, query]);
 
-  // The list hangs from the field's left edge; when that would run it past
-  // the window's right edge (a picker near the right of a narrow window), it
-  // hangs from the right edge instead and opens to the left.
+  // The list hangs from the field's left edge. When that would run it past
+  // the right edge of the room it has (the window, or a scrolling box around
+  // the picker such as Review's side panel), it hangs from the field's right
+  // edge if that fits, else it is only as wide as the room.
   useLayoutEffect(() => {
-    if (!open) return undefined;
+    const list = listRef.current;
+    if (!open || !list) return undefined;
     function place() {
-      const list = listRef.current;
-      if (!list) return;
+      delete list.dataset.side;
+      list.style.maxWidth = "";
       const box = list.parentElement.getBoundingClientRect(), w = list.offsetWidth;
-      setToLeft(box.left + w > document.documentElement.clientWidth && box.right - w >= 0);
+      let lo = 0, hi = document.documentElement.clientWidth;
+      for (let a = list.parentElement.parentElement; a && a !== document.body; a = a.parentElement) {
+        if (getComputedStyle(a).overflowX === "visible") continue;
+        const r = a.getBoundingClientRect();
+        lo = Math.max(lo, r.left + a.clientLeft);
+        hi = Math.min(hi, r.left + a.clientLeft + a.clientWidth);
+      }
+      if (box.left + w <= hi) return;
+      if (box.right - w >= lo) list.dataset.side = "left";
+      else list.style.maxWidth = `${Math.max(box.width, hi - box.left)}px`;
     }
     place();
     window.addEventListener("resize", place);
@@ -113,7 +123,7 @@ export default function CreatorPicker({
         onKeyDown={onKeyDown}
       />
       {open && (
-        <ul ref={listRef} className={`picker-list${toLeft ? " is-to-left" : ""}`} id={listId} role="listbox" aria-label={label}>
+        <ul ref={listRef} className="picker-list" id={listId} role="listbox" aria-label={label}>
           {!query && value && (
             <li role="option" aria-selected={false} className="picker-option picker-all"
                 onMouseDown={e => { e.preventDefault(); pick(null); }}>

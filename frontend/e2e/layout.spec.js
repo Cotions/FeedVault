@@ -115,6 +115,26 @@ const DIALOGS = [
     scope: ".review-help",
   },
   {
+    // The suggestions hang over the panel's buttons, cut off by no scrolling
+    // box (Review's info panel scrolls): the last one the list shows without
+    // scrolling is what a click there hits.
+    name: "Review › Tag suggestions",
+    open: async page => {
+      await openPage(page, { name: "Review", path: "/review" });
+      await page.keyboard.press("t");
+      await page.getByRole("combobox", { name: "Tag this post…" }).fill("a");
+      const list = page.locator(".tag-suggest");
+      await expect(list.locator("li").first()).toBeVisible();
+      expect(await list.evaluate(ul => {
+        const bottom = ul.getBoundingClientRect().bottom;
+        const li = [...ul.children].filter(x => x.getBoundingClientRect().bottom <= bottom).pop();
+        const r = li.getBoundingClientRect();
+        return li.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+      }), "the last suggestion in sight is on top, not cut off").toBe(true);
+    },
+    scope: ".tag-suggest",
+  },
+  {
     name: "Notifications panel",
     open: async page => {
       await openPage(page, PAGES[0]);
@@ -136,7 +156,6 @@ const DIALOGS = [
 test.describe("dialogs", () => {
   for (const d of DIALOGS) {
     test(d.name, async ({ page }, testInfo) => {
-      await stillPage(page);
       await d.open(page);
       await stillPage(page);
       await expect(page.locator(d.scope).first()).toBeVisible();

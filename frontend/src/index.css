@@ -1637,7 +1637,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   .card-table td.cell-actions { align-items: center; }
   .card-table .storage-actions { justify-content: flex-start; }
   .card-table .storage-creator { max-width: 100%; }
-  .card-table .person-chip { max-width: 100%; }
+  .data-table.card-table .person-chip { max-width: 100%; }
   .data-table.card-table tbody td.storage-share { display: flex; align-items: center; gap: 10px; }
   .card-table .storage-share::before { flex: 0 0 96px; }
   .card-table .storage-share .channel-bar-track { flex: 1; width: auto; min-width: 0; }
@@ -2230,6 +2230,8 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .storage-creator-name { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .storage-creator:hover .storage-creator-name { color: var(--accent-hover); }
 .storage-creator-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* As wide as the creator above it at most: a long person's name is cut (its title has it). */
+.storage-table .person-chip { max-width: 240px; }
 .data-table .storage-size { color: var(--accent-hover); font-weight: 800; }
 .storage-share { min-width: 150px; }
 .storage-share, .storage-split { white-space: nowrap; }
@@ -2502,8 +2504,9 @@ a.btn-primary { color: var(--on-accent); }
 .tag-input { position: relative; min-width: 0; }
 .tag-input input[type="text"] { width: 100%; font-family: var(--body); padding: 7px 11px; }
 .tag-suggest {
-  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 120;
-  list-style: none; margin: 0; padding: 4px;
+  /* A popover, placed by TagInput (left, top, width) under its field. */
+  position: fixed; inset: auto; z-index: 120;
+  list-style: none; margin: 0; padding: 4px; color: var(--text);
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px;
   box-shadow: var(--lift);
   max-height: 260px; overflow-y: auto;
@@ -2758,7 +2761,7 @@ a.btn-primary { color: var(--on-accent); }
   border-radius: 10px;
   box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.95);
 }
-.picker-list.is-to-left { left: auto; right: 0; }
+.picker-list[data-side="left"] { left: auto; right: 0; }
 .picker-option {
   display: flex; flex-direction: column; gap: 1px;
   padding: 6px 10px; border-radius: 7px; cursor: pointer;

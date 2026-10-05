@@ -38,8 +38,8 @@ export async function seedStress(base) {
     if (n.length > MAX_NAME) throw new Error(`e2e stress: name longer than ${MAX_NAME}: ${n}`);
   }
   const post = await call(base, "GET", `/api/posts/${STRESS_POST.platform}/${STRESS_POST.post_id}`);
-  if (post.author.handle.length !== 60 || post.author.name.length !== 60) {
-    throw new Error(`e2e stress: the demo was not made with --stress (creator ${post.author.handle})`);
+  if (post.author?.handle?.length !== 60 || post.author?.name?.length !== 60) {
+    throw new Error(`e2e stress: the demo was not made with --stress (creator ${post.author?.handle})`);
   }
   await call(base, "POST", "/api/tags/apply", { posts: [STRESS_POST.id], add: STRESS_TAGS });
   const { collection } = await call(base, "POST", "/api/collections", { name: STRESS_COLLECTION });

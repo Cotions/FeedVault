@@ -22,6 +22,9 @@ const COLUMNS = [
   { key: "share", label: "Share", by: "bytes" },
 ];
 
+// A creator's second line: their name, when it is not the handle, and the platform.
+const creatorSub = a => `${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}`;
+
 function pct(part, whole) {
   if (!whole) return "0%";
   const p = (part / whole) * 100;
@@ -78,9 +81,7 @@ function CreatorTable({ rows, total }) {
               <td role="cell" className="cell-main" data-label="Creator">
                 <Link to={authorFeedPath(a.platform, a)} className="storage-creator" title={`Show posts by @${a.handle}`}>
                   <span className="storage-creator-name">@{a.handle || a.id}</span>
-                  <span className="storage-creator-sub" title={`${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}`}>
-                    {a.name && a.name !== a.handle ? `${a.name} · ` : ""}{platformLabel(a.platform)}
-                  </span>
+                  <span className="storage-creator-sub" title={creatorSub(a)}>{creatorSub(a)}</span>
                 </Link>
                 {a.person && (
                   <Link to={personPath(a.person.id)} className="chip person-chip" title={`Person: ${a.person.name}`}>

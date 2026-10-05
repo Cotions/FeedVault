@@ -193,15 +193,13 @@ function CardOptionsButton({ sync, onEdit }) {
 
 function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted }) {
   const former = matchedFormer(a, query);
+  const sub = `${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}${former ? ` · was @${former}` : ""}`;
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(a.handle || a.name || "?").charAt(0).toUpperCase()}</span>
       <span className="creator-id">
         <span className="creator-name">@{a.handle || a.id}</span>
-        <span className="creator-sub" title={`${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}${former ? ` · was @${former}` : ""}`}>
-          {a.name && a.name !== a.handle ? `${a.name} · ` : ""}{platformLabel(a.platform)}
-          {former && ` · was @${former}`}
-        </span>
+        <span className="creator-sub" title={sub}>{sub}</span>
         <CardSyncStatus sync={sync} />
       </span>
       <span className="person-stats">
