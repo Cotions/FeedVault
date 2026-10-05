@@ -826,17 +826,19 @@ def _own_tool(folder, name="yt-dlp"):
 
 
 @pytest.mark.parametrize("open_up, says", [
-    (lambda tool: tool.chmod(0o775), "the file ({tool}) is writable by group or others"),
-    (lambda tool: tool.chmod(0o757), "the file ({tool}) is writable by group or others"),
-    (lambda tool: tool.parent.chmod(0o775), "its folder ({folder}) is writable by group or others"),
-    (lambda tool: tool.parent.chmod(0o777), "its folder ({folder}) is writable by group or others"),
+    (lambda tool: tool.chmod(0o775), "the file ({tool}) is writable by group or others (chmod go-w '{tool}')"),
+    (lambda tool: tool.chmod(0o757), "the file ({tool}) is writable by group or others (chmod go-w '{tool}')"),
+    (lambda tool: tool.parent.chmod(0o775),
+     "its folder ({folder}) is writable by group or others (chmod go-w '{folder}')"),
+    (lambda tool: tool.parent.chmod(0o777),
+     "its folder ({folder}) is writable by group or others (chmod go-w '{folder}')"),
 ])
 def test_a_tool_path_others_can_swap_is_refused_when_saved(env, client, open_up, says):
     tool = _own_tool(env["tmp"] / "tools")
     open_up(tool)
     r = client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()
     assert r["ok"] is False
-    assert r["error"] == "yt-dlp: " + says.format(tool=tool, folder=tool.parent) + " (chmod go-w)"
+    assert r["error"] == "yt-dlp: " + says.format(tool=tool, folder=tool.parent)
 
 
 def test_a_tool_path_of_another_user_is_refused(env, client, monkeypatch):
@@ -863,7 +865,7 @@ def test_a_tool_path_through_a_symlink_is_checked_where_it_leads(env, client):
     assert client.post("/api/config", json={"tools": {"yt-dlp": str(link)}}, headers=H).get_json()["ok"]
     tool.parent.chmod(0o777)
     r = client.post("/api/config", json={"tools": {"yt-dlp": str(link)}}, headers=H).get_json()
-    assert r["error"] == f"yt-dlp: its folder ({tool.parent}) is writable by group or others (chmod go-w)"
+    assert r["error"] == f"yt-dlp: its folder ({tool.parent}) is writable by group or others (chmod go-w '{tool.parent}')"
 
 
 def test_a_tool_path_others_can_swap_by_now_is_not_run(runner, client, monkeypatch):
@@ -874,7 +876,8 @@ def test_a_tool_path_others_can_swap_by_now_is_not_run(runner, client, monkeypat
     assert client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()["ok"]
     assert ended(jobs.submit("tool-version", {"tool": "yt-dlp"})["id"])["state"] == "done"
     tool.chmod(0o777)                          # after it was saved
-    why = f"yt-dlp: the path set in Settings is refused: the file ({tool}) is writable by group or others (chmod go-w)"
+    why = (f"yt-dlp: the path set in Settings is refused: the file ({tool}) is writable by group or others "
+           f"(chmod go-w '{tool}')")
     assert jobs.tool_path("yt-dlp") is None and jobs.tool_lookup("yt-dlp") == (None, why)
     job = ended(jobs.submit("tool-version", {"tool": "yt-dlp"})["id"])
     assert (job["state"], job["message"], job["exit_code"]) == ("failed", why, None)
@@ -912,7 +915,7 @@ def test_a_tool_path_below_a_folder_others_can_write_to_is_refused(env, client):
     top.chmod(0o777)
     try:
         r = client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()
-        assert r["error"] == f"yt-dlp: a folder above it ({top}) is writable by group or others (chmod go-w)"
+        assert r["error"] == f"yt-dlp: a folder above it ({top}) is writable by group or others (chmod go-w '{top}')"
         top.chmod(0o1777)
         assert client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()["ok"]
     finally:

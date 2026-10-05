@@ -1674,6 +1674,8 @@ def main():
     if _port_busy(config.PORT):
         print(f"[api] Port {config.PORT} already in use — FeedVault may already be running.")
         sys.exit(1)
+    # A umask of 002 (or an older FeedVault) left them group-writable: scripts would be refused.
+    scripts.tighten()
     try:
         db.init(config.db_path(cfg))
     except db.SchemaTooNew as e:

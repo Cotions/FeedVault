@@ -134,7 +134,7 @@ def export(conn, name, data_dir):
     rows = conn.execute(t.select or f"SELECT {', '.join(t.columns)} FROM {t.table} "
                                     f"ORDER BY {', '.join(t.key)}").fetchall()
     out = path(data_dir, name)
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    config.make_private_dir(os.path.dirname(out))
     config.write_private(out, lambda f: json.dump(
         {"version": FORMAT_VERSION, "rows": [dict(zip(t.columns, r)) for r in rows]}, f))
     return len(rows)

@@ -2343,7 +2343,14 @@ the file's path. Its inputs are only environment variables: `FV_TARGET`,
   It never starts with `-`. It reaches the program as one literal
   argument or env value.
 
-**Refused**, listed with `refused` saying why and never run:
+**Refused**, listed with `refused` saying why and never run (a mode
+refusal ends with the command that fixes it, such as
+`(chmod go-w '/home/me/.config/feedvault')`). The listing makes the folder
+(and the config folder) `0700` when it is not there yet, whatever the
+umask; on start FeedVault runs `chmod go-w` on its scripts folder, and on
+its config folder when that is the default `~/.config/feedvault`, when
+they are yours and writable by group or others (a umask of `002`), and
+logs it. It never changes a folder above them.
 
 - the folder itself when it is a symlink, someone else's, or writable by
   group or others, or when a folder above it, up to `/` (along its path as

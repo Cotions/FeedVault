@@ -148,3 +148,93 @@ def test_a_folder_that_cannot_be_fsynced_still_saves(env, monkeypatch, code):
     cfg["check_updates"] = True
     config.save(cfg)
     assert config.load()["check_updates"] is True
+
+
+# ---------------------------------------------------------------------------
+# The other writers that used a fixed <file>.tmp name (#75): the same writer
+# ---------------------------------------------------------------------------
+
+def write_stamps(env):
+    import configparser
+
+    import sync
+    stamps = configparser.ConfigParser()
+    stamps["someone"] = {"post-timestamp": "2024-01-01T00:00:00"}
+    path = sync.stamps_path()
+    sync._write_stamps(stamps, path)
+    return path
+
+
+def keep_trashed(env):
+    import sync
+    sync._keep_trashed(75, {"1", "2"})
+    sync._trashed_before.pop(75, None)
+    return sync._retrash_path(75)
+
+
+def write_manifest(env):
+    import trash
+    root = str(env["media"])
+    os.makedirs(trash.trash_dir(root), exist_ok=True)
+    trash._write_manifest(root, [{"post": 1}])
+    return trash._manifest_path(root)
+
+
+def save_pypi(env):
+    import downloaders
+    cfg = config.load()
+    cfg["check_updates"] = True
+    path = downloaders._pypi_path(cfg)
+    if os.path.exists(path):                   # due again: written again
+        os.remove(path)
+    downloaders.fetch_latest, real = (lambda name: ("1.0", None)), downloaders.fetch_latest
+    try:
+        downloaders.latest(cfg)
+    finally:
+        downloaders.fetch_latest = real
+    return path
+
+
+OTHER_WRITERS = [write_stamps, keep_trashed, write_manifest, save_pypi]
+
+
+@pytest.mark.parametrize("write", OTHER_WRITERS)
+def test_other_writers_never_follow_a_symlink_at_the_old_temp_name(env, write, tmp_path):
+    path = write(env)
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    os.symlink(victim, path + ".tmp")
+    write(env)
+    assert victim.read_text() == "untouched"
+    assert os.path.isfile(path) and not os.path.islink(path)
+    left = [n for n in os.listdir(os.path.dirname(path)) if n.endswith(".tmp") and n != os.path.basename(path) + ".tmp"]
+    assert left == []
+
+
+@pytest.mark.parametrize("write", OTHER_WRITERS)
+def test_other_writers_fsync_the_file_then_its_folder_around_the_rename(env, write, monkeypatch):
+    path = write(env)
+    events = []
+    fsync, replace = os.fsync, os.replace
+
+    def logged_fsync(fd):
+        events.append(("fsync", "dir" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"))
+        fsync(fd)
+
+    def logged_replace(a, b):
+        events.append(("replace", os.path.dirname(a) == os.path.dirname(b), b))
+        replace(a, b)
+
+    monkeypatch.setattr(os, "fsync", logged_fsync)
+    monkeypatch.setattr(os, "replace", logged_replace)
+    write(env)
+    assert events == [("fsync", "file"), ("replace", True, path), ("fsync", "dir")]
+
+
+def test_the_trash_manifest_keeps_its_mode(env):
+    """Review: the manifest is in a media root, read maybe by others: not made 0600."""
+    path = write_manifest(env)
+    assert mode(path) == 0o644                 # a new one
+    os.chmod(path, 0o664)
+    write_manifest(env)
+    assert mode(path) == 0o664

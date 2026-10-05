@@ -6,11 +6,12 @@ it is installed.
 """
 import hashlib
 import os
-import shutil
 import subprocess
 import tempfile
 
 from PIL import Image, ImageOps
+
+import config
 
 WIDTH = 480
 MAX_HEIGHT = 1200      # 9:16 at WIDTH is 853; taller panoramas get cropped by the grid anyway
@@ -24,8 +25,30 @@ def open_image(path):
     return Image.open(path, formats=FORMATS)
 
 
+def ffmpeg_path():
+    """The ffmpeg to run, or None: the path set in Settings, else the first
+    in PATH's absolute folders, as for the downloaders (jobs.tool_path:
+    never a bare name, nor a relative result)."""
+    import jobs                                # it imports db, which imports this module
+    return jobs.tool_path("ffmpeg")
+
+
+def ffprobe_path():
+    """The ffprobe to run, or None: the one beside the ffmpeg set in
+    Settings when there is one (checked as it is: config.tool_refused),
+    else the first in PATH's absolute folders (jobs._which; ffprobe is not
+    one of Settings' tools)."""
+    import jobs
+    configured = (config.load().get("tools") or {}).get("ffmpeg")
+    if configured:
+        beside = os.path.join(os.path.dirname(configured), "ffprobe")
+        if config.tool_refused(beside) is None:
+            return beside
+    return jobs._which("ffprobe")
+
+
 def have_ffmpeg():
-    return shutil.which("ffmpeg") is not None
+    return ffmpeg_path() is not None
 
 
 def _cache_path(data_dir, media_path):
@@ -52,7 +75,7 @@ def _save_image(src, out):
 
 
 def _atomic_save(out, write):
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    config.make_private_dir(os.path.dirname(out))
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), suffix=".part")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -66,15 +89,16 @@ def _atomic_save(out, write):
         raise
 
 
-def _video_frame(src, out):
-    """One frame, a second in (or the first frame of a very short clip)."""
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+def _video_frame(src, out, ffmpeg):
+    """One frame, a second in (or the first frame of a very short clip),
+    made by the program at ``ffmpeg`` (ffmpeg_path)."""
+    config.make_private_dir(os.path.dirname(out))
     fd, frame = tempfile.mkstemp(dir=os.path.dirname(out), suffix=".png")
     os.close(fd)
     try:
         for seek in ("1", "0"):
             r = subprocess.run(
-                ["ffmpeg", "-loglevel", "error", "-y", "-ss", seek, "-i", src,
+                [ffmpeg, "-loglevel", "error", "-y", "-ss", seek, "-i", src,
                  "-frames:v", "1", frame],
                 capture_output=True, timeout=30,
             )
@@ -109,11 +133,14 @@ def thumb_for(data_dir, row):
     # Remember clips ffmpeg could not read, so a grid refresh does not retry
     # them on every request. Replacing the file (newer mtime) clears it.
     failed = out + ".failed"
-    if _fresh(failed, src) or not have_ffmpeg() or not os.path.isfile(src):
+    if _fresh(failed, src) or not os.path.isfile(src):
         return None
-    if _video_frame(src, out):
+    ffmpeg = ffmpeg_path()                     # looked up once: none now is not a clip ffmpeg failed on
+    if ffmpeg is None:
+        return None
+    if _video_frame(src, out, ffmpeg):
         return out
-    os.makedirs(os.path.dirname(failed), exist_ok=True)
+    config.make_private_dir(os.path.dirname(failed))
     open(failed, "w").close()
     return None
 
@@ -140,7 +167,7 @@ def move(data_dir, old_path, new_path):
     old, new = _cache_path(data_dir, old_path), _cache_path(data_dir, new_path)
     for a, b in ((old, new), (old + ".failed", new + ".failed")):
         try:
-            os.makedirs(os.path.dirname(b), exist_ok=True)
+            config.make_private_dir(os.path.dirname(b))
             os.replace(a, b)
         except OSError:
             pass

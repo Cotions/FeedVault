@@ -63,22 +63,90 @@ def load():
 
 def save(cfg):
     path = config_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    make_private_dir(os.path.dirname(path))
     with _lock:
         write_private(path, lambda f: json.dump(cfg, f, indent=2))
 
 
-def write_private(path, dump):
+def make_private_dir(path):
+    """Create the folder ``path`` and its missing parents, each 0700 whatever
+    the umask (002 would leave them group-writable, and then refused: a
+    scripts folder, a folder above it). A folder already there is left as
+    it is, and so is one another process makes at the same time. Returns
+    ``path``."""
+    missing, p = [], os.path.abspath(path)
+    while not os.path.isdir(p):
+        missing.append(p)
+        up = os.path.dirname(p)
+        if up == p:
+            break
+        p = up
+    for p in reversed(missing):
+        try:
+            os.mkdir(p, 0o700)
+        except FileExistsError:
+            if not os.path.isdir(p):
+                raise
+            continue
+        # mkdir's mode is masked by the umask: one that drops the owner's bits too.
+        fd = os.open(p, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            if stat.S_IMODE(os.fstat(fd).st_mode) != 0o700:
+                os.fchmod(fd, 0o700)
+        except OSError:
+            pass                               # a file system that keeps no modes (CIFS, FUSE): its own
+        finally:
+            os.close(fd)
+    return path
+
+
+def tighten_private_dir(path):
+    """``chmod go-w`` the folder ``path`` when it is ours, a real folder (not
+    a symlink) and writable by group or others. Nothing else, nothing above
+    it. Returns the mode it had when it was changed, else None (a file
+    system that refuses it too: read-only, CIFS; the folder's refusal then
+    says the chmod to run)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if st.st_uid != os.getuid() or not st.st_mode & 0o022:
+            return None
+        os.fchmod(fd, stat.S_IMODE(st.st_mode) & ~0o022)
+        return stat.S_IMODE(st.st_mode)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def chmod_hint(path, how="go-w", uid=None):
+    """The command that fixes ``path``'s mode, its path single-quoted for a
+    shell; with sudo for a folder of root's (``uid`` 0) when we are not root."""
+    sudo = "sudo " if uid == 0 and os.getuid() != 0 else ""
+    return sudo + "chmod " + how + " '" + path.replace("'", "'\\''") + "'"
+
+
+def write_private(path, dump, private=True):
     """Write ``path`` atomically, readable by its owner only (0600): ``dump(f)``
     writes into a temp file of a unique name in its folder (mkstemp:
     O_CREAT|O_EXCL, so never through a symlink left there), fsynced, renamed
     over ``path``, then the folder fsynced. A file that was more open is
-    replaced by a 0600 one."""
+    replaced by a 0600 one. ``private=False``, for a file in a media root
+    (others may read it, its file system may keep no modes: CIFS, FUSE):
+    the mode of the file it replaces (0644 for a new one), a refused
+    fchmod let go."""
     folder = os.path.dirname(path)
     fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)[:100]}.", suffix=".tmp", dir=folder)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            os.fchmod(f.fileno(), 0o600)
+            try:
+                os.fchmod(f.fileno(), 0o600 if private else _mode_of(path, 0o644))
+            except OSError:
+                if private:
+                    raise
             dump(f)
             f.flush()
             os.fsync(f.fileno())
@@ -100,6 +168,15 @@ def write_private(path, dump):
     except OSError as e:
         if e.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EACCES):
             raise
+
+
+def _mode_of(path, default):
+    """``path``'s permission bits (not a symlink's target's), else ``default``."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return default
+    return stat.S_IMODE(st.st_mode) & 0o777 if stat.S_ISREG(st.st_mode) else default
 
 
 def clean_roots(roots):
@@ -156,7 +233,7 @@ def ancestors_refused(path):
             return f"{what} belongs to another user"
         # A sticky folder (/tmp) lets nobody else rename or remove what is ours.
         if st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX:
-            return f"{what} is writable by group or others (chmod go-w)"
+            return f"{what} is writable by group or others ({chmod_hint(p, uid=st.st_uid)})"
     return None
 
 
@@ -180,7 +257,7 @@ def tool_refused(path):
         if st.st_uid not in (0, os.getuid()):
             return f"{what} ({p}) belongs to another user"
         if st.st_mode & 0o022:
-            return f"{what} ({p}) is writable by group or others (chmod go-w)"
+            return f"{what} ({p}) is writable by group or others ({chmod_hint(p, uid=st.st_uid)})"
     return ancestors_refused(os.path.dirname(real)) or ancestors_refused(os.path.dirname(os.path.abspath(path)))
 
 

@@ -275,10 +275,8 @@ def latest(cfg=None):
         saved.update(got)
         path = _pypi_path(cfg)
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path + ".tmp", "w", encoding="utf-8") as f:
-                json.dump(saved, f, indent=1)
-            os.replace(path + ".tmp", path)
+            config.make_private_dir(os.path.dirname(path))
+            config.write_private(path, lambda f: json.dump(saved, f, indent=1))
         except OSError as e:                   # still shown; asked again on the next start
             print(f"[downloaders] could not save {path}: {e}")
         return saved
@@ -367,7 +365,7 @@ def _build_test(params):
     tool = params["tool"]
     cfg = config.load()
     folder = _scratch(cfg)
-    os.makedirs(folder, exist_ok=True)
+    config.make_private_dir(folder)
     if tool == "instaloader":
         args = ["--no-posts", "--no-profile-pic", "--no-metadata-json", "--dirname-pattern", sync._escape(folder),
                 *sync.session_flags(sync.settings(cfg)["session"])]

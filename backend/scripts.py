@@ -588,8 +588,8 @@ def _entry(name, folder):
             "mtime": None}
 
 
-def _folder_refused(st, what):
-    """Why a folder (its lstat) may not hold scripts, else None."""
+def _folder_refused(st, what, path):
+    """Why a folder (``path``'s lstat) may not hold scripts, else None."""
     if stat.S_ISLNK(st.st_mode):
         return f"{what} is a symlink"
     if not stat.S_ISDIR(st.st_mode):
@@ -597,7 +597,7 @@ def _folder_refused(st, what):
     if st.st_uid != os.getuid():
         return f"{what} belongs to another user"
     if st.st_mode & 0o022:
-        return f"{what} is writable by group or others (chmod go-w)"
+        return f"{what} is writable by group or others ({config.chmod_hint(path)})"
     return None
 
 
@@ -606,8 +606,8 @@ def _ancestors_refused(folder):
     return config.ancestors_refused(folder)
 
 
-def _file_refused(st, kind):
-    """Why a file (its stat) may not run, else None."""
+def _file_refused(st, kind, path):
+    """Why a file (``path``'s stat) may not run, else None."""
     if stat.S_ISLNK(st.st_mode):
         return "a symlink: a script must be a regular file in the folder itself"
     if not stat.S_ISREG(st.st_mode):
@@ -615,11 +615,11 @@ def _file_refused(st, kind):
     if st.st_uid != os.getuid():
         return "belongs to another user"
     if st.st_mode & 0o022:
-        return "writable by group or others (chmod go-w)"
+        return f"writable by group or others ({config.chmod_hint(path)})"
     if st.st_size > SIZE_MAX:
         return f"larger than {SIZE_MAX // 1024} KiB"
     if kind == "shell" and not st.st_mode & stat.S_IXUSR:
-        return "not executable (chmod u+x)"
+        return f"not executable ({config.chmod_hint(path, 'u+x')})"
     return None
 
 
@@ -633,13 +633,13 @@ def _read(name, folder, dir_fd):
         return out, None
     try:
         before = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-        out["refused"] = _file_refused(before, out["kind"])
+        out["refused"] = _file_refused(before, out["kind"], out["path"])
         if out["refused"]:
             return out, None
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
         with os.fdopen(fd, "rb") as f:
             st = os.fstat(f.fileno())
-            out["refused"] = _file_refused(st, out["kind"])
+            out["refused"] = _file_refused(st, out["kind"], out["path"])
             if (st.st_dev, st.st_ino) != (before.st_dev, before.st_ino):
                 out["refused"] = "it changed while it was read"
             if out["refused"]:
@@ -674,7 +674,7 @@ def _files():
     folder = scripts_dir()
     try:
         st = os.lstat(folder)
-        refused = _folder_refused(st, "the scripts folder") or _ancestors_refused(folder)
+        refused = _folder_refused(st, "the scripts folder", folder) or _ancestors_refused(folder)
         if refused:
             return refused, []
         dir_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -729,9 +729,40 @@ def _read_folder():
     return found[0]
 
 
+def make_folder():
+    """Create the scripts folder (and the config folder) 0700 when it is not
+    there yet, so the first script needs no chmod: config.make_private_dir.
+    One that cannot be made is left to _files to say why."""
+    try:
+        config.make_private_dir(scripts_dir())
+    except OSError:
+        pass
+
+
+def tighten():
+    """On start: chmod go-w FeedVault's own folders when a umask of 002 (or
+    an older FeedVault) left them writable by group or others, so they are
+    not refused: the scripts folder, and the config folder when it is the
+    default one (``<XDG_CONFIG_HOME>/feedvault``, FEEDVAULT_CONFIG unset;
+    a config file set elsewhere may sit in a folder of the user's). Only
+    folders that are ours and not symlinks (config.tighten_private_dir),
+    never a folder above them. Returns [(folder, its mode before)]."""
+    folders = [scripts_dir()]
+    if not os.environ.get("FEEDVAULT_CONFIG"):
+        folders.insert(0, os.path.dirname(config.config_path()))
+    out = []
+    for folder in folders:
+        before = config.tighten_private_dir(folder)
+        if before is not None:
+            print(f"[scripts] {folder} was writable by group or others ({before:o}): now {before & ~0o022:o}")
+            out.append((folder, before))
+    return out
+
+
 def listing():
     """{dir, dir_refused, shell_template, scripts}: the built-ins, then the
-    files by name."""
+    files by name. The scripts folder is made when it is not there."""
+    make_folder()
     refused, found = _files()
     return {"dir": scripts_dir(), "dir_refused": refused, "shell_template": SHELL_TEMPLATE,
             "scripts": [_builtin(n) for n in BUILTINS] + [s for s, _ in found]}
@@ -1092,7 +1123,7 @@ def _build(params):
     script = runnable(params["script"], params.get("sha256"))
     cfg = config.load()
     vals = _vals(script, params, cfg)
-    os.makedirs(os.path.join(cfg["data_directory"], DIR_NAME), exist_ok=True)
+    config.make_private_dir(os.path.join(cfg["data_directory"], DIR_NAME))
     return _spec(script, vals, cfg, _rescan(script, vals, cfg["media_roots"]))
 
 
@@ -1208,7 +1239,7 @@ def _sync_build(params):
     roots = cfg["media_roots"]
     try:
         os.makedirs(folder, exist_ok=True)
-        os.makedirs(os.path.join(cfg["data_directory"], DIR_NAME), exist_ok=True)
+        config.make_private_dir(os.path.join(cfg["data_directory"], DIR_NAME))
     except OSError as e:
         raise jobs.BadRequest(f"cannot create the source's folder: {e.strerror or e}")
     try:

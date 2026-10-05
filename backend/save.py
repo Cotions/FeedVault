@@ -85,7 +85,7 @@ def _start(params, note, argv=None):
     run may have left files)."""
     stage = staging(_shortcode(params))
     _clear(stage)
-    os.makedirs(stage)
+    config.make_private_dir(stage)
 
 
 # ---------------------------------------------------------------------------
