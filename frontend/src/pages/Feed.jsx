@@ -568,7 +568,7 @@ export default function Feed() {
           Move {selectedCount === 1 ? "this post" : `these ${selectedCount} posts`} and
           all {selectedCount === 1 ? "its" : "their"} files
           ({selectedPosts.reduce((n, p) => n + (p.media_count || 0), 0)} media, {fmtBytes(selectedBytes)}) to the trash?
-          You can empty the trash from Settings.
+          You can restore {selectedCount === 1 ? "it" : "them"} from the Trash page.
         </p>
       </ConfirmDialog>
     </div>

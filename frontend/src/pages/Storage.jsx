@@ -324,7 +324,7 @@ export default function Storage() {
         {pending && (
           <p>
             Move this {pending.kind} by @{pending.author?.handle || pending.author?.id} ({fmtBytes(pending.bytes)}) to
-            the trash? If it is the post's only file, the whole post goes with it. You can empty the trash from Settings.
+            the trash? If it is the post's only file, the whole post goes with it. You can restore it from the Trash page.
           </p>
         )}
       </ConfirmDialog>
