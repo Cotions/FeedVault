@@ -1402,6 +1402,9 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 }
 .kv-val { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--text-dim); }
 .kv-copy { user-select: all; }
+/* On a phone 110px of key left the value ~180px, so tool paths and the
+   update note wrapped every two words. */
+@media (max-width: 640px) { .kv-key { width: 64px; } }
 
 /* ── Creators ───────────────────────────────────────────── */
 .creator-grid {
