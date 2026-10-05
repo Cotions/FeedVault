@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
-
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+import { FOCUSABLE } from "../lib/layout";
 
 /* Modal confirmation. Traps Tab inside the dialog, Esc or a backdrop click
    cancels, focus starts on Cancel (so a stray Enter never destroys anything)
