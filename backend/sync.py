@@ -151,7 +151,7 @@ import sources
 import trash
 import userdata
 from parsers import is_media, yt_dlp
-from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SPACED_RE, _day_start, _load
+from parsers.instaloader import _HANDLE_RE as _TARGET_RE, _NAME_RE, _SIDE_SUFFIXES, _SPACED_RE, _day_start, _load
 
 KIND = "instaloader-sync"
 GROUP = "instaloader"
@@ -755,11 +755,14 @@ def _put_back(sid, before, folder, note):
 
 def _cut_metadata(conn, ids, folder):
     """{post id: [paths]}: the metadata files beside the posts' media, in
-    ``folder`` (resolved, a trailing separator), that no parser can read
-    (an empty or cut .json): instaloader was stopped (Quit, cancel) while
-    it wrote one. The post was indexed from its file names, and the file
-    would stay behind when the post goes back to the trash."""
-    found = {}
+    ``folder`` (resolved, a trailing separator), whose content no parser can
+    read (an empty or cut .json), with the side files of the same name
+    (caption, location, comments): instaloader was stopped (Quit, cancel)
+    while it wrote that post. The post was indexed from its file names, so
+    these would stay behind when it goes back to the trash."""
+    def ours(path):
+        return os.path.isfile(path) and not os.path.islink(path) and os.path.realpath(path).startswith(folder)
+    found, checked = {}, set()
     for i in range(0, len(ids), 500):
         part = ids[i:i + 500]
         for row in conn.execute(f"SELECT post_id, path FROM media WHERE post_id IN ({','.join('?' * len(part))})",
@@ -769,13 +772,18 @@ def _cut_metadata(conn, ids, folder):
             slide = re.fullmatch(r"(.+)_\d+", stem)
             for base in {stem, *([slide.group(1)] if slide else [])}:
                 for path in (os.path.join(where, base + ".json"), os.path.join(where, base + ".json.xz")):
-                    if path in found.get(row["post_id"], ()) or os.path.islink(path) or not os.path.isfile(path) \
-                            or not os.path.realpath(path).startswith(folder):
+                    if path in checked or not ours(path):
                         continue
+                    checked.add(path)
                     try:
                         _load(path)
-                    except (OSError, ValueError, EOFError, lzma.LZMAError):
-                        found.setdefault(row["post_id"], []).append(path)
+                        continue
+                    except (ValueError, EOFError, lzma.LZMAError):
+                        pass                   # cut: the content is wrong
+                    except Exception:          # cannot be read now (permissions, I/O): not known to be cut
+                        continue
+                    sides = [os.path.join(where, base + s) for s in _SIDE_SUFFIXES]
+                    found.setdefault(row["post_id"], []).extend([path, *filter(ours, sides)])
     return found
 
 
@@ -794,8 +802,8 @@ def _remove_cut(cut, gone, note):
             except OSError as e:
                 note(f"could not remove {os.path.basename(path)}: {e.strerror or e}")
     if removed:
-        note(f"{removed} unreadable metadata file{'' if removed == 1 else 's'} instaloader left half-written "
-             f"beside {'it' if len(gone) == 1 else 'them'}: removed")
+        note(f"{removed} file{'' if removed == 1 else 's'} instaloader left as it was stopped writing "
+             f"{'it' if len(gone) == 1 else 'them'} (metadata cut short): removed")
 
 
 # A stamp before every post: the sync walks the whole profile, without

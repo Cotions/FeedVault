@@ -568,11 +568,38 @@ def test_trashed_post_quit_while_instaloader_writes_it_goes_back_at_the_next_sta
         if t.name == f"job-{job['id']}":
             t.join(10)
     assert jobs.get(job["id"])["state"] == "interrupted"
+    if at == "json-opened":
+        # The side files real instaloader may have written before its JSON.
+        [meta] = [n for n in os.listdir(folder) if "CPOSTB00001" in n and n.endswith(".json")]
+        for side in (".txt", "_comments.json"):
+            (folder / (meta[:-len(".json")] + side)).write_text("[]")
     monkeypatch.setattr(jobs, "_closing", False)
     sync._trashed_before.clear()
     jobs.recover()
     sync.resume()
     _brought_back(env, folder)
+
+
+def test_metadata_that_cannot_be_read_now_is_not_taken_for_cut(env, client, fake, monkeypatch):
+    """#77: only a .json whose content is wrong is taken for one instaloader
+    was stopped writing; one FeedVault cannot open (permissions, I/O) stays."""
+    s, folder = _trashed_between(env, client, fake)
+    mark = env["tmp"] / "stalled"
+    data = json.loads(fake.data.read_text())
+    fake.data.write_text(json.dumps({**data, "stall": {"post": "CPOSTB00001", "at": "json", "mark": str(mark)}}))
+    post(client, f"/api/sources/{s['id']}/sync")
+    wait_for(mark.exists)
+    jobs.shutdown()
+    [meta] = [folder / n for n in os.listdir(folder) if "CPOSTB00001" in n and n.endswith(".json")]
+    meta.chmod(0)
+    try:
+        monkeypatch.setattr(jobs, "_closing", False)
+        sync._trashed_before.clear()
+        jobs.recover()
+        sync.resume()
+        assert meta.exists()
+    finally:
+        meta.chmod(0o644)
 
 
 # A FeedVault that starts a sync, then dies once instaloader has brought B back.

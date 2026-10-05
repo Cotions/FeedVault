@@ -433,8 +433,8 @@ def test_a_job_starting_its_process_as_shutdown_runs_is_stopped_before_it_return
 def test_a_job_started_as_shutdown_runs_stays_interrupted(runner, monkeypatch):
     """#77: _pump marks a job running, then saves it outside the lock. A
     save that read "running" before shutdown() recorded the job but writes
-    after it must not leave the job running in the database, and the job's
-    process never starts."""
+    after it must not leave the job running in the database; the job's
+    thread, started after shutdown(), runs nothing."""
     import db
     pids = runner["tmp"] / "pid"
     runner["kind"]("long", _writes_its_pid(pids))
@@ -458,17 +458,44 @@ def test_a_job_started_as_shutdown_runs_stays_interrupted(runner, monkeypatch):
     submitting = threading.Thread(target=lambda: out.update(jobs.submit("long", {})), name="submit")
     submitting.start()
     assert reading.wait(10)
-    stopping = threading.Thread(target=jobs.shutdown)
-    stopping.start()
-    stopping.join(2)                                    # a shutdown() that does not wait for that save returns by then
+    jobs.shutdown()                                     # records it interrupted while that save waits
     release.set()
     submitting.join(10)
-    stopping.join(10)
     for t in threading.enumerate():
         if t.name == f"job-{out['id']}":
             t.join(10)
     assert real().execute("SELECT state FROM jobs WHERE id = ?", (out["id"],)).fetchone()["state"] == "interrupted"
     assert state(out["id"]) == "interrupted" and not pids.exists()
+
+
+def test_shutdown_with_a_job_thread_not_started_yet(runner, monkeypatch):
+    """#77 (review): _pump sets job.thread, then starts it, outside the lock.
+    shutdown() between the two neither fails (joining a thread not started
+    raises) nor leaves it anything to run: it starts, sees the job is
+    interrupted, and ends."""
+    pids = runner["tmp"] / "pid"
+    runner["kind"]("long", _writes_its_pid(pids))
+    created, release, held = threading.Event(), threading.Event(), []
+
+    class Held(threading.Thread):
+        def start(self):
+            if self.name.startswith("job-"):
+                held.append(self)
+                created.set()
+                release.wait(10)
+            super().start()
+    monkeypatch.setattr(jobs.threading, "Thread", Held)
+    out = {}
+    submitting = threading.Thread(target=lambda: out.update(jobs.submit("long", {})))
+    submitting.start()
+    assert created.wait(10)
+    try:
+        jobs.shutdown()
+    finally:
+        release.set()
+        submitting.join(10)
+    held[0].join(10)
+    assert not held[0].is_alive() and state(out["id"]) == "interrupted" and not pids.exists()
 
 
 def test_history_is_kept_in_sqlite(runner, monkeypatch):
