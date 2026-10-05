@@ -1044,6 +1044,17 @@ export default function Settings() {
                     <code className="kv-val">{config.version || "—"}</code>
                   </div>
                 </div>
+                <div className="card">
+                  <div className="card-title">Browser userscript</div>
+                  <p className="page-lede">
+                    Adds Save and Sync profile buttons on Instagram, X and TikTok, and marks the posts
+                    you already have. It needs <a href="https://www.tampermonkey.net/" className="text-link" target="_blank" rel="noopener noreferrer">Tampermonkey</a> or <a href="https://violentmonkey.github.io/" className="text-link" target="_blank" rel="noopener noreferrer">Violentmonkey</a> in your browser.
+                  </p>
+                  {/* A server route, not a dashboard page: a plain link, which the extension takes over. */}
+                  <a href="/userscript/feedvault.user.js" className="btn-secondary" target="_blank" rel="noopener noreferrer">
+                    <Icon name="download" size={14} />Install the browser userscript
+                  </a>
+                </div>
               </div>
             </>
           )}

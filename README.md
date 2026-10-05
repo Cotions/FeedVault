@@ -128,8 +128,13 @@ yt-dlp --write-info-json --write-thumbnail \
   ChannelVault". Shorts and short clips are indexed like TikTok videos
 
 
-Install [Tampermonkey](https://www.tampermonkey.net/), then open
-<http://localhost:3380/userscript/feedvault.user.js>. It runs on Instagram,
+Install [Tampermonkey](https://www.tampermonkey.net/) or
+[Violentmonkey](https://violentmonkey.github.io/), then click **Install the
+browser userscript** in Settings › About, or open
+<http://localhost:3380/userscript/feedvault.user.js>. The script is served
+with the port of the instance it comes from (in its `API_BASE` and its update
+URLs): installed from the demo on 3389, or with `FEEDVAULT_PORT` set, it
+talks to that instance. It runs on Instagram,
 X (x.com, twitter.com) and TikTok (www.tiktok.com). Saved posts get a green
 "saved" badge in grids, and a post page shows an "In FeedVault" link.
 A post FeedVault does not have gets a **Save to FeedVault** button instead (on
