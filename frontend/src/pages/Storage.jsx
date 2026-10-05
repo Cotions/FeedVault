@@ -43,14 +43,15 @@ function CreatorTable({ rows, total }) {
 
   return (
     <div className="table-wrap">
-      <table className="data-table storage-table">
-        <thead>
-          <tr>
-            <th scope="col">Creator</th>
+      <table className="data-table storage-table card-table" role="table">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th scope="col" role="columnheader">Creator</th>
             {COLUMNS.map(c => (
               <th
                 key={c.key}
                 scope="col"
+                role="columnheader"
                 className={c.key === "share" ? "" : "num"}
                 aria-sort={sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
               >
@@ -67,14 +68,14 @@ function CreatorTable({ rows, total }) {
                 </button>
               </th>
             ))}
-            <th scope="col">Kept · unreviewed</th>
-            <th scope="col" aria-label="Actions" />
+            <th scope="col" role="columnheader">Kept · unreviewed</th>
+            <th scope="col" role="columnheader" aria-label="Actions" />
           </tr>
         </thead>
-        <tbody>
+        <tbody role="rowgroup">
           {sorted.map((a, i) => (
-            <tr key={`${a.platform}:${a.id}`} style={{ animationDelay: `${Math.min(i, 30) * 20}ms` }}>
-              <td>
+            <tr key={`${a.platform}:${a.id}`} role="row" style={{ animationDelay: `${Math.min(i, 30) * 20}ms` }}>
+              <td role="cell" className="cell-main" data-label="Creator">
                 <Link to={authorFeedPath(a.platform, a)} className="storage-creator" title={`Show posts by @${a.handle}`}>
                   <span className="storage-creator-name">@{a.handle || a.id}</span>
                   <span className="storage-creator-sub">
@@ -87,16 +88,16 @@ function CreatorTable({ rows, total }) {
                   </Link>
                 )}
               </td>
-              <td className="num">{fmtInt(a.posts)}</td>
-              <td className="num">{fmtInt(a.media)}</td>
-              <td className="num storage-size">{fmtBytes(a.bytes)}</td>
-              <td className="storage-share">
+              <td role="cell" className="num" data-label="Posts">{fmtInt(a.posts)}</td>
+              <td role="cell" className="num" data-label="Media">{fmtInt(a.media)}</td>
+              <td role="cell" className="num storage-size" data-label="Size">{fmtBytes(a.bytes)}</td>
+              <td role="cell" className="storage-share" data-label="Share">
                 <span className="channel-bar-track" aria-hidden="true">
                   <span className="channel-bar-fill" style={{ width: `${(a.bytes / max) * 100}%`, "--d": `${Math.min(i, 30) * 20}ms` }} />
                 </span>
                 <span className="mono storage-pct">{pct(a.bytes, total)}</span>
               </td>
-              <td className="storage-split" title={`Kept ${fmtBytes(a.kept_bytes)} · unreviewed ${fmtBytes(a.unreviewed_bytes)}`}>
+              <td role="cell" className="storage-split" data-label="Kept · unreviewed" title={`Kept ${fmtBytes(a.kept_bytes)} · unreviewed ${fmtBytes(a.unreviewed_bytes)}`}>
                 <span className="split-track" aria-hidden="true">
                   <span className="split-kept" style={{ width: `${a.bytes ? (a.kept_bytes / a.bytes) * 100 : 0}%` }} />
                   <span className="split-unrev" style={{ width: `${a.bytes ? (a.unreviewed_bytes / a.bytes) * 100 : 0}%` }} />
@@ -106,7 +107,7 @@ function CreatorTable({ rows, total }) {
                   <span className="split-unrev-label">{fmtBytes(a.unreviewed_bytes)}</span>
                 </span>
               </td>
-              <td>
+              <td role="cell" className="cell-actions" data-label="Open">
                 <div className="storage-actions">
                   <Link to={authorFeedPath(a.platform, a)} className="icon-btn" title={`Feed: @${a.handle}'s posts`} aria-label={`Feed of @${a.handle}`}>
                     <Icon name="feed" size={15} />
