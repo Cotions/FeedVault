@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { getScript, getScripts, runScript } from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -172,6 +172,13 @@ export default function Scripts() {
   }, [reload]);
 
   const job = jobId != null ? (list?.jobs || []).find(j => j.id === jobId) : null;
+  // Run is clicked far down the page, on a template; the log opens near the
+  // top. Bring it into view, else the click seems to do nothing.
+  const logRef = useRef(null);
+  const shownId = job?.id;
+  useEffect(() => {
+    if (shownId != null) logRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [shownId]);
   const all = data?.scripts || [];
   const builtins = all.filter(s => s.builtin);
   const files = all.filter(s => !s.builtin);
@@ -211,7 +218,7 @@ export default function Scripts() {
       </div>
 
       {job && (
-        <div className="card">
+        <div className="card" ref={logRef}>
           <div className="job-log-head">
             <div className="card-title">Log</div>
             <span className="job-title"><span className="dim mono">#{job.id}</span> {job.label}</span>
