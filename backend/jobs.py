@@ -245,6 +245,8 @@ class Job:
         self.raw = collections.deque(maxlen=LOG_LINES if hooks else 0)
         self.n = 0
         self.proc = None
+        self.thread = None                     # the one that runs it (_run), once it is started
+        self.launch = threading.Lock()         # held by _run from its last look at ``interrupted`` to job.proc
         self.cancelled = False
         self.exited = False
         self.interrupted = False
@@ -361,7 +363,8 @@ def _pump():
             _wake[1].start()
     for job in starting:
         _save(job)
-        threading.Thread(target=_run, args=(job,), daemon=True, name=f"job-{job.id}").start()
+        job.thread = threading.Thread(target=_run, args=(job,), daemon=True, name=f"job-{job.id}")
+        job.thread.start()
 
 
 def _woken():
@@ -383,6 +386,9 @@ def _run(job):
     try:
         kind = _kinds[job.kind]
         script = None
+        if job.interrupted:                    # started after shutdown() had begun: no hook runs
+            _finish(job, "interrupted")
+            return
         if kind.check:
             try:
                 script = kind.check(job.params, lambda text: _note(job, f"[feedvault] {text}"))
@@ -404,6 +410,9 @@ def _run(job):
         if job.cancelled:
             _finish(job, "cancelled", message="cancelled")
             return
+        if job.interrupted:
+            _finish(job, "interrupted")
+            return
         if kind.start:
             try:
                 args = kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"), job.argv)
@@ -418,25 +427,36 @@ def _run(job):
                 return
         # The downloaders are Python: live output.
         env = {**(os.environ if job.env is None else job.env), "PYTHONUNBUFFERED": "1"}
-        fd = None
-        try:
-            argv = [exe, *job.args]
-            if head:
-                fd = _sealed(script)
-                argv = [*head, f"/dev/fd/{fd}", *job.args]
-            job.began = time.time()
-            proc = subprocess.Popen(argv, cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    start_new_session=True, pass_fds=(fd,) if fd is not None else ())
-        except OSError as e:
-            _finish(job, "failed", message=f"{job.tool} could not start: {e.strerror or e}")
+        fd = proc = failed = None
+        # shutdown() takes job.launch once it has set job.interrupted: by
+        # then the process has started (it is in job.proc, for shutdown() to
+        # stop) or it never will.
+        with job.launch:
+            if not job.interrupted:
+                try:
+                    argv = [exe, *job.args]
+                    if head:
+                        fd = _sealed(script)
+                        argv = [*head, f"/dev/fd/{fd}", *job.args]
+                    job.began = time.time()
+                    proc = subprocess.Popen(argv, cwd=job.cwd, env=env, stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                            start_new_session=True, pass_fds=(fd,) if fd is not None else ())
+                except OSError as e:
+                    failed = f"{job.tool} could not start: {e.strerror or e}"
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+                if proc is not None:
+                    with _lock:
+                        job.proc = proc
+                        stop = job.cancelled or job.interrupted
+        if failed is not None:
+            _finish(job, "failed", message=failed)
             return
-        finally:
-            if fd is not None:
-                os.close(fd)
-        with _lock:
-            job.proc = proc
-            stop = job.cancelled or job.interrupted
+        if proc is None:                       # FeedVault is stopping: it never starts
+            _finish(job, "interrupted")
+            return
         if stop:
             _terminate(job)
         _record_process(job, proc.pid)
@@ -704,8 +724,12 @@ def cancel(job_id):
 
 
 def shutdown():
-    """Stop every job before the app exits, the same way as cancel, waiting
-    at most KILL_AFTER. Ended jobs are recorded as interrupted."""
+    """Stop every job before the app exits, the same way as cancel. When it
+    returns, the process group of every job is dead (one whose process
+    started meanwhile too), the thread of every job has ended or was given
+    up on (with a log line), and every job that had not ended is recorded
+    as interrupted, for good. Waits at most KILL_AFTER for the processes
+    (SIGTERM, then SIGKILL), then at most KILL_AFTER for the threads."""
     global _closing, _wake
     with _lock:
         _closing = True
@@ -715,22 +739,57 @@ def shutdown():
         jobs = list(_active.values())
         for job in jobs:
             job.interrupted = True
-    procs = [j.proc for j in jobs if j.proc is not None and not j.exited]
-    for proc in procs:
-        _killpg(proc, signal.SIGTERM)
     deadline = time.monotonic() + KILL_AFTER
+    procs = []
+
+    def stop(job):
+        with _lock:
+            proc = job.proc if not job.exited else None
+        if proc is not None and proc not in procs:
+            procs.append(proc)
+            _killpg(proc, signal.SIGTERM)
+    for job in jobs:                           # the running ones first: their grace starts now
+        stop(job)
+    for job in jobs:
+        # A thread starting its process holds job.launch: once it is free,
+        # job.proc is set or no process will start (_run).
+        if job.launch.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            job.launch.release()
+            stop(job)
+        else:
+            print(f"[jobs] #{job.id}: still starting its process after {KILL_AFTER}s")
     for proc in procs:
         try:
             proc.wait(max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             pass
         _killpg(proc, signal.SIGKILL)
+    # Each thread ends its job itself (_finish: interrupted, its log saved).
+    # One not started yet sees job.interrupted first thing (_run).
+    until = time.monotonic() + KILL_AFTER
+    for job in jobs:
+        thread = job.thread
+        if thread is None or thread is threading.current_thread():
+            continue
+        try:
+            thread.join(max(0.0, until - time.monotonic()))
+        except RuntimeError:                   # not started yet
+            continue
+        if thread.is_alive():
+            print(f"[jobs] #{job.id}: its thread had not ended {KILL_AFTER}s after its process: given up on")
+        with _lock:
+            proc = job.proc if not job.exited else None
+        if proc is not None and proc not in procs:     # started after all, its launch outlasting the wait
+            _killpg(proc, signal.SIGKILL)
     now = int(time.time())
     for job in jobs:
         with _lock:
+            if job.id not in _active:
+                continue                       # its thread ended it, and saved it with its log
             ended = job.ended_at is not None
             if not ended:
                 job.state, job.ended_at, job.message = "interrupted", now, INTERRUPTED
+            job.shown = None                   # a thread given up on in _finish shows it as it was
             tail = list(job.lines)[-TAIL_KEPT:]
         _save(job, tail)
         if not ended:
@@ -786,14 +845,18 @@ def amend(job_id, keys):
 
 
 def _save(job, tail=None):
-    """Write a job's state; ``tail`` (its last lines) once it has ended."""
+    """Write a job's state; ``tail`` (its last lines) once it has ended. The
+    job is read when it is written, and a row that says it ended never goes
+    back to queued or running: a save that read the job before shutdown()
+    recorded it, and writes after, changes nothing."""
+    with _lock:
+        row = (job.state, job.started_at, job.ended_at, job.exit_code,
+               None if job.result is None else json.dumps(job.result), job.message)
     conn = db.connect()
     conn.execute(
         "UPDATE jobs SET state = ?, started_at = ?, ended_at = ?, exit_code = ?, result = ?, message = ?, "
-        "tail = COALESCE(?, tail) WHERE id = ?",
-        (job.state, job.started_at, job.ended_at, job.exit_code,
-         None if job.result is None else json.dumps(job.result), job.message,
-         None if tail is None else json.dumps(tail), job.id))
+        "tail = COALESCE(?, tail) WHERE id = ? AND (? NOT IN ('queued', 'running') OR state IN ('queued', 'running'))",
+        (*row, None if tail is None else json.dumps(tail), job.id, row[0]))
     conn.commit()
 
 
