@@ -229,3 +229,12 @@ def test_other_writers_fsync_the_file_then_its_folder_around_the_rename(env, wri
     monkeypatch.setattr(os, "replace", logged_replace)
     write(env)
     assert events == [("fsync", "file"), ("replace", True, path), ("fsync", "dir")]
+
+
+def test_the_trash_manifest_keeps_its_mode(env):
+    """Review: the manifest is in a media root, read maybe by others: not made 0600."""
+    path = write_manifest(env)
+    assert mode(path) == 0o644                 # a new one
+    os.chmod(path, 0o664)
+    write_manifest(env)
+    assert mode(path) == 0o664

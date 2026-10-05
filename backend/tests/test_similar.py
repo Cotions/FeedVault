@@ -83,7 +83,7 @@ def test_pass_fingerprints_every_picture(env, monkeypatch):
     v = write_post(env["media"] / "alice", "V1", TS + 60, ALICE, "video")       # poster beside it
     n = write_post(env["media"] / "alice", "V2", TS + 120, ALICE, "video")
     os.remove(n + ".jpg")                                                     # no poster
-    monkeypatch.setattr(thumbs, "have_ffmpeg", lambda: False)
+    monkeypatch.setattr(thumbs, "ffmpeg_path", lambda: None)
     scanner.scan(env["roots"])
     assert hashing.run_pass(db.connect())
     h = hashes()
@@ -117,11 +117,11 @@ def test_video_without_poster_uses_an_ffmpeg_frame(env, monkeypatch):
     scanner.scan(env["roots"])
     data_dir = str(env["tmp"] / "data")
 
-    def frame(src, out):                                                   # what ffmpeg would write
+    def frame(src, out, ffmpeg):                                           # what ffmpeg would write
         os.makedirs(os.path.dirname(out), exist_ok=True)
         photo(out, 5)
         return True
-    monkeypatch.setattr(thumbs, "have_ffmpeg", lambda: True)
+    monkeypatch.setattr(thumbs, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
     monkeypatch.setattr(thumbs, "_video_frame", frame)
     hashing.run_pass(db.connect(), data_dir=data_dir)
     row = db.connect().execute("SELECT * FROM media").fetchone()
@@ -194,15 +194,15 @@ def test_video_waits_for_ffmpeg(env, monkeypatch):
     os.remove(n + ".jpg")
     scanner.scan(env["roots"])
     data_dir = str(env["tmp"] / "data")
-    monkeypatch.setattr(thumbs, "have_ffmpeg", lambda: False)
+    monkeypatch.setattr(thumbs, "ffmpeg_path", lambda: None)
     hashing.run_pass(db.connect(), data_dir=data_dir)
     assert hashes().get(n + ".mp4", {}).get("dhash") is None
 
-    def frame(src, out):
+    def frame(src, out, ffmpeg):
         os.makedirs(os.path.dirname(out), exist_ok=True)
         photo(out, 5)
         return True
-    monkeypatch.setattr(thumbs, "have_ffmpeg", lambda: True)    # installed later: picked up next pass
+    monkeypatch.setattr(thumbs, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")    # installed later: picked up next pass
     monkeypatch.setattr(thumbs, "_video_frame", frame)
     hashing.run_pass(db.connect(), data_dir=data_dir)
     assert hashes()[n + ".mp4"]["dhash"] is not None
@@ -421,7 +421,8 @@ def test_videos_in_groups_are_measured_once(env, monkeypatch):
         with open(base + ".mp4", "ab") as f:
             f.write(extra)
     calls = []
-    monkeypatch.setattr(hashing, "video_size", lambda p: calls.append(p) or ((720, 1280) if p == a + ".mp4" else None))
+    monkeypatch.setattr(hashing, "video_size",
+                        lambda p, ffprobe=None: calls.append(p) or ((720, 1280) if p == a + ".mp4" else None))
     monkeypatch.setattr(thumbs, "ffprobe_path", lambda: "/usr/bin/ffprobe")
     scanner.scan(env["roots"])
     hashing.run_pass(db.connect())

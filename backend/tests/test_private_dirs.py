@@ -146,3 +146,43 @@ def test_a_refusal_says_the_chmod_to_run(env, client, tmp_path, umask002):
     r = client.post("/api/config", json={"tools": {"yt-dlp": str(tool)}}, headers=H).get_json()
     assert r["error"] == (f"yt-dlp: its folder ({bin_dir}) is writable by group or others "
                           f"(chmod go-w '{tmp_path}/it'\\''s bin')")
+
+
+def test_a_folder_that_cannot_be_chmodded_does_not_stop_feedvault(env, tmp_path, monkeypatch, umask002):
+    """Review: a read-only mount, CIFS: start goes on, the folder is made all the same."""
+    mine = tmp_path / "ro"
+    (mine / "scripts").mkdir(parents=True)
+    (mine / "scripts").chmod(0o775)
+    monkeypatch.setenv("FEEDVAULT_CONFIG", str(mine / "config.json"))
+
+    def refused(fd, mode):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(config.os, "fchmod", refused)
+    assert scripts.tighten() == []
+    mkdir = os.mkdir
+    monkeypatch.setattr(config.os, "mkdir", lambda p, mode: mkdir(p, 0o777))   # a mode it does not keep
+    config.make_private_dir(str(tmp_path / "cifs" / "data"))
+    assert os.path.isdir(tmp_path / "cifs" / "data")
+
+
+def test_a_root_folder_refusal_says_sudo(env, tmp_path, monkeypatch):
+    top = tmp_path / "srv"
+    (top / "tools").mkdir(parents=True)
+    top.chmod(0o775)
+    (top / "tools").chmod(0o755)
+    tool = top / "tools" / "yt-dlp"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    real_stat = os.stat
+
+    def roots(path, *a, **k):
+        st = real_stat(path, *a, **k)
+        if os.fspath(path) == str(top):
+            return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, 0, *st[5:10]))
+        return st
+
+    monkeypatch.setattr(config.os, "stat", roots)
+    assert config.tool_refused(str(tool)) == \
+        f"its parent folder ({top}) is writable by group or others (sudo chmod go-w '{top}')"
+    top.chmod(0o755)

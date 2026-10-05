@@ -452,7 +452,7 @@ def _read_manifest(root):
 def _write_manifest(root, lines):
     """config.write_private: a temp file of a unique name, never through a
     symlink left in the trash folder, fsynced, renamed over the manifest
-    (no fchmod: the trash is in a media root, maybe a network share)."""
+    (private=False: the trash is in a media root, its mode stays as it was)."""
     def dump(f):
         for line in lines:
             f.write(json.dumps(line) + "\n")

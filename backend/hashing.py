@@ -194,10 +194,11 @@ def from_db(value):
     return value + (1 << 64) if value is not None and value < 0 else value
 
 
-def video_size(path):
-    """(width, height) of a video's first video stream from ffprobe, or None
-    (None too when there is no ffprobe: thumbs.ffprobe_path)."""
-    ffprobe = thumbs.ffprobe_path()
+def video_size(path, ffprobe=None):
+    """(width, height) of a video's first video stream from the ffprobe at
+    ``ffprobe`` (else thumbs.ffprobe_path's), or None (None too when there
+    is no ffprobe)."""
+    ffprobe = ffprobe or thumbs.ffprobe_path()
     if ffprobe is None:
         return None
     try:
@@ -309,10 +310,12 @@ def run_pass(conn, restart=None, data_dir=None):
         if not _hash_all(conn, list(pics), "dhash", restart, _fresh(known, 4),
                          lambda path, st: _dhash_row(path, st, *pics[path], data_dir), PICTURE_WORKERS):
             return False
-        if thumbs.ffprobe_path():
+        ffprobe = thumbs.ffprobe_path()           # looked up once for the pass
+        if ffprobe:
             import duplicates                     # it imports this module
             if not _hash_all(conn, duplicates.videos_to_measure(conn), "probe", restart,
-                             lambda path, st: False, _probe_row, PICTURE_WORKERS):
+                             lambda path, st: False, lambda path, st: _probe_row(path, st, ffprobe),
+                             PICTURE_WORKERS):
                 return False
         _set(finished_at=int(time.time()))
         return True
@@ -371,8 +374,8 @@ def _dhash_row(path, st, kind, poster, data_dir):
     return (path, *st, width, height, now, to_db(value), now), read
 
 
-def _probe_row(path, st):
-    size = video_size(path) or (0, 0)            # 0: measured, unknown; not retried until the file changes
+def _probe_row(path, st, ffprobe):
+    size = video_size(path, ffprobe) or (0, 0)            # 0: measured, unknown; not retried until the file changes
     return (*size, path, *st), 0
 
 

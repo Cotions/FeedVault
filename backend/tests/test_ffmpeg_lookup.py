@@ -66,3 +66,27 @@ def test_ffprobe_on_path_is_run_by_its_absolute_path(env, tool_guard, tmp_path):
     assert thumbs.ffprobe_path() == str(exe)
     assert hashing.video_size(str(tmp_path / "x.mp4")) == (640, 360)
     assert os.path.realpath(exe) in tool_guard.runs
+
+
+def test_no_ffmpeg_now_is_not_a_clip_it_failed_on(env, tmp_path, monkeypatch):
+    """Review: the lookup is made once; none found leaves no .failed marker."""
+    row = video_row(env)
+    data = str(tmp_path / "data")
+    assert thumbs.thumb_for(data, row) is None
+    out = thumbs._cache_path(data, row["path"])
+    assert not os.path.exists(out + ".failed")
+    monkeypatch.setattr(thumbs, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(thumbs, "_video_frame", lambda src, out, ffmpeg: False)
+    assert thumbs.thumb_for(data, row) is None and os.path.exists(out + ".failed")
+
+
+def test_ffprobe_beside_the_ffmpeg_set_in_settings_is_used(env, client, tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir(mode=0o755)
+    exe = fake(tools / "ffmpeg", "sys.exit(0)")
+    probe = fake(tools / "ffprobe", "print('320x240')")
+    assert client.post("/api/config", json={"tools": {"ffmpeg": str(exe)}}, headers=H).get_json()["ok"]
+    assert thumbs.ffprobe_path() == str(probe)
+    assert hashing.video_size(str(tmp_path / "x.mp4")) == (320, 240)
+    probe.chmod(0o777)                         # someone else could swap it: not that one
+    assert thumbs.ffprobe_path() is None

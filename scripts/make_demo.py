@@ -538,7 +538,12 @@ def main():
     # The demo's config folder (its scripts folder's parent) and its tools'
     # folder: not group-writable whatever the umask, or they are refused (#75).
     for folder in (root, os.path.join(root, "bin")):
-        os.makedirs(folder, mode=0o700, exist_ok=True)
+        missing, p = [], folder
+        while not os.path.isdir(p):
+            missing.append(p)
+            p = os.path.dirname(p)
+        for p in reversed(missing):             # the missing ones above it too, as config.make_private_dir
+            os.mkdir(p, 0o700)
         os.chmod(folder, 0o700)
     media = os.path.join(root, "media")
     if os.path.exists(media):

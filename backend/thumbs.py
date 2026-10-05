@@ -34,9 +34,16 @@ def ffmpeg_path():
 
 
 def ffprobe_path():
-    """The ffprobe to run, or None: the first in PATH's absolute folders
-    (jobs._which; it is not one of Settings' tools)."""
+    """The ffprobe to run, or None: the one beside the ffmpeg set in
+    Settings when there is one (checked as it is: config.tool_refused),
+    else the first in PATH's absolute folders (jobs._which; ffprobe is not
+    one of Settings' tools)."""
     import jobs
+    configured = (config.load().get("tools") or {}).get("ffmpeg")
+    if configured:
+        beside = os.path.join(os.path.dirname(configured), "ffprobe")
+        if config.tool_refused(beside) is None:
+            return beside
     return jobs._which("ffprobe")
 
 
@@ -82,12 +89,9 @@ def _atomic_save(out, write):
         raise
 
 
-def _video_frame(src, out):
-    """One frame, a second in (or the first frame of a very short clip).
-    False when there is no ffmpeg to run."""
-    ffmpeg = ffmpeg_path()
-    if ffmpeg is None:
-        return False
+def _video_frame(src, out, ffmpeg):
+    """One frame, a second in (or the first frame of a very short clip),
+    made by the program at ``ffmpeg`` (ffmpeg_path)."""
     config.make_private_dir(os.path.dirname(out))
     fd, frame = tempfile.mkstemp(dir=os.path.dirname(out), suffix=".png")
     os.close(fd)
@@ -129,9 +133,12 @@ def thumb_for(data_dir, row):
     # Remember clips ffmpeg could not read, so a grid refresh does not retry
     # them on every request. Replacing the file (newer mtime) clears it.
     failed = out + ".failed"
-    if _fresh(failed, src) or not have_ffmpeg() or not os.path.isfile(src):
+    if _fresh(failed, src) or not os.path.isfile(src):
         return None
-    if _video_frame(src, out):
+    ffmpeg = ffmpeg_path()                     # looked up once: none now is not a clip ffmpeg failed on
+    if ffmpeg is None:
+        return None
+    if _video_frame(src, out, ffmpeg):
         return out
     config.make_private_dir(os.path.dirname(failed))
     open(failed, "w").close()
