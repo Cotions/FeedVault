@@ -393,28 +393,43 @@ function ReviewSession({ scope, scopeControls }) {
   // stage gets what the first screen has left between the page above it and
   // that bar (at most 55vh), so the item and its buttons show without a
   // scroll. Measured from layout, never from the scroll position, again
-  // whenever the page above or the bar changes size. The screen height is
-  // taken once per width: a phone's toolbar showing or hiding as the page
-  // scrolls must not resize the stage.
+  // whenever the page above or the bar changes size. The bar's height goes
+  // to --review-bar-h, for the room kept under the page and the toasts. The
+  // screen height is the tallest seen at this width: a keyboard or a
+  // phone's toolbar showing must not shrink the stage under the post.
   useLayoutEffect(() => {
     const phone = window.matchMedia(PHONE);
+    const root = document.documentElement.style;
     let width = null, screenH = 0;
+    function set(style, name, value) {
+      if (style.getPropertyValue(name) !== value) style.setProperty(name, value);
+    }
     function fit() {
       const stage = stageRef.current;
       if (!stage) return;
-      if (!phone.matches) { stage.style.removeProperty("--stage-h"); return; }
-      if (window.innerWidth !== width) { width = window.innerWidth; screenH = window.innerHeight; }
+      if (!phone.matches) {
+        stage.style.removeProperty("--stage-h");
+        root.removeProperty("--review-bar-h");
+        return;
+      }
+      if (window.innerWidth !== width) { width = window.innerWidth; screenH = 0; }
+      screenH = Math.max(screenH, window.innerHeight);
+      const bar = barRef.current?.offsetHeight || 0;
       const top = stage.getBoundingClientRect().top + window.scrollY;
-      const room = screenH - top - (barRef.current?.offsetHeight || 0) - 12;
-      const h = `${Math.round(Math.max(200, Math.min(room, screenH * 0.55)))}px`;
-      if (stage.style.getPropertyValue("--stage-h") !== h) stage.style.setProperty("--stage-h", h);
+      const room = screenH - top - bar - 12;
+      set(stage.style, "--stage-h", `${Math.round(Math.max(200, Math.min(room, screenH * 0.55)))}px`);
+      set(root, "--review-bar-h", `${bar}px`);
     }
     fit();
     const seen = new ResizeObserver(fit);
     seen.observe(document.body);
     if (barRef.current) seen.observe(barRef.current);
     window.addEventListener("resize", fit);
-    return () => { seen.disconnect(); window.removeEventListener("resize", fit); };
+    return () => {
+      seen.disconnect();
+      window.removeEventListener("resize", fit);
+      root.removeProperty("--review-bar-h");
+    };
   }, []);
 
   /* ── Render ────────────────────────────────────────────── */
@@ -647,10 +662,19 @@ export default function Review() {
   const scopeKey = JSON.stringify(scope);
 
   // Open on a desktop (the toggle is hidden there), closed on a phone, where
-  // the filters would push the post below the first screen. Held here, not
-  // in the session, so changing a filter does not close them.
+  // they are rarely changed during a session and would put the post's
+  // details a screen further down. Held here, not in the session, so
+  // changing a filter does not close them; crossing the breakpoint (a
+  // rotation) starts over from that width's default.
   const [filtersOpen, setFiltersOpen] = useState(() => !window.matchMedia(PHONE).matches);
-  const active = [platform, kind, author || person, tag || untagged, collection, newOnly, order === "asc"].filter(Boolean).length;
+  useEffect(() => {
+    const phone = window.matchMedia(PHONE);
+    const follow = () => setFiltersOpen(!phone.matches);
+    phone.addEventListener("change", follow);
+    return () => phone.removeEventListener("change", follow);
+  }, []);
+  // A creator account sets its platform too: one filter, not two.
+  const active = [author || person || platform, kind, tag || untagged, collection, newOnly, order === "asc"].filter(Boolean).length;
 
   const { data: authorsData } = useApi(getAuthors, 0);
   const { data: peopleData } = useApi(getPeople, 0);

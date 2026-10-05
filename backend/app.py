@@ -1641,8 +1641,11 @@ USERSCRIPT_LINES = ("// @updateURL    ", "// @downloadURL  ", 'const API_BASE = 
 def _userscript_text(port):
     folder = os.path.join(config.BUNDLE_DIR, "userscript") if config.FROZEN \
         else os.path.join(config.REPO_DIR, "userscript")
-    with open(os.path.join(folder, "feedvault.user.js"), encoding="utf-8") as f:
-        text = f.read()
+    try:
+        with open(os.path.join(folder, "feedvault.user.js"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        abort(404)
     origin = f"http://localhost:{int(port)}"
     for line in USERSCRIPT_LINES:
         text = text.replace(line + USERSCRIPT_ORIGIN, line + origin, 1)
@@ -1651,8 +1654,11 @@ def _userscript_text(port):
 
 @app.get("/userscript/feedvault.user.js")
 def serve_userscript():
-    return Response(_userscript_text(config.PORT), mimetype="text/javascript",
+    resp = Response(_userscript_text(config.PORT), mimetype="text/javascript",
                     headers={"Cache-Control": "no-cache"})
+    # An update check with the ETag it has gets a 304, as from a file.
+    resp.add_etag()
+    return resp.make_conditional(request)
 
 
 # ---------------------------------------------------------------------------

@@ -191,6 +191,24 @@ def test_userscript_names_this_instances_port(client, monkeypatch):
     assert _header_lines(text, "@connect") == ["// @connect      localhost", "// @connect      127.0.0.1"]
 
 
+def test_userscript_update_check_and_missing_file(client, monkeypatch):
+    import app as app_module
+    import config
+    monkeypatch.setattr(config, "PORT", 3389)
+    r = client.get("/userscript/feedvault.user.js")
+    etag = r.headers["ETag"]
+    again = client.get("/userscript/feedvault.user.js", headers={"If-None-Match": etag})
+    assert again.status_code == 304 and again.data == b""
+    # Another port's text has another ETag: no 304 across instances.
+    monkeypatch.setattr(config, "PORT", 3390)
+    assert client.get("/userscript/feedvault.user.js", headers={"If-None-Match": etag}).status_code == 200
+    # No file (a bundle built without it): a 404, not a 500.
+    monkeypatch.setattr(config, "REPO_DIR", "/nonexistent-feedvault")
+    monkeypatch.setattr(config, "FROZEN", False)
+    assert client.get("/userscript/feedvault.user.js").status_code == 404
+    assert app_module.USERSCRIPT_ORIGIN == "http://localhost:3380"
+
+
 def test_userscript_port_never_comes_from_the_request(client, monkeypatch):
     import config
     monkeypatch.setattr(config, "PORT", 3389)

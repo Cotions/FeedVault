@@ -1049,6 +1049,8 @@ export default function Settings() {
                   <p className="page-lede">
                     Adds Save and Sync profile buttons on Instagram, X and TikTok, and marks the posts
                     you already have. It needs <a href="https://www.tampermonkey.net/" className="text-link" target="_blank" rel="noopener noreferrer">Tampermonkey</a> or <a href="https://violentmonkey.github.io/" className="text-link" target="_blank" rel="noopener noreferrer">Violentmonkey</a> in your browser.
+                    Installed from here, it talks to this instance, and replaces a FeedVault userscript
+                    installed from another port.
                   </p>
                   {/* A server route, not a dashboard page: a plain link, which the extension takes over. */}
                   <a href="/userscript/feedvault.user.js" className="btn-secondary" target="_blank" rel="noopener noreferrer">

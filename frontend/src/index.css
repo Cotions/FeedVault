@@ -405,6 +405,7 @@ main {
      trapping fixed descendants inside it. */
   to   { opacity: 1; }
 }
+@keyframes pageFade { from { opacity: 0; } }
 
 @media (max-width: 640px) {
   /* Nothing wider than a phone: the search box, a page's head and the
@@ -1976,11 +1977,11 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
    decision buttons are a bar fixed at the bottom, clear of the home
    indicator, so every decision is a tap with no scroll. */
 @media (max-width: 640px) {
-  /* A finished pageIn held by fill-mode "both" still makes <main> the
-     containing block of fixed boxes in Chrome; "backwards" looks the same
-     and lets the bar go. */
-  main:has(> .review) { animation-fill-mode: backwards; }
-  .review { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+  /* pageIn moves <main>, and a transform, even a finished one held by its
+     fill mode, makes <main> the bar's containing block: here it fades only. */
+  main:has(> .review) { animation-name: pageFade; }
+  /* --review-bar-h: the bar's height, measured by Review.jsx. */
+  .review { padding-bottom: calc(var(--review-bar-h, 120px) + 12px); }
   .review-stage { height: var(--stage-h, 55vh); }
   .review-filters { display: flex; flex-direction: column; gap: 8px; }
   .review-filters-toggle { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start; min-height: 40px; }
@@ -2004,10 +2005,10 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   .review-actions-row { display: contents; }
   .review-actions-row .btn-secondary { min-height: 40px; padding: 6px 4px; }
   /* No keyboard on a phone: no key hints. */
-  .review .kbd { display: none; }
+  .review-side .kbd { display: none; }
   .review-wide { display: none; }
   /* Toasts ("Kept", "Undone") above the bar, not over its buttons. */
-  body:has(.review-actions) .toasts { bottom: calc(120px + env(safe-area-inset-bottom)); }
+  body:has(.review-actions) .toasts { bottom: calc(var(--review-bar-h, 120px) + 12px); }
 }
 
 /* ── Scrollbar ──────────────────────────────────────────── */
