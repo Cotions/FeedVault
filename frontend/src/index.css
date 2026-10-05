@@ -2864,3 +2864,27 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 }
 .creator-mute { margin-right: 6px; flex-shrink: 0; }
 .creator-mute.is-muted { color: var(--glow); }
+
+/* ── Phone pass (#85) ───────────────────────────────────── */
+@media (max-width: 640px) {
+  /* iOS Safari zooms the page into any field under 16px when it takes focus,
+     and leaves it zoomed. Every kind of field, whatever its own rule says. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="color"]), select, textarea { font-size: 16px !important; }
+  input[type="text"], input[type="date"], select { min-height: 36px; }
+  /* Tap-sized: the small text buttons (Rename, Delete, Options, Not a
+     duplicate, Tag, Collection…) and the icon buttons on rows and tiles. */
+  .btn-ghost { min-height: 32px; }
+  .del-btn { min-width: 32px; min-height: 32px; }
+  .creator-tools .icon-btn, .big-file-trash, .icon-btn-sm { width: 34px; height: 34px; }
+  .source-sync { min-height: 32px; }
+  .source-rename .btn-link { padding: 8px 4px; }
+  .review-open { padding: 8px 0; }
+  /* Two tiles a row (Trash, Storage's biggest files), not one screen-high tile. */
+  .big-files { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+}
+/* A phone on its side (641-860px, the sidebar still showing): a page's head
+   wraps like it does under 640px instead of pushing the page sideways. */
+@media (max-width: 860px) {
+  .page-head { flex-wrap: wrap; }
+  .collection-new input[type="text"] { min-width: 0; }
+}
