@@ -1406,7 +1406,10 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 /* ── Creators ───────────────────────────────────────────── */
 .creator-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  /* 340px: a card carries up to four icon buttons beside the name, count
+     and badges; at 240px the name shrank to "@…" and the badges ran over
+     the count. min(): never wider than the column on a phone. */
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
   gap: 10px;
 }
 .creator-card {
@@ -1834,6 +1837,12 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .creator-tools { display: flex; flex-direction: column; gap: 2px; margin-right: 10px; flex-shrink: 0; }
 .creator-tools .creator-review { margin-right: 0; }
 .creator-tools .icon-btn { width: 26px; height: 26px; }
+/* A phone: the buttons go on a row of their own under the name. */
+@media (max-width: 640px) {
+  .creator-card { flex-wrap: wrap; justify-content: flex-end; padding-bottom: 8px; }
+  .creator-card .creator-main { flex-basis: 100%; }
+  .creator-card .creator-tools { flex-direction: row; }
+}
 .creator-opts-wrap { position: relative; display: inline-flex; }
 .creator-opts-menu {
   position: absolute; top: 100%; right: 0; z-index: 20; margin-top: 4px; min-width: 200px;
