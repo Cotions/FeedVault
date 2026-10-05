@@ -8,6 +8,7 @@ import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
 import { desktopAllowed, notificationPath } from "./lib/notify";
+import { FOCUSABLE, PHONE } from "./lib/layout";
 import Icon            from "./components/Icon";
 import CyberBackground from "./components/CyberBackground";
 import Notifications   from "./components/Notifications";
@@ -65,6 +66,12 @@ export default function App() {
   const desktopRef = useRef(false);       // this tab shows desktop notifications (the setting, and allowed)
   const navigateRef = useRef(navigate);
   useEffect(() => { navigateRef.current = navigate; }, [navigate]);
+  // On a phone the sidebar is a drawer behind the header's menu button.
+  const [drawer, setDrawer] = useState(false);
+  const menuRef   = useRef(null);
+  const navRef    = useRef(null);
+  const headerRef = useRef(null);
+  const mainRef   = useRef(null);
 
   const toast = useCallback((text, kind = "ok", link) => {
     const id = ++toastId.current;
@@ -118,6 +125,56 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // The drawer closes when a link in it is followed (onClick on the nav, even
+  // to the page already shown), when the page changes (Back), and when the
+  // screen grows past the breakpoint. Not on every new history entry: search
+  // and filters replace the URL on a timer, which must not shut it.
+  useEffect(() => {
+    const mq = window.matchMedia(PHONE);
+    const onChange = () => { if (!mq.matches) setDrawer(false); };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  const [navPath, setNavPath] = useState(location.pathname);
+  if (location.pathname !== navPath) { setNavPath(location.pathname); setDrawer(false); }
+
+  // While the drawer is open: focus moves into it and Tab stays there, Escape
+  // closes it (after the bell's panel or the quit confirmation, which close
+  // first), the header and the page are inert, and the page does not scroll.
+  // Closing disarms Quit and gives focus back to the menu button.
+  useEffect(() => {
+    if (!drawer) return;
+    const nav = navRef.current;
+    const focusable = () => [...nav.querySelectorAll(FOCUSABLE)];
+    (nav.querySelector(".side-link.active") || focusable()[0])?.focus();
+    function onKey(e) {
+      if (e.key === "Escape") {
+        if (!nav.querySelector(".notif-panel, .side-quit-confirm")) setDrawer(false);
+      } else if (e.key === "Tab") {
+        const list = focusable();
+        const first = list[0], last = list[list.length - 1];
+        if (!nav.contains(document.activeElement)) { e.preventDefault(); first?.focus(); }
+        else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    }
+    const html = document.documentElement.style;
+    const overflow = html.overflow;
+    html.overflow = "hidden";
+    // The attribute, not React's prop: React 18 and 19 disagree on its value.
+    const behind = [headerRef.current, mainRef.current].filter(Boolean);
+    for (const el of behind) el.setAttribute("inert", "");
+    document.addEventListener("keydown", onKey);
+    const button = menuRef.current;
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      html.overflow = overflow;
+      for (const el of behind) el.removeAttribute("inert");
+      setConfirmQuit(false);
+      if (button && document.contains(button)) button.focus();
+    };
+  }, [drawer]);
 
   useEffect(() => {
     if (!confirmQuit) return;
@@ -253,6 +310,7 @@ export default function App() {
   // Either way the app is going down: show the farewell screen regardless.
   async function handleQuit() {
     setConfirmQuit(false);
+    setDrawer(false);
     setQuit(true);
     try { await quitApp(); } catch { /* connection dropped as it exited */ }
   }
@@ -276,7 +334,22 @@ export default function App() {
     <ToastContext.Provider value={toast}>
       <CyberBackground />
       <ScrollManager />
-      <header>
+      <header ref={headerRef}>
+        <button
+          type="button"
+          ref={menuRef}
+          className="icon-btn nav-menu-btn"
+          aria-expanded={drawer}
+          aria-controls="main-nav"
+          aria-label={menuLabel(jobList?.notifications?.unread ?? 0, jobsActive, jobList?.new ?? 0, running, lastErrors)}
+          title="Pages, jobs, notifications"
+          onClick={() => setDrawer(true)}
+        >
+          <Icon name="menu" size={18} />
+          {(jobList?.notifications?.unread ?? 0) > 0 ? (
+            <span className="nav-menu-badge">{fmtInt(jobList.notifications.unread)}</span>
+          ) : (jobsActive > 0 || jobList?.new > 0 || running || lastErrors > 0) && <span className="nav-menu-dot" />}
+        </button>
         <div className="brand">
           <span className="brand-mark"><Icon name="feed" size={17} /></span>
           <h1>FeedVault</h1>
@@ -301,6 +374,12 @@ export default function App() {
           )}
         </div>
         <div className="header-right">
+          {jobsActive > 0 && (
+            <Link to="/jobs" className="nav-jobs-live" title={`${jobsRunning} running, ${jobsActive - jobsRunning} queued`}
+                  aria-label={`Jobs: ${jobsActive} active`}>
+              <Icon name="refresh" size={13} className="spin" />{jobsActive}
+            </Link>
+          )}
           <span
             className={`status-dot ${online ? "online" : ""}`}
             title={online ? "Backend connected" : online === false ? "Backend offline" : "Connecting…"}
@@ -311,7 +390,15 @@ export default function App() {
       </header>
 
       <div className="app-body">
-        <nav className="sidebar" aria-label="Main">
+        {drawer && <div className="nav-backdrop" onClick={() => setDrawer(false)} />}
+        <nav className={`sidebar${drawer ? " is-open" : ""}`} id="main-nav" aria-label="Main" ref={navRef}
+             onClick={e => { if (e.target.closest("a[href]")) setDrawer(false); }}>
+          <div className="side-drawer-head">
+            <span className="card-title">Menu</span>
+            <button type="button" className="btn-ghost notif-close" onClick={() => setDrawer(false)} aria-label="Close menu">
+              <Icon name="close" size={15} />
+            </button>
+          </div>
           <div className="side-row">
             <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
             {jobList?.new > 0 && (
@@ -395,7 +482,7 @@ export default function App() {
           )}
         </nav>
 
-        <main>
+        <main ref={mainRef}>
           {online === false && (
             <div className="offline-banner" role="alert">
               <Icon name="warn" size={16} />
@@ -453,6 +540,19 @@ export default function App() {
     </JobsContext.Provider>
     </ScanContext.Provider>
   );
+}
+
+/* The menu button's name says what waits behind it, since on a phone its
+   badge stands for the bell, the running jobs, the new posts and the scan. */
+function menuLabel(unread, jobs, fresh, scanning, scanErrors) {
+  const parts = [
+    unread > 0 && `${fmtInt(unread)} unread notification${unread === 1 ? "" : "s"}`,
+    jobs > 0 && `${jobs} job${jobs === 1 ? "" : "s"} active`,
+    fresh > 0 && `${fmtInt(fresh)} new post${fresh === 1 ? "" : "s"}`,
+    scanning && "scanning",
+    scanErrors > 0 && `last scan: ${scanErrors} error${scanErrors === 1 ? "" : "s"}`,
+  ].filter(Boolean);
+  return parts.length ? `Menu (${parts.join(", ")})` : "Menu";
 }
 
 // "Sync @name" / "Sync x.com/name" → "@name" / "x.com/name"

@@ -12,6 +12,7 @@ import TagInput from "../components/TagInput";
 import CollectionDialog from "../components/CollectionDialog";
 import Icon from "../components/Icon";
 import CreatorPicker from "../components/CreatorPicker";
+import { PHONE } from "../lib/layout";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
 
@@ -30,7 +31,6 @@ const TOP_UP_BELOW = 10;
 const PRELOAD_AHEAD = 2;
 const MUTE_KEY = "feedvault.review.muted";
 // The phone layout's breakpoint, the same as the CSS one (index.css).
-const PHONE = "(max-width: 640px)";
 
 function readMuted() {
   try { return localStorage.getItem(MUTE_KEY) !== "0"; } catch { return true; }
