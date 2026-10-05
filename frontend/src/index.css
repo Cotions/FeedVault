@@ -758,6 +758,13 @@ button:disabled { opacity: 0.4; cursor: default; }
   letter-spacing: 1.6px;
   color: var(--muted);
 }
+/* Two cells of ~160px on a phone: at 40px "85.5 KB" and "in the trash ·
+   7 files" were cut at the cell's edge. */
+@media (max-width: 640px) {
+  .stats-hero-cell { padding: 22px 10px 18px; }
+  .stats-hero-num { font-size: 28px; letter-spacing: -1px; }
+  .stats-hero-label { text-align: center; }
+}
 
 /* Channel bars */
 .channel-bars { display: flex; flex-direction: column; gap: 7px; }
