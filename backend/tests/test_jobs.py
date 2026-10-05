@@ -351,10 +351,16 @@ def test_rescan_target_must_be_inside_a_media_root(runner):
         jobs.submit("outside", {})
 
 
+def _writes_its_pid(path):
+    """A script that writes its pid to ``path`` (whole: the file appears
+    with the pid in it, so a test that sees it can read it), then sleeps."""
+    return (f"import os, time; open({str(path) + '.tmp'!r}, 'w').write(str(os.getpid())); "
+            f"os.replace({str(path) + '.tmp'!r}, {str(path)!r}); time.sleep(1000)")
+
+
 def test_shutdown_stops_running_jobs(runner):
     pids = runner["tmp"] / "pid"
-    runner["kind"]("long", f"import os, time; open({str(pids)!r}, 'w').write(str(os.getpid())); time.sleep(1000)",
-                   group="g")
+    runner["kind"]("long", _writes_its_pid(pids), group="g")
     runner["gate_kind"]("gated", "g")
     job = jobs.submit("long", {})["id"]
     queued = jobs.submit("gated", {"gate": str(runner["tmp"] / "never")})["id"]
@@ -364,10 +370,6 @@ def test_shutdown_stops_running_jobs(runner):
     assert state(job) == "interrupted" and state(queued) == "interrupted"
     with pytest.raises(jobs.BadRequest):
         jobs.submit("long", {})
-
-
-def _writes_its_pid(path):
-    return f"import os, time; open({str(path)!r}, 'w').write(str(os.getpid())); time.sleep(1000)"
 
 
 def test_a_job_ending_as_shutdown_runs_is_interrupted_when_it_returns(runner, monkeypatch, capsys):
