@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { getPosts, getPost, getAuthors, getPeople, getTags, getCollections, applyTags, deleteItems, setDecision, restorePosts } from "../lib/api";
 import { setTagColors } from "../lib/tagColors";
@@ -29,6 +29,8 @@ const PAGE = 50;
 const TOP_UP_BELOW = 10;
 const PRELOAD_AHEAD = 2;
 const MUTE_KEY = "feedvault.review.muted";
+// The phone layout's breakpoint, the same as the CSS one (index.css).
+const PHONE = "(max-width: 640px)";
 
 function readMuted() {
   try { return localStorage.getItem(MUTE_KEY) !== "0"; } catch { return true; }
@@ -142,6 +144,8 @@ function ReviewSession({ scope, scopeControls }) {
   const requested   = useRef(new Set());
   const videoRef    = useRef(null);
   const rootRef     = useRef(null);
+  const stageRef    = useRef(null);
+  const barRef      = useRef(null);
 
   const cur = pos < queue.length ? queue[pos] : null;
   const post = cur ? full[cur.id] : null;
@@ -385,6 +389,34 @@ function ReviewSession({ scope, scopeControls }) {
   // Enter would press the button again instead of meaning "keep".
   function act(e, fn) { e.currentTarget.blur(); fn(); }
 
+  // On a phone the decision buttons are a bar fixed at the bottom, and the
+  // stage gets what the first screen has left between the page above it and
+  // that bar (at most 55vh), so the item and its buttons show without a
+  // scroll. Measured from layout, never from the scroll position, again
+  // whenever the page above or the bar changes size. The screen height is
+  // taken once per width: a phone's toolbar showing or hiding as the page
+  // scrolls must not resize the stage.
+  useLayoutEffect(() => {
+    const phone = window.matchMedia(PHONE);
+    let width = null, screenH = 0;
+    function fit() {
+      const stage = stageRef.current;
+      if (!stage) return;
+      if (!phone.matches) { stage.style.removeProperty("--stage-h"); return; }
+      if (window.innerWidth !== width) { width = window.innerWidth; screenH = window.innerHeight; }
+      const top = stage.getBoundingClientRect().top + window.scrollY;
+      const room = screenH - top - (barRef.current?.offsetHeight || 0) - 12;
+      const h = `${Math.round(Math.max(200, Math.min(room, screenH * 0.55)))}px`;
+      if (stage.style.getPropertyValue("--stage-h") !== h) stage.style.setProperty("--stage-h", h);
+    }
+    fit();
+    const seen = new ResizeObserver(fit);
+    seen.observe(document.body);
+    if (barRef.current) seen.observe(barRef.current);
+    window.addEventListener("resize", fit);
+    return () => { seen.disconnect(); window.removeEventListener("resize", fit); };
+  }, []);
+
   /* ── Render ────────────────────────────────────────────── */
 
   const handle = cur?.author?.handle || "unknown";
@@ -453,7 +485,7 @@ function ReviewSession({ scope, scopeControls }) {
 
   return (
     <div className="review" ref={rootRef}>
-      <div className="review-stage">
+      <div className="review-stage" ref={stageRef}>
         {stage}
         {media.length > 1 && cur && (
           <>
@@ -535,7 +567,7 @@ function ReviewSession({ scope, scopeControls }) {
           </div>
         )}
 
-        <div className="review-actions">
+        <div className="review-actions" ref={barRef}>
           <button type="button" className="btn-keep" onClick={e => act(e, keep)} disabled={!cur || busy}>
             <Icon name="check" size={15} />Keep<Kbd>K</Kbd>
           </button>
@@ -544,11 +576,11 @@ function ReviewSession({ scope, scopeControls }) {
           </button>
           {media.length > 1 && (
             <button type="button" className="btn-danger-soft" onClick={e => act(e, trashItem)} disabled={!m || busy}>
-              <Icon name="trash" size={14} />Trash this item<Kbd>X</Kbd>
+              <Icon name="trash" size={14} />Trash <span className="review-wide">this </span>item<Kbd>X</Kbd>
             </button>
           )}
           <div className="review-actions-row">
-            <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "prev" }))} title="Previous post (↑ or J)">
+            <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "prev" }))} title="Previous post (↑ or J)" aria-label="Previous post">
               <Icon name="arrowUp" size={14} /><Kbd>↑</Kbd>
             </button>
             <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "next" }))} disabled={!cur} title="Skip to the next post (↓ or L)">
@@ -559,13 +591,13 @@ function ReviewSession({ scope, scopeControls }) {
             </button>
           </div>
           <div className="review-actions-row">
-            <button type="button" className="btn-secondary" onClick={e => act(e, () => setMuted(v => !v))} aria-pressed={muted} title="Mute (M)">
+            <button type="button" className="btn-secondary" onClick={e => act(e, () => setMuted(v => !v))} aria-pressed={muted} title="Mute (M)" aria-label="Mute">
               <Icon name={muted ? "volumeOff" : "volume"} size={14} /><Kbd>M</Kbd>
             </button>
-            <button type="button" className="btn-secondary" onClick={e => act(e, toggleFullscreen)} title="Fullscreen (F)">
+            <button type="button" className="btn-secondary" onClick={e => act(e, toggleFullscreen)} title="Fullscreen (F)" aria-label="Fullscreen">
               <Icon name="expand" size={14} /><Kbd>F</Kbd>
             </button>
-            <button type="button" className="btn-secondary" onClick={e => act(e, () => setHelp(true))} title="Keyboard shortcuts (?)">
+            <button type="button" className="btn-secondary" onClick={e => act(e, () => setHelp(true))} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
               <Icon name="keyboard" size={14} /><Kbd>?</Kbd>
             </button>
           </div>
@@ -614,6 +646,12 @@ export default function Review() {
     [platform, author, person, kind, order, tag, untagged, newOnly, collection]);
   const scopeKey = JSON.stringify(scope);
 
+  // Open on a desktop (the toggle is hidden there), closed on a phone, where
+  // the filters would push the post below the first screen. Held here, not
+  // in the session, so changing a filter does not close them.
+  const [filtersOpen, setFiltersOpen] = useState(() => !window.matchMedia(PHONE).matches);
+  const active = [platform, kind, author || person, tag || untagged, collection, newOnly, order === "asc"].filter(Boolean).length;
+
   const { data: authorsData } = useApi(getAuthors, 0);
   const { data: peopleData } = useApi(getPeople, 0);
   const { data: tagsData } = useApi(getTags, 0);
@@ -633,60 +671,67 @@ export default function Review() {
   }
 
   const controls = (
-    <div className="review-scope" role="group" aria-label="Review scope">
-      <select className="sort-select" aria-label="Platform" value={platform} onChange={e => setParam({ platform: e.target.value, author: "" })}>
-        <option value="">All platforms</option>
-        {platforms.map(p => <option key={p} value={p}>{platformLabel(p)}</option>)}
-      </select>
-      <select className="sort-select" aria-label="Kind" value={kind} onChange={e => setParam({ kind: e.target.value })}>
-        <option value="">All kinds</option>
-        {KINDS.map(k => <option key={k} value={k}>{k}</option>)}
-      </select>
-      <CreatorPicker
-        className="review-scope-author"
-        people={peopleData || []}
-        accounts={authors}
-        platform={person ? "" : platform}
-        allLabel="All creators"
-        value={person ? { person } : author ? { platform, id: author } : null}
-        onChange={c => {
-          if (!c) setParam({ author: "", person: "" });
-          else if (c.person) setParam({ person: String(c.person.id), author: "", platform: "" });
-          else setParam({ platform: c.account.platform, author: c.account.id, person: "" });
-        }}
-      />
-      <select
-        className="sort-select review-scope-tag"
-        aria-label="Tag"
-        value={untagged ? "__untagged" : tag}
-        onChange={e => {
-          const v = e.target.value;
-          setParam(v === "__untagged" ? { untagged: "1", tag: "" } : { tag: v, untagged: "" });
-        }}
-      >
-        <option value="">Any tags</option>
-        <option value="__untagged">Untagged only</option>
-        {tag && !(tagsData || []).some(t => t.name === tag) && <option value={tag}>{tag}</option>}
-        {(tagsData || []).map(t => <option key={t.name} value={t.name}>{t.name} ({t.count})</option>)}
-      </select>
-      {(collections.length > 0 || collection) && (
-        <select className="sort-select review-scope-collection" aria-label="Collection" value={collection}
-                onChange={e => setParam({ collection: e.target.value })}>
-          <option value="">Any collection</option>
-          {collection && !collections.some(c => String(c.id) === collection) && (
-            <option value={collection} disabled>collection {collection}</option>
-          )}
-          {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
+    <div className={`review-filters${filtersOpen ? " is-open" : ""}`}>
+      <button type="button" className="btn-secondary review-filters-toggle" aria-expanded={filtersOpen}
+              aria-controls="review-scope" onClick={() => setFiltersOpen(v => !v)}>
+        <Icon name="filter" size={14} />Filters{active > 0 && <span className="chip">{active}</span>}
+        <Icon name="chevDown" size={14} className="review-filters-chev" />
+      </button>
+      <div className="review-scope" id="review-scope" role="group" aria-label="Review scope">
+        <select className="sort-select" aria-label="Platform" value={platform} onChange={e => setParam({ platform: e.target.value, author: "" })}>
+          <option value="">All platforms</option>
+          {platforms.map(p => <option key={p} value={p}>{platformLabel(p)}</option>)}
         </select>
-      )}
-      <select className="sort-select" aria-label="New posts" value={newOnly ? "1" : ""} onChange={e => setParam({ new: e.target.value })}>
-        <option value="">New and old</option>
-        <option value="1">New since last visit</option>
-      </select>
-      <select className="sort-select" aria-label="Order" value={order} onChange={e => setParam({ order: e.target.value === "asc" ? "asc" : "" })}>
-        <option value="desc">Newest first</option>
-        <option value="asc">Oldest first</option>
-      </select>
+        <select className="sort-select" aria-label="Kind" value={kind} onChange={e => setParam({ kind: e.target.value })}>
+          <option value="">All kinds</option>
+          {KINDS.map(k => <option key={k} value={k}>{k}</option>)}
+        </select>
+        <CreatorPicker
+          className="review-scope-author"
+          people={peopleData || []}
+          accounts={authors}
+          platform={person ? "" : platform}
+          allLabel="All creators"
+          value={person ? { person } : author ? { platform, id: author } : null}
+          onChange={c => {
+            if (!c) setParam({ author: "", person: "" });
+            else if (c.person) setParam({ person: String(c.person.id), author: "", platform: "" });
+            else setParam({ platform: c.account.platform, author: c.account.id, person: "" });
+          }}
+        />
+        <select
+          className="sort-select review-scope-tag"
+          aria-label="Tag"
+          value={untagged ? "__untagged" : tag}
+          onChange={e => {
+            const v = e.target.value;
+            setParam(v === "__untagged" ? { untagged: "1", tag: "" } : { tag: v, untagged: "" });
+          }}
+        >
+          <option value="">Any tags</option>
+          <option value="__untagged">Untagged only</option>
+          {tag && !(tagsData || []).some(t => t.name === tag) && <option value={tag}>{tag}</option>}
+          {(tagsData || []).map(t => <option key={t.name} value={t.name}>{t.name} ({t.count})</option>)}
+        </select>
+        {(collections.length > 0 || collection) && (
+          <select className="sort-select review-scope-collection" aria-label="Collection" value={collection}
+                  onChange={e => setParam({ collection: e.target.value })}>
+            <option value="">Any collection</option>
+            {collection && !collections.some(c => String(c.id) === collection) && (
+              <option value={collection} disabled>collection {collection}</option>
+            )}
+            {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
+          </select>
+        )}
+        <select className="sort-select" aria-label="New posts" value={newOnly ? "1" : ""} onChange={e => setParam({ new: e.target.value })}>
+          <option value="">New and old</option>
+          <option value="1">New since last visit</option>
+        </select>
+        <select className="sort-select" aria-label="Order" value={order} onChange={e => setParam({ order: e.target.value === "asc" ? "asc" : "" })}>
+          <option value="desc">Newest first</option>
+          <option value="asc">Oldest first</option>
+        </select>
+      </div>
     </div>
   );
 
