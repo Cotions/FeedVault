@@ -304,7 +304,7 @@ function findLayoutProblems({ scope, allow, overlapPx, minTarget }) {
     let past = null;
     const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     for (let n = walk.nextNode(); n && !past; n = walk.nextNode()) {
-      if (!n.data.trim() || !shown(n.parentElement)) continue;
+      if (!/[\p{L}\p{N}]/u.test(n.data) || !shown(n.parentElement)) continue;   // " @", " · ": nothing to find in a title
       let own = true;
       for (let a = n.parentElement; a && a !== el; a = a.parentElement) {
         const s = getComputedStyle(a);

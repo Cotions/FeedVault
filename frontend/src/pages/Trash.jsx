@@ -101,9 +101,9 @@ function TrashEntry({ entry: e, index, selectMode, selected, onToggle, onRestore
       <div className="big-file-foot">
         <span className="trash-entry-meta">
           {partial && e.platform && e.post_id ? (
-            <Link to={postPath(e)} className="big-file-author" title="Open the rest of the post" onClick={ev => selectMode && ev.preventDefault()}>{who}</Link>
+            <Link to={postPath(e)} className="big-file-author" title={`${who} · open the rest of the post`} onClick={ev => selectMode && ev.preventDefault()}>{who}</Link>
           ) : (
-            <span className="big-file-author" title={e.post || ""}>{who}</span>
+            <span className="big-file-author" title={e.post && e.post !== who ? `${who} · ${e.post}` : who}>{who}</span>
           )}
           <span className="trash-entry-when" title={`Deleted ${fmtFullDate(e.at)}${e.posted_at ? ` · posted ${fmtFullDate(e.posted_at)}` : ""}`}>
             {deleted}

@@ -78,13 +78,13 @@ function CreatorTable({ rows, total }) {
               <td role="cell" className="cell-main" data-label="Creator">
                 <Link to={authorFeedPath(a.platform, a)} className="storage-creator" title={`Show posts by @${a.handle}`}>
                   <span className="storage-creator-name">@{a.handle || a.id}</span>
-                  <span className="storage-creator-sub">
+                  <span className="storage-creator-sub" title={`${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}`}>
                     {a.name && a.name !== a.handle ? `${a.name} · ` : ""}{platformLabel(a.platform)}
                   </span>
                 </Link>
                 {a.person && (
                   <Link to={personPath(a.person.id)} className="chip person-chip" title={`Person: ${a.person.name}`}>
-                    <Icon name="users" size={11} />{a.person.name}
+                    <Icon name="users" size={11} /><span className="chip-text">{a.person.name}</span>
                   </Link>
                 )}
               </td>

@@ -1,8 +1,17 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { platformLabel, platformShort } from "../lib/fmt";
 import { accountKey, accountText, matchedFormer, matches, personText } from "../lib/people";
 
 const MAX_SHOWN = 60;
+
+// An option's second line: platforms and count, and what matched.
+function personSub(p) {
+  return `${p.platforms.map(platformShort).join(" · ") || "no account"} · ${p.count}`;
+}
+function accountSub(a, query) {
+  const former = matchedFormer(a, query);
+  return `${platformLabel(a.platform)} · ${a.count}${former ? ` · was @${former}` : ""}${a.person ? ` · ${a.person.name}` : ""}`;
+}
 
 /* A searchable creator filter: people first, then accounts, matched by name,
    any handle the account ever had, or a folder alias. Replaces a <select>,
@@ -19,7 +28,9 @@ export default function CreatorPicker({
   const [open,   setOpen]   = useState(false);
   const [query,  setQuery]  = useState("");
   const [active, setActive] = useState(0);
+  const [toLeft, setToLeft] = useState(false);
   const inputRef = useRef(null);
+  const listRef = useRef(null);
   const listId = useId();
 
   const options = useMemo(() => {
@@ -33,6 +44,22 @@ export default function CreatorPicker({
     }
     return out.slice(0, MAX_SHOWN);
   }, [people, accounts, platform, exclude, query]);
+
+  // The list hangs from the field's left edge; when that would run it past
+  // the window's right edge (a picker near the right of a narrow window), it
+  // hangs from the right edge instead and opens to the left.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    function place() {
+      const list = listRef.current;
+      if (!list) return;
+      const box = list.parentElement.getBoundingClientRect(), w = list.offsetWidth;
+      setToLeft(box.left + w > document.documentElement.clientWidth && box.right - w >= 0);
+    }
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, options]);
 
   const current = value?.person != null
     ? (people || []).find(p => p.id === Number(value.person))
@@ -86,7 +113,7 @@ export default function CreatorPicker({
         onKeyDown={onKeyDown}
       />
       {open && (
-        <ul className="picker-list" id={listId} role="listbox" aria-label={label}>
+        <ul ref={listRef} className={`picker-list${toLeft ? " is-to-left" : ""}`} id={listId} role="listbox" aria-label={label}>
           {!query && value && (
             <li role="option" aria-selected={false} className="picker-option picker-all"
                 onMouseDown={e => { e.preventDefault(); pick(null); }}>
@@ -107,18 +134,12 @@ export default function CreatorPicker({
               {o.person ? (
                 <>
                   <span className="picker-person">{o.person.name}</span>
-                  <span className="picker-sub">
-                    {o.person.platforms.map(platformShort).join(" · ") || "no account"} · {o.person.count}
-                  </span>
+                  <span className="picker-sub" title={personSub(o.person)}>{personSub(o.person)}</span>
                 </>
               ) : (
                 <>
                   <span className="picker-handle">@{o.account.handle || o.account.id}</span>
-                  <span className="picker-sub">
-                    {platformLabel(o.account.platform)} · {o.account.count}
-                    {matchedFormer(o.account, query) && <> · was @{matchedFormer(o.account, query)}</>}
-                    {o.account.person && <> · {o.account.person.name}</>}
-                  </span>
+                  <span className="picker-sub" title={accountSub(o.account, query)}>{accountSub(o.account, query)}</span>
                 </>
               )}
             </li>

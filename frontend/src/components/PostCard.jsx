@@ -87,7 +87,8 @@ export default function PostCard({ post, index = 0, selectMode = false, selected
 
       <div className="post-info">
         <div className="post-meta">
-          <Link to={authorFeedPath(post.platform, post.author)} className="post-author" title={post.author?.name || handle}>
+          <Link to={authorFeedPath(post.platform, post.author)} className="post-author"
+                title={post.author?.name && post.author.name !== handle ? `${post.author.name} · @${handle}` : `@${handle}`}>
             @{handle}
           </Link>
           <span className="post-platform" title={platformLabel(post.platform)}>{platformShort(post.platform)}</span>
@@ -97,7 +98,7 @@ export default function PostCard({ post, index = 0, selectMode = false, selected
           </time>
         </div>
         {cover && text && (
-          <Link to={to} className="post-excerpt">{text}</Link>
+          <Link to={to} className="post-excerpt" title={text}>{text}</Link>
         )}
         <TagChips tags={post.tags} max={3} compact />
       </div>

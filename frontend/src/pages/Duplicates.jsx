@@ -98,7 +98,8 @@ function Member({ m, group, chosen, onChoose, onView, disabled }) {
       </span>
       <span className="dup-member-foot">
         <span className="dup-folder" title={m.meta_path}>{lastPart(m.folder)}/</span>
-        <span className="dup-member-sub">
+        <span className="dup-member-sub"
+              title={[m.post && who, `${posts ? "posted" : "saved"} ${fmtShortDate(posts ? m.posted_at : m.saved_at)}`, plural(m.files, "file")].filter(Boolean).join(" · ")}>
           {m.post && who && <><Link to={postPath(m.post)} className="text-link" onClick={e => e.stopPropagation()}>{who}</Link> · </>}
           {posts
             ? <span title={`Posted ${fmtFullDate(m.posted_at)} · saved ${fmtFullDate(m.saved_at)}`}>posted {fmtShortDate(m.posted_at)}</span>

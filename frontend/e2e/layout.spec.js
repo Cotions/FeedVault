@@ -52,7 +52,6 @@ async function openUrl(page, url, ready) {
 }
 
 const S = stressData();
-const heading = name => page => page.getByRole("heading", { level: 2, name, exact: true });
 
 const VIEWS = [
   ...PAGES.map(p => ({ name: p.name, open: page => openPage(page, p) })),

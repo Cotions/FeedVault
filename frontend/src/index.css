@@ -112,6 +112,7 @@ body {
   gap: 6px;
   width: 32px;
   height: 32px;
+  flex-shrink: 0;
   padding: 0;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -646,6 +647,10 @@ button:disabled { opacity: 0.4; cursor: default; }
   font-size: 21px;
   font-weight: 800;
   letter-spacing: -0.6px;
+  /* A 60-character handle or name wraps: never pushes the head's buttons
+     off a narrow window. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .page-count {
   font-family: var(--mono);
@@ -835,6 +840,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   animation: statRise 0.4s ease forwards;
   border-radius: 6px;
   padding: 3px 4px;
+  min-height: 24px;                 /* a link: a 24px target */
   transition: background 0.15s;
 }
 .channel-bar-row:hover { background: rgba(255, 255, 255, 0.03); }
@@ -941,6 +947,8 @@ code {
   padding: 4px 7px;
   white-space: nowrap;
 }
+/* A chip that is a link (a suggestion's account, a creator's person): a 24px target. */
+a.chip { min-height: 24px; }
 .chip-new { color: var(--accent-text); border-color: rgba(var(--glow-rgb), 0.35); background: rgba(var(--accent-rgb), 0.12); }
 
 .page-head-bare { margin-bottom: 0; }
@@ -1207,6 +1215,9 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  /* 24px to the pointer, the line's own height to the row. */
+  padding-block: 3.5px;
+  margin-block: -3.5px;
   transition: color 0.15s;
 }
 .post-author:hover { color: var(--accent-hover); }
@@ -1234,6 +1245,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  min-height: 24px;                 /* a one-line caption is still a 24px target */
 }
 .post-excerpt:hover { color: var(--text); }
 
@@ -1420,6 +1432,9 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   font-weight: 800;
   letter-spacing: -0.3px;
   overflow-wrap: anywhere;
+  /* 24px to the pointer: the extra goes above, where nothing else is. */
+  padding-top: 3px;
+  margin-top: -3px;
 }
 .post-byline-handle:hover { color: var(--accent-hover); }
 .post-byline-name { font-size: 12px; color: var(--muted); }
@@ -1622,6 +1637,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   .card-table td.cell-actions { align-items: center; }
   .card-table .storage-actions { justify-content: flex-start; }
   .card-table .storage-creator { max-width: 100%; }
+  .card-table .person-chip { max-width: 100%; }
   .data-table.card-table tbody td.storage-share { display: flex; align-items: center; gap: 10px; }
   .card-table .storage-share::before { flex: 0 0 96px; }
   .card-table .storage-share .channel-bar-track { flex: 1; width: auto; min-width: 0; }
@@ -2080,14 +2096,17 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 }
 .review-left { font-size: 26px; font-weight: 800; letter-spacing: -1px; text-shadow: 0 0 20px rgba(var(--glow-rgb), 0.35); }
 .review-session { flex-basis: 100%; font-size: 11px; color: var(--muted); }
-.review-info { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+/* Many tags or collections: the info shrinks to leave the buttons room and
+   scrolls, never runs under them. */
+.review-info { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; }
 .review-byline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.review-byline .post-byline-handle { flex: 1; min-width: 0; }
+/* At the top of a scrolling box its 24px target grows down: above, it would be cut off. */
+.review-byline .post-byline-handle { flex: 1; min-width: 0; padding: 0 0 3px; margin: 0 0 -3px; }
 .review-meta { font-size: 11.5px; color: var(--text-dim); }
 .review-album { font-size: 12px; }
 .review-caption { max-height: 30vh; overflow-y: auto; font-size: 13px; }
 .review-caption .rich-text { font-size: 13px; line-height: 1.55; }
-.review-open { font-size: 12px; align-self: flex-start; }
+.review-open { font-size: 12px; align-self: flex-start; padding-block: 4px; }
 .review-actions { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
 .review-actions > button { padding: 10px 14px; }
 .review-actions-row { display: flex; gap: 6px; }
@@ -2448,6 +2467,11 @@ a.btn-primary { color: var(--on-accent); }
   color: inherit;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* A link or toggle is 24px tall to the pointer; the negative margin keeps
+   the chip as tall as before (its padding is unpainted). */
+.tag-chip > a, .tag-chip-toggle { padding-block: 6.5px; margin-block: -2.5px; }
+/* The × has 3px of its own padding on the left: the gap stays 9px. */
+.tag-chip > :is(a, span):has(+ .tag-chip-x) { padding-right: 6px; }
 .tag-chip > a:hover { color: var(--glow); }
 /* A tag's own colour (--tag, set on the chip), toned for the dark surface. */
 .tag-chip.has-color {
@@ -2458,18 +2482,22 @@ a.btn-primary { color: var(--on-accent); }
 .tag-chip.has-color > a:hover { color: #fff; }
 .tag-chip-x {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; margin-right: 3px;
-  padding: 0; border: 0; border-radius: 50%;
-  background: transparent; color: var(--muted); cursor: pointer;
+  /* An 18px circle in a 24px target: the padding is the pointer's, not the
+     row's (negative margin), and not painted (content-box background). */
+  width: 24px; height: 24px; margin: -3px 0; flex-shrink: 0;
+  padding: 3px; border: 0; border-radius: 50%;
+  background: transparent; background-clip: content-box; color: var(--muted); cursor: pointer;
 }
 .tag-chip-x:hover:not(:disabled) { color: var(--text); background: rgba(255, 255, 255, 0.08); }
 .tag-chip-toggle { background: transparent; border: 0; font: inherit; cursor: pointer; }
 .tag-chip.is-more { color: var(--muted); background: transparent; border-color: var(--border); padding: 4px 7px; }
 .tag-chip.is-add { color: var(--blue); background: rgba(91, 157, 255, 0.1); border-color: rgba(91, 157, 255, 0.3); }
 .tag-chip.is-remove { color: #ffb3b5; background: rgba(229, 72, 77, 0.12); border-color: rgba(229, 72, 77, 0.4); text-decoration: line-through; }
-.tag-chips.is-compact { margin-top: 7px; gap: 4px; }
+.tag-chips.is-compact { margin-top: 7px; gap: 6px 4px; }
 .tag-chips.is-compact .tag-chip { font-size: 10.5px; }
 .tag-chips.is-compact .tag-chip > a, .tag-chips.is-compact .tag-chip > span { padding: 3px 7px; }
+/* Same 24px target on a card; 6px between rows so two rows' targets never meet. */
+.tag-chips.is-compact .tag-chip > a { padding-block: 7px; margin-block: -4px; min-width: 24px; justify-content: center; }
 
 .tag-input { position: relative; min-width: 0; }
 .tag-input input[type="text"] { width: 100%; font-family: var(--body); padding: 7px 11px; }
@@ -2619,6 +2647,7 @@ a.btn-primary { color: var(--on-accent); }
 .side-new {
   position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
   text-decoration: none;
+  min-height: 24px;                 /* a link of its own: a 24px target */
 }
 .side-new:hover { background: rgba(var(--accent-rgb), 0.26); }
 .new-badge { margin-left: 0; align-self: flex-end; white-space: nowrap; }
@@ -2729,12 +2758,13 @@ a.btn-primary { color: var(--on-accent); }
   border-radius: 10px;
   box-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.95);
 }
+.picker-list.is-to-left { left: auto; right: 0; }
 .picker-option {
   display: flex; flex-direction: column; gap: 1px;
   padding: 6px 10px; border-radius: 7px; cursor: pointer;
 }
 .picker-option.is-active { background: var(--surface-2); }
-.picker-person, .picker-handle { font-size: 13px; font-weight: 700; color: var(--text); }
+.picker-person, .picker-handle { font-size: 13px; font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
 .picker-person { color: var(--accent-hover); }
 .picker-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .picker-all { font-size: 12px; color: var(--text-dim); }
@@ -2742,6 +2772,8 @@ a.btn-primary { color: var(--on-accent); }
 .storage-person { margin-left: 8px; }
 .chip.person-chip { color: var(--accent-hover); border-color: rgba(var(--glow-rgb), 0.35); text-transform: none; }
 .chip.person-chip:hover { background: rgba(var(--accent-rgb), 0.12); }
+/* A chip's text, cut when the chip is held narrower than it (its title has it all). */
+.chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── People ─────────────────────────────────────────────── */
 .creators-section { display: flex; align-items: baseline; gap: 8px; margin: 18px 0 10px; }
@@ -2754,6 +2786,9 @@ button.creator-main { background: none; border: 0; color: inherit; font: inherit
 .person-card .creator-id { gap: 5px; }
 .person-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .platform-chip { text-transform: none; }
+/* A person's accounts: a long handle is cut (its title has it), never runs
+   over the count and the card's buttons. */
+.person-chips .platform-chip { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .person-stats { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
 
 .suggestions {
@@ -2858,7 +2893,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   display: flex; align-items: center; gap: 10px;
   padding: 9px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
 }
-.source-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.source-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
 .source-summary { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .source-schedule {
   display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-dim);
@@ -2894,6 +2929,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 }
 .source-health .is-err { color: #ffb3b5; }
 .source-rename { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--text); }
+.source-rename .btn-link { min-height: 24px; }
+.source-rename > span { min-width: 0; overflow-wrap: anywhere; }
 .warn-badge { margin-left: 0; align-self: flex-end; white-space: nowrap; color: #ffd59a; background: rgba(255, 196, 102, 0.12); border-color: rgba(255, 196, 102, 0.4); }
 .warn-badge .icon { color: #ffd59a; }
 .creator-card .source-sync { margin-right: 10px; }
@@ -2939,7 +2976,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 }
 .notif-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 0 16px; }
 .notif-head .card-title { margin-bottom: 8px; }
-.notif-close { padding: 4px; }
+.notif-close { padding: 4px; min-width: 24px; min-height: 24px; justify-content: center; }
 .notif-empty { margin: 0; padding: 4px 16px 16px; color: var(--muted); font-size: 13px; }
 .notif-list { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; }
 .notif-entry {
