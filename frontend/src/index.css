@@ -419,28 +419,69 @@ main {
   .app-body { flex-direction: column; background: none; }
   /* In a column, auto margins would size it to its content's width. */
   main { width: 100%; }
-  .sidebar {
-    position: static;
-    width: 100%;
-    min-height: 0;
-    height: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px;
-    padding: 10px 12px;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+  /* One bar: the menu button, the brand mark, the search box, the running
+     jobs and the status dot. 8px + 36px search + 8px + 1px border, under
+     the notch when there is one. */
+  :root { --header-h: calc(53px + env(safe-area-inset-top)); }
+  header { gap: 8px; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; }
+  header h1 {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
   }
-  /* The links wrap as chips sized to their label, not one full-width row
-     each (that pushed the page a whole screen down). The .sidebar prefix
-     outranks the base rules declared further down. */
-  .sidebar .side-link { width: auto; padding: 7px 10px; white-space: nowrap; }
-  .sidebar .side-row { flex-direction: row; align-items: center; }
-  .sidebar .side-new { position: static; transform: none; }
-  .sidebar .side-sep { display: none; }
-  .sidebar .side-scan-status { padding: 0 6px 0 0; }
+  .header-right { gap: 8px; }
+  header .nav-menu-btn { display: inline-flex; position: relative; flex-shrink: 0; width: 36px; height: 36px; }
+  header .nav-jobs-live { display: inline-flex; }
+  /* The sidebar is a drawer from the left, over everything, the same column
+     as on a desktop. Closed, it is not there at all (nor in the tab order). */
+  .sidebar { display: none; }
+  .sidebar.is-open {
+    display: flex;
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    z-index: 110;
+    width: min(280px, 86vw);
+    height: auto;
+    padding: calc(10px + env(safe-area-inset-top)) 12px calc(18px + env(safe-area-inset-bottom));
+    background: rgba(13, 16, 23, 0.98);
+    border-right: 1px solid var(--border);
+    box-shadow: 18px 0 40px -20px rgba(0, 0, 0, 0.9);
+    overscroll-behavior: contain;
+    animation: drawerIn 0.2s cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+  .sidebar .side-drawer-head { display: flex; }
+  /* Tap-sized rows. */
+  .sidebar .side-link { min-height: 42px; }
+  .nav-backdrop {
+    position: fixed; inset: 0; z-index: 109;
+    background: rgba(0, 0, 0, 0.55);
+    animation: pageFade 0.2s ease;
+  }
+  /* The bell's panel opens over the drawer, inside the screen. */
+  .sidebar .notif-panel { top: calc(env(safe-area-inset-top) + 56px); }
 }
+/* Phone-only parts of the bar and the drawer. */
+.nav-menu-btn, .nav-jobs-live, .side-drawer-head { display: none; }
+.side-drawer-head { align-items: center; justify-content: space-between; padding: 0 2px 8px 14px; }
+.side-drawer-head .card-title { margin: 0; }
+.nav-menu-badge, .nav-menu-dot {
+  position: absolute; top: -4px; right: -4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.nav-menu-badge { min-width: 17px; padding: 1px 4px; font-family: var(--mono); font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; }
+.nav-menu-dot { top: -2px; right: -2px; width: 9px; height: 9px; }
+.nav-jobs-live {
+  align-items: center; gap: 4px;
+  min-height: 32px; padding: 0 8px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: var(--accent-hover);
+  background: rgba(var(--accent-rgb), 0.14);
+  border: 1px solid rgba(var(--glow-rgb), 0.3);
+  border-radius: 999px;
+}
+@keyframes drawerIn { from { transform: translateX(-100%); } }
 
 /* ── Cards ──────────────────────────────────────────────── */
 .card {

@@ -39,6 +39,8 @@ const JOBS_IDLE_POLL_MS   = 15000;
 // Desktop notifications on: a hidden tab still polls, now and then.
 const DESKTOP_POLL_MS     = 60000;
 const DESKTOP_MAX         = 5;               // notifications shown at once; the bell lists the rest
+// A phone: the sidebar folds into a drawer behind the header's menu button.
+const PHONE = "(max-width: 640px)";
 
 export default function App() {
   const location = useLocation();
@@ -65,6 +67,11 @@ export default function App() {
   const desktopRef = useRef(false);       // this tab shows desktop notifications (the setting, and allowed)
   const navigateRef = useRef(navigate);
   useEffect(() => { navigateRef.current = navigate; }, [navigate]);
+  const [phone,    setPhone]    = useState(() => window.matchMedia(PHONE).matches);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  const navRef  = useRef(null);
+  const drawer  = phone && menuOpen;
 
   const toast = useCallback((text, kind = "ok", link) => {
     const id = ++toastId.current;
@@ -118,6 +125,49 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // On a phone the sidebar is a drawer. Any navigation closes it (choosing a
+  // page, a notification, Back), and so does growing past the breakpoint.
+  useEffect(() => {
+    const mq = window.matchMedia(PHONE);
+    const onChange = () => { setPhone(mq.matches); if (!mq.matches) setMenuOpen(false); };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  const [navKey, setNavKey] = useState(location.key);
+  if (location.key !== navKey) { setNavKey(location.key); setMenuOpen(false); }
+
+  // While the drawer is open: focus moves into it and Tab stays there, Escape
+  // closes it (after the bell's panel or the quit confirmation, which close
+  // first), and the page behind does not scroll. Closing gives focus back to
+  // the menu button.
+  useEffect(() => {
+    if (!drawer) return;
+    const nav = navRef.current;
+    const focusable = () => [...nav.querySelectorAll("a[href], button:not(:disabled)")];
+    (nav.querySelector(".side-link.active") || focusable()[0])?.focus();
+    function onKey(e) {
+      if (e.key === "Escape") {
+        if (!nav.querySelector(".notif-panel, .side-quit-confirm")) setMenuOpen(false);
+      } else if (e.key === "Tab") {
+        const list = focusable();
+        const first = list[0], last = list[list.length - 1];
+        if (!nav.contains(document.activeElement)) { e.preventDefault(); first?.focus(); }
+        else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    }
+    const html = document.documentElement.style;
+    const overflow = html.overflow;
+    html.overflow = "hidden";
+    document.addEventListener("keydown", onKey);
+    const button = menuRef.current;
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      html.overflow = overflow;
+      button?.focus();
+    };
+  }, [drawer]);
 
   useEffect(() => {
     if (!confirmQuit) return;
@@ -276,7 +326,22 @@ export default function App() {
     <ToastContext.Provider value={toast}>
       <CyberBackground />
       <ScrollManager />
-      <header>
+      <header inert={drawer ? "" : undefined}>
+        <button
+          type="button"
+          ref={menuRef}
+          className="icon-btn nav-menu-btn"
+          aria-expanded={drawer}
+          aria-controls="main-nav"
+          aria-label={menuLabel(jobList?.notifications?.unread ?? 0, jobsActive, jobList?.new ?? 0)}
+          title="Pages, jobs, notifications"
+          onClick={() => setMenuOpen(true)}
+        >
+          <Icon name="menu" size={18} />
+          {(jobList?.notifications?.unread ?? 0) > 0 ? (
+            <span className="nav-menu-badge">{fmtInt(jobList.notifications.unread)}</span>
+          ) : (jobsActive > 0 || jobList?.new > 0) && <span className="nav-menu-dot" />}
+        </button>
         <div className="brand">
           <span className="brand-mark"><Icon name="feed" size={17} /></span>
           <h1>FeedVault</h1>
@@ -301,6 +366,12 @@ export default function App() {
           )}
         </div>
         <div className="header-right">
+          {jobsActive > 0 && (
+            <Link to="/jobs" className="nav-jobs-live" title={`${jobsRunning} running, ${jobsActive - jobsRunning} queued`}
+                  aria-label={`Jobs: ${jobsActive} active`}>
+              <Icon name="refresh" size={13} className="spin" />{jobsActive}
+            </Link>
+          )}
           <span
             className={`status-dot ${online ? "online" : ""}`}
             title={online ? "Backend connected" : online === false ? "Backend offline" : "Connecting…"}
@@ -311,7 +382,14 @@ export default function App() {
       </header>
 
       <div className="app-body">
-        <nav className="sidebar" aria-label="Main">
+        {drawer && <div className="nav-backdrop" onClick={() => setMenuOpen(false)} />}
+        <nav className={`sidebar${drawer ? " is-open" : ""}`} id="main-nav" aria-label="Main" ref={navRef}>
+          <div className="side-drawer-head">
+            <span className="card-title">Menu</span>
+            <button type="button" className="btn-ghost notif-close" onClick={() => setMenuOpen(false)} aria-label="Close menu">
+              <Icon name="close" size={15} />
+            </button>
+          </div>
           <div className="side-row">
             <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
             {jobList?.new > 0 && (
@@ -395,7 +473,7 @@ export default function App() {
           )}
         </nav>
 
-        <main>
+        <main inert={drawer ? "" : undefined}>
           {online === false && (
             <div className="offline-banner" role="alert">
               <Icon name="warn" size={16} />
@@ -453,6 +531,17 @@ export default function App() {
     </JobsContext.Provider>
     </ScanContext.Provider>
   );
+}
+
+/* The menu button's name says what waits behind it, since on a phone its
+   badge stands for the bell, the running jobs and the new posts. */
+function menuLabel(unread, jobs, fresh) {
+  const parts = [
+    unread > 0 && `${fmtInt(unread)} unread notification${unread === 1 ? "" : "s"}`,
+    jobs > 0 && `${jobs} job${jobs === 1 ? "" : "s"} active`,
+    fresh > 0 && `${fmtInt(fresh)} new post${fresh === 1 ? "" : "s"}`,
+  ].filter(Boolean);
+  return parts.length ? `Menu (${parts.join(", ")})` : "Menu";
 }
 
 // "Sync @name" / "Sync x.com/name" → "@name" / "x.com/name"
