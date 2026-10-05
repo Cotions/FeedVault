@@ -2287,11 +2287,13 @@ a.btn-primary { color: var(--on-accent); }
   background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 10px;
 }
 .tag-row:hover { border-color: var(--border); }
-.tag-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: var(--text-dim); }
+.tag-row-main { flex: 1 1 160px; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: var(--text-dim); }
 .tag-row-main:hover { color: var(--text); }
 .tag-row-main .icon { color: var(--accent-hover); flex-shrink: 0; }
 .tag-row-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tag-row-actions { display: flex; gap: 2px; flex-shrink: 0; }
+/* The 160px basis above makes the actions wrap under the name on a phone
+   rather than squeezing the name to its first letter. */
 .tag-row { flex-wrap: wrap; }
 .tag-row.is-unused { opacity: 0.55; }
 .tag-row.is-unused:hover { opacity: 1; }
