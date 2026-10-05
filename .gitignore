@@ -7,3 +7,5 @@ dist/
 build/
 release/
 .playwright-mcp/
+frontend/playwright-report/
+frontend/test-results/

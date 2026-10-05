@@ -5,7 +5,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 
 export default [
-  { ignores: ['dist'] },
+  { ignores: ['dist', 'playwright-report', 'test-results'] },
   {
     files: ['**/*.{js,jsx}'],
     languageOptions: {
@@ -46,8 +46,9 @@ export default [
     },
   },
   {
-    // Node checks run by `npm test` (node --test), outside the browser bundle.
-    files: ['scripts/**/*.js'],
+    // Node checks run by `npm test` (node --test) and the browser tests run by
+    // `npm run e2e` (Playwright), outside the browser bundle.
+    files: ['scripts/**/*.js', 'e2e/**/*.js', 'playwright.config.js'],
     languageOptions: { globals: globals.node },
   },
 ]

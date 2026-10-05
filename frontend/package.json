@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test scripts/fmt.test.js scripts/theme.test.js scripts/sourceOptions.test.js scripts/health.test.js scripts/userscript.test.js scripts/viteServer.test.js",
+    "test": "node --test scripts/fmt.test.js scripts/theme.test.js scripts/sourceOptions.test.js scripts/health.test.js scripts/userscript.test.js scripts/viteServer.test.js scripts/e2eHarness.test.js",
+    "e2e": "playwright test",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.63.0",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^6.1.1",
