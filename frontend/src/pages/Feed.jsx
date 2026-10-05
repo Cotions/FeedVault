@@ -219,10 +219,10 @@ export default function Feed() {
       setConfirmDel(false);
       setDelErrors(r.errors?.length ? r.errors : null);
       if (gone.size) {
-        toast(`${gone.size} post${gone.size === 1 ? "" : "s"} moved to the trash (${plural(r.files ?? 0, "file")} including metadata, ${fmtBytes(r.bytes ?? 0)}).`);
+        toast(`${plural(gone.size, "post")} moved to the trash (${plural(r.files ?? 0, "file")} including metadata, ${fmtBytes(r.bytes ?? 0)}).`);
       }
       if (gone.size < ids.length && !r.errors?.length) {
-        toast(`${ids.length - gone.size} post${ids.length - gone.size === 1 ? "" : "s"} could not be deleted.`, "err");
+        toast(`${plural(ids.length - gone.size, "post")} could not be deleted.`, "err");
       }
     } catch (e) {
       setDlgError(e.message);
@@ -570,7 +570,7 @@ export default function Feed() {
           Move {selectedCount === 1 ? "this post" : `these ${selectedCount} posts`} and
           all {selectedCount === 1 ? "its" : "their"} files
           {selectedMedia > 0 && ` (${selectedMedia} media, ${fmtBytes(selectedBytes)})`} to the trash?
-          You can restore {selectedCount === 1 ? "it" : "them"} from the Trash page.
+          You can restore {selectedCount === 1 ? "it" : "them"} from the Trash page; the space is freed once the trash is emptied.
         </p>
       </ConfirmDialog>
     </div>

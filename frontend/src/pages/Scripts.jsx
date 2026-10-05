@@ -177,7 +177,9 @@ export default function Scripts() {
   const logRef = useRef(null);
   const shownId = job?.id;
   useEffect(() => {
-    if (shownId != null) logRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    if (shownId == null) return;
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    logRef.current?.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
   }, [shownId]);
   const all = data?.scripts || [];
   const builtins = all.filter(s => s.builtin);

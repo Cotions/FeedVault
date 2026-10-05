@@ -762,7 +762,7 @@ button:disabled { opacity: 0.4; cursor: default; }
    7 files" were cut at the cell's edge. */
 @media (max-width: 640px) {
   .stats-hero-cell { padding: 22px 10px 18px; }
-  .stats-hero-num { font-size: 28px; letter-spacing: -1px; }
+  .stats-hero-num { font-size: clamp(20px, 7vw, 28px); letter-spacing: -1px; }
   .stats-hero-label { text-align: center; }
 }
 
@@ -1849,7 +1849,8 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .creator-tools .icon-btn { width: 26px; height: 26px; }
 /* A phone: the buttons go on a row of their own under the name. */
 @media (max-width: 640px) {
-  .creator-card { flex-wrap: wrap; justify-content: flex-end; padding-bottom: 8px; }
+  .creator-card { flex-wrap: wrap; justify-content: flex-end; }
+  .creator-card:has(> :not(.creator-main)) { padding-bottom: 8px; }
   .creator-card .creator-main { flex-basis: 100%; }
   .creator-card .creator-tools { flex-direction: row; }
 }

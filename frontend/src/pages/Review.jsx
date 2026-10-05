@@ -590,7 +590,7 @@ function ReviewSession({ scope, scopeControls }) {
                 <div key={k}><dt><Kbd>{k}</Kbd></dt><dd>{d}</dd></div>
               ))}
             </dl>
-            <p className="dim">Trashing moves files to the trash folder; undo brings them back. Empty the trash from Settings.</p>
+            <p className="dim">Trashing moves files to the trash folder; undo, or the Trash page, brings them back. Empty the trash from Settings.</p>
             <button type="button" className="btn-secondary" onClick={() => setHelp(false)} autoFocus>Close</button>
           </div>
         </div>
