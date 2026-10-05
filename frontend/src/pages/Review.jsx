@@ -13,6 +13,8 @@ import CollectionDialog from "../components/CollectionDialog";
 import Icon from "../components/Icon";
 import CreatorPicker from "../components/CreatorPicker";
 import { PHONE } from "../lib/layout";
+import { useFiltersOpen } from "../lib/useFiltersOpen";
+import FiltersToggle from "../components/FiltersToggle";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
 
@@ -660,20 +662,10 @@ export default function Review() {
     [platform, author, person, kind, order, tag, untagged, newOnly, collection]);
   const scopeKey = JSON.stringify(scope);
 
-  // Open on a desktop (the toggle is hidden there), closed on a phone, where
-  // they are rarely changed during a session and would put the post's
-  // details a screen further down. Held here, not in the session, so
-  // changing a filter does not close them; crossing the breakpoint (a
-  // rotation) starts over from that width's default.
-  const [filtersOpen, setFiltersOpen] = useState(() => !window.matchMedia(PHONE).matches);
-  useEffect(() => {
-    const phone = window.matchMedia(PHONE);
-    const follow = () => setFiltersOpen(!phone.matches);
-    phone.addEventListener("change", follow);
-    return () => phone.removeEventListener("change", follow);
-  }, []);
-  // A creator account sets its platform too: one filter, not two.
-  const active = [author || person || platform, kind, tag || untagged, collection, newOnly, order === "asc"].filter(Boolean).length;
+  const [filtersOpen, setFiltersOpen] = useFiltersOpen();
+  // A creator account sets its platform too: one filter, not two (a person
+  // and a platform are two).
+  const active = [author || person, !author && platform, kind, tag || untagged, collection, newOnly, order === "asc"].filter(Boolean).length;
 
   const { data: authorsData } = useApi(getAuthors, 0);
   const { data: peopleData } = useApi(getPeople, 0);
@@ -695,11 +687,7 @@ export default function Review() {
 
   const controls = (
     <div className={`review-filters${filtersOpen ? " is-open" : ""}`}>
-      <button type="button" className="btn-secondary review-filters-toggle" aria-expanded={filtersOpen}
-              aria-controls="review-scope" onClick={() => setFiltersOpen(v => !v)}>
-        <Icon name="filter" size={14} />Filters{active > 0 && <span className="chip">{active}</span>}
-        <Icon name="chevDown" size={14} className="review-filters-chev" />
-      </button>
+      <FiltersToggle open={filtersOpen} onToggle={() => setFiltersOpen(v => !v)} active={active} controls="review-scope" />
       <div className="review-scope" id="review-scope" role="group" aria-label="Review scope">
         <select className="sort-select" aria-label="Platform" value={platform} onChange={e => setParam({ platform: e.target.value, author: "" })}>
           <option value="">All platforms</option>

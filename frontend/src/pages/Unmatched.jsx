@@ -29,27 +29,27 @@ export default function Unmatched() {
         <div className="empty">Every file is attached to a post.</div>
       ) : (
         <div className="table-wrap">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th scope="col">Path</th>
-                <th scope="col">Reason</th>
-                <th scope="col" className="num">Size</th>
-                <th scope="col" className="num">Modified</th>
+          <table className="data-table card-table" role="table">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th scope="col" role="columnheader">Path</th>
+                <th scope="col" role="columnheader">Reason</th>
+                <th scope="col" role="columnheader" className="num">Size</th>
+                <th scope="col" role="columnheader" className="num">Modified</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody role="rowgroup">
               {rows.map((r, i) => (
-                <tr key={r.path} style={{ animationDelay: `${Math.min(i, 30) * 20}ms` }}>
-                  <td className="path" title={r.path}>{r.path}</td>
-                  <td className="reason">
+                <tr key={r.path} role="row" style={{ animationDelay: `${Math.min(i, 30) * 20}ms` }}>
+                  <td role="cell" className="path cell-main" data-label="Path" title={r.path}>{r.path}</td>
+                  <td role="cell" className="reason" data-label="Reason">
                     {r.reason || "—"}
                     {r.reason?.startsWith("duplicate of ") && (
                       <> <Link to="/duplicates" className="text-link" title="Compare the copies and keep one">compare in Duplicates</Link></>
                     )}
                   </td>
-                  <td className="num">{fmtBytes(r.size)}</td>
-                  <td className="num" title={fmtFullDate(r.mtime)}>{fmtStamp(r.mtime)}</td>
+                  <td role="cell" className="num" data-label="Size">{fmtBytes(r.size)}</td>
+                  <td role="cell" className="num" data-label="Modified" title={fmtFullDate(r.mtime)}>{fmtStamp(r.mtime)}</td>
                 </tr>
               ))}
             </tbody>

@@ -204,35 +204,36 @@ export default function Jobs() {
           <div className="empty">{list ? "No job has run yet." : "Loading…"}</div>
         ) : (
           <div className="table-wrap">
-            <table className="data-table job-table">
-              <thead>
-                <tr>
-                  <th scope="col">State</th>
-                  <th scope="col">Job</th>
-                  <th scope="col" className="num">Started</th>
-                  <th scope="col" className="num">Took</th>
-                  <th scope="col" className="num">Exit</th>
-                  <th scope="col">Result</th>
+            <table className="data-table job-table card-table" role="table">
+              <thead role="rowgroup">
+                <tr role="row">
+                  <th scope="col" role="columnheader">State</th>
+                  <th scope="col" role="columnheader">Job</th>
+                  <th scope="col" role="columnheader" className="num">Started</th>
+                  <th scope="col" role="columnheader" className="num">Took</th>
+                  <th scope="col" role="columnheader" className="num">Exit</th>
+                  <th scope="col" role="columnheader">Result</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody role="rowgroup">
                 {history.map((j, i) => (
                   <tr
                     key={j.id}
+                    role="row"
                     className={j.id === shown?.id ? "is-selected" : undefined}
                     style={{ animationDelay: `${Math.min(i, 30) * 20}ms` }}
                     onClick={() => pick(j.id)}
                   >
-                    <td><StateChip state={j.state} /></td>
-                    <td>
+                    <td role="cell" data-label="State"><StateChip state={j.state} /></td>
+                    <td role="cell" className="cell-main" data-label="Job">
                       <button type="button" className="btn-link" onClick={e => { e.stopPropagation(); pick(j.id); }} title="Show its log">
                         <JobTitle job={j} />
                       </button>
                     </td>
-                    <td className="num" title={fmtFullDate(j.started_at ?? j.created_at)}>{fmtStamp(j.started_at ?? j.created_at)}</td>
-                    <td className="num">{jobDuration(j) ?? "—"}</td>
-                    <td className="num">{j.exit_code ?? "—"}</td>
-                    <td className={j.state === "failed" ? "job-message is-err" : "job-message"}>{j.message || "—"}</td>
+                    <td role="cell" className="num" data-label="Started" title={fmtFullDate(j.started_at ?? j.created_at)}>{fmtStamp(j.started_at ?? j.created_at)}</td>
+                    <td role="cell" className="num" data-label="Took">{jobDuration(j) ?? "—"}</td>
+                    <td role="cell" className="num" data-label="Exit">{j.exit_code ?? "—"}</td>
+                    <td role="cell" className={j.state === "failed" ? "job-message is-err" : "job-message"} data-label="Result">{j.message || "—"}</td>
                   </tr>
                 ))}
               </tbody>
