@@ -668,7 +668,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 
 .vp-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  /* 96px: the three cells still fit one row on a phone (at 120px the third
+     wrapped and left an empty grey cell beside it). */
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 1px;
   background: var(--border);
   border: 1px solid var(--border);
