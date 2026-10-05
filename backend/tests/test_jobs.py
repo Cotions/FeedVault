@@ -55,8 +55,8 @@ def runner(env, monkeypatch):
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     added = []
 
-    def kind(name, script, group="test", params=None, args=lambda p: [], **extra):
-        jobs.register(name, label=name, params=params or {}, group=group,
+    def kind(name, script, group="test", params=None, args=lambda p: [], hooks=None, **extra):
+        jobs.register(name, label=name, params=params or {}, group=group, **(hooks or {}),
                       build=lambda p: {"tool": sys.executable, "args": ["-c", script, *args(p)],
                                        **{k: (v(p) if callable(v) else v) for k, v in extra.items()}})
         added.append(name)
@@ -364,6 +364,111 @@ def test_shutdown_stops_running_jobs(runner):
     assert state(job) == "interrupted" and state(queued) == "interrupted"
     with pytest.raises(jobs.BadRequest):
         jobs.submit("long", {})
+
+
+def _writes_its_pid(path):
+    return f"import os, time; open({str(path)!r}, 'w').write(str(os.getpid())); time.sleep(1000)"
+
+
+def test_a_job_ending_as_shutdown_runs_is_interrupted_when_it_returns(runner, monkeypatch, capsys):
+    """#77 (CI: 'running' == 'interrupted'): the job's thread sees its
+    process exit (SIGTERM) and enters _finish before shutdown() records the
+    job; _finish shows the job as it was ("running") until its ended hook is
+    done. When shutdown() returns, the job says interrupted all the same."""
+    pids = runner["tmp"] / "pid"
+    in_ended, release = threading.Event(), threading.Event()
+    runner["kind"]("long", _writes_its_pid(pids), hooks={"ended": lambda job: (in_ended.set(), release.wait(10))})
+    real = jobs._killpg
+
+    def killpg(proc, sig):
+        # shutdown()'s SIGKILL, once the process has exited: only after the
+        # job's thread is in _finish (its ended hook).
+        if sig == signal.SIGKILL and threading.current_thread() is threading.main_thread():
+            assert in_ended.wait(10)
+        real(proc, sig)
+    monkeypatch.setattr(jobs, "_killpg", killpg)
+    job = jobs.submit("long", {})["id"]
+    wait_for(pids.exists)
+    try:
+        jobs.shutdown()
+        assert not alive(int(pids.read_text()))
+        assert (state(job), jobs.get(job)["message"]) == ("interrupted", jobs.INTERRUPTED)
+    finally:
+        release.set()
+    assert ended(job)["state"] == "interrupted"                 # and stays so
+    assert f"[jobs] #{job}: " in capsys.readouterr().out          # the thread it gave up on
+
+
+def test_a_job_starting_its_process_as_shutdown_runs_is_stopped_before_it_returns(runner, monkeypatch):
+    """#77: the job's thread is between Popen and ``job.proc = proc`` when
+    shutdown() runs. When shutdown() returns, that process is dead too."""
+    monkeypatch.setattr(jobs, "KILL_AFTER", 5)
+    runner["kind"]("long", "import time; time.sleep(1000)")
+    started, release, procs = threading.Event(), threading.Event(), []
+    real = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        proc = real(*args, **kwargs)
+        if threading.current_thread().name.startswith("job-"):
+            procs.append(proc)
+            started.set()
+            release.wait(10)
+        return proc
+    monkeypatch.setattr(jobs.subprocess, "Popen", popen)
+    job = jobs.submit("long", {})["id"]
+    assert started.wait(10)
+    seen = {}
+
+    def quit():
+        jobs.shutdown()
+        seen.update(alive=alive(procs[0].pid), state=state(job))
+    stopping = threading.Thread(target=quit)
+    stopping.start()
+    stopping.join(2)                                    # a shutdown() that does not wait for it returns by then
+    release.set()
+    stopping.join(10)
+    assert seen == {"alive": False, "state": "interrupted"}
+
+
+def test_a_job_started_as_shutdown_runs_stays_interrupted(runner, monkeypatch):
+    """#77: _pump marks a job running, then saves it outside the lock. A
+    save that read "running" before shutdown() recorded the job but writes
+    after it must not leave the job running in the database, and the job's
+    process never starts."""
+    import db
+    pids = runner["tmp"] / "pid"
+    runner["kind"]("long", _writes_its_pid(pids))
+    reading, release = threading.Event(), threading.Event()
+    real = db.connect
+
+    class Slow:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, params=()):
+            if sql.startswith("UPDATE jobs SET state") and params[0] == "running":
+                reading.set()
+                release.wait(10)
+            return self.conn.execute(sql, params)
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+    monkeypatch.setattr(db, "connect", lambda: Slow(real()) if threading.current_thread().name == "submit" else real())
+    out = {}
+    submitting = threading.Thread(target=lambda: out.update(jobs.submit("long", {})), name="submit")
+    submitting.start()
+    assert reading.wait(10)
+    stopping = threading.Thread(target=jobs.shutdown)
+    stopping.start()
+    stopping.join(2)                                    # a shutdown() that does not wait for that save returns by then
+    release.set()
+    submitting.join(10)
+    stopping.join(10)
+    for t in threading.enumerate():
+        if t.name == f"job-{out['id']}":
+            t.join(10)
+    assert real().execute("SELECT state FROM jobs WHERE id = ?", (out["id"],)).fetchone()["state"] == "interrupted"
+    assert state(out["id"]) == "interrupted" and not pids.exists()
 
 
 def test_history_is_kept_in_sqlite(runner, monkeypatch):

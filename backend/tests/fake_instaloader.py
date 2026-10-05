@@ -49,6 +49,13 @@ NTFS: a name with a reserved character (``:``) fails with errno 22.
 "delay" sleeps that many seconds before each post (for cancelling).
 "gate", a file path: the run waits for that file to exist before it does
 anything, so a test holds it running for as long as it needs (no timing).
+"stall", {"post": shortcode, "at": point, "mark": path}: writing that post
+stops for good at that point, once it has created the file "mark", so a
+test stops the run exactly there, as a signal may in a real one. Points:
+"opened" (its first media file created, still empty), "media" (its media
+written, not its JSON), "json-opened" (its JSON created, still empty),
+"json" (its JSON written, not its caption), "caption-opened" (its caption
+file created, still empty).
 """
 import argparse
 import ast
@@ -64,18 +71,32 @@ from datetime import datetime, timezone
 STAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"
 
 
-def png(path, rgb):
+STALL = None                                   # data["stall"], set by main
+
+
+def stall(p, at):
+    """Stop here for good when data["stall"] says so (see the docstring)."""
+    if STALL and STALL.get("post") == p["shortcode"] and STALL.get("at") == at:
+        with open(STALL["mark"], "w"):
+            pass
+        while True:
+            time.sleep(1000)
+
+
+def png(path, rgb, opened=lambda: None):
     raw = b"".join(b"\x00" + bytes(rgb) * 32 for _ in range(32))
 
     def chunk(tag, data):
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
     with open(path, "wb") as f:
+        opened()
         f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 32, 32, 8, 2, 0, 0, 0))
                 + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
-def mp4(path):
+def mp4(path, opened=lambda: None):
     with open(path, "wb") as f:
+        opened()
         f.write(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64)
 
 
@@ -105,18 +126,23 @@ def write(base, p, profile, owner, videos=True, thumbnails=True, pictures=True):
     kind = p.get("kind", "image")
     slides = p.get("slides", 2) if kind == "carousel" else 1
     colour = tuple((sum(map(ord, p["shortcode"])) * k) % 256 for k in (3, 7, 11))
+    opened = lambda: stall(p, "opened")        # it never returns once it stalls: at the first media file
     for s in range(1, slides + 1):
         name = f"{base}_{s}" if slides > 1 else base
         video = kind == "video" or (kind == "carousel" and s in p.get("video_slides", ()))
         if pictures and (not video or thumbnails or not videos):
-            png(name + ".jpg", tuple((c + 40 * s) % 256 for c in colour))
+            png(name + ".jpg", tuple((c + 40 * s) % 256 for c in colour), opened)
         if video and videos:
-            mp4(name + ".mp4")
+            mp4(name + ".mp4", opened)
+    stall(p, "media")
     with open(base + ".json", "w") as f:
+        stall(p, "json-opened")
         json.dump({"node": node(p, profile, owner),
                    "instaloader": {"version": "4.15.1", "node_type": "Post"}}, f, indent=4)
+    stall(p, "json")
     if p.get("caption"):
         with open(base + ".txt", "w") as f:
+            stall(p, "caption-opened")
             f.write(p["caption"])
     folder = os.path.dirname(base) or "."
     for n in os.listdir(folder):
@@ -344,6 +370,8 @@ def run(argv):
                                                                    "fake_instaloader.json")
     with open(data_file) as f:
         data = json.load(f)
+    global STALL
+    STALL = data.get("stall")
     while data.get("gate") and not os.path.exists(data["gate"]):
         time.sleep(0.01)
     if args.no_pictures and args.fast_update:
