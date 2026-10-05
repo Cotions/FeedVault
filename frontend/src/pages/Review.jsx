@@ -30,7 +30,6 @@ const PAGE = 50;
 const TOP_UP_BELOW = 10;
 const PRELOAD_AHEAD = 2;
 const MUTE_KEY = "feedvault.review.muted";
-// The phone layout's breakpoint, the same as the CSS one (index.css).
 
 function readMuted() {
   try { return localStorage.getItem(MUTE_KEY) !== "0"; } catch { return true; }
