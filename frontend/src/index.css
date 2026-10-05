@@ -1012,6 +1012,30 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .filter .sort-select { min-width: 120px; }
 .filter-author .sort-select { min-width: 190px; max-width: 280px; }
 .filter-clear { font-family: var(--mono); font-size: 11px; padding: 8px 10px; }
+/* The filters that fold on a phone: on a desktop, no box of their own, so
+   they sit in the row with Sort and the rest. */
+.feed-scope { display: contents; }
+/* A phone: one row with the toggle, Sort and Select; the filters open in
+   their own rows under it, and the clear button with them. The Person and
+   Review links (only there with a creator filter) stay in sight under it. */
+@media (max-width: 640px) {
+  .feed-filters { align-items: center; gap: 8px; }
+  .feed-filters > * { order: 2; }
+  .feed-filters > :is(.filters-toggle, .filter-sort, .page-head-spacer, .select-toggle) { order: 0; }
+  .feed-filters > :is(.filters-toggle, .select-toggle) { height: 40px; flex-shrink: 0; }
+  .feed-filters > .page-head-spacer { display: none; }
+  /* 307px for the three at 375: Sort takes what is left, Select is its
+     icon (its label stays for screen readers, and in its title). */
+  .feed-filters > .filter-sort { flex: 1 1 0; min-width: 0; }
+  .feed-filters > .filter-sort .sort-select { min-width: 0; width: 100%; height: 40px; }
+  .feed-filters > .select-toggle { width: 40px; padding: 0; justify-content: center; }
+  :is(.feed-filters > .filter-sort > span, .feed-filters > .select-toggle .select-toggle-label) {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .feed-filters > :is(.feed-scope, .filter-clear) { order: 1; }
+  .feed-scope { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; flex-basis: 100%; }
+  .feed-filters:not(.is-open) > :is(.feed-scope, .filter-clear) { display: none; }
+}
 
 /* ── Masonry ────────────────────────────────────────────── */
 /* CSS columns: each card keeps its media's own aspect ratio and the columns
@@ -2033,8 +2057,16 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   .review { grid-template-columns: minmax(0, 1fr); height: auto; }
   .review-stage { height: 62vh; }
 }
-/* The filters' toggle shows on a phone only: on a desktop they are always open. */
-.review-filters-toggle { display: none; }
+/* The filters' toggle (Review, Feed) shows on a phone only: on a desktop
+   they are always open. Two classes: as specific as the toolbar buttons'
+   rule (.feed-filters .btn-secondary), and later. */
+.btn-secondary.filters-toggle { display: none; }
+@media (max-width: 640px) {
+  .btn-secondary.filters-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; }
+  .filters-toggle .chip { margin-left: 2px; }
+  .filters-toggle-chev { transition: transform 0.15s ease; }
+  .filters-toggle[aria-expanded="true"] .filters-toggle-chev { transform: rotate(180deg); }
+}
 /* A phone: the filters fold behind their toggle, the stage takes what the
    first screen has left (Review.jsx sets --stage-h, at most 55vh), and the
    decision buttons are a bar fixed at the bottom, clear of the home
@@ -2047,10 +2079,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   .review { padding-bottom: calc(var(--review-bar-h, 120px) + 12px); }
   .review-stage { height: var(--stage-h, 55vh); }
   .review-filters { display: flex; flex-direction: column; gap: 8px; }
-  .review-filters-toggle { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start; min-height: 40px; }
-  .review-filters-toggle .chip { margin-left: 2px; }
-  .review-filters-chev { transition: transform 0.15s ease; }
-  .review-filters.is-open .review-filters-chev { transform: rotate(180deg); }
+  .review-filters .filters-toggle { align-self: flex-start; }
   .review-filters:not(.is-open) .review-scope { display: none; }
   /* A backdrop filter would make the panel the bar's containing block. */
   .review-side { backdrop-filter: none; background: rgba(20, 23, 31, 0.92); }

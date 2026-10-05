@@ -18,6 +18,8 @@ import SelectionBar from "../components/SelectionBar";
 import BulkTagDialog from "../components/BulkTagDialog";
 import CollectionDialog from "../components/CollectionDialog";
 import CreatorPicker from "../components/CreatorPicker";
+import FiltersToggle from "../components/FiltersToggle";
+import { useFiltersOpen, usePhone } from "../lib/useFiltersOpen";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
@@ -282,6 +284,15 @@ export default function Feed() {
     ? authors.find(a => (a.id === author || a.aliases?.includes(author)) && (!platform || a.platform === platform)) : null;
   const selectedPerson = person ? (peopleApi.data || []).find(p => String(p.id) === person) : null;
 
+  // On a phone the filters fold behind a toggle; Sort and Select stay beside it.
+  const [filtersOpen, setFiltersOpen] = useFiltersOpen();
+  // Sort's choices in short there, so they fit beside the toggle.
+  const phone = usePhone();
+  // Counted as Review counts them: a creator account sets its platform too,
+  // and every tag is one filter. Sort is not: it stays in sight.
+  const activeFilters = [author || person || platform, kind, tagFilter.length || untagged, collection, review, newOnly, notification]
+    .filter(Boolean).length;
+
   function clearFilters() {
     const next = new URLSearchParams();
     if (sort === "saved") next.set("sort", "saved");
@@ -321,100 +332,103 @@ export default function Feed() {
         )}
       </div>
 
-      <div className="feed-filters" role="group" aria-label="Filters">
-        <button
-          type="button"
-          className={`btn-secondary select-toggle${newOnly ? " is-on" : ""}`}
-          aria-pressed={newOnly}
-          onClick={() => setParam({ new: newOnly ? "" : "1" })}
-          title="Only posts indexed since you last marked everything seen"
-        >
-          <Icon name="refresh" size={13} />New since last visit{newCount > 0 ? ` (${fmtInt(newCount)})` : ""}
-        </button>
-        <label className="filter">
-          <span>Platform</span>
-          <select className="sort-select" value={platform} onChange={e => setParam({ platform: e.target.value, author: "" })}>
-            <option value="">All</option>
-            {platforms.map(p => <option key={p} value={p}>{platformLabel(p)}</option>)}
-          </select>
-        </label>
-        <label className="filter">
-          <span>Kind</span>
-          <select className="sort-select" value={kind} onChange={e => setParam({ kind: e.target.value })}>
-            <option value="">All</option>
-            {KINDS.map(k => <option key={k} value={k}>{k}</option>)}
-          </select>
-        </label>
-        <div className="filter filter-author">
-          <span>Creator</span>
-          <CreatorPicker
-            people={peopleApi.data || []}
-            accounts={authors}
-            platform={person ? "" : platform}
-            value={person ? { person } : author ? { platform, id: author } : null}
-            onChange={onCreator}
-          />
-        </div>
-        <label className="filter filter-tags">
-          <span>Tags</span>
-          <select className="sort-select" value="" onChange={e => onTagFilter(e.target.value)}>
-            <option value="">{untagged ? "Untagged" : tagFilter.length ? "Add another…" : "Any"}</option>
-            {!untagged && <option value="__untagged">Untagged only</option>}
-            {allTags.filter(t => !tagFilter.some(f => sameTag(f, t.name))).map(t => (
-              <option key={t.name} value={t.name}>{t.name} ({t.count})</option>
-            ))}
-          </select>
-        </label>
-        {notification && (
-          <ul className="tag-chips filter-tag-chips" aria-label="Sync filter">
-            <li className="tag-chip"><span><Icon name="bell" size={11} />this sync&apos;s posts</span>
-              <button type="button" className="tag-chip-x" onClick={() => setParam({ notification: "" })} aria-label="Remove the sync filter">
-                <Icon name="close" size={10} />
-              </button>
-            </li>
-          </ul>
-        )}
-        {(tagFilter.length > 0 || untagged) && (
-          <ul className="tag-chips filter-tag-chips" aria-label="Tag filters">
-            {untagged && (
-              <li className="tag-chip"><span>untagged</span>
-                <button type="button" className="tag-chip-x" onClick={() => setParam({ untagged: "" })} aria-label="Remove the untagged filter">
-                  <Icon name="close" size={10} />
-                </button>
-              </li>
-            )}
-            {tagFilter.map(t => (
-              <li key={t} className="tag-chip"><span><Icon name="tag" size={11} />{t}</span>
-                <button type="button" className="tag-chip-x" onClick={() => setParam({ tag: tagFilter.filter(x => x !== t) })} aria-label={`Remove the ${t} filter`}>
-                  <Icon name="close" size={10} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {(collections.length > 0 || collection) && (
-          <label className="filter filter-collection">
-            <span>Collection</span>
-            <select className="sort-select" value={collection} onChange={e => setParam({ collection: e.target.value })}>
-              <option value="">Any</option>
-              {collection && !selectedCollection && <option value={collection} disabled>collection {collection}</option>}
-              {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
+      <div className={`feed-filters${filtersOpen ? " is-open" : ""}`} role="group" aria-label="Filters">
+        <FiltersToggle open={filtersOpen} onToggle={() => setFiltersOpen(v => !v)} active={activeFilters} controls="feed-scope" />
+        <div className="feed-scope" id="feed-scope">
+          <button
+            type="button"
+            className={`btn-secondary select-toggle${newOnly ? " is-on" : ""}`}
+            aria-pressed={newOnly}
+            onClick={() => setParam({ new: newOnly ? "" : "1" })}
+            title="Only posts indexed since you last marked everything seen"
+          >
+            <Icon name="refresh" size={13} />New since last visit{newCount > 0 ? ` (${fmtInt(newCount)})` : ""}
+          </button>
+          <label className="filter">
+            <span>Platform</span>
+            <select className="sort-select" value={platform} onChange={e => setParam({ platform: e.target.value, author: "" })}>
+              <option value="">All</option>
+              {platforms.map(p => <option key={p} value={p}>{platformLabel(p)}</option>)}
             </select>
           </label>
-        )}
-        <label className="filter">
-          <span>Review</span>
-          <select className="sort-select" value={review} onChange={e => setParam({ review: e.target.value })}>
-            <option value="">All</option>
-            <option value="unreviewed">Unreviewed</option>
-            <option value="kept">Kept</option>
-          </select>
-        </label>
-        <label className="filter">
+          <label className="filter">
+            <span>Kind</span>
+            <select className="sort-select" value={kind} onChange={e => setParam({ kind: e.target.value })}>
+              <option value="">All</option>
+              {KINDS.map(k => <option key={k} value={k}>{k}</option>)}
+            </select>
+          </label>
+          <div className="filter filter-author">
+            <span>Creator</span>
+            <CreatorPicker
+              people={peopleApi.data || []}
+              accounts={authors}
+              platform={person ? "" : platform}
+              value={person ? { person } : author ? { platform, id: author } : null}
+              onChange={onCreator}
+            />
+          </div>
+          <label className="filter filter-tags">
+            <span>Tags</span>
+            <select className="sort-select" value="" onChange={e => onTagFilter(e.target.value)}>
+              <option value="">{untagged ? "Untagged" : tagFilter.length ? "Add another…" : "Any"}</option>
+              {!untagged && <option value="__untagged">Untagged only</option>}
+              {allTags.filter(t => !tagFilter.some(f => sameTag(f, t.name))).map(t => (
+                <option key={t.name} value={t.name}>{t.name} ({t.count})</option>
+              ))}
+            </select>
+          </label>
+          {notification && (
+            <ul className="tag-chips filter-tag-chips" aria-label="Sync filter">
+              <li className="tag-chip"><span><Icon name="bell" size={11} />this sync&apos;s posts</span>
+                <button type="button" className="tag-chip-x" onClick={() => setParam({ notification: "" })} aria-label="Remove the sync filter">
+                  <Icon name="close" size={10} />
+                </button>
+              </li>
+            </ul>
+          )}
+          {(tagFilter.length > 0 || untagged) && (
+            <ul className="tag-chips filter-tag-chips" aria-label="Tag filters">
+              {untagged && (
+                <li className="tag-chip"><span>untagged</span>
+                  <button type="button" className="tag-chip-x" onClick={() => setParam({ untagged: "" })} aria-label="Remove the untagged filter">
+                    <Icon name="close" size={10} />
+                  </button>
+                </li>
+              )}
+              {tagFilter.map(t => (
+                <li key={t} className="tag-chip"><span><Icon name="tag" size={11} />{t}</span>
+                  <button type="button" className="tag-chip-x" onClick={() => setParam({ tag: tagFilter.filter(x => x !== t) })} aria-label={`Remove the ${t} filter`}>
+                    <Icon name="close" size={10} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {(collections.length > 0 || collection) && (
+            <label className="filter filter-collection">
+              <span>Collection</span>
+              <select className="sort-select" value={collection} onChange={e => setParam({ collection: e.target.value })}>
+                <option value="">Any</option>
+                {collection && !selectedCollection && <option value={collection} disabled>collection {collection}</option>}
+                {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
+              </select>
+            </label>
+          )}
+          <label className="filter">
+            <span>Review</span>
+            <select className="sort-select" value={review} onChange={e => setParam({ review: e.target.value })}>
+              <option value="">All</option>
+              <option value="unreviewed">Unreviewed</option>
+              <option value="kept">Kept</option>
+            </select>
+          </label>
+        </div>
+        <label className="filter filter-sort">
           <span>Sort</span>
           <select className="sort-select" value={sort} onChange={e => setParam({ sort: e.target.value === "saved" ? "saved" : "" })}>
-            <option value="posted">Newest posted</option>
-            <option value="saved">Newest saved</option>
+            <option value="posted">{phone ? "Posted" : "Newest posted"}</option>
+            <option value="saved">{phone ? "Saved" : "Newest saved"}</option>
           </select>
         </label>
         {anyFilter && (
@@ -451,7 +465,7 @@ export default function Feed() {
             title={sel.active ? "Leave select mode (Esc)" : "Select posts to tag, keep or delete"}
           >
             <Icon name={sel.active ? "close" : "check"} size={14} />
-            {sel.active ? "Done" : "Select"}
+            <span className="select-toggle-label">{sel.active ? "Done" : "Select"}</span>
           </button>
         )}
       </div>
