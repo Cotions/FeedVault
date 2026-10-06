@@ -398,7 +398,7 @@ export default function Feed() {
                 </li>
               )}
               {tagFilter.map(t => (
-                <li key={t} className="tag-chip"><span><Icon name="tag" size={11} />{t}</span>
+                <li key={t} className="tag-chip"><span><Icon name="tag" size={11} /><span className="tag-chip-name">{t}</span></span>
                   <button type="button" className="tag-chip-x" onClick={() => setParam({ tag: tagFilter.filter(x => x !== t) })} aria-label={`Remove the ${t} filter`}>
                     <Icon name="close" size={10} />
                   </button>

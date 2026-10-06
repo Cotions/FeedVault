@@ -159,3 +159,15 @@ test("index.css's own text and edges read at WCAG AA on every surface", () => {
   }
   for (const k of ["--danger-fill", "--danger-fill-hover"]) assert.ok(contrast("#ffffff", css[k]) >= 4.5, `white on ${k} ${css[k]}`);
 });
+
+test("a pinned button or glow text keeps 4.5:1: the fill and glow are not lightened away from it", () => {
+  for (const t of PRESETS) {
+    const white = palette({ base: t.base, buttonText: "#ffffff" });
+    assert.ok(contrast("#ffffff", white["--accent"]) >= 4.5, `${t.id}: white on the fill`);
+    const glowInk = palette({ base: t.base, glowText: "#ffffff" });
+    assert.equal(glowInk["--on-glow"], "#ffffff");
+    assert.ok(contrast("#ffffff", glowInk["--glow"]) >= Math.min(4.5, contrast("#ffffff", palette({ base: t.base })["--glow"])), `${t.id}: white on the glow`);
+  }
+  // Iris with white text keeps main's fill, 9.6:1 (not lightened to 4.4:1).
+  assert.ok(contrast("#ffffff", palette({ base: "#a78bfa", buttonText: "#ffffff" })["--accent"]) > 9);
+});

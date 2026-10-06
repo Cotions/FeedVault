@@ -877,7 +877,10 @@ export async function quiet(page, ready, ms = 150) {
   if (ready) await expect(page.locator(ready).first()).toBeVisible();
   const n = inFlight.get(page);
   const end = Date.now() + 10_000;
-  while (Date.now() < end && (n.now > 0 || Date.now() - n.last < ms)) await page.waitForTimeout(25);
+  while (n.now > 0 || Date.now() - n.last < ms) {
+    if (Date.now() > end) throw new Error(`quiet: /api still busy after 10s (${n.now} in flight)`);
+    await page.waitForTimeout(25);
+  }
   await settle(page);
 }
 

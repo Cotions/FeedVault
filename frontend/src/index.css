@@ -55,6 +55,9 @@ html {
   scroll-padding-top: calc(var(--header-h) + 8px);
   scroll-padding-bottom: 8px;
 }
+/* In select mode, clear of the selection bar too: its height (set by
+   SelectionBar.jsx), the 16px under it and 8px above. */
+html:has(.select-bar) { scroll-padding-bottom: calc(var(--select-bar-h, 60px) + 24px + env(safe-area-inset-bottom)); }
 
 body {
   color: var(--text);
@@ -588,8 +591,9 @@ button:disabled { opacity: 0.4; cursor: default; }
   color: var(--on-accent);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 8px 20px -10px rgba(var(--glow-rgb), 0.55);
 }
-.btn-primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)) border-box;
+.btn-primary:hover:not(:disabled) { background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)) border-box; }
+/* Not while focused: the hover shadow would hide the focus ring. */
+.btn-primary:hover:not(:disabled):not(:focus-visible) {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset, 0 10px 26px -8px rgba(var(--glow-rgb), 0.7);
 }
 .btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--edge); }
@@ -933,7 +937,6 @@ button:disabled { opacity: 0.4; cursor: default; }
 /* The ring itself outranks a single class: a button's own shadow (.btn-keep,
    .btn-primary) must not hide it. */
 :is(a, button, select, summary, [tabindex], video):focus-visible { box-shadow: var(--ring); }
-.side-link:focus-visible { box-shadow: var(--ring); }
 
 .mono { font-family: var(--mono); }
 .dim  { color: var(--muted); }
@@ -1876,7 +1879,8 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 
 /* ── Danger, keep ───────────────────────────────────────── */
 .btn-danger { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
-.btn-danger:hover:not(:disabled) { background: var(--danger-fill-hover); box-shadow: 0 8px 20px -10px rgba(229, 72, 77, 0.7); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-fill-hover); }
+.btn-danger:hover:not(:disabled):not(:focus-visible) { box-shadow: 0 8px 20px -10px rgba(229, 72, 77, 0.7); }
 .btn-danger-soft {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   background: rgba(229, 72, 77, 0.1);
@@ -2528,6 +2532,7 @@ a.btn-primary { color: var(--on-accent); }
 /* A name too long for the chip ends in an ellipsis (a flex box's own text
    cannot), from its start: centred, it was cut at both ends. */
 .tag-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tag-chip svg { flex-shrink: 0; }
 .tag-chip-toggle > .dim { flex-shrink: 0; }
 /* A tag's own colour (--tag, set on the chip), toned for the dark surface. */
 .tag-chip.has-color {

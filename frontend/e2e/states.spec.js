@@ -28,9 +28,10 @@ const SIZES = [
 const MAX_STOPS = 40;        // Tab presses per page and size: the Feed's cards go on
 const BACK_STOPS = 10;       // then Shift+Tab, which scrolls up into the header's way
 
-const S = stressData();
-const CREATOR = `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`;
-const POST = `/p/${S.post.platform}/${S.post.post_id}`;
+// Read when a test runs: global-setup sets the stress data after the
+// specs are loaded (and listing them needs none).
+const creatorUrl = () => { const S = stressData(); return `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`; };
+const postUrl = () => { const S = stressData(); return `/p/${S.post.platform}/${S.post.post_id}`; };
 
 async function openUrl(page, url, ready) {
   await page.goto(url);
@@ -47,7 +48,7 @@ async function open(page, name) {
 
 const VIEWS = [
   ...PAGES.map(p => ({ name: p.name, open: page => open(page, p.name) })),
-  { name: "Post", open: page => openUrl(page, POST, ".post-page-head") },
+  { name: "Post", open: page => openUrl(page, postUrl(), ".post-page-head") },
 ];
 
 test.beforeEach(async ({ page }) => { await addProbes(page); });
@@ -195,7 +196,7 @@ const POPOVERS = [
   {
     name: "Selection bar › Tag… and its suggestions",
     open: async page => {
-      await openUrl(page, CREATOR, "article.post-card");
+      await openUrl(page, creatorUrl(), "article.post-card");
       await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
       await page.locator("article.post-card").first().click();
       await page.getByRole("button", { name: /^Tag…/ }).click();
@@ -207,7 +208,7 @@ const POPOVERS = [
   {
     name: "Selection bar › Collection…",
     open: async page => {
-      await openUrl(page, CREATOR, "article.post-card");
+      await openUrl(page, creatorUrl(), "article.post-card");
       await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
       await page.locator("article.post-card").first().click();
       await page.getByRole("button", { name: /^Collection…/ }).click();
@@ -224,7 +225,7 @@ test.describe("popovers", () => {
       for (const s of SIZES.slice(0, 1)) {
         await page.setViewportSize({ width: s.width, height: s.height });
         await p.open(page);
-                await expect(page.locator(p.pop).first()).toBeVisible();
+        await expect(page.locator(p.pop).first()).toBeVisible();
         await settle(page);
         for (const sel of [p.pop, ...(p.also || [])]) {
           const probs = await page.evaluate(q => window.__fv.popover(q), sel);
@@ -247,16 +248,26 @@ const SCROLLED = [
       await expect(page.locator(".select-bar")).toBeVisible();
     },
   },
-  { name: "Creator", open: page => openUrl(page, CREATOR, "article.post-card") },
+  { name: "Creator", open: page => openUrl(page, creatorUrl(), "article.post-card") },
   { name: "Storage", open: page => open(page, "Storage") },
   { name: "Jobs › History", open: page => open(page, "Jobs") },
 ];
+
+// Select mode pins its bar to the window's bottom: Tab must keep the
+// focused card clear of it (the Feed's first cards, one size).
+test("focus in select mode stays clear of the selection bar", async ({ page }, testInfo) => {
+  const s = SIZES[0];
+  await atSize(page, s);
+  await SCROLLED.find(v => v.name === "Feed, selecting").open(page);
+  const found = (await walkFocus(page, "Feed, selecting", s.label)).filter(f => f.state === "Tab");
+  await report(testInfo, found);
+});
 
 test.describe("scrolled", () => {
   for (const v of SCROLLED) {
     test(v.name, async ({ page }, testInfo) => {
       await v.open(page);
-            const found = [];
+      const found = [];
       for (const s of SIZES) {
         await atSize(page, s);
         for (const [state, to] of [["halfway", 0.5], ["bottom", 1]]) {
@@ -277,7 +288,7 @@ test.describe("jumps land below the header", () => {
     for (const s of SIZES) {
       await page.setViewportSize({ width: s.width, height: s.height });
       await openUrl(page, "/settings#downloaders", "#downloaders");
-            await settle(page);
+      await settle(page);
       const [card, bars] = await Promise.all([
         page.locator("#downloaders").evaluate(el => el.getBoundingClientRect().top),
         page.evaluate(() => window.__fv.bars()),
@@ -292,7 +303,7 @@ test.describe("jumps land below the header", () => {
     for (const s of SIZES) {
       await page.setViewportSize({ width: s.width, height: s.height });
       await openUrl(page, "/settings#downloads", ".settings-tab[aria-current=page]");
-            await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
       await page.locator('.settings-tab[href$="#about"]').click();
       await settle(page);
       const top = await page.locator(".settings-layout > :not(.settings-tabs)").first().evaluate(el => el.getBoundingClientRect().top);
@@ -304,11 +315,12 @@ test.describe("jumps land below the header", () => {
   test("Review's next post starts at the top of its panel", async ({ page }) => {
     for (const s of SIZES) {
       await page.setViewportSize({ width: s.width, height: s.height });
-      await openUrl(page, `/review?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`, ".review-open");
-            // A post whose details scroll (the stress post's 15 tags), scrolled down.
+      await openUrl(page, `/review${creatorUrl().slice(1)}`, ".review-open");
+      // A post whose details scroll (the stress post's 15 tags), scrolled down.
       const info = page.locator(".review-info");
       const first = await page.locator(".review-open").getAttribute("href");
       await info.evaluate(el => { el.scrollTop = el.scrollHeight; });
+      expect(await info.evaluate(el => el.scrollTop), `${s.label}: the first post's details scroll`).toBeGreaterThan(0);
       await page.keyboard.press("l");
       await expect(page.locator(".review-open")).not.toHaveAttribute("href", first);
       await settle(page);

@@ -95,20 +95,26 @@ export function palette(theme) {
   const pinned = key => isHex(theme[key]) ? hexToRgb(theme[key]) : null;
 
   // The glow draws focus rings and icons: 3:1 on the lightest surface it
-  // sits on, at the ring's 0.9 alpha (Iris's was 2.9:1).
+  // sits on, at the ring's 0.9 alpha (Iris's was 2.9:1). A pinned text on
+  // the glow keeps its 4.5:1: lightening stops before it would lose it.
+  const glowInk = pinned("glowText");
   let glowL = 58;
-  while (!pinned("glow") && glowL < 90 && contrast(mixRgb(at(69, glowL), hexToRgb(SURFACE_2), RING_ALPHA), SURFACE_2) < 3) glowL++;
+  while (!pinned("glow") && glowL < 90 && contrast(mixRgb(at(69, glowL), hexToRgb(SURFACE_2), RING_ALPHA), SURFACE_2) < 3
+    && !(glowInk && contrast(at(69, glowL + 1), glowInk) < MIN_INK)) glowL++;
   const glow = pinned("glow") || at(69, glowL);
   // A pinned glow is read on its own hue: ink on it is tinted the same.
   const gh = pinned("glow") ? rgbToHsl(glow)[0] : h;
   const fill = pinned("fill");
-  // The derived fill starts at green's 40% lightness and goes up until the
-  // theme's dark ink reads on it at 4.5:1 (button text is 13px bold: WCAG
-  // AA's normal size). That also keeps it 3:1 or more from the dark page:
-  // Ember, Ocean and Rose sat at 3.9:1 under their ink, Iris and Crimson's
-  // fills at 2.2:1 against the page.
+  // The derived fill starts at green's 40% lightness and moves until the
+  // button text reads on it at 4.5:1 (13px bold: WCAG AA's normal size):
+  // up from the theme's dark ink, which also keeps the fill 3:1 or more
+  // from the dark page (Ember, Ocean and Rose sat at 3.9:1 under their
+  // ink, Iris and Crimson's fills at 2.2:1 against the page), or down from
+  // a pinned light text.
+  const ink = pinned("buttonText") || hslToRgb(h, 65, 5);
+  const step = luminance(ink) > luminance(at(54, 40)) ? -1 : 1;
   let fillL = 40;
-  while (!fill && fillL < 90 && contrast(at(54, fillL), hslToRgb(h, 65, 5)) < MIN_INK) fillL++;
+  while (!fill && fillL > 10 && fillL < 90 && contrast(at(54, fillL), ink) < MIN_INK) fillL += step;
   const accent = fill || at(54, fillL);
   // A pinned fill keeps its own hue for the hover/bright shades.
   const [fh, fs, fl] = fill ? rgbToHsl(fill) : [h, 54 * k, fillL];
