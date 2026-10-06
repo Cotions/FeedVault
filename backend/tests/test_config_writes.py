@@ -238,3 +238,15 @@ def test_the_trash_manifest_keeps_its_mode(env):
     os.chmod(path, 0o664)
     write_manifest(env)
     assert mode(path) == 0o664
+
+
+# FEEDVAULT_PORT (#100): read as run.sh and Vite read it, never falling back to 3380.
+@pytest.mark.parametrize("value, port", [(None, 3380), ("4000", 4000), ("1", 1), ("65535", 65535), ("03389", 3389)])
+def test_the_port_is_the_one_set(value, port):
+    assert config._port(value) == port
+
+
+@pytest.mark.parametrize("value", ["", "abc", "0", "65536", "99999", "-1", " 4000", "+4000", "4000.5", "123456"])
+def test_an_invalid_port_stops_feedvault(value):
+    with pytest.raises(SystemExit, match="FEEDVAULT_PORT must be a port number from 1 to 65535"):
+        config._port(value)

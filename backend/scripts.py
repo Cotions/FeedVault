@@ -321,6 +321,17 @@ ENV = Tool({"--split-string": ((SPLIT,),), "--unset": ((),), "--chdir": ((PATH,)
            {"S": ((SPLIT,),), "u": ((),), "C": ((PATH,),), "a": ((),)}, "iv0", False, False, None, None, ())
 # A shell's -c text is read as code.
 SHELLS = ("sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish")
+# A downloader run by Python (#98): `python3 -m yt_dlp` runs the package's
+# __main__.py, which the tool's own command runs too; `python3 /x/yt-dlp`
+# runs that file. CPython reads its options as getopt does
+# (Python/getopt.c, "bBc:dEhiIJm:OPqRsStuvVW:xX:?"): an item is a cluster
+# of flags that may end in -c (code: no module), -m (the module: the rest
+# of the item, else the next one) or -W / -X (a value, likewise);
+# --check-hash-based-pycs takes the next item, any other long option
+# (--help, --version) runs nothing, and "--" ends them.
+MODULES = {"yt_dlp": "yt-dlp", "gallery_dl": "gallery-dl", "instaloader": "instaloader"}
+PYTHON_RE = re.compile(r"(?:python|pypy)[0-9.]*")
+PY_FLAGS, PY_VALUES = "bBdEhiIJOPqRsStuvVx?", "WX"
 
 
 class Found(collections.namedtuple("Found", "index given options values maybe", defaults=(False,))):
@@ -405,12 +416,88 @@ def _ends(argv, end, start, found, tool):
         for m in range(start + 1, end))
 
 
+def _known(name):
+    """Whether ``name`` is a program the checks or the lock groups read."""
+    return name in TOOLS or name in jobs.TOOLS or name in SHELLS or name == "env" \
+        or PYTHON_RE.fullmatch(name) is not None
+
+
+LINK_HOPS = 40                                 # as the kernel's limit on a path's symlinks
+
+
+def _name(item):
+    """The name of the program ``item`` runs: its file name, or, for an
+    absolute path whose name is none of the known ones (_known), the first
+    known name along the symlinks it leads through, one at a time (~/bin/ytdl
+    to yt-dlp; ~/bin/ytdl to /snap/bin/yt-dlp to /usr/bin/snap: yt-dlp). A
+    name found on PATH is not followed: the job's PATH decides."""
+    name = os.path.basename(item)
+    if _known(name) or not os.path.isabs(item):
+        return name
+    path = item
+    for _ in range(LINK_HOPS):
+        try:
+            link = os.readlink(path)
+        except OSError:                        # not a link (any more), or unreadable
+            break
+        path = os.path.join(os.path.dirname(path), link)
+        if _known(os.path.basename(path)):
+            return os.path.basename(path)
+    return name
+
+
+def _python(argv, i):
+    """(the index of the item naming the downloader the Python at ``i``
+    runs, its name) for `-m yt_dlp` (`-m yt_dlp.__main__`, `-Im yt_dlp`,
+    `-myt_dlp`, `-m runpy yt_dlp`), a file named as one (`python3
+    /usr/bin/yt-dlp`) or its package (`python3 /x/yt_dlp`, `.../yt_dlp/__main__.py`),
+    else None. Its own options go after that item."""
+    n = i + 1
+    while n < len(argv) and argv[n].startswith("-") and argv[n] != "-":
+        a = argv[n]
+        if a == "--":
+            n += 1
+            break
+        if a.startswith("--"):
+            if a != "--check-hash-based-pycs":
+                return None
+            n += 2
+            continue
+        for k, c in enumerate(a[1:], 1):
+            if c == "m":
+                at, module = (n, a[k + 1:]) if a[k + 1:] else (n + 1, argv[n + 1] if n + 1 < len(argv) else "")
+                if module == "runpy":          # runpy's own __main__ runs the module named next
+                    at, module = at + 1, argv[at + 1] if at + 1 < len(argv) else ""
+                name = MODULES.get(module.removesuffix(".__main__"))
+                return (at, name) if name else None
+            if c in PY_VALUES:
+                n += 0 if a[k + 1:] else 1
+                break
+            if c not in PY_FLAGS:
+                return None
+        n += 1
+    if n >= len(argv):
+        return None
+    # The tool's file, its package's folder (python3 /x/yt_dlp) or that
+    # folder's __main__.py: yt-dlp's and gallery-dl's put their folder's
+    # parent on sys.path when run so.
+    item = argv[n].rstrip("/") or argv[n]
+    name = _name(item)
+    if name == "__main__.py":
+        name = MODULES.get(os.path.basename(os.path.dirname(item)))
+    else:
+        name = name if name in TOOLS else MODULES.get(name)
+    return (n, name) if name else None
+
+
 def _walk(argv):
-    """(the index of the program a command runs, past env and its options,
-    or None when env splits a text into it: -S; [Found] for each option
-    of env's and then of the program's, when it is one of TOOLS)."""
+    """(the index of the item naming the program a command runs, past env
+    and its options, and past Python for a downloader it runs (_python),
+    or None when env splits a text into it: -S; that program's name
+    (_name), or None; [Found] for each option of env's and then of the
+    program's, when it is one of TOOLS)."""
     found, i = [], 0
-    while os.path.basename(argv[i]) == "env":
+    while _name(argv[i]) == "env":
         i += 1
         while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i]):
             match = _match(argv[i], ENV)
@@ -420,12 +507,15 @@ def _walk(argv):
             f, i = _found(argv, i, match, ENV)
             found.append(f)
             if SPLIT in f.kinds(0):
-                return None, found
+                return None, None, found
         if i >= len(argv):
-            return len(argv) - 1, found
-    tool = TOOLS.get(os.path.basename(argv[i]))
+            return len(argv) - 1, _name(argv[-1]), found
+    name = _name(argv[i])
+    if PYTHON_RE.fullmatch(name):
+        i, name = _python(argv, i) or (i, name)
+    tool = TOOLS.get(name)
     if tool is None:
-        return i, found
+        return i, name, found
     read, n, end = [], i + 1, None
     while n < len(argv):
         if argv[n] == "--":
@@ -442,7 +532,7 @@ def _walk(argv):
     names = {f.index for f in read} | {end}
     maybe = [_found(argv, m, match, tool)[0]._replace(maybe=True) for m in range(i + 1, last)
              if m not in names and (match := _match(argv[m], tool))]
-    return i, found + sorted(read + maybe)
+    return i, name, found + sorted(read + maybe)
 
 
 def _check_sh(argv):
@@ -482,11 +572,10 @@ def _formatter(value, how):
 def _check_shell(argv):
     """Why a FeedVault placeholder would be read as code through one of the
     tool's options, else None."""
-    start, found = _walk(argv)
+    start, tool, found = _walk(argv)
     if start is None:
         return "env -S splits its text into a command: not in a command with a FeedVault placeholder" \
             if _used(argv) else None
-    tool = os.path.basename(argv[start])
     if tool in SHELLS:
         return _check_sh(argv[start + 1:])
     for f in found:
@@ -836,11 +925,12 @@ def check_url(value):
 
 
 def program(script):
-    """The name of the program a command runs (a downloader named by its
-    path or behind env too), else the script's tool."""
+    """The name of the program a command runs (_walk: a downloader named by
+    its path, a symlink to it, run behind env or by Python too), else the
+    script's tool."""
     argv = script.get("argv")
-    i = _walk(argv)[0] if script["kind"] == "command" and argv else None
-    return script["tool"] if i is None else os.path.basename(argv[i])
+    start, name, _ = _walk(argv) if script["kind"] == "command" and argv else (None, None, None)
+    return script["tool"] if start is None else name
 
 
 def check_target(script, value):
@@ -898,8 +988,10 @@ def shell_env(vals):
 
 def group(script):
     """A downloader's command runs in that tool's lock group (never beside
-    a sync of it); anything else in "scripts"."""
-    return script["tool"] if script["tool"] in jobs.TOOLS else "scripts"
+    a sync of it), however it names it (program); anything else in
+    "scripts"."""
+    tool = program(script)
+    return tool if tool in jobs.TOOLS else "scripts"
 
 
 def _rescan(script, vals, roots):
@@ -1004,10 +1096,9 @@ def command(script, vals):
     option's value, or env's -C, out of its folder (_check_path)."""
     argv = script["argv"]
     out = [substitute(a, vals) for a in argv]
-    start, found = _walk(argv)
+    start, tool, found = _walk(argv)
     if start is None:
         return out
-    tool = os.path.basename(argv[start])
     spec = TOOLS.get(tool)
     expands = tool if spec and spec.expands else None
     escaped = {k: spec.escape(v) for k, v in vals.items()} if spec else vals
@@ -1146,9 +1237,11 @@ def _tool_pause(tool):
 
 
 def _pause(params):
-    """A downloader's command pauses as that tool's syncs do."""
+    """A downloader's command pauses as that tool's syncs do, however it
+    names it (program, as its lock group)."""
     try:
-        return _tool_pause((get(params["script"]) or {}).get("tool"))
+        script = get(params["script"])
+        return _tool_pause(program(script)) if script else 0
     except Exception:                          # reads files: never left holding the queue
         return 0
 

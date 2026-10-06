@@ -100,8 +100,10 @@ npm run build       # Vite build into frontend/dist
 
 `npm test` runs the files listed in `package.json`'s `test` script (all in
 `frontend/scripts/`): formatting helpers, themes, source options, account
-health, the userscript, the Vite dev server's settings, the review queue,
-and the browser test harness and shards (below). A new `*.test.js` file has
+health, the userscript, the Vite dev server's settings (its proxy follows
+`FEEDVAULT_PORT`), the review queue, the browser test harness and shards
+(below), `run.sh`'s port check (its port block runs alone in bash) and
+the `--help` of `run.sh` and `testapp.sh` (the only way either is started). A new `*.test.js` file has
 to be added to that list.
 
 ## Browser tests

@@ -3,8 +3,11 @@
 Backend listens on `127.0.0.1:3380` (the port is `FEEDVAULT_PORT`'s when
 set). The built dashboard is served by the backend itself (same origin). The
 Vite dev server (`./run.sh --dev`) proxies `/api`, `/media`, trash
-thumbnails and `/userscript` to `127.0.0.1:3380`, so dev mode also runs
-same-origin; it does not follow `FEEDVAULT_PORT` (#100, open).
+thumbnails and `/userscript` to the backend's port on `127.0.0.1`, so dev
+mode also runs same-origin. `run.sh` exports the port it starts the backend
+on, and Vite reads `FEEDVAULT_PORT` (3380 when unset); a value that is not a
+port from 1 to 65535 (empty too) stops `run.sh`, Vite and the backend
+rather than falling back to 3380.
 
 Times are Unix seconds (UTC). Absent values are `null`, never missing keys.
 
@@ -962,7 +965,14 @@ An **account** (`/api/authors` rows, a person's `accounts`):
 ```
 
 - `handle` and `name` are those of the newest post (handles change), or the
-  new handle of a rename the user accepted after it.
+  new handle of a rename the user accepted after it. An account whose posts
+  are all rebuilt from file names, in a profile folder (one of its files is
+  named after the folder), reads as that folder's handle instead, whatever
+  its newest file is named: a file name holds the target it was downloaded
+  for, which may be someone else's or an older name. A folder no file is
+  named after (`saved`, a profile renamed since) keeps the newest post's
+  handle. Each post keeps the handle its file name gives (its
+  `author.handle`, and in `handles` below).
 - `count` and `bytes` cover the posts in the index, aliases included;
   `newest` is the newest `posted_at`.
 - `url`: the profile's address for `instagram`, `twitter`, `tiktok` and
@@ -2392,7 +2402,8 @@ be run as they are, or copied into a file.
   last `/` (the file name gallery-dl formats); its folder is left as it is.
   A run is refused (400) when a value puts a `$` in that folder (gallery-dl
   expands `$NAME` there) or `\f` in the file name. This holds for a
-  gallery-dl named by its path or run behind `env` too.
+  gallery-dl named by its path, run behind `env` or by Python too (as
+  for the lock group, below).
   So is a `{url}` or `{target}` putting a `..` or leading `~` in that folder, or a `..` in a path option (`-D`, `-o`, env's `-C`…), or a leading `~` or a `$` in one where the tool expands them (gallery-dl, yt-dlp).
 - `needs`: `target`, `url` or `none`. A script that uses `{target}` or
   `{url}` without needing it is refused.
@@ -2436,7 +2447,7 @@ header keys are `name`,
   or control characters.
 - `target`, by the program run:
   - instaloader: a profile name or a post's shortcode;
-  - gallery-dl and yt-dlp (by name, path or behind `env`): a link, as for `url`;
+  - gallery-dl and yt-dlp (by name, path, behind `env` or run by Python): a link, as for `url`;
   - a shell script or a program by absolute path: any text of 1 to 200
     characters, without control characters.
 
@@ -2479,7 +2490,8 @@ logs it. It never changes a folder above them.
   (Python); of yt-dlp also `--external-downloader-args` and `--ppa`; of
   instaloader `--post-filter`, `--only-if` and `--storyitem-filter` (Python
   it evaluates). The
-  downloader may be named by its path or run through `env`; joined
+  downloader may be named by its path, run through `env` or by Python
+  (`python3 -m yt_dlp`; see the lock group below for every form read); joined
   (`--exec=…`, `-o…`) and abbreviated forms count; after `--` nothing is
   an option (yt-dlp's optparse and gallery-dl's and instaloader's
   argparse read it so), there or in a run's escaping and path checks. Also a shell's `-c` text
@@ -2523,11 +2535,21 @@ could not be read.
 **Runs.** Job kind `script`, started by `POST /api/scripts/<id>/run` only
 (`POST /api/jobs` refuses it), shown in the [Jobs](#jobs) list as any job.
 
-- Lock group: the tool's when `argv[0]` is the tool's bare name
-  (`instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg`: never beside a sync of
-  that tool, its pause between them), else `scripts`, with no pause: a
-  downloader named by its absolute path or run behind `env` is in
-  `scripts` today: a bug, open as #98.
+- Lock group: the tool's when the program the command runs is
+  `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` (never beside a sync of
+  that tool, its pause between them), else `scripts`, with no pause. The
+  program is read as the checks read it: by its bare name or its path
+  (`/opt/venv/bin/yt-dlp`, `env ./yt-dlp`), behind `env` and its options
+  and variables (`env -i`, `env LANG=C yt-dlp`), run by Python (`python3
+  -m yt_dlp`, `-m gallery_dl`, `-m instaloader`, with Python's own options
+  before `-m`, `-m runpy yt_dlp`, `python3 /path/yt-dlp`, or the package's
+  folder or its `__main__.py`), or an absolute path that is a symlink to
+  one of them under another name (`~/bin/ytdl`; links are followed one at
+  a time, so the first known name along them counts, whenever the command
+  is read). Not read: `env -S` (its text is split by env's own
+  rules), a name looked up on `PATH` that is a symlink, and other
+  launchers (`nice`, `timeout`, a wrapper script): those run in
+  `scripts`.
 - `argv` is the command as run, or the script's path. `argv` and `params`
   are scrubbed as output is (`health.scrub`).
 - The log starts with `[feedvault]` lines: the script's path and the

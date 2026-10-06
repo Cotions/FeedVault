@@ -1077,6 +1077,129 @@ def test_a_downloaders_command_shares_its_lock_group(client, folder, runner):
     assert runner.runs()[-1]["args"] == ["--", "carol.cooks"]
 
 
+# #98: a downloader named however the command names it runs in its tool's
+# lock group with its pause. Read only: none of these is run.
+NAMED = [
+    (["/usr/bin/instaloader"], "instaloader"),
+    (["/opt/venv/bin/yt-dlp"], "yt-dlp"),
+    (["/usr/bin/env", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/env", "-i", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/env", "LANG=C", "instaloader"], "instaloader"),
+    (["/usr/bin/env", "-i", "PATH=/opt/bin", "-u", "HOME", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/env", "--", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/env", "./yt-dlp"], "yt-dlp"),
+    (["/usr/bin/python3", "-m", "yt_dlp"], "yt-dlp"),
+    (["/usr/bin/python3", "-m", "gallery_dl"], "gallery-dl"),
+    (["/usr/bin/python3", "-m", "instaloader"], "instaloader"),
+    (["/usr/bin/python3", "-m", "yt_dlp.__main__"], "yt-dlp"),
+    (["/usr/bin/python3", "-myt_dlp"], "yt-dlp"),
+    (["/usr/bin/python3", "-Im", "gallery_dl"], "gallery-dl"),
+    (["/usr/bin/python3", "-X", "utf8", "-Wignore", "-u", "-m", "yt_dlp"], "yt-dlp"),
+    (["/usr/bin/python3", "--check-hash-based-pycs", "never", "-m", "gallery_dl"], "gallery-dl"),
+    (["/opt/venv/bin/python", "-m", "yt_dlp"], "yt-dlp"),
+    (["/usr/bin/python3.12", "/opt/venv/bin/yt-dlp"], "yt-dlp"),
+    (["/usr/bin/python3", "--", "/opt/venv/bin/gallery-dl"], "gallery-dl"),
+    (["/usr/bin/env", "python3", "-m", "gallery_dl"], "gallery-dl"),
+    (["/usr/bin/env", "-i", "PYTHONUTF8=1", "python3", "-u", "-m", "instaloader"], "instaloader"),
+    (["/usr/bin/python3", "-m", "runpy", "yt_dlp"], "yt-dlp"),
+    (["/usr/bin/python3", "/usr/lib/python3/dist-packages/yt_dlp/__main__.py"], "yt-dlp"),
+    (["/usr/bin/python3", "/opt/src/gallery_dl"], "gallery-dl"),
+    (["/usr/bin/python3", "/opt/src/gallery_dl/"], "gallery-dl"),
+]
+NOT_DOWNLOADERS = [
+    ["/usr/bin/echo", "yt-dlp"],
+    ["/usr/bin/env", "true", "yt-dlp"],
+    ["/usr/bin/python3", "-c", "import yt_dlp"],
+    ["/usr/bin/python3", "-m", "json.tool"],
+    ["/usr/bin/python3", "-m", "yt_dlpx"],
+    ["/usr/bin/python3", "--version", "-m", "yt_dlp"],
+    ["/usr/bin/python3", "/opt/bin/other.py", "yt-dlp"],
+    ["/usr/bin/python3", "-m", "runpy", "json.tool"],
+    ["/usr/bin/python3", "/opt/src/other/__main__.py"],
+    ["/usr/bin/env", "-S", "yt-dlp --version"],          # env -S: its text is not read (see API.md)
+]
+PAUSES = {"instaloader": 41, "gallery-dl": 42, "yt-dlp": 43}
+
+
+@pytest.fixture
+def pauses(env):
+    cfg = config.load()
+    for tool, seconds in PAUSES.items():
+        cfg[tool] = {"pause": seconds}
+    config.save(cfg)
+
+
+@pytest.mark.parametrize("argv, tool", NAMED)
+def test_a_downloader_however_named_gets_its_lock_group_and_pause(client, folder, pauses, argv, tool):
+    write(folder, "named.json", {"needs": "none", "argv": [*argv, "--version"]})
+    script = scripts.get("named")
+    assert script["refused"] is None
+    assert scripts.program(script) == tool
+    assert scripts.group(script) == tool
+    assert scripts._pause({"script": "named"}) == PAUSES[tool]
+
+
+@pytest.mark.parametrize("argv", NOT_DOWNLOADERS)
+def test_another_program_stays_in_the_scripts_group_with_no_pause(client, folder, pauses, argv):
+    write(folder, "other.json", {"needs": "none", "argv": argv})
+    script = scripts.get("other")
+    assert script["refused"] is None
+    assert scripts.group(script) == "scripts" and scripts._pause({"script": "other"}) == 0
+    write(folder, "echo.sh", SHELL, 0o755)
+    assert scripts.group(scripts.get("echo")) == "scripts" and scripts._pause({"script": "echo"}) == 0
+
+
+@pytest.mark.parametrize("argv", [
+    ["/usr/bin/python3", "-m", "yt_dlp"],
+    ["/usr/bin/env", "-i", "python3", "-Im", "yt_dlp"],
+    ["/usr/bin/python3", "/opt/venv/bin/yt-dlp"],
+    ["/usr/bin/python3", "-m", "runpy", "yt_dlp"],
+    ["/usr/bin/python3", "/opt/src/yt_dlp/__main__.py"],
+])
+def test_a_downloader_run_by_python_gets_the_same_checks(client, folder, argv):
+    """Its options are read as the tool's: a placeholder in --exec is refused,
+    as for yt-dlp by name (before #98, Python hid them)."""
+    write(folder, "notify.json", {"needs": "url", "argv": [*argv, "--exec", "echo {url}", "--", "{url}"]})
+    assert listed(client)["notify"]["refused"].startswith("--exec's value can reach a shell")
+    script = {"kind": "command", "tool": argv[0], "argv": [*argv, "-o", "{root}/%(id)s", "--", "{url}"]}
+    vals = {"target": "", "url": "https://e.com/100%", "root": "/m/50%", "data_dir": "/d", "archive": "/a"}
+    assert scripts.command(script, vals)[-4:] == ["-o", "/m/50%%/%(id)s", "--", "https://e.com/100%"]
+
+
+def test_a_symlink_to_a_downloader_runs_in_its_lock_group(client, folder, runner, pauses, env):
+    runner.install_as("yt-dlp")
+    link = env["tmp"] / "links" / "ytdl"
+    link.parent.mkdir()
+    link.symlink_to(runner.bin / "yt-dlp")
+    write(folder, "linked.json", {"needs": "url", "argv": [str(link), "--", "{url}"]})
+    assert scripts._pause({"script": "linked"}) == PAUSES["yt-dlp"]
+    job = run(client, "linked", url="https://www.youtube.com/watch?v=abc")["job"]
+    assert job["group"] == "yt-dlp"
+    assert ended(job["id"])["state"] == "done"
+    assert runner.runs()[-1]["args"] == ["--", "https://www.youtube.com/watch?v=abc"]
+    # Through a chain of links whose last file has another name (a snap's launcher):
+    # the first known name along it.
+    (env["tmp"] / "links" / "snap").write_text("")
+    snap_yt = env["tmp"] / "links" / "yt-dlp"
+    snap_yt.symlink_to(env["tmp"] / "links" / "snap")
+    chained = env["tmp"] / "links" / "yt"
+    chained.symlink_to(snap_yt)
+    write(folder, "chained.json", {"needs": "none", "argv": [str(chained), "--version"]})
+    assert scripts.group(scripts.get("chained")) == "yt-dlp"
+    # A target is checked as yt-dlp's too: a link.
+    write(folder, "linked-t.json", {"needs": "target", "argv": [str(link), "--", "{target}"]})
+    assert "an http(s) link for yt-dlp" in run(client, "linked-t", status=400, target="carol")["error"]
+
+
+def test_a_downloader_by_absolute_path_runs_in_its_lock_group(client, folder, runner):
+    runner.install_as("instaloader")
+    write(folder, "abs.json", {"needs": "target", "argv": [str(runner.bin / "instaloader"), "--", "{target}"]})
+    job = run(client, "abs", target="carol.cooks")["job"]
+    assert job["group"] == "instaloader"
+    assert ended(job["id"])["state"] == "done"
+    assert runner.runs()[-1]["args"] == ["--", "carol.cooks"]
+
+
 def test_a_builtin_runs_with_its_tools_found_as_in_settings(client, env, runner):
     runner.install_as("yt-dlp")
     job = run(client, "builtin:yt-dlp-video", url="https://www.youtube.com/watch?v=abc")["job"]
@@ -3092,7 +3215,7 @@ def test_every_argv_form_reads_as_pinned(argv, why, got):
 
 
 def walked(argv):
-    start, found = scripts._walk(argv)
+    start, _, found = scripts._walk(argv)
     return start, [(f.index, f.given, [o for o, _ in f.options], f.values, f.maybe) for f in found]
 
 
@@ -3116,10 +3239,9 @@ def test_the_check_and_command_agree_on_every_pinned_form(argv):
     and _check_shell refuses it as code or a format string exactly when
     either reading has it one. An item naming an option is never given a
     link: that would change how the command reads."""
-    start, found = scripts._walk(argv)
-    if start is None or os.path.basename(argv[start]) not in scripts.TOOLS:
+    start, tool, found = scripts._walk(argv)
+    if start is None or tool not in scripts.TOOLS:
         return
-    tool = os.path.basename(argv[start])
     claims = collections.defaultdict(list)
     for f in found:
         for n, (item, at) in enumerate(f.values):

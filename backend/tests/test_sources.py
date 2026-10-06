@@ -171,8 +171,8 @@ def test_suggestions_from_existing_folders(env, client):
 
 
 def test_suggestion_of_a_filename_only_folder_targets_the_folder(env, client):
-    # As in the real archive: the newest file is named after someone else, so
-    # the account's handle reads as theirs. The folder's name is the profile.
+    # As in the real archive: the newest file is named after someone else.
+    # The folder's name is the profile (and the account's handle, #99).
     folder = env["media"] / "motherbeef"
     folder.mkdir()
     for i, (name, ts) in enumerate([("motherbeef", TS), ("motherbeef", TS + 60), ("tatum.bell", TS + 120)]):

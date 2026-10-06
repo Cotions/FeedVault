@@ -16,7 +16,7 @@ CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/feedvault"
 LIVE_CONFIG="$CONFIG_HOME/config.json"
 TEST_CONFIG="$CONFIG_HOME/config.test.json"
 DEMO_DIR="${FEEDVAULT_DEMO_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/feedvault-demo}"
-PORT="${FEEDVAULT_TEST_PORT:-3389}"
+PORT="${FEEDVAULT_TEST_PORT-3389}"
 VENV="$ROOT/backend/venv"
 
 say()  { printf '\033[1;32m▸\033[0m %s\n' "$*"; }
@@ -29,10 +29,16 @@ for arg in "$@"; do
     --demo)   MODE=demo ;;
     --reset)  MODE=reset ;;
     --status) MODE=status ;;
-    --help|-h) sed -n '2,12p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    # The comment block under the #! line, up to the first line that is not one.
+    --help|-h) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     *) die "Unknown option: $arg (try --help)" ;;
   esac
 done
+
+# A number from 1 to 65535 before it goes anywhere (the Python check below).
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$PORT >= 1 && 10#$PORT <= 65535 )) \
+  || die "FEEDVAULT_TEST_PORT must be a port number from 1 to 65535, not '$PORT'"
+PORT=$((10#$PORT))
 
 [ -x "$VENV/bin/python" ] || die "No virtualenv at $VENV. Run ./run.sh once."
 [ -f "$ROOT/frontend/dist/index.html" ] || die "UI not built. Run: ./run.sh --build"
@@ -112,5 +118,5 @@ else
   warn "bwrap not found — running without the read-only protection"
 fi
 
-say "Test instance → http://localhost:$PORT   (live app stays on 3380)"
+say "Test instance → http://localhost:$PORT   (live app stays on ${FEEDVAULT_PORT:-3380})"
 exec "${CMD[@]}"

@@ -48,7 +48,7 @@ def clean_accounts(value):
 # Aliases (derived, on every scan)
 # ---------------------------------------------------------------------------
 
-FILENAMES = "% (filenames)"     # tool of posts rebuilt from file names
+FILENAMES = db.FILENAMES       # tool of posts rebuilt from file names
 
 
 def _folder(path, folder_id):

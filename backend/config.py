@@ -6,6 +6,7 @@ next to the code, so the repo holds the app only and a frozen binary works too.
 import errno
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -16,7 +17,19 @@ BUNDLE_DIR = getattr(sys, "_MEIPASS", "")
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR   = os.path.dirname(BASE_DIR)
 
-PORT = int(os.environ.get("FEEDVAULT_PORT", "3380"))
+
+
+def _port(value):
+    """FEEDVAULT_PORT: unset is 3380; anything but a number from 1 to 65535
+    (empty too) stops FeedVault, as it stops run.sh and Vite (#100)."""
+    if value is None:
+        return 3380
+    if not re.fullmatch(r"[0-9]{1,5}", value) or not 1 <= int(value) <= 65535:
+        raise SystemExit(f"FEEDVAULT_PORT must be a port number from 1 to 65535, not {value!r}")
+    return int(value)
+
+
+PORT = _port(os.environ.get("FEEDVAULT_PORT"))
 # Release builds rewrite this line with the tag being built.
 __version__ = "0.0.0-dev"
 
