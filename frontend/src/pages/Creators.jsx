@@ -19,6 +19,7 @@ import {
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
 import { optionsSummary } from "../lib/sourceOptions";
 import { warnings } from "../lib/health";
+import PageHeader from "../components/PageHeader";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -483,227 +484,227 @@ export default function Creators() {
   const empty = !people.length && !unlinked.length;
 
   return (
-    <div className="card">
-      <div className="page-head">
-        <h2 className="page-title">Creators</h2>
-        <span className="page-count">
-          {data && peopleApi.data
-            ? `${plural(peopleAll.length, "person", "people")} · ${plural(data.length, "account")} · ${plural(total, "post")}`
-            : "…"}
-        </span>
-        <div className="page-head-spacer" />
-        {(data?.length > 8 || peopleAll.length > 8) && (
-          <input
-            type="text"
-            className="page-filter"
-            placeholder="Name or any handle…"
-            aria-label="Filter creators"
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
+    <>
+      <PageHeader
+        title="Creators"
+        sub={data && peopleApi.data
+          ? `${plural(peopleAll.length, "person", "people")} · ${plural(data.length, "account")} · ${plural(total, "post")}`
+          : "…"}
+        actions={<>
+          {(data?.length > 8 || peopleAll.length > 8) && (
+            <input
+              type="text"
+              className="page-filter"
+              placeholder="Name or any handle…"
+              aria-label="Filter creators"
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+          )}
+          {!sel.active && (
+            <button type="button" className="btn-secondary" onClick={() => setAdding({ name: "", links: "", error: null })}
+                    title="A person and their profile links, before anything is downloaded">
+              <Icon name="plus" size={14} /> New person
+            </button>
+          )}
+          {data?.length > 1 && (
+            <button
+              type="button"
+              className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
+              aria-pressed={sel.active}
+              onClick={() => (sel.active ? sel.exit() : sel.enter())}
+              title={sel.active ? "Leave select mode (Esc)" : "Select people and accounts to merge"}
+            >
+              <Icon name={sel.active ? "close" : "check"} size={14} />
+              {sel.active ? "Done" : "Select"}
+            </button>
+          )}
+        </>}
+      />
+      <div className="card">
+        {!sel.active && !filter && (
+          <section className="sources-panel" aria-label="Sources">
+            <AddSource onAdded={sources.reload} />
+            <SyncAllBar count={sourceList.length} syncAll={syncAll} />
+            {loose.length > 0 && (
+              <ul className="source-list">
+                {loose.map(src => (
+                  <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
+                             onSaved={sources.reload} />
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {!sel.active && !filter && (
+          <SourceSuggestions
+            list={sources.data?.suggestions}
+            busy={busy}
+            onAdd={s => addSuggested([s])}
+            onAddAll={() => setAddAll({ error: null })}
           />
         )}
-        {!sel.active && (
-          <button type="button" className="btn-secondary" onClick={() => setAdding({ name: "", links: "", error: null })}
-                  title="A person and their profile links, before anything is downloaded">
-            <Icon name="plus" size={14} /> New person
-          </button>
-        )}
-        {data?.length > 1 && (
-          <button
-            type="button"
-            className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
-            aria-pressed={sel.active}
-            onClick={() => (sel.active ? sel.exit() : sel.enter())}
-            title={sel.active ? "Leave select mode (Esc)" : "Select people and accounts to merge"}
-          >
-            <Icon name={sel.active ? "close" : "check"} size={14} />
-            {sel.active ? "Done" : "Select"}
-          </button>
-        )}
-      </div>
 
-      {!sel.active && !filter && (
-        <section className="sources-panel" aria-label="Sources">
-          <AddSource onAdded={sources.reload} />
-          <SyncAllBar count={sourceList.length} syncAll={syncAll} />
-          {loose.length > 0 && (
-            <ul className="source-list">
-              {loose.map(src => (
-                <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
-                           onSaved={sources.reload} />
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
+        {!sel.active && !filter && (
+          <Suggestions data={suggestApi.data} busy={busy} onLink={linkSuggestion} onDismiss={dismiss} />
+        )}
 
-      {!sel.active && !filter && (
-        <SourceSuggestions
-          list={sources.data?.suggestions}
+        {error && !data ? (
+          <div className="empty">Could not load creators: {error.message}</div>
+        ) : loading ? (
+          <div className="empty">Loading…</div>
+        ) : empty ? (
+          <div className="empty">{filter ? "No creator matches." : "No creators yet. They appear once posts are indexed."}</div>
+        ) : (
+          <>
+            {people.length > 0 && (
+              <>
+                <h3 className="card-title creators-section">People <span className="page-count">{fmtInt(people.length)}</span></h3>
+                <div className="creator-grid">
+                  {people.map((p, i) => (
+                    <PersonCard
+                      key={p.id}
+                      person={p}
+                      index={i}
+                      selectMode={sel.active}
+                      selected={sel.isSelected(`person:${p.id}`)}
+                      onToggle={shift => sel.toggle(index(`person:${p.id}`), shift)}
+                      sync={syncOf(`person:${p.id}`)}
+                      onSync={sources.sync}
+                      fresh={fresh.get(`person:${p.id}`)}
+                      onSeen={() => markCardSeen(fresh.get(`person:${p.id}`), { person: p.id }, p.name)}
+                      muted={mutedSet && mutedSet.has(`person:${p.id}`)}
+                      onMuted={onMuted}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+            {unlinked.length > 0 && (
+              <>
+                {people.length > 0 && (
+                  <h3 className="card-title creators-section">Accounts <span className="page-count">{fmtInt(unlinked.length)} not linked</span></h3>
+                )}
+                <div className="creator-grid">
+                  {unlinked.map((a, i) => (
+                    <AccountCard
+                      key={`${a.platform}:${a.id ?? a.handle}`}
+                      account={a}
+                      index={i}
+                      query={filter}
+                      selectMode={sel.active}
+                      selected={sel.isSelected(`account:${accountKey(a)}`)}
+                      onToggle={shift => sel.toggle(index(`account:${accountKey(a)}`), shift)}
+                      sync={a.id != null ? syncOf(`account:${accountKey(a)}`) : null}
+                      onSync={sources.sync}
+                      onEdit={setEditing}
+                      fresh={a.id != null ? fresh.get(`account:${accountKey(a)}`) : null}
+                      onSeen={() => markCardSeen(fresh.get(`account:${accountKey(a)}`), { account: accountRef(a) },
+                                                 `@${a.handle || a.id}`)}
+                      muted={mutedSet && mutedSet.has(`account:${accountKey(a)}`)}
+                      onMuted={onMuted}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {sel.active && (
+          <SelectionBar selection={sel} loaded={items.filter(i => i.id).length}>
+            <button type="button" className="btn-primary" disabled={!canMerge || busy} onClick={askMerge}
+                    title={canMerge ? "" : "Select accounts, or two people"}>
+              <Icon name="users" size={14} /> Merge into one person
+            </button>
+          </SelectionBar>
+        )}
+
+        <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
+        {editing && <SourceOptionsDialog source={editing} onClose={() => setEditing(null)} onSaved={sources.reload} />}
+
+        <ConfirmDialog
+          open={!!addAll}
+          title={`Add ${fmtInt(sources.data?.suggestions?.length || 0)} sources?`}
+          confirmLabel="Add all"
           busy={busy}
-          onAdd={s => addSuggested([s])}
-          onAddAll={() => setAddAll({ error: null })}
-        />
-      )}
+          error={addAll?.error}
+          onConfirm={async () => {
+            if (await addSuggested(sources.data?.suggestions || [])) setAddAll(null);
+            else setAddAll({ error: "Some could not be added; see the messages." });
+          }}
+          onCancel={() => setAddAll(null)}
+        >
+          Every instaloader folder listed becomes a source, with the profile name shown. Nothing is
+          downloaded until you sync; each first sync starts after the newest post already in the folder.
+        </ConfirmDialog>
 
-      {!sel.active && !filter && (
-        <Suggestions data={suggestApi.data} busy={busy} onLink={linkSuggestion} onDismiss={dismiss} />
-      )}
+        <ConfirmDialog
+          open={!!adding}
+          title="New person"
+          confirmLabel="Create"
+          busy={busy}
+          error={adding?.error}
+          onConfirm={runAdd}
+          onCancel={() => setAdding(null)}
+          initialFocus={addRef}
+          confirmDisabled={!adding?.name.trim()}
+        >
+          <p>Each profile link becomes a source of theirs. Nothing is downloaded until you sync them.</p>
+          <label className="dialog-field">
+            <span>Name</span>
+            <input
+              ref={addRef}
+              type="text"
+              className="page-filter"
+              maxLength={64}
+              value={adding?.name || ""}
+              onChange={e => setAdding(a => ({ ...a, name: e.target.value, error: null }))}
+            />
+          </label>
+          <label className="dialog-field">
+            <span>Profile links, one per line</span>
+            <textarea
+              className="person-notes"
+              rows={4}
+              placeholder={"https://www.instagram.com/…\nhttps://x.com/…\nhttps://www.youtube.com/@…"}
+              value={adding?.links || ""}
+              onChange={e => setAdding(a => ({ ...a, links: e.target.value, error: null }))}
+            />
+          </label>
+        </ConfirmDialog>
 
-      {error && !data ? (
-        <div className="empty">Could not load creators: {error.message}</div>
-      ) : loading ? (
-        <div className="empty">Loading…</div>
-      ) : empty ? (
-        <div className="empty">{filter ? "No creator matches." : "No creators yet. They appear once posts are indexed."}</div>
-      ) : (
-        <>
-          {people.length > 0 && (
-            <>
-              <h3 className="card-title creators-section">People <span className="page-count">{fmtInt(people.length)}</span></h3>
-              <div className="creator-grid">
-                {people.map((p, i) => (
-                  <PersonCard
-                    key={p.id}
-                    person={p}
-                    index={i}
-                    selectMode={sel.active}
-                    selected={sel.isSelected(`person:${p.id}`)}
-                    onToggle={shift => sel.toggle(index(`person:${p.id}`), shift)}
-                    sync={syncOf(`person:${p.id}`)}
-                    onSync={sources.sync}
-                    fresh={fresh.get(`person:${p.id}`)}
-                    onSeen={() => markCardSeen(fresh.get(`person:${p.id}`), { person: p.id }, p.name)}
-                    muted={mutedSet && mutedSet.has(`person:${p.id}`)}
-                    onMuted={onMuted}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-          {unlinked.length > 0 && (
-            <>
-              {people.length > 0 && (
-                <h3 className="card-title creators-section">Accounts <span className="page-count">{fmtInt(unlinked.length)} not linked</span></h3>
-              )}
-              <div className="creator-grid">
-                {unlinked.map((a, i) => (
-                  <AccountCard
-                    key={`${a.platform}:${a.id ?? a.handle}`}
-                    account={a}
-                    index={i}
-                    query={filter}
-                    selectMode={sel.active}
-                    selected={sel.isSelected(`account:${accountKey(a)}`)}
-                    onToggle={shift => sel.toggle(index(`account:${accountKey(a)}`), shift)}
-                    sync={a.id != null ? syncOf(`account:${accountKey(a)}`) : null}
-                    onSync={sources.sync}
-                    onEdit={setEditing}
-                    fresh={a.id != null ? fresh.get(`account:${accountKey(a)}`) : null}
-                    onSeen={() => markCardSeen(fresh.get(`account:${accountKey(a)}`), { account: accountRef(a) },
-                                               `@${a.handle || a.id}`)}
-                    muted={mutedSet && mutedSet.has(`account:${accountKey(a)}`)}
-                    onMuted={onMuted}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </>
-      )}
-
-      {sel.active && (
-        <SelectionBar selection={sel} loaded={items.filter(i => i.id).length}>
-          <button type="button" className="btn-primary" disabled={!canMerge || busy} onClick={askMerge}
-                  title={canMerge ? "" : "Select accounts, or two people"}>
-            <Icon name="users" size={14} /> Merge into one person
-          </button>
-        </SelectionBar>
-      )}
-
-      <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
-      {editing && <SourceOptionsDialog source={editing} onClose={() => setEditing(null)} onSaved={sources.reload} />}
-
-      <ConfirmDialog
-        open={!!addAll}
-        title={`Add ${fmtInt(sources.data?.suggestions?.length || 0)} sources?`}
-        confirmLabel="Add all"
-        busy={busy}
-        error={addAll?.error}
-        onConfirm={async () => {
-          if (await addSuggested(sources.data?.suggestions || [])) setAddAll(null);
-          else setAddAll({ error: "Some could not be added; see the messages." });
-        }}
-        onCancel={() => setAddAll(null)}
-      >
-        Every instaloader folder listed becomes a source, with the profile name shown. Nothing is
-        downloaded until you sync; each first sync starts after the newest post already in the folder.
-      </ConfirmDialog>
-
-      <ConfirmDialog
-        open={!!adding}
-        title="New person"
-        confirmLabel="Create"
-        busy={busy}
-        error={adding?.error}
-        onConfirm={runAdd}
-        onCancel={() => setAdding(null)}
-        initialFocus={addRef}
-        confirmDisabled={!adding?.name.trim()}
-      >
-        <p>Each profile link becomes a source of theirs. Nothing is downloaded until you sync them.</p>
-        <label className="dialog-field">
-          <span>Name</span>
-          <input
-            ref={addRef}
-            type="text"
-            className="page-filter"
-            maxLength={64}
-            value={adding?.name || ""}
-            onChange={e => setAdding(a => ({ ...a, name: e.target.value, error: null }))}
-          />
-        </label>
-        <label className="dialog-field">
-          <span>Profile links, one per line</span>
-          <textarea
-            className="person-notes"
-            rows={4}
-            placeholder={"https://www.instagram.com/…\nhttps://x.com/…\nhttps://www.youtube.com/@…"}
-            value={adding?.links || ""}
-            onChange={e => setAdding(a => ({ ...a, links: e.target.value, error: null }))}
-          />
-        </label>
-      </ConfirmDialog>
-
-      <ConfirmDialog
-        open={!!merge}
-        title={chosenPeople.length > 1 ? "Merge people" : chosenPeople.length ? `Add to ${chosenPeople[0].name}` : "New person"}
-        confirmLabel={chosenPeople.length ? "Merge" : "Create"}
-        busy={busy}
-        error={merge?.error}
-        onConfirm={runMerge}
-        onCancel={() => setMerge(null)}
-        initialFocus={nameRef}
-        confirmDisabled={!merge?.name.trim()}
-      >
-        <p>
-          {chosenPeople.length > 1 && `${chosenPeople.length} people become one; their notes are kept. `}
-          {chosenAccounts.length > 0 && `${chosenAccounts.length} account${chosenAccounts.length === 1 ? "" : "s"} get linked. `}
-          Posts and files are not touched.
-        </p>
-        <label className="dialog-field">
-          <span>Name</span>
-          <input
-            ref={nameRef}
-            type="text"
-            className="page-filter"
-            maxLength={64}
-            value={merge?.name || ""}
-            onChange={e => setMerge(m => ({ ...m, name: e.target.value, error: null }))}
-            onKeyDown={e => { if (e.key === "Enter" && merge?.name.trim() && !busy) runMerge(); }}
-          />
-        </label>
-      </ConfirmDialog>
-    </div>
+        <ConfirmDialog
+          open={!!merge}
+          title={chosenPeople.length > 1 ? "Merge people" : chosenPeople.length ? `Add to ${chosenPeople[0].name}` : "New person"}
+          confirmLabel={chosenPeople.length ? "Merge" : "Create"}
+          busy={busy}
+          error={merge?.error}
+          onConfirm={runMerge}
+          onCancel={() => setMerge(null)}
+          initialFocus={nameRef}
+          confirmDisabled={!merge?.name.trim()}
+        >
+          <p>
+            {chosenPeople.length > 1 && `${chosenPeople.length} people become one; their notes are kept. `}
+            {chosenAccounts.length > 0 && `${chosenAccounts.length} account${chosenAccounts.length === 1 ? "" : "s"} get linked. `}
+            Posts and files are not touched.
+          </p>
+          <label className="dialog-field">
+            <span>Name</span>
+            <input
+              ref={nameRef}
+              type="text"
+              className="page-filter"
+              maxLength={64}
+              value={merge?.name || ""}
+              onChange={e => setMerge(m => ({ ...m, name: e.target.value, error: null }))}
+              onKeyDown={e => { if (e.key === "Enter" && merge?.name.trim() && !busy) runMerge(); }}
+            />
+          </label>
+        </ConfirmDialog>
+      </div>
+    </>
   );
 }

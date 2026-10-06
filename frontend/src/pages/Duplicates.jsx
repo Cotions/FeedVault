@@ -10,6 +10,7 @@ import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
 import SelectionBar from "../components/SelectionBar";
+import PageHeader from "../components/PageHeader";
 
 const PAGE = 50;
 const MAX_PAGE = 500;      // the backend's limit; a reload refetches what was loaded
@@ -453,32 +454,29 @@ export default function Duplicates() {
   /* ── Render ──────────────────────────────────────────── */
   const k = KINDS.find(x => x.value === kind);
   const head = (
-    <div className="page-head">
-      <h2 className="page-title">Duplicates</h2>
-      {current && (
-        <span className="page-count">
-          {plural(result.total, "group")} · {fmtBytes(result.frees)} to free
-        </span>
-      )}
-      <div className="page-head-spacer" />
-      {reposts > 0 && (
-        <button
-          type="button"
-          className={`btn-secondary select-toggle${withReposts ? " is-on" : ""}`}
-          aria-pressed={withReposts}
-          onClick={() => setWithReposts(v => !v)}
-          title="Reposts are posts by different accounts. Include them in Select, where the earliest posted is kept."
-        >
-          {withReposts ? "Reposts included" : "Include reposts"}
-        </button>
-      )}
-      {identical.length > 0 && !sel.active && (
-        <button type="button" className="btn-secondary" onClick={sel.enter} title="Pick identical groups to resolve with the suggested copy">
-          <Icon name="check" size={14} />Select
-        </button>
-      )}
-      {sel.active && <button type="button" className="btn-secondary" onClick={sel.exit}>Done</button>}
-    </div>
+    <PageHeader
+      title="Duplicates"
+      sub={current && `${plural(result.total, "group")} · ${fmtBytes(result.frees)} to free`}
+      actions={<>
+        {reposts > 0 && (
+          <button
+            type="button"
+            className={`btn-secondary select-toggle${withReposts ? " is-on" : ""}`}
+            aria-pressed={withReposts}
+            onClick={() => setWithReposts(v => !v)}
+            title="Reposts are posts by different accounts. Include them in Select, where the earliest posted is kept."
+          >
+            {withReposts ? "Reposts included" : "Include reposts"}
+          </button>
+        )}
+        {identical.length > 0 && !sel.active && (
+          <button type="button" className="btn-secondary" onClick={sel.enter} title="Pick identical groups to resolve with the suggested copy">
+            <Icon name="check" size={14} />Select
+          </button>
+        )}
+        {sel.active && <button type="button" className="btn-secondary" onClick={sel.exit}>Done</button>}
+      </>}
+    />
   );
 
   const progress = status?.running ? (

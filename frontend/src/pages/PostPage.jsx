@@ -14,6 +14,7 @@ import DeleteErrors from "../components/DeleteErrors";
 import TagChips from "../components/TagChips";
 import TagInput from "../components/TagInput";
 import CollectionDialog from "../components/CollectionDialog";
+import PageHeader from "../components/PageHeader";
 
 /* The post's tags: remove with ×, add with autocomplete. */
 function PostTags({ post, onChanged }) {
@@ -135,17 +136,21 @@ export default function PostPage() {
   }
 
   const head = (
-    <div className="post-page-head">
-      <button type="button" className="btn-secondary btn-back" onClick={back}>
-        <Icon name="back" size={15} />Back
-      </button>
-      <div className="page-head-spacer" />
-      {matches && (
+    <PageHeader
+      className="post-page-head"
+      title="Post"
+      sub={matches && `@${post.author?.handle || "unknown"} · ${platformLabel(post.platform)}`}
+      back={(
+        <button type="button" className="btn-secondary btn-back" onClick={back}>
+          <Icon name="back" size={15} />Back
+        </button>
+      )}
+      actions={matches && (
         <button type="button" className="btn-danger-soft" onClick={() => ask({ type: "post" })}>
           <Icon name="trash" size={14} />Delete post
         </button>
       )}
-    </div>
+    />
   );
 
   if (error && (!matches || error.status === 404)) {

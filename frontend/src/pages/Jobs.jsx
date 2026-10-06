@@ -4,6 +4,7 @@ import { useJobs, ENDED, SAVE_KINDS, jobDuration, shownParams } from "../lib/job
 import { fmtAgo, fmtFullDate, fmtStamp } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import PageHeader from "../components/PageHeader";
 
 const LOG_POLL_MS = 1000;
 const LOG_KEPT    = 5000;          // lines kept on screen, as many as the backend keeps
@@ -157,13 +158,8 @@ export default function Jobs() {
 
   return (
     <div className="jobs-page">
+      <PageHeader title="Jobs" sub={list ? `${list.running} running · ${list.queued} queued` : "…"} />
       <div className="card">
-        <div className="page-head">
-          <h2 className="page-title">Jobs</h2>
-          <span className="page-count">
-            {list ? `${list.running} running · ${list.queued} queued` : "…"}
-          </span>
-        </div>
         <p className="page-lede">
           Downloads and other command-line tools FeedVault runs for you, one at a time per tool.
           When a download ends, its folder is indexed right away. Check your tools in Settings.

@@ -14,6 +14,7 @@ import Suggestions from "../components/Suggestions";
 import MuteButton from "../components/MuteButton";
 import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
+import PageHeader from "../components/PageHeader";
 
 function AccountRow({ account: a, busy, onUnlink }) {
   const url = safeUrl(a.url);
@@ -199,11 +200,10 @@ export default function PersonPage() {
   const muted = !!newApi.data?.muted?.people?.includes(p.id);
 
   return (
-    <div className="card person-page">
-      <div className="page-head">
-        <Link to="/creators" className="icon-btn" title="All creators" aria-label="All creators"><Icon name="back" size={16} /></Link>
-        <span className="avatar-letter" aria-hidden="true">{p.name.charAt(0).toUpperCase()}</span>
-        {editName != null ? (
+    <>
+      <PageHeader
+        title={p.name}
+        heading={editName != null && (
           <form className="person-rename" onSubmit={e => { e.preventDefault(); save({ name: editName }, () => setEditName(null)); }}>
             <input
               autoFocus
@@ -218,149 +218,148 @@ export default function PersonPage() {
             <button type="submit" className="btn-primary" disabled={busy || !editName.trim()}>Save</button>
             <button type="button" className="btn-ghost" onClick={() => setEditName(null)}>Cancel</button>
           </form>
-        ) : (
-          <>
-            <h2 className="page-title">{p.name}</h2>
+        )}
+        sub={`${fmtInt(p.count)} posts · ${fmtBytes(p.bytes)}${p.newest ? ` · newest ${fmtAgo(p.newest)}` : ""}`}
+        back={<Link to="/creators" className="btn-secondary btn-back"><Icon name="back" size={15} />Creators</Link>}
+        actions={<>
+          {editName == null && (
             <button type="button" className="btn-ghost" onClick={() => setEditName(p.name)}>Rename</button>
-          </>
-        )}
-        <span className="page-count">
-          {fmtInt(p.count)} posts · {fmtBytes(p.bytes)}{p.newest ? ` · newest ${fmtAgo(p.newest)}` : ""}
-        </span>
-        <div className="page-head-spacer" />
-        <button type="button" className="btn-ghost person-delete" onClick={() => { setDlgError(null); setConfirm(true); }}>
-          <Icon name="trash" size={14} /> Delete person
-        </button>
-      </div>
+          )}
+          <button type="button" className="btn-ghost person-delete" onClick={() => { setDlgError(null); setConfirm(true); }}>
+            <Icon name="trash" size={14} /> Delete person
+          </button>
+        </>}
+      />
+      <div className="card person-page">
+        <nav className="person-links" aria-label={`${p.name} across the app`}>
+          <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
+          <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
+          <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
+          <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
+          <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
+        </nav>
 
-      <nav className="person-links" aria-label={`${p.name} across the app`}>
-        <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
-        <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
-        <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
-        <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
-        <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
-      </nav>
-
-      <div className="person-new">
-        {fresh?.count > 0 && (
-          <>
-            <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
-                  title="Their posts indexed since you last marked them seen">
-              {fmtInt(fresh.count)} new
-            </Link>
-            <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
-                    title="Their new posts stop being new; everyone else's stay">
-              <Icon name="check" size={14} /> Mark seen
-            </button>
-          </>
-        )}
-        {newApi.data && (
-          <MuteButton muted={muted} whom={{ person: p.id }} name={p.name} onDone={() => { newApi.reload(); started(); }} />
-        )}
-      </div>
-
-      <section className="person-section">
-        <h3 className="card-title">Accounts <span className="page-count">{p.accounts.length}</span></h3>
-        {p.accounts.length === 0 ? (
-          <div className="empty">No account linked yet. Add one below.</div>
-        ) : (
-          <ul className="person-accounts">
-            {p.accounts.map(a => (
-              <AccountRow
-                key={accountKey(a)}
-                account={a}
-                busy={busy}
-                onUnlink={a => change({ remove: [accountRef(a)] }, `@${a.handle || a.id} unlinked.`)}
-              />
-            ))}
-          </ul>
-        )}
-        <div className="person-add">
-          <CreatorPicker
-            accounts={authors || []}
-            exclude={linked}
-            label="Add an account"
-            allLabel="Add an account…"
-            onChange={v => {
-              if (!v?.account) return;
-              const a = v.account;
-              const from = a.person && a.person.id !== p.id ? ` (moved from ${a.person.name})` : "";
-              change({ add: [accountRef(a)] }, `@${a.handle || a.id} linked${from}.`);
-            }}
-          />
-          <span className="creator-sub">An account belongs to one person: adding it here takes it from anyone else.</span>
-        </div>
-        <Suggestions
-          title="Also them?"
-          data={{ suggestions: suggested }}
-          busy={busy}
-          onLink={s => {
-            const add = s.accounts.filter(a => !a.person).map(accountRef);
-            change({ add }, `${add.length} account${add.length === 1 ? "" : "s"} linked.`);
-          }}
-          onDismiss={dismiss}
-        />
-      </section>
-
-      <section className="person-section">
-        <div className="person-section-head">
-          <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
-          {mine.length > 0 && (
-            <button type="button" className="btn-primary" disabled={busy} onClick={syncAll}
-                    title="Sync each source of this person, one after another">
-              <Icon name="refresh" size={14} /> Sync {mine.length > 1 ? `all ${mine.length}` : ""}
-            </button>
+        <div className="person-new">
+          {fresh?.count > 0 && (
+            <>
+              <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
+                    title="Their posts indexed since you last marked them seen">
+                {fmtInt(fresh.count)} new
+              </Link>
+              <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
+                      title="Their new posts stop being new; everyone else's stay">
+                <Icon name="check" size={14} /> Mark seen
+              </button>
+            </>
+          )}
+          {newApi.data && (
+            <MuteButton muted={muted} whom={{ person: p.id }} name={p.name} onDone={() => { newApi.reload(); started(); }} />
           )}
         </div>
-        {mine.length === 0 ? (
-          <div className="empty">
-            {sources.data ? "Nothing to sync yet. Add a profile below to download their new posts from here." : "Loading…"}
+
+        <section className="person-section">
+          <h3 className="card-title">Accounts <span className="page-count">{p.accounts.length}</span></h3>
+          {p.accounts.length === 0 ? (
+            <div className="empty">No account linked yet. Add one below.</div>
+          ) : (
+            <ul className="person-accounts">
+              {p.accounts.map(a => (
+                <AccountRow
+                  key={accountKey(a)}
+                  account={a}
+                  busy={busy}
+                  onUnlink={a => change({ remove: [accountRef(a)] }, `@${a.handle || a.id} unlinked.`)}
+                />
+              ))}
+            </ul>
+          )}
+          <div className="person-add">
+            <CreatorPicker
+              accounts={authors || []}
+              exclude={linked}
+              label="Add an account"
+              allLabel="Add an account…"
+              onChange={v => {
+                if (!v?.account) return;
+                const a = v.account;
+                const from = a.person && a.person.id !== p.id ? ` (moved from ${a.person.name})` : "";
+                change({ add: [accountRef(a)] }, `@${a.handle || a.id} linked${from}.`);
+              }}
+            />
+            <span className="creator-sub">An account belongs to one person: adding it here takes it from anyone else.</span>
           </div>
-        ) : (
-          <ul className="source-list">
-            {mine.map(s => (
-              <SourceRow key={s.id} source={s} job={sources.jobOf(s)} onSync={sources.sync} onRemove={setRemoving}
-                         onSaved={sources.reload} />
-            ))}
-          </ul>
-        )}
-        <AddSource person={p.id} onAdded={sources.reload} />
-      </section>
+          <Suggestions
+            title="Also them?"
+            data={{ suggestions: suggested }}
+            busy={busy}
+            onLink={s => {
+              const add = s.accounts.filter(a => !a.person).map(accountRef);
+              change({ add }, `${add.length} account${add.length === 1 ? "" : "s"} linked.`);
+            }}
+            onDismiss={dismiss}
+          />
+        </section>
 
-      <section className="person-section">
-        <h3 className="card-title">Notes</h3>
-        <textarea
-          className="person-notes"
-          aria-label="Notes"
-          rows={4}
-          maxLength={5000}
-          placeholder="Anything worth remembering about them."
-          value={notesValue}
-          onChange={e => setNotes(e.target.value)}
-        />
-        {notes != null && notes !== p.notes && (
-          <div className="person-notes-actions">
-            <button type="button" className="btn-primary" disabled={busy} onClick={() => save({ notes }, () => setNotes(null))}>Save notes</button>
-            <button type="button" className="btn-ghost" disabled={busy} onClick={() => setNotes(null)}>Discard</button>
+        <section className="person-section">
+          <div className="person-section-head">
+            <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
+            {mine.length > 0 && (
+              <button type="button" className="btn-primary" disabled={busy} onClick={syncAll}
+                      title="Sync each source of this person, one after another">
+                <Icon name="refresh" size={14} /> Sync {mine.length > 1 ? `all ${mine.length}` : ""}
+              </button>
+            )}
           </div>
-        )}
-      </section>
+          {mine.length === 0 ? (
+            <div className="empty">
+              {sources.data ? "Nothing to sync yet. Add a profile below to download their new posts from here." : "Loading…"}
+            </div>
+          ) : (
+            <ul className="source-list">
+              {mine.map(s => (
+                <SourceRow key={s.id} source={s} job={sources.jobOf(s)} onSync={sources.sync} onRemove={setRemoving}
+                           onSaved={sources.reload} />
+              ))}
+            </ul>
+          )}
+          <AddSource person={p.id} onAdded={sources.reload} />
+        </section>
 
-      <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
+        <section className="person-section">
+          <h3 className="card-title">Notes</h3>
+          <textarea
+            className="person-notes"
+            aria-label="Notes"
+            rows={4}
+            maxLength={5000}
+            placeholder="Anything worth remembering about them."
+            value={notesValue}
+            onChange={e => setNotes(e.target.value)}
+          />
+          {notes != null && notes !== p.notes && (
+            <div className="person-notes-actions">
+              <button type="button" className="btn-primary" disabled={busy} onClick={() => save({ notes }, () => setNotes(null))}>Save notes</button>
+              <button type="button" className="btn-ghost" disabled={busy} onClick={() => setNotes(null)}>Discard</button>
+            </div>
+          )}
+        </section>
 
-      <ConfirmDialog
-        open={confirm}
-        title={`Delete ${p.name}?`}
-        confirmLabel="Delete person"
-        danger
-        busy={busy}
-        error={dlgError}
-        onConfirm={remove}
-        onCancel={() => setConfirm(false)}
-      >
-        Their {p.accounts.length} account{p.accounts.length === 1 ? "" : "s"} go back to unlinked.
-        No post or file is touched.
-      </ConfirmDialog>
-    </div>
+        <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
+
+        <ConfirmDialog
+          open={confirm}
+          title={`Delete ${p.name}?`}
+          confirmLabel="Delete person"
+          danger
+          busy={busy}
+          error={dlgError}
+          onConfirm={remove}
+          onCancel={() => setConfirm(false)}
+        >
+          Their {p.accounts.length} account{p.accounts.length === 1 ? "" : "s"} go back to unlinked.
+          No post or file is touched.
+        </ConfirmDialog>
+      </div>
+    </>
   );
 }

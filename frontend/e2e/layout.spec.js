@@ -163,3 +163,46 @@ test.describe("dialogs", () => {
     });
   }
 });
+
+// One page shell (#93): every page opens on the same head, above its cards.
+// The title (h2) starts at the same x and y on each page, to 1px, and the
+// head ends above whatever follows it and above the first card.
+const SHELL_SIZES = [SIZES[1], SIZES[2]];   // 1280x800, 1440x900
+const SHELL_VIEWS = [
+  ...VIEWS.filter(v => !v.name.startsWith("Settings ›")),
+  { name: "Tag", open: page => openUrl(page, `/?tag=${encodeURIComponent("ceramics")}`, pg => pg.locator("article.post-card").first()) },
+];
+
+test("every page's title is in the same place", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "layout-zoom", "the zoomed project checks the resting layout only");
+  test.setTimeout(120_000);
+  const problems = [];
+  for (const s of SHELL_SIZES) {
+    await page.setViewportSize({ width: s.width, height: s.height });
+    let first = null;
+    for (const v of SHELL_VIEWS) {
+      await v.open(page);
+      await stillPage(page);
+      await settle(page);
+      const m = await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        const head = document.querySelector("main .page-head");
+        const h2 = head?.querySelector("h2");
+        if (!head || !h2) return null;
+        const hb = head.getBoundingClientRect(), tb = h2.getBoundingClientRect();
+        const next = head.nextElementSibling?.getBoundingClientRect();
+        const card = [...document.querySelectorAll("main .card")].find(c => c.getBoundingClientRect().height > 0)?.getBoundingClientRect();
+        return { x: tb.x, y: tb.y, bottom: hb.bottom, next: next?.top ?? null, card: card?.top ?? null };
+      });
+      const at = `${v.name} at ${s.label}`;
+      if (!m) { problems.push(`${at}: no .page-head with an h2 in <main>`); continue; }
+      first ??= { ...m, name: v.name };
+      if (Math.abs(m.x - first.x) > 1 || Math.abs(m.y - first.y) > 1) {
+        problems.push(`${at}: title at (${m.x}, ${m.y}), ${first.name} has it at (${first.x}, ${first.y})`);
+      }
+      if (m.next != null && m.next < m.bottom - 0.5) problems.push(`${at}: the head (bottom ${m.bottom}) overlaps what follows it (top ${m.next})`);
+      if (m.card != null && m.card < m.bottom - 0.5) problems.push(`${at}: the head (bottom ${m.bottom}) overlaps the first card (top ${m.card})`);
+    }
+  }
+  expect(problems, problems.join("\n")).toEqual([]);
+});

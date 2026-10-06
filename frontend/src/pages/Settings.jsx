@@ -10,6 +10,7 @@ import { fmtAgo, fmtBytes, fmtFullDate, plural } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import AppearanceSettings from "../components/AppearanceSettings";
+import PageHeader from "../components/PageHeader";
 
 function sameList(a, b) {
   return a.length === b.length && a.every((x, i) => x === b[i]);
@@ -988,7 +989,7 @@ export default function Settings() {
 
   return (
     <div className="settings-page">
-      <div className="page-head page-head-bare"><h2 className="page-title">Settings</h2></div>
+      <PageHeader title="Settings" />
       <div className="settings-layout">
         <nav className="settings-tabs" aria-label="Settings sections">
           {TABS.map(t => (
