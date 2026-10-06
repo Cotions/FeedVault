@@ -312,10 +312,9 @@ TOOLS = {
         {"B": ((PATH,),), "f": ((PATH,),)}, "CFGPSVhqs", True, False, sync._escape,
         "the post's own attributes (likes, date_utc)", ("--latest-stamps",)),
 }
-# env's options whose values the checks and command() read: -C (a path),
-# and -S (split: its text becomes the command). LAUNCHERS has its grammar.
-ENV = Tool({"--split-string": ((SPLIT,),), "--unset": ((),), "--chdir": ((PATH,),), "--argv0": ((),)},
-           {"S": ((SPLIT,),), "u": ((),), "C": ((PATH,),), "a": ((),)}, "iv0", False, False, None, None, ())
+# What env's option values are (LAUNCHERS has its grammar): -C a path,
+# -S a text split into the command it runs; the others' no kind.
+ENV_KINDS = {"-C": PATH, "--chdir": PATH, "-S": SPLIT, "--split-string": SPLIT}
 # A program that runs the one named after its own options (and after
 # ``operands`` items of its own: timeout's duration, taskset's mask), read
 # as GNU getopt_long reads them with a leading "+": options end at "--"
@@ -328,10 +327,13 @@ ENV = Tool({"--split-string": ((SPLIT,),), "--unset": ((),), "--chdir": ((PATH,)
 # -NUM / --NUM / -+NUM, an adjustment. An option it does not have, a value
 # or operand missing: it runs nothing either. From their source: coreutils
 # 9.4 (env.c, nice.c, nohup.c, timeout.c, stdbuf.c; env's -a, --argv0 from
-# 9.5 on: an older env refuses it) and util-linux 2.39.3 (setsid.c,
-# ionice.c, taskset.c). Not followed: chrt (its priority, an operand,
-# became optional in later versions), flock (its -c runs $SHELL -c with
-# the text after the file), and the RUNNERS.
+# 9.5 on: an older env refuses it) and util-linux 2.39.3 (ionice.c,
+# taskset.c). Named by its bare name or a path in SYSTEM_DIRS only: a
+# program of the user's under one of these names is not one. Not followed:
+# setsid (a job leads its own process group, so setsid forks, exits at once
+# and leaves the program out of the job's reach), chrt (its priority, an
+# operand, became optional in later versions), flock (its -c runs $SHELL
+# -c with the text after the file), and the RUNNERS.
 Launcher = collections.namedtuple("Launcher", "flags values none longs operands numbers", defaults=(0, False))
 FLAG, VALUE, OPTIONAL, NONE = "flag", "value", "optional", "none"
 _GNU = {"help": NONE, "version": NONE}
@@ -345,7 +347,6 @@ LAUNCHERS = {
     "timeout": Launcher("v", "ks", "", {"kill-after": VALUE, "signal": VALUE, "verbose": FLAG, "foreground": FLAG,
                                          "preserve-status": FLAG, **_GNU}, 1),
     "stdbuf": Launcher("", "ioe", "", {"input": VALUE, "output": VALUE, "error": VALUE, **_GNU}),
-    "setsid": Launcher("cfw", "", "hV", {"ctty": FLAG, "fork": FLAG, "wait": FLAG, **_GNU}),
     "ionice": Launcher("t", "nc", "pPuhV", {"classdata": VALUE, "class": VALUE, "ignore": FLAG, "pid": NONE,
                                              "pgid": NONE, "uid": NONE, **_GNU}),
     "taskset": Launcher("ac", "", "phV", {"all-tasks": FLAG, "cpu-list": FLAG, "pid": NONE, **_GNU}, 1),
@@ -353,20 +354,25 @@ LAUNCHERS = {
 # Programs that run a command (or a text as one) FeedVault does not
 # follow: refused with a placeholder anywhere, as any program it does not read.
 RUNNERS = ("xargs", "sudo", "doas", "su", "runuser", "ssh", "watch", "script", "parallel", "find", "chrt",
-           "flock", "exec", "time", "busybox", "unshare", "nsenter", "systemd-run", "firejail", "bwrap")
+           "flock", "setsid", "exec", "time", "busybox", "unshare", "nsenter", "systemd-run", "firejail", "bwrap")
+# Where a launcher or a DATA_ONLY program named by its path must be.
+SYSTEM_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin")
 # Programs that only ever treat their arguments as data (printed), so a
 # placeholder may reach them: echo (coreutils: -n, -e, -E, its escapes
 # print text); printf, but never in its format (its first argument, after
-# a "--"), whose % directives consume the others.
+# a "--"), whose % directives consume the others. By its bare name or a
+# path in SYSTEM_DIRS only, as a launcher.
 DATA_ONLY = ("echo", "printf")
 # A shell's -c text is read as code, and the file its first argument names
 # when it has no -c (nor -s) is run. fish is not one: its -c, -C and more
 # take values of their own.
 SHELLS = ("sh", "bash", "dash", "zsh", "ksh", "mksh", "ash")
-# Shells' options that take the next item, all of theirs at once (bash and
-# dash -o, -O; ksh93 -R; mksh -T): reading one as a value that is not
-# only ever makes the check look later in argv.
-SHELL_VALUES = "oOTR"
+# Each shell's short options that take the next item (bash -o, -O; ksh93
+# -R; mksh -T); sh and ksh may be any of them, so they get them all:
+# reading one as a value that is not only ever makes the check look
+# later in argv.
+SHELL_VALUES = {"bash": "oO", "dash": "o", "ash": "o", "zsh": "o", "mksh": "oT"}
+SHELL_ANY_VALUES = "oOTR"
 SHELL_LONG_VALUES = ("--rcfile", "--init-file", "--emulate")
 # A downloader run by Python (#98): `python3 -m yt_dlp` runs the package's
 # __main__.py, which the tool's own command runs too; `python3 /x/yt-dlp`
@@ -469,6 +475,12 @@ def _known(name):
         or name in DATA_ONLY or PYTHON_RE.fullmatch(name) is not None
 
 
+def _system(item):
+    """Whether ``item`` names a program by its bare name (the job's PATH
+    finds it) or by a path in one of SYSTEM_DIRS."""
+    return "/" not in item or os.path.dirname(os.path.normpath(item)) in SYSTEM_DIRS
+
+
 LINK_HOPS = 40                                 # as the kernel's limit on a path's symlinks
 
 
@@ -539,9 +551,10 @@ def _python(argv, i):
 
 def _options(argv, i, spec, name):
     """(the index of the first item after the options of the launcher at
-    ``i`` (``spec``, named ``name``), [(index of an option item that took a
-    value, the option as named in full)], None), or (None, [], why it runs
-    no program, or not as FeedVault reads it)."""
+    ``i`` (``spec``, named ``name``), [(index of an option item that takes
+    a value, its name as given, as named in full, (index of the item its
+    value starts in, offset))], None), or (None, [], why it runs no
+    program, or not as FeedVault reads it)."""
     n, took = i + 1, []
     while n < len(argv):
         a = argv[n]
@@ -564,11 +577,11 @@ def _options(argv, i, spec, name):
             if kind == VALUE and not eq:
                 if n + 1 >= len(argv):
                     return None, [], f"{name} {a} has no value"
-                took.append((n, "--" + names[0]))
+                took.append((n, "--" + given, "--" + names[0], (n + 1, 0)))
                 n += 2
                 continue
             if eq:
-                took.append((n, "--" + names[0]))
+                took.append((n, "--" + given, "--" + names[0], (n, len(given) + 3)))
             n += 1
             continue
         for k, c in enumerate(a[1:], 1):
@@ -578,10 +591,14 @@ def _options(argv, i, spec, name):
                 return None, [], f"{name} -{c} runs no program"
             if c not in spec.values:
                 return None, [], f"{name} reads {a!r} in a way FeedVault does not follow"
-            if k + 1 == len(a) and n + 1 >= len(argv):
+            if k + 1 < len(a):
+                took.append((n, "-" + c, "-" + c, (n, k + 1)))
+                n += 1
+            elif n + 1 < len(argv):
+                took.append((n, "-" + c, "-" + c, (n + 1, 0)))
+                n += 2
+            else:
                 return None, [], f"{name} -{c} has no value"
-            took.append((n, "-" + c))
-            n += 1 if k + 1 < len(a) else 2
             break
         else:
             n += 1
@@ -596,18 +613,17 @@ def _launch(argv):
     which program runs: env -S splits a text into it, a launcher that runs
     none or reads an option FeedVault does not follow)."""
     found, chain, i = [], [], 0
-    while (name := _name(argv[i])) in LAUNCHERS:
+    while (name := _name(argv[i])) in LAUNCHERS and _system(argv[i]):
         chain.append((i, name))
         spec = LAUNCHERS[name]
         n, took, why = _options(argv, i, spec, name)
         if n is None:
             return None, found, chain, why
         if name == "env":
-            for m, option in took:
-                match = _match(argv[m], ENV)
-                if match is not None:
-                    found.append(_found(argv, m, match, ENV)[0])
-                if option in ("-S", "--split-string"):
+            for m, given, option, value in took:
+                kind = ENV_KINDS.get(option)
+                found.append(Found(m, given, [(option, ((kind,) if kind else (),))], [value]))
+                if kind == SPLIT:
                     return None, found, chain, "env -S splits its text into a command"
             n += n < len(argv) and argv[n] == "-"
             while n < len(argv) and "=" in argv[n]:
@@ -653,11 +669,13 @@ def _walk(argv):
     return i, name, found + sorted(read + maybe)
 
 
-def _check_sh(argv):
-    """Why a placeholder would be read as a shell's code, else None: in its
-    options, or in the first item after them (SHELL_VALUES and
-    SHELL_LONG_VALUES take the next one): its -c text once one of them holds
-    c, else, unless one holds s (commands from stdin), the file it runs."""
+def _check_sh(argv, shell):
+    """Why a placeholder would be read as code by ``shell`` given ``argv``,
+    else None: in its options, or in the first item after them (its
+    SHELL_VALUES and SHELL_LONG_VALUES take the next one): its -c text once
+    one of them holds c, else, unless one holds s (commands from stdin), the
+    file it runs."""
+    letters = SHELL_VALUES.get(shell, SHELL_ANY_VALUES)
     run, stdin, value = False, False, False
     for a in argv:
         if _used([a]) and (value or a.startswith(("-", "+"))):
@@ -669,7 +687,7 @@ def _check_sh(argv):
         elif a.startswith(("-", "+")):
             run = run or "c" in a
             stdin = stdin or a.startswith("-") and "s" in a
-            value = any(c in a for c in SHELL_VALUES)
+            value = any(c in a for c in letters)
         else:
             break
     else:
@@ -699,21 +717,21 @@ def _check_program(argv):
     """Why a FeedVault placeholder in ``argv`` could reach code, as far as
     which program reads it goes, else None. Every program on the way to the
     one that reads the arguments must be one FeedVault follows (LAUNCHERS,
-    Python running a downloader), with no placeholder in its own items but
-    env's -C (a folder, checked as a path when it runs); the last one a
-    downloader (its options are checked: _check_shell), a shell (_check_sh)
-    or DATA_ONLY. A placeholder never names a program."""
+    Python running a downloader), with no placeholder in its own items; the
+    last one a downloader (its options are checked: _check_shell), a shell
+    (_check_sh) or DATA_ONLY. A placeholder never names a program."""
     if not _used(argv):
         return None
-    start, found, chain, why = _launch(argv)
+    start, _, chain, why = _launch(argv)
     if start is None:
         return f"{why}: not in a command with a FeedVault placeholder"
-    chdir = {m for f in found if PATH in f.kinds(0) for m, _ in f.values}
     for n in range(start):
-        if n not in chdir and _used([argv[n]]):
+        if _used([argv[n]]):
             launcher = next(name for at, name in reversed(chain) if at <= n)
-            return (f"{argv[n]!r}: a placeholder may not be among {launcher}'s options or operands "
-                    f"(env's -C, a folder, may hold one): pass it to the program it runs")
+            why = (" (a variable can be code to the program, LD_PRELOAD or BASH_ENV, and -C picks the folder "
+                   "its relative names, configs and modules are found in)") if launcher == "env" else ""
+            return (f"{argv[n]!r}: a placeholder may not be among {launcher}'s options or operands{why}: "
+                    "pass it to the program it runs")
     name = _name(argv[start])
     if _used([argv[start]]):
         return f"{argv[start]!r}: a placeholder may not name the program to run"
@@ -729,13 +747,13 @@ def _check_program(argv):
         return None
     if name in TOOLS or name in SHELLS:
         return None
-    if name == "printf":
+    if name == "printf" and _system(argv[start]):
         rest = argv[start + 1:]
         fmt = rest[1:2] if rest[:1] == ["--"] else rest[:1]
         if _used(fmt):
             return f"{fmt[0]!r}: printf's format may not hold a FeedVault placeholder: pass it after the format (%s)"
         return None
-    if name in DATA_ONLY:
+    if name in DATA_ONLY and _system(argv[start]):
         return None
     if name in RUNNERS:
         return (f"{name} runs a command FeedVault does not follow, so no FeedVault placeholder may be in it: "
@@ -751,7 +769,7 @@ def _check_shell(argv):
     if start is None:                          # _check_program's to refuse
         return None
     if tool in SHELLS:
-        return _check_sh(argv[start + 1:])
+        return _check_sh(argv[start + 1:], tool)
     for f in found:
         if f.index < start:
             continue

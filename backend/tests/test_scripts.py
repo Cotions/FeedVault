@@ -280,6 +280,8 @@ def runner(env, folder, monkeypatch):
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     monkeypatch.setattr(sync, "_batch", None)
     rec = Recorder(env["tmp"])
+    # Its folder stands in for /usr/bin, where an echo is one (scripts.SYSTEM_DIRS).
+    monkeypatch.setattr(scripts, "SYSTEM_DIRS", (*scripts.SYSTEM_DIRS, str(rec.bin)))
     monkeypatch.setenv("PATH", f"{rec.bin}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setenv("RECORDER_LOG", str(rec.log))
     return rec
@@ -312,7 +314,8 @@ def log_of(client, job_id):
 
 # A program FeedVault does not read the arguments of may not take a
 # placeholder (#103), so the recorder runs as one that only ever prints
-# them (scripts.DATA_ONLY): a fake echo, as the downloaders are fakes.
+# them (scripts.DATA_ONLY): a fake echo, as the downloaders are fakes, in
+# a folder the runner fixture makes a system one.
 def command(rec, *args, needs="target", rescan=None):
     return {"needs": needs, "rescan": rescan, "argv": [str(rec.echo), *args]}
 
@@ -1222,7 +1225,7 @@ def why_refused(argv):
 
 
 # A launcher (coreutils' env, nice, nohup, timeout, stdbuf; util-linux's
-# setsid, ionice, taskset) is seen through, with and without its options:
+# ionice, taskset) is seen through, with and without its options:
 # the downloader it runs gets its checks, its lock group and its pause.
 LAUNCHED = [
     (["/usr/bin/nice", "yt-dlp"], "yt-dlp"),
@@ -1241,8 +1244,8 @@ LAUNCHED = [
     (["/usr/bin/timeout", "--kill", "5", "--", "60", "gallery-dl"], "gallery-dl"),
     (["/usr/bin/stdbuf", "-oL", "yt-dlp"], "yt-dlp"),
     (["/usr/bin/stdbuf", "-o", "L", "-e0", "--input=0", "gallery-dl"], "gallery-dl"),
-    (["/usr/bin/setsid", "yt-dlp"], "yt-dlp"),
-    (["/usr/bin/setsid", "-fw", "--ctty", "instaloader"], "instaloader"),
+    (["/usr/bin/env", "nice", "yt-dlp"], "yt-dlp"),      # its bare name, as the job's PATH finds it
+    (["/usr/local/bin/timeout", "5", "yt-dlp"], "yt-dlp"),
     (["/usr/bin/ionice", "yt-dlp"], "yt-dlp"),
     (["/usr/bin/ionice", "-c3", "-t", "yt-dlp"], "yt-dlp"),
     (["/usr/bin/ionice", "-c", "2", "-n", "7", "--", "gallery-dl"], "gallery-dl"),
@@ -1254,8 +1257,8 @@ LAUNCHED = [
     (["/usr/bin/env", "--ignore-environment", "--unset=HOME", "--block-signal=INT", "yt-dlp"], "yt-dlp"),
     # One in another, any order, any depth.
     (["/usr/bin/nice", "timeout", "60", "env", "X=1", "yt-dlp"], "yt-dlp"),
-    (["/usr/bin/env", "-i", "nice", "-n", "19", "ionice", "-c3", "stdbuf", "-oL", "setsid", "-w", "taskset", "-c",
-      "0", "nohup", "timeout", "-s", "KILL", "2h", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/env", "-i", "nice", "-n", "19", "ionice", "-c3", "stdbuf", "-oL", "taskset", "-c", "0", "nohup",
+      "timeout", "-s", "KILL", "2h", "gallery-dl"], "gallery-dl"),
     (["/usr/bin/timeout", "60", "/usr/bin/nice", "/usr/bin/python3", "-m", "yt_dlp"], "yt-dlp"),
     (["/usr/bin/nice", "/opt/venv/bin/instaloader"], "instaloader"),
 ]
@@ -1279,7 +1282,7 @@ def test_a_launcher_is_seen_through_to_the_downloader_it_runs(client, folder, pa
     (["/usr/bin/nice", "-x", "yt-dlp", "{url}"], "nice reads '-x' in a way FeedVault does not follow"),
     (["/usr/bin/timeout", "--verbose=1", "60", "yt-dlp", "{url}"], "timeout reads '--verbose=1'"),
     (["/usr/bin/nice", "-{url}", "yt-dlp"], "nice reads '-{url}'"),
-    (["/usr/bin/setsid", "--fork=1", "yt-dlp", "{url}"], "setsid reads '--fork=1'"),
+    (["/usr/bin/nohup", "--fork", "yt-dlp", "{url}"], "nohup reads '--fork'"),
     (["/usr/bin/stdbuf", "--", "{url}"], "a placeholder may not name the program to run"),
     (["/usr/bin/env", "--ig", "yt-dlp", "{url}"], "env reads '--ig'"),    # --ignore-environment or -signal?
     # It runs no program: --help, --version, a pid's options.
@@ -1288,7 +1291,7 @@ def test_a_launcher_is_seen_through_to_the_downloader_it_runs(client, folder, pa
     (["/usr/bin/ionice", "-c3", "-p", "1", "{url}"], "ionice -p runs no program"),
     (["/usr/bin/ionice", "--pid=1", "{url}"], "ionice --pid=1 runs no program"),
     (["/usr/bin/taskset", "-p", "0x1", "{url}"], "taskset -p runs no program"),
-    (["/usr/bin/setsid", "-V", "{url}"], "setsid -V runs no program"),
+    (["/usr/bin/taskset", "-V", "{url}"], "taskset -V runs no program"),
     (["/usr/bin/env", "X={url}"], "env runs no program here"),
     (["/usr/bin/timeout", "60"], None),                                           # nothing to refuse: no placeholder
 ])
@@ -1311,6 +1314,10 @@ def test_a_launcher_read_otherwise_is_refused_with_a_placeholder(argv, why):
     (["/usr/bin/env", "X={target}", "yt-dlp", "{url}"], "X={target}", "env"),
     (["/usr/bin/env", "BASH_ENV={root}/x", "/bin/bash", "-c", "true"], "BASH_ENV={root}/x", "env"),
     (["/usr/bin/nice", "env", "LD_PRELOAD={archive}", "yt-dlp"], "LD_PRELOAD={archive}", "env"),
+    # The folder it runs in decides what relative names, configs (yt-dlp.conf) and modules load.
+    (["/usr/bin/env", "-C", "{root}", "yt-dlp", "{url}"], "{root}", "env"),
+    (["/usr/bin/env", "-iC{target}", "/bin/sh", "fetch.sh"], "-iC{target}", "env"),
+    (["/usr/bin/nice", "env", "--chdir={root}/x", "gallery-dl", "{url}"], "--chdir={root}/x", "env"),
 ])
 def test_a_placeholder_among_a_launchers_items_is_refused(argv, item, launcher):
     error = why_refused([a.replace("{target}", "{url}") for a in argv])
@@ -1318,10 +1325,9 @@ def test_a_placeholder_among_a_launchers_items_is_refused(argv, item, launcher):
     assert error.startswith(f"{item!r}: a placeholder may not be among {launcher}'s options or operands")
 
 
-def test_env_s_chdir_may_hold_a_placeholder_checked_as_a_path(env):
-    for argv in (["/usr/bin/env", "-C", "{root}", "yt-dlp", "{url}"],
-                 ["/usr/bin/nice", "env", "--chdir={root}/x", "gallery-dl", "{url}"]):
-        assert why_refused(argv) is None
+def test_env_s_chdir_is_still_checked_as_a_path_when_filled_in(env):
+    """A command with a placeholder there is refused; command() still keeps
+    a link's .. out of it (as before #103)."""
     script = {"kind": "command", "tool": "/usr/bin/nice", "argv": ["/usr/bin/nice", "env", "-C", "/tmp/{url}",
                                                                    "yt-dlp", "{url}"]}
     vals = {"target": "", "url": "https://x.com/../../etc", "root": "/m", "data_dir": "/d", "archive": "/a"}
@@ -1343,6 +1349,9 @@ def test_env_s_chdir_may_hold_a_placeholder_checked_as_a_path(env):
     ["/usr/bin/chrt", "-o", "0", "yt-dlp", "{url}"],
     ["/usr/bin/flock", "/tmp/lock", "yt-dlp", "{url}"],
     ["/usr/bin/flock", "/tmp/lock", "-c", "yt-dlp {url}"],
+    # A job leads its process group: setsid forks and exits, the program out of the job's reach.
+    ["/usr/bin/setsid", "yt-dlp", "{url}"],
+    ["/usr/bin/setsid", "-w", "yt-dlp", "{url}"],
     # Behind a launcher seen through, too.
     ["/usr/bin/nice", "xargs", "yt-dlp", "{url}"],
     ["/usr/bin/env", "-i", "sudo", "-u", "me", "yt-dlp", "{url}"],
@@ -1375,6 +1384,11 @@ def test_a_runner_feedvault_does_not_follow_is_refused_with_a_placeholder(argv):
     (["/usr/bin/env", "./mytool", "{url}"], "mytool"),
     (["/usr/bin/nice", "/home/me/bin/wrap.sh", "{url}"], "wrap.sh"),
     (["/usr/bin/timeout", "60", "../bin/x", "{root}"], "x"),
+    # A program of the user's under a launcher's or echo's name is no launcher, nor echo.
+    (["/home/me/bin/echo", "{url}"], "echo"),
+    (["/usr/bin/env", "./printf", "%s", "{url}"], "printf"),
+    (["/home/me/bin/nice", "yt-dlp", "{url}"], "nice"),
+    (["/usr/bin/env", "/opt/bin/timeout", "60", "yt-dlp", "{url}"], "timeout"),
 ])
 def test_an_interpreter_or_an_unknown_program_is_refused_with_a_placeholder(argv, name):
     error = why_refused(argv)
@@ -1422,6 +1436,9 @@ def test_a_placeholder_among_pythons_options_or_naming_what_it_runs_is_refused(a
     (["/bin/mksh", "-T", "x", "{url}"], "a shell runs the file its first argument names"),
     (["/bin/ksh", "-R", "x", "-c", "{url}"], "a shell's -c text is read as code"),
     (["/bin/zsh", "--emulate", "{url}", "-c", "x"], "among a shell's options"),
+    # bash's and zsh's -T is a flag (functrace): what follows is the file.
+    (["/bin/bash", "-eT", "/home/me/fetch.sh", "{url}"], None),
+    (["/bin/sh", "-T", "x", "{url}"], "a shell runs the file its first argument names"),     # sh may be mksh
 ])
 def test_a_shell_keeps_its_checks_and_its_file_is_never_a_placeholder(argv, why):
     error = why_refused(argv)
@@ -1801,7 +1818,10 @@ def test_the_scheduler_runs_the_script(client, runner, source):
 REFUSED_NOW = {"name": "Mine", "needs": "target", "argv": ["/usr/bin/perl", "/home/me/fetch.pl", "{target}"]}
 
 
-def test_a_saved_script_the_rule_refuses_is_listed_never_run_and_fails_its_schedule(client, folder, runner, source):
+def test_a_saved_script_the_rule_refuses_is_listed_never_run_and_fails_its_schedule(client, folder, runner, source,
+                                                                                  monkeypatch):
+    for state in ("_notes", "_held", "_last"):         # no earlier test's spread between a platform's syncs
+        monkeypatch.setattr(scheduler, state, {})
     attach(client, source["id"], "mine")
     client.post(f"/api/sources/{source['id']}", json={"options": {"schedule": "hourly"}}, headers=H)
     runner.install_as("gallery-dl")
@@ -2073,19 +2093,19 @@ PINNED = [
      'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
      'instead (its inputs are FV_* variables, never pasted into code)',
      None),
-    (['/opt/bin/echo', '--flag', '--', '{target}'], None, 'plain'),
+    (['/usr/bin/echo', '--flag', '--', '{target}'], None, 'plain'),
     (['/opt/bin/recorder', '--url={url}', '{url}'],
      'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
      'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
      'instead (its inputs are FV_* variables, never pasted into code)',
      None),
-    (['/opt/bin/echo', '--url={url}', '{url}'], None, 'plain'),
+    (['/usr/bin/echo', '--url={url}', '{url}'], None, 'plain'),
     (['/opt/bin/recorder', '{root}/x', '{data_dir}', '{archive}', '{profile}', '{target}', '--', '{target}{target}'],
      'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
      'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
      'instead (its inputs are FV_* variables, never pasted into code)',
      None),
-    (['/opt/bin/echo', '{root}/x', '{data_dir}', '{archive}', '{profile}', '{target}', '--', '{target}{target}'],
+    (['/usr/bin/echo', '{root}/x', '{data_dir}', '{archive}', '{profile}', '{target}', '--', '{target}{target}'],
      None, 'plain'),
     (['instaloader', '{root}', '--', '{root}'], None, 'plain'),
     (['yt-dlp', '{root}', '--', '{root}'], None, 'plain'),
@@ -3019,13 +3039,11 @@ PINNED = [
       'env': 'plain',
       'formfeed': 'plain',
       'template': 'plain'}),
-    (['/usr/bin/env', '-C', '/tmp/{url}', 'gallery-dl', '{url}'], None,
-     {'brace_root': 'plain',
-      'dollar': 'plain',
-      'dotdot': "400: {url} puts a .. in -C's path, which would lead out of the folder written there",
-      'env': 'plain',
-      'formfeed': 'plain',
-      'template': 'plain'}),
+    (['/usr/bin/env', '-C', '/tmp/{url}', 'gallery-dl', '{url}'],
+     "'/tmp/{url}': a placeholder may not be among env's options or operands (a variable can be code to "
+     'the program, LD_PRELOAD or BASH_ENV, and -C picks the folder its relative names, configs and '
+     'modules are found in): pass it to the program it runs',
+     None),
     (['env', '-i', '-u', 'X', '-C/tmp/{url}', 'yt-dlp', '{url}'],
      'argv[0] must be one of instaloader, gallery-dl, yt-dlp, ffmpeg (found as in Settings → Downloaders), or an '
      'absolute path to a program',
@@ -3490,28 +3508,28 @@ PINNED = [
      'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
      'instead (its inputs are FV_* variables, never pasted into code)',
      None),
-    (['/opt/bin/echo', '{target}'], None, 'plain'),
+    (['/usr/bin/echo', '{target}'], None, 'plain'),
     (['/opt/bin/recorder', '{url}'],
      'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
      'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
      'instead (its inputs are FV_* variables, never pasted into code)',
      None),
-    (['/opt/bin/echo', '{url}'], None, 'plain'),
+    (['/usr/bin/echo', '{url}'], None, 'plain'),
     (['yt-dlp', '--', '{target}'], None, 'plain'),
     (['/opt/bin/recorder', '--evil', '{target}'],
      'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
      'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
      'instead (its inputs are FV_* variables, never pasted into code)',
      None),
-    (['/opt/bin/echo', '--evil', '{target}'], None, 'plain'),
+    (['/usr/bin/echo', '--evil', '{target}'], None, 'plain'),
     (['/opt/bin/recorder', '--post', '{root}/carol.cooks'],
      'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
      'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
      'instead (its inputs are FV_* variables, never pasted into code)',
      None),
-    (['/opt/bin/echo', '--post', '{root}/carol.cooks'], None, 'plain'),
+    (['/usr/bin/echo', '--post', '{root}/carol.cooks'], None, 'plain'),
     (['/opt/bin/recorder'], None, 'plain'),
-    (['/opt/bin/echo'], None, 'plain'),
+    (['/usr/bin/echo'], None, 'plain'),
     (['instaloader', '--hold'], None, 'plain'),
     (['instaloader', '--no-videos', '--latest-stamps', '{archive}', '--dirname-pattern', '{root}', '--', '{target}',
       '--extra'],

@@ -2507,13 +2507,16 @@ logs it. It never changes a folder above them.
   `echo` / `printf`:
   - launchers are read with their options as coreutils 9.4 and
     util-linux 2.39.3 parse them, one inside another: `env`, `nice`,
-    `nohup`, `timeout`, `stdbuf`, `setsid`, `ionice`, `taskset`. A
-    placeholder may not be in their own items (options, `timeout`'s
-    duration, `taskset`'s mask, `env`'s `NAME=value`, which a program can
-    read as code: `LD_PRELOAD`, `BASH_ENV`), except `env -C` / `--chdir`
-    (a folder, checked as a path when it runs). One run so that it runs no
-    program (`--help`, `ionice -p`, `taskset -p`), with an option it does
-    not have, or `env -S`: refused with a placeholder anywhere;
+    `nohup`, `timeout`, `stdbuf`, `ionice`, `taskset`, by their bare name
+    or a path in `/bin`, `/usr/bin`, `/usr/local/bin`, `/sbin` or
+    `/usr/sbin` (a program of yours under one of these names is not one).
+    A placeholder may not be in their own items: options, `timeout`'s
+    duration, `taskset`'s mask, `env`'s `NAME=value` (a program can read
+    a variable as code: `LD_PRELOAD`, `BASH_ENV`) and `env -C` (the folder
+    relative names, configs such as yt-dlp's `yt-dlp.conf` and Python's
+    modules are found in). One run so that it runs no program (`--help`,
+    `ionice -p`, `taskset -p`), with an option it does not have, or `env
+    -S`: refused with a placeholder anywhere;
   - a placeholder never names the program to run (`argv[0]`, the item a
     launcher runs, a shell's script file when it has no `-c` or `-s`,
     what Python runs), nor is among Python's options (`-W` imports a
@@ -2523,8 +2526,11 @@ logs it. It never changes a folder above them.
     script.py`, `perl`, `ruby`, `node`, `awk`, `php`, `lua`, `Rscript`,
     `fish`), a program that runs another one FeedVault does not follow
     (`xargs`, `sudo`, `doas`, `su`, `runuser`, `ssh`, `watch`, `script`,
-    `parallel`, `find -exec`, `chrt`, `flock`), or any other program, by
-    its path or behind a launcher. `printf` takes one after its format,
+    `parallel`, `find -exec`, `chrt`, `flock`, `setsid`: a job leads its
+    own process group, so `setsid` forks and exits at once, its program out
+    of the job's reach), or any other program, by its path or behind a
+    launcher. `echo` and `printf` count by their bare name or a path in
+    those folders, as launchers; `printf` takes one after its format,
     never in it. Use a shell script and its `FV_*` variables, or pass the
     value to a shell after its `-c` text (`sh -c 'perl x.pl "$1"' sh
     {url}`);
@@ -2582,10 +2588,10 @@ could not be read.
   one of them under another name (`~/bin/ytdl`; links are followed one at
   a time, so the first known name along them counts, whenever the command
   is read), behind the launchers the checks read (`nice`, `timeout 60`,
-  `ionice -c3`, `stdbuf -oL`, `setsid`, `nohup`, `taskset`, `env`, one in
-  another: `nice timeout 60 env X=1 yt-dlp`). Not read: `env -S` (its
+  `ionice -c3`, `stdbuf -oL`, `nohup`, `taskset`, `env`, one in another:
+  `nice timeout 60 env X=1 yt-dlp`). Not read: `env -S` (its
   text is split by env's own rules), a name looked up on `PATH` that is a
-  symlink, and other programs (`chrt`, `flock`, `sudo`, a wrapper script):
+  symlink, and other programs (`setsid`, `chrt`, `flock`, `sudo`, a wrapper script):
   those run in `scripts`.
 - `argv` is the command as run, or the script's path. `argv` and `params`
   are scrubbed as output is (`health.scrub`).
