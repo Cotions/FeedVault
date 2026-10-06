@@ -1794,6 +1794,49 @@ def test_the_scheduler_runs_the_script(client, runner, source):
     assert "--no-videos" in runner.runs()[-1]["args"]
 
 
+# #103: a script saved before the rule that the rule refuses now. It stays
+# listed with the reason and its path (edited or deleted there: the app
+# never writes it), its text can be read, a run is refused with the
+# reason, and a schedule that names it records a failed run and moves on.
+REFUSED_NOW = {"name": "Mine", "needs": "target", "argv": ["/usr/bin/perl", "/home/me/fetch.pl", "{target}"]}
+
+
+def test_a_saved_script_the_rule_refuses_is_listed_never_run_and_fails_its_schedule(client, folder, runner, source):
+    attach(client, source["id"], "mine")
+    client.post(f"/api/sources/{source['id']}", json={"options": {"schedule": "hourly"}}, headers=H)
+    runner.install_as("gallery-dl")
+    other = client.post("/api/sources", json={"tool": "gallery-dl", "target": "https://x.com/carol",
+                                              "options": {"schedule": "hourly"}}, headers=H).get_json()["source"]
+    write(folder, "mine.json", REFUSED_NOW)
+    why = "perl is not a program FeedVault reads the arguments of"
+
+    item = listed(client)["mine"]
+    assert item["refused"].startswith(why) and item["path"] == str(folder / "mine.json")
+    got = client.get("/api/scripts/mine", headers=H)
+    assert got.status_code == 200 and json.loads(got.get_json()["content"]) == REFUSED_NOW
+    assert f"mine.json is refused: {why}" in run(client, "mine", status=400, target="carol.cooks")["error"]
+    assert jobs.active() == []
+
+    queued = scheduler.tick()
+    assert sorted(j["kind"] for j in queued) == ["gallery-dl-sync", "script-sync"]
+    failed = ended(next(j for j in queued if j["kind"] == "script-sync")["id"])
+    assert failed["state"] == "failed" and failed["message"].startswith("the source's script: mine.json is refused: ")
+    assert why in failed["message"]
+    assert any(why in t for t in log_of(client, failed["id"]))
+    s = client.get(f"/api/sources/{source['id']}", headers=H).get_json()
+    assert s["last_result"]["state"] == "failed" and why in s["last_result"]["message"]
+    # The other source's sync ran in the same tick, and the script never did.
+    assert ended(next(j for j in queued if j["kind"] == "gallery-dl-sync")["id"])["state"] == "done"
+    assert all(r["args"][-1] != "carol.cooks" for r in runner.runs())
+    assert client.get(f"/api/sources/{other['id']}", headers=H).get_json()["last_result"]["state"] == "done"
+
+    # Edited at its path into a form the rule takes, it is listed and runs again; deleted, it is gone.
+    write(folder, "mine.json", INSTA)
+    assert listed(client)["mine"]["refused"] is None
+    (folder / "mine.json").unlink()
+    assert "mine" not in listed(client)
+
+
 FOREIGN = [{"Origin": "https://www.instagram.com"}, {"Sec-Fetch-Site": "cross-site"}]
 
 

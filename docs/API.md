@@ -2535,6 +2535,12 @@ logs it. It never changes a folder above them.
 - a shell script that is not executable, has no absolute `#!` or has no
   `needs`.
 
+A script saved before a check that refuses it now (a new FeedVault) is
+shown the same way: listed with its reason and its path, where it is
+edited or deleted (the app never writes it), its text still readable
+(`GET /api/scripts/<id>`); a run of it is refused with that reason, and a
+source's sync of it, scheduled too, fails with it (see On a source).
+
 A file is opened without following symlinks and checked on what was
 opened. Its SHA-256 is kept when its job is queued, and the file is read
 again right before the job starts. A script that changed, or is refused
