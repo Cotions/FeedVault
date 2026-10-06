@@ -2274,6 +2274,12 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
+  /* No entry animation and no lift on a collection card. Specific enough
+     to win over the card's own rules, further down. Cards that start at
+     opacity 0 (post, creator, big file) keep their 0.01ms animation: it is
+     what shows them. */
+  .collection-grid .collection-card { animation: none; }
+  .collection-grid .collection-card:is(:hover, .is-over) { transform: none; }
 }
 
 /* ── Storage page ───────────────────────────────────────── */
@@ -2692,7 +2698,10 @@ a.btn-primary { color: var(--on-accent); }
   background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden;
   color: var(--text-dim);
   transition: border-color 0.15s, transform 0.15s;
-  animation: statRise 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  /* Backwards, not both: a fill held after the end keeps the animation's
+     transform, which outranks the hover lift and the drop target's scale
+     below (#94). The card's own opacity is 1, so it needs no end fill. */
+  animation: statRise 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
 }
 .collection-card:hover { border-color: rgba(var(--glow-rgb), 0.45); transform: translateY(-2px); color: var(--text); }
 .collection-card[draggable="true"] { cursor: grab; }

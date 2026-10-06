@@ -403,6 +403,27 @@ function installProbes() {
   const boxOf = r => ({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.right - r.left), h: Math.round(r.bottom - r.top) });
   const shown = el => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !el.closest("[inert], [aria-hidden=true]");
   const allowed = (allow, rule, el) => allow.some(x => x.rule === rule && el.matches(x.el));
+  // Whether a style sheet gives the element itself a transform on hover
+  // (a lift): a rule with a transform whose selector's last part has
+  // :hover and, with it taken out, matches the element.
+  const hoverTransform = el => {
+    for (const sheet of document.styleSheets) {
+      let rules;
+      try { rules = [...sheet.cssRules]; } catch { continue; }
+      // Into @media blocks that apply (and @supports, @layer).
+      const flat = rs => rs.flatMap(r => (r.cssRules && !r.selectorText
+        ? (r.media && !matchMedia(r.media.mediaText).matches ? [] : flat([...r.cssRules])) : [r]));
+      for (const r of flat(rules)) {
+        if (!r.selectorText || !r.style?.transform || r.style.transform === "none") continue;
+        for (const part of r.selectorText.split(",")) {
+          const last = part.trim().split(/\s*[\s>+~]\s*/).pop();
+          if (!last.includes(":hover")) continue;
+          try { if (el.matches(part.replace(/:hover/g, "").trim() || "*")) return true; } catch { /* a selector matches() refuses */ }
+        }
+      }
+    }
+    return false;
+  };
   const describe = el => ({ sel: cssPath(el), text: textOf(el), box: boxOf(el.getBoundingClientRect()) });
 
   // The part of the window an element's overflow ancestors let show.
@@ -595,7 +616,8 @@ function installProbes() {
         return shown(e) && r.width > 4 && r.height > 4 && near(r, self) && !e.closest("header, .cyber-bg");
       });
       for (const e of floats) e.dataset.fvFloat ??= String(window.__fvFloats = (window.__fvFloats || 0) + 1);
-      return { ...describe(el), boxes, floats: floats.map(e => e.dataset.fvFloat), allowMove: allowed(allow, "hover-moved", el) };
+      return { ...describe(el), boxes, floats: floats.map(e => e.dataset.fvFloat), allowMove: allowed(allow, "hover-moved", el),
+        lifts: hoverTransform(el), transform: getComputedStyle(el).transform };
     },
 
     // A popover (or any box): inside the window, clear of the pinned bars,

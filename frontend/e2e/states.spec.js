@@ -6,7 +6,8 @@
 //    not under the sticky header or the selection bar, and never on
 //    something hidden.
 //  - Hover: one element of each kind in sight on those pages. Its box and
-//    its neighbours' stay put, and whatever opens on hover stays in the
+//    its neighbours' stay put (one with a hover lift moves instead, and
+//    stays put under reduced motion), and whatever opens on hover stays in the
 //    window, clear of the bars. The popovers that open on a click
 //    (creator picker, tag suggestions, notifications, the selection bar's
 //    dialogs) too, at rest and with their field low in the window.
@@ -98,8 +99,11 @@ async function walkFocus(page, view, size) {
   return found;
 }
 
-// The mouse on one element of each kind in sight, in turn.
-async function walkHover(page, view, size) {
+// The mouse on one element of each kind in sight, in turn. An element a
+// style sheet gives a hover transform (a lift) must move on hover, its box
+// or its computed transform, and must not under reduced motion (#94).
+// ``lifts``: when given, counts the lifts checked.
+async function walkHover(page, view, size, { reduced = false, lifts = null } = {}) {
   const found = [];
   await page.evaluate(() => { window.scrollTo(0, 0); document.querySelectorAll("[data-fv-hover]").forEach(e => delete e.dataset.fvHover); });
   await page.mouse.move(1, size.height - 1);                      // the sidebar's empty foot
@@ -112,10 +116,19 @@ async function walkHover(page, view, size) {
     await frame(page);
     const after = await page.evaluate(([k, allow]) => window.__fv.hoverBoxes(k, allow), [i, STATE_ALLOW]);
     if (!after) continue;
+    const diff = (x, y) => Math.max(Math.abs(x.x - y.x), Math.abs(x.y - y.y), Math.abs(x.width - y.width), Math.abs(x.height - y.height));
+    if (before.lifts) {
+      if (lifts) lifts.count++;
+      const moved = diff(self, after.boxes.find(b => b.self).box) > 0.5 || before.transform !== after.transform;
+      if (moved === reduced) {
+        found.push({ view, size: size.label, state: reduced ? "hover, reduced motion" : "hover", rule: reduced ? "hover-lift-reduced" : "hover-lift-dead",
+          detail: reduced ? `it moves on hover under reduced motion (transform ${after.transform})`
+            : `it declares a hover transform but does not move (transform ${after.transform})`, a: before });
+      }
+    }
     for (let b = 0; b < before.boxes.length && b < after.boxes.length; b++) {
-      const x = before.boxes[b].box, y = after.boxes[b].box;
-      const d = Math.max(Math.abs(x.x - y.x), Math.abs(x.y - y.y), Math.abs(x.width - y.width), Math.abs(x.height - y.height));
-      if (d > 0.5 && !(before.boxes[b].self && before.allowMove)) {
+      const d = diff(before.boxes[b].box, after.boxes[b].box);
+      if (d > 0.5 && !(before.boxes[b].self && (before.allowMove || before.lifts))) {
         found.push({ view, size: size.label, state: "hover", rule: "hover-moved",
           detail: `${before.boxes[b].self ? "the element" : `its neighbour ${before.boxes[b].sel}`} moved ${Math.round(d * 10) / 10}px`, a: before });
         break;
@@ -145,6 +158,21 @@ test.describe("focus and hover", () => {
       await report(testInfo, found);
     });
   }
+});
+
+// The collection card's lift (#94): the walk above checks every lift it
+// meets; here, that there is one to check, and that reduced motion stops it.
+test("a hover lift moves, and stays put under reduced motion", async ({ page }, testInfo) => {
+  const found = [];
+  for (const reduced of [false, true]) {
+    await page.emulateMedia({ reducedMotion: reduced ? "reduce" : "no-preference" });
+    await open(page, "Collections");
+    await atSize(page, SIZES[SIZES.length - 1]);
+    const lifts = { count: 0 };
+    found.push(...await walkHover(page, "Collections", SIZES[SIZES.length - 1], { reduced, lifts }));
+    expect(lifts.count, `hover lifts checked${reduced ? " under reduced motion" : ""}`).toBeGreaterThan(0);
+  }
+  await report(testInfo, found);
 });
 
 // Popovers opened by a click: in the window, clear of the bars, at rest and
