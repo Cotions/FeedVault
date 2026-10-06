@@ -8,6 +8,9 @@
   --surface-2: #191d28;
   --border: #262b39;
   --border-soft: #1d2230;
+  /* The edge of a field or a button: 3:1 against the surfaces it sits on
+     (WCAG 1.4.11), where --border is a divider's hairline. */
+  --edge: #646b89;
   /* accent: phosphor green by default. lib/theme.js overrides all of these
      at runtime from the theme picked in Settings; keep the two in step. */
   --accent: #2f9e4f;
@@ -22,11 +25,15 @@
   --glow-rgb: 74, 222, 128;
   /* signals */
   --danger: #e5484d;
+  /* A danger button's fill: white on it reads at 4.5:1 (--danger: 3.9:1). */
+  --danger-fill: #c93a3f;
+  --danger-fill-hover: #d03f44;
   --blue: #5b9dff;
   /* type */
   --text: #e8ecf6;
   --text-dim: #aab1c7;
-  --muted: #6c7293;
+  /* 4.5:1 on every surface, the lightest (--surface-2) included. */
+  --muted: #858cab;
   --mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   --display: 'Bricolage Grotesque', system-ui, sans-serif;
   --body: system-ui, -apple-system, sans-serif;
@@ -36,7 +43,9 @@
      flush under it and card anchors land below it. Plus the notch, when
      index.html's viewport-fit=cover lets the page reach under it (0 elsewhere). */
   --header-h: calc(57px + env(safe-area-inset-top));
-  --ring: 0 0 0 1px rgba(var(--glow-rgb), 0.45), 0 0 22px -4px rgba(var(--glow-rgb), 0.4);
+  /* The ring's edge at 3:1 against the page in every theme (0.45 was 1.6:1
+     in Iris); the glow around it is decoration. */
+  --ring: 0 0 0 1px rgba(var(--glow-rgb), 0.9), 0 0 22px -4px rgba(var(--glow-rgb), 0.4);
   --lift: 0 12px 30px -16px rgba(0, 0, 0, 0.85);
 }
 
@@ -60,6 +69,9 @@ body {
 /* Links inherit their surroundings — no browser blue, no underline anywhere.
    Anything that needs to read as a link says so with colour or hover state. */
 :where(a, a:visited) { color: inherit; text-decoration: none; }
+
+/* The browser's grey placeholder is 4.25:1 on the fields' dark fill. */
+::placeholder { color: var(--muted); opacity: 1; }
 
 /* ── Cyber backdrop ─────────────────────────────────────── */
 /* Painted by components/CyberBackground.jsx: columns of coloured glyphs falling
@@ -122,7 +134,7 @@ body {
   flex-shrink: 0;
   padding: 0;
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 9px;
   color: var(--text-dim);
   transition: color 0.15s, border-color 0.15s, background 0.15s;
@@ -211,7 +223,7 @@ input[type="text"].header-search {
   font-size: 13px;
   color: var(--text);
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 18px;
   outline: none;
   transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
@@ -543,7 +555,7 @@ main {
 input[type="text"] {
   flex: 1;
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 8px;
   color: var(--text);
   font-family: var(--mono);
@@ -577,9 +589,9 @@ button:disabled { opacity: 0.4; cursor: default; }
   background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover));
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset, 0 10px 26px -8px rgba(var(--glow-rgb), 0.7);
 }
-.btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
-.btn-secondary:hover:not(:disabled) { background: #222736; border-color: #333a4f; }
-.btn-danger { background: var(--danger); color: #fff; }
+.btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--edge); }
+.btn-secondary:hover:not(:disabled) { background: #222736; border-color: var(--muted); }
+.btn-danger { background: var(--danger-fill); color: #fff; }
 .btn-ghost { background: transparent; color: var(--muted); font-size: 12px; padding: 5px 10px; }
 .btn-ghost:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
 
@@ -679,7 +691,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%237b7f9e' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 9px;
   color: var(--text);
   font-family: var(--body);
@@ -1861,7 +1873,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 
 /* ── Danger, keep ───────────────────────────────────────── */
 .btn-danger { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
-.btn-danger:hover:not(:disabled) { background: #f0595e; box-shadow: 0 8px 20px -10px rgba(229, 72, 77, 0.7); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-fill-hover); box-shadow: 0 8px 20px -10px rgba(229, 72, 77, 0.7); }
 .btn-danger-soft {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   background: rgba(229, 72, 77, 0.1);
@@ -2057,8 +2069,10 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px;
   font-family: var(--mono); font-size: 10px; font-weight: 700; line-height: 1;
-  color: inherit; opacity: 0.75;
-  border: 1px solid currentColor; border-radius: 4px;
+  /* The key in the button's own colour (at 0.75 it was under 4.5:1), the
+     frame around it fainter. */
+  color: inherit;
+  border: 1px solid color-mix(in srgb, currentColor 55%, transparent); border-radius: 4px;
 }
 .review {
   display: grid;

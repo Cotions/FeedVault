@@ -382,7 +382,7 @@ export async function checkLayout(page, testInfo, { view, size, scope = null }) 
 export const STATE_ALLOW = [];
 
 // In the page, before its own scripts (page.addInitScript): window.__fv,
-// the probes states.spec.js calls between key presses
+// the probes states.spec.js and themes.spec.js call between key presses
 // and mouse moves. Self-contained: it is serialized into the page.
 function installProbes() {
   const CLIPS = new Set(["hidden", "clip", "auto", "scroll"]);
@@ -619,6 +619,236 @@ function installProbes() {
       return out;
     },
 
+    // WCAG contrast on the page as it is: text (4.5:1, 3:1 when large),
+    // placeholders, the edge of fields and filled buttons and the focus
+    // ring (3:1), from computed colours, each composited with its alpha
+    // and its ancestors' opacity over what is painted behind it, down to
+    // the page's own background (the falling glyphs aside). A gradient
+    // behind counts by its worst stop. Text over a picture or video is
+    // judged over both black and white. ``allow``: [{ rule, el }].
+    contrast(allow, { ring = false, ringOnly = false } = {}) {
+      const out = [], info = [];
+      const parse = c => {
+        if (!c || c === "transparent") return [0, 0, 0, 0];
+        let m = c.match(/^rgba?\(([^)]+)\)$/);
+        if (m) { const v = m[1].split(/[\s,/]+/).filter(Boolean).map(Number); return [v[0], v[1], v[2], v.length > 3 ? v[3] : 1]; }
+        m = c.match(/^color\(srgb ([^)]+)\)$/);
+        if (m) { const v = m[1].split(/[\s/]+/).filter(Boolean).map(Number); return [v[0] * 255, v[1] * 255, v[2] * 255, v.length > 3 ? v[3] : 1]; }
+        return null;
+      };
+      const over = (top, under) => {           // top [r,g,b,a] over an opaque [r,g,b]
+        const a = top[3];
+        return [0, 1, 2].map(i => top[i] * a + under[i] * (1 - a));
+      };
+      const lum = rgb => {
+        const [r, g, b] = rgb.map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+      const hex = rgb => "#" + rgb.map(v => Math.round(v).toString(16).padStart(2, "0")).join("");
+      const pageBg = parse(getComputedStyle(document.body).backgroundColor).slice(0, 3);
+      const COLOR = /(rgba?\([^)]+\)|color\(srgb [^)]+\)|transparent)/;
+      const colorsIn = img => (img.match(new RegExp(COLOR.source, "g")) || []).map(parse).filter(Boolean);
+      const splitTop = str => str.split(/,(?![^(]*\))/).map(x => x.trim());
+      // The colours a background-image paints under ``r`` (the element's
+      // box) in ``box`` (the ancestor's): a vertical or horizontal linear
+      // gradient read where the element sits (its two ends and middle),
+      // any other gradient by all its stops.
+      function imageColors(img, box, r) {
+        const out = [];
+        for (const layer of img.split(/,\s*(?=(?:linear|radial|conic|repeating-[a-z]+)-gradient\(|url\()/)) {
+          const m = layer.match(/^linear-gradient\((.*)\)$/s);
+          const parts = m ? splitTop(m[1]) : null;
+          if (parts) {
+            const d = COLOR.test(parts[0]) ? "to bottom" : parts.shift();
+            const axis = /^(180deg|to bottom)$/.test(d) ? "y" : /^(90deg|to right)$/.test(d) ? "x" : null;
+            if (!axis) { out.push(...colorsIn(layer)); continue; }
+            const len = axis === "y" ? box.height : box.width;
+            const stops = parts.map(p => {
+              const c = parse((p.match(COLOR) || [])[0]);
+              const at = p.replace(COLOR, "").trim().split(/\s+/).filter(Boolean)[0];
+              return { c, at: at == null ? null : at.endsWith("%") ? parseFloat(at) / 100 * len : parseFloat(at) };
+            }).filter(x => x.c);
+            if (!stops.length) continue;
+            if (stops[0].at == null) stops[0].at = 0;
+            if (stops[stops.length - 1].at == null) stops[stops.length - 1].at = len;
+            for (let i = 1; i < stops.length; i++) {
+              if (stops[i].at != null) continue;
+              let j = i; while (stops[j].at == null) j++;
+              for (let k = i; k < j; k++) stops[k].at = stops[i - 1].at + (stops[j].at - stops[i - 1].at) * (k - i + 1) / (j - i + 1);
+            }
+            const at = x => {
+              if (x <= stops[0].at) return stops[0].c;
+              for (let i = 1; i < stops.length; i++) {
+                if (x <= stops[i].at) {
+                  const a = stops[i - 1], b = stops[i], t = b.at > a.at ? (x - a.at) / (b.at - a.at) : 1;
+                  return a.c.map((v, k) => v + (b.c[k] - v) * t);
+                }
+              }
+              return stops[stops.length - 1].c;
+            };
+            const from = axis === "y" ? r.top - box.top : r.left - box.left;
+            const size = axis === "y" ? r.height : r.width;
+            for (const x of [from + 1, from + size / 2, from + size - 1]) out.push(at(x));
+          } else if (!layer.startsWith("url(")) out.push(...colorsIn(layer));
+        }
+        return out;
+      }
+      const MEDIA = "img, video, canvas, picture";
+
+      // What may be painted behind ``el``'s content (its own background
+      // included unless ``outside``): the opaque colours it can be, and
+      // whether a picture is under it.
+      const bgCache = new Map();
+      function behind(el, outside = false) {
+        const key = el;
+        if (!outside && bgCache.has(key)) return bgCache.get(key);
+        const layers = [];
+        let media = false;
+        for (let a = outside ? el.parentElement : el; a; a = a.parentElement) {
+          const cs = getComputedStyle(a);
+          const op = parseFloat(cs.opacity);
+          const fill = parse(cs.backgroundColor);
+          const imgs = cs.backgroundImage !== "none" ? imageColors(cs.backgroundImage, a.getBoundingClientRect(), el.getBoundingClientRect()) : [];
+          if (cs.backgroundImage.includes("url(") && !a.closest(".cyber-bg")) media = true;
+          const pos = cs.position;
+          if ((pos === "absolute" || pos === "fixed") && a !== el) {
+            // Laid over something: a picture in the box it is placed in.
+            const host = pos === "fixed" ? null : a.offsetParent;
+            if (host && host.querySelector(MEDIA) && !a.querySelector(MEDIA)) media = true;
+          }
+          if (a === el && (pos === "absolute" || pos === "fixed")) {
+            const host = pos === "fixed" ? null : a.offsetParent;
+            if (host && host.querySelector(MEDIA) && !a.contains(host.querySelector(MEDIA))) media = true;
+          }
+          layers.push({ fill, imgs, op });
+          if (fill && fill[3] >= 1 && !imgs.length && op >= 1) break;
+        }
+        // Bottom up: each layer over the ones under it; a gradient's stops
+        // each give a possible colour (at most 8 kept: the extremes).
+        let cands = media ? [[0, 0, 0], [255, 255, 255]] : [pageBg];
+        for (const L of layers.reverse()) {
+          let next = [];
+          for (const c of cands) {
+            let base = L.fill ? over(L.fill, c) : c;
+            const opts = L.imgs.length ? L.imgs.map(g => over(g, base)) : [base];
+            for (const o of opts) next.push(L.op < 1 ? o.map((v, i) => v * L.op + c[i] * (1 - L.op)) : o);
+          }
+          next.sort((p, q) => lum(p) - lum(q));
+          if (next.length > 8) next = [...next.slice(0, 4), ...next.slice(-4)];
+          cands = next;
+        }
+        const res = { cands, media };
+        if (!outside) bgCache.set(key, res);
+        return res;
+      }
+      const opacityOf = el => { let o = 1; for (let a = el; a; a = a.parentElement) o *= parseFloat(getComputedStyle(a).opacity); return o; };
+      const worst = (fg, cands) => {
+        let w = null;
+        for (const c of cands) {
+          const f = fg[3] < 1 ? over(fg, c) : fg.slice(0, 3);
+          const r = ratio(f, c);
+          if (!w || r < w.r) w = { r, fg: hex(f), bg: hex(c) };
+        }
+        return w;
+      };
+      const push = (rule, el, w, need, extra = "") => {
+        if (w.r + 1e-6 >= need) return;
+        const disabled = !!el.closest(":disabled, [aria-disabled=true], .is-disabled");
+        const item = { rule: disabled ? `${rule}-disabled` : rule, detail: `${w.r.toFixed(2)}:1 < ${need}:1, ${w.fg} on ${w.bg}${extra}`, a: describe(el), ratio: w.r };
+        if (disabled) { if (w.r < 3) info.push(item); return; }
+        if (allowed(allow, rule, el)) { info.push({ ...item, allowed: true }); return; }
+        out.push(item);
+      };
+
+      // Text: every element with text of its own.
+      for (const el of ringOnly ? [] : document.body.querySelectorAll("*")) {
+        if (el.closest("svg, .cyber-bg, script, style, noscript, [hidden]")) continue;
+        if (![...el.childNodes].some(n => n.nodeType === 3 && n.data.trim())) continue;
+        if (!shown(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) continue;
+        const cs = getComputedStyle(el);
+        const fg = parse(cs.color);
+        if (!fg) continue;
+        const op = opacityOf(el);
+        fg[3] *= op;
+        const size = parseFloat(cs.fontSize), weight = parseInt(cs.fontWeight, 10);
+        const large = size >= 24 || (size >= 18.66 && weight >= 700);
+        const { cands, media } = behind(el);
+        const w = worst(fg, cands);
+        push(large ? "text-large" : "text", el, w, large ? 3 : 4.5, media ? " (over a picture)" : "");
+      }
+      // Placeholders, in empty fields.
+      for (const el of ringOnly ? [] : document.querySelectorAll("input[placeholder], textarea[placeholder]")) {
+        if (el.value || !shown(el)) continue;
+        const fg = parse(getComputedStyle(el, "::placeholder").color);
+        if (!fg) continue;
+        fg[3] *= opacityOf(el);
+        push("placeholder", el, worst(fg, behind(el).cands), 4.5);
+      }
+      // Edges: a field's or a filled button's border or fill, whichever
+      // stands out more, against what is around it. A button with no fill
+      // of its own (a ghost or a link) has no edge to judge: its text is
+      // checked above.
+      const edgeOf = el => {
+        const cs = getComputedStyle(el);
+        const around = behind(el, true).cands;
+        let best = null;
+        const fill = parse(cs.backgroundColor);
+        const imgs = cs.backgroundImage !== "none" ? colorsIn(cs.backgroundImage) : [];
+        const fills = imgs.length ? imgs : fill && fill[3] > 0 ? [fill] : [];
+        for (const c of around) {
+          let r = 1, fg = null;
+          if (parseFloat(cs.borderTopWidth) > 0) {
+            const b = parse(cs.borderTopColor);
+            if (b && b[3] > 0) { const f = over(b, c); const x = ratio(f, c); if (x > r) { r = x; fg = hex(f); } }
+          }
+          // A gradient fill: judged by its weakest stop.
+          if (fills.length) {
+            const x = Math.min(...fills.map(f => ratio(over(f, c), c)));
+            if (x > r) { r = x; fg = hex(over(fills[0], c)); }
+          }
+          if (!best || r < best.r) best = { r, fg: fg || "none", bg: hex(c) };
+        }
+        return best;
+      };
+      for (const el of ringOnly ? [] : document.querySelectorAll("input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=color]):not([type=range]):not([type=file]), select, textarea")) {
+        if (!shown(el) || el.getBoundingClientRect().width < 2) continue;
+        push("field-edge", el, edgeOf(el), 3);
+      }
+      for (const el of ringOnly ? [] : document.querySelectorAll("button, a.btn-primary, a.btn-secondary, [role=button]")) {
+        if (!shown(el) || el.getBoundingClientRect().width < 2) continue;
+        const cs = getComputedStyle(el);
+        const fill = parse(cs.backgroundColor);
+        const filled = cs.backgroundImage.includes("gradient") || (fill && fill[3] >= 0.5);
+        if (!filled) continue;
+        push("button-edge", el, edgeOf(el), 3);
+      }
+      // The focus ring of the element that has focus.
+      if (ring) {
+        const el = document.activeElement;
+        if (el && el !== document.body) {
+          // Where its transition ends, not where it starts.
+          const kept = el.style.getPropertyValue("transition");
+          el.style.setProperty("transition", "none", "important");
+          const cs = getComputedStyle(el);
+          let color = null, inset = false;
+          if (cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) > 0) color = cs.outlineColor;
+          else if (cs.boxShadow !== "none") {
+            const first = cs.boxShadow.split(/,(?![^(]*\))/)[0];
+            color = (first.match(/(rgba?\([^)]+\)|color\(srgb [^)]+\))/) || [])[0];
+            inset = /\binset\b/.test(first);
+          }
+          const fg = parse(color);
+          if (kept) el.style.setProperty("transition", kept); else el.style.removeProperty("transition");
+          if (fg) push("focus-ring", el, worst(fg, inset ? behind(el).cands : behind(el, true).cands), 3);
+        }
+      }
+      return { out, info };
+    },
+
+    // The pinned bars' rects, for the specs' own checks.
     bars: () => bars().map(b => ({ kind: b.el.matches("header") ? "header" : "select-bar", sel: cssPath(b.el), ...boxOf(b.r) })),
   };
 }

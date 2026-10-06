@@ -50,6 +50,12 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 }, trace: "off" },
     },
     {
+      // WCAG contrast in each preset theme.
+      name: "themes",
+      testMatch: /themes\.spec\.js$/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 }, trace: "off" },
+    },
+    {
       name: "phone",
       testMatch: /(phone|safe-area)\.spec\.js$/,
       // 375x812 with touch (the iPhone X profile), in Chromium: the only browser installed.

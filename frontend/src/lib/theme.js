@@ -82,19 +82,36 @@ export function inkFor(bg, hue) {
 // (fill 54%/40%, hover 52%/51%, ...), so every hue reads with the same weight
 // on the dark base. Duller picks scale down; louder ones are capped at green's.
 const GREEN_SAT = 69;
+const MIN_INK = 4.5;
+// index.css's lightest surface (--surface-2), and the focus ring's alpha
+// (--ring): the base palette never changes with the theme.
+export const SURFACE_2 = "#191d28";
+export const RING_ALPHA = 0.9;
+const mixRgb = (top, under, a) => top.map((v, i) => Math.round(v * a + under[i] * (1 - a)));
 export function palette(theme) {
   const [h, s] = rgbToHsl(hexToRgb(isHex(theme.base) ? theme.base : PRESETS[0].base));
   const k = Math.min(s, GREEN_SAT) / GREEN_SAT;
   const at = (sat, l) => hslToRgb(h, sat * k, l);
   const pinned = key => isHex(theme[key]) ? hexToRgb(theme[key]) : null;
 
-  const glow = pinned("glow") || at(69, 58);
+  // The glow draws focus rings and icons: 3:1 on the lightest surface it
+  // sits on, at the ring's 0.9 alpha (Iris's was 2.9:1).
+  let glowL = 58;
+  while (!pinned("glow") && glowL < 90 && contrast(mixRgb(at(69, glowL), hexToRgb(SURFACE_2), RING_ALPHA), SURFACE_2) < 3) glowL++;
+  const glow = pinned("glow") || at(69, glowL);
   // A pinned glow is read on its own hue: ink on it is tinted the same.
   const gh = pinned("glow") ? rgbToHsl(glow)[0] : h;
   const fill = pinned("fill");
-  const accent = fill || at(54, 40);
+  // The derived fill starts at green's 40% lightness and goes up until the
+  // theme's dark ink reads on it at 4.5:1 (button text is 13px bold: WCAG
+  // AA's normal size). That also keeps it 3:1 or more from the dark page:
+  // Ember, Ocean and Rose sat at 3.9:1 under their ink, Iris and Crimson's
+  // fills at 2.2:1 against the page.
+  let fillL = 40;
+  while (!fill && fillL < 90 && contrast(at(54, fillL), hslToRgb(h, 65, 5)) < MIN_INK) fillL++;
+  const accent = fill || at(54, fillL);
   // A pinned fill keeps its own hue for the hover/bright shades.
-  const [fh, fs, fl] = fill ? rgbToHsl(fill) : [h, 54 * k, 40];
+  const [fh, fs, fl] = fill ? rgbToHsl(fill) : [h, 54 * k, fillL];
   const hover = hslToRgb(fh, fs, Math.min(fl + 11, 92));
   const highlight = pinned("highlight") || at(73, 79);
   // Button text sits on the hover→fill gradient: judge it against the middle.

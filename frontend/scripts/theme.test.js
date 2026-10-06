@@ -5,7 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  PRESETS, PHOSPHOR, DEFAULT_THEME_ID, contrast, palette, getCustomThemes, getActiveTheme, saveCustomThemes,
+  PRESETS, PHOSPHOR, DEFAULT_THEME_ID, SURFACE_2, RING_ALPHA, contrast, palette, themeColors, getCustomThemes,
+  getActiveTheme, saveCustomThemes,
 } from "../src/lib/theme.js";
 
 const HEX = /^#[0-9a-f]{6}$/;
@@ -119,4 +120,42 @@ test("stored custom themes keep only known fields with valid colours", () => {
     { id: "c-2", name: "Mine", base: "#22D3EE" },
   ]);
   assert.equal(getActiveTheme().id, "c-1");
+});
+
+// index.css's :root, as name -> value.
+function rootVars() {
+  const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+  const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
+  return Object.fromEntries([...root.matchAll(/\s(--[\w-]+):\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+}
+const mixHex = (top, under, a) => hexRgb(top).map((v, i) => Math.round(v * a + hexRgb(under)[i] * (1 - a)));
+
+test("every preset reads at WCAG AA on the dark base (what the e2e themes check measures)", () => {
+  const css = rootVars();
+  assert.equal(css["--surface-2"], SURFACE_2, "theme.js's SURFACE_2 is index.css's --surface-2");
+  assert.match(css["--ring"], new RegExp(`rgba\\(var\\(--glow-rgb\\), ${RING_ALPHA}\\)`), "RING_ALPHA is --ring's");
+  for (const t of PRESETS) {
+    const p = themeColors(t);
+    // A button's fill is its edge: 3:1 against the page and the lightest surface.
+    for (const bg of [css["--bg"], SURFACE_2]) assert.ok(contrast(p["--accent"], bg) >= 3, `${t.id}: --accent ${p["--accent"]} on ${bg}`);
+    // Its 13px bold text, at both ends of the hover→fill gradient: 4.5:1.
+    for (const k of ["--accent", "--accent-hover"]) {
+      assert.ok(contrast(p["--on-accent"], p[k]) >= 4.5, `${t.id}: --on-accent on ${k} ${p[k]}`);
+    }
+    // Links, hashtags and badges are --accent-hover or --accent-text: 4.5:1 on every surface.
+    for (const k of ["--accent-hover", "--accent-text"]) {
+      for (const bg of [css["--bg"], css["--surface"], SURFACE_2]) assert.ok(contrast(p[k], bg) >= 4.5, `${t.id}: ${k} on ${bg}`);
+    }
+    // The focus ring: --glow at --ring's alpha, 3:1 on the lightest surface.
+    assert.ok(contrast(mixHex(p["--glow"], SURFACE_2, RING_ALPHA), SURFACE_2) >= 3, `${t.id}: ring ${p["--glow"]}`);
+  }
+});
+
+test("index.css's own text and edges read at WCAG AA on every surface", () => {
+  const css = rootVars();
+  for (const bg of [css["--bg"], css["--surface"], css["--surface-2"]]) {
+    for (const k of ["--text", "--text-dim", "--muted"]) assert.ok(contrast(css[k], bg) >= 4.5, `${k} ${css[k]} on ${bg}`);
+    assert.ok(contrast(css["--edge"], bg) >= 3, `--edge ${css["--edge"]} on ${bg}`);
+  }
+  for (const k of ["--danger-fill", "--danger-fill-hover"]) assert.ok(contrast("#ffffff", css[k]) >= 4.5, `white on ${k} ${css[k]}`);
 });
