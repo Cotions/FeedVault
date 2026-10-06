@@ -335,6 +335,14 @@ function ReviewSession({ scope, scopeControls }) {
   // Enter would press the button again instead of meaning "keep".
   function act(e, fn) { e.currentTarget.blur(); fn(); }
 
+  // The next post's details start at their top, not where the last one's
+  // were scrolled to (the panel stays mounted: focus inside it stays put).
+  const infoRef = useRef(null);
+  const curId = cur?.id;
+  useLayoutEffect(() => {
+    if (infoRef.current) infoRef.current.scrollTop = 0;
+  }, [curId]);
+
   // On a phone the decision buttons are a bar fixed at the bottom, and the
   // stage gets what the first screen has left between the page above it and
   // that bar (at most 55vh), so the item and its buttons show without a
@@ -478,7 +486,7 @@ function ReviewSession({ scope, scopeControls }) {
         </div>
 
         {cur && (
-          <div className="review-info">
+          <div className="review-info" ref={infoRef}>
             <div className="review-byline">
               <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
               <span className="chip" title={platformLabel(cur.platform)}>{platformShort(cur.platform)}</span>
@@ -514,7 +522,7 @@ function ReviewSession({ scope, scopeControls }) {
               {post?.collections?.length > 0 && (
                 <ul className="tag-chips">
                   {post.collections.map(c => (
-                    <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`} title={c.name}>{c.name}</Link></li>
+                    <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`} title={c.name}><span className="tag-chip-name">{c.name}</span></Link></li>
                   ))}
                 </ul>
               )}

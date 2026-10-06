@@ -41,6 +41,21 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1152, height: 720 }, deviceScaleFactor: 1.25 },
     },
     {
+      // Focus, hover, popovers and scrolled pages at 1280x800 and 1440x900
+      // (the spec sets each in turn).
+      name: "states",
+      testMatch: /states\.spec\.js$/,
+      // No trace: it records every key press and doubles the run; a failure
+      // attaches its findings and a screenshot.
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 }, trace: "off" },
+    },
+    {
+      // WCAG contrast in each preset theme.
+      name: "themes",
+      testMatch: /themes\.spec\.js$/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 }, trace: "off" },
+    },
+    {
       name: "phone",
       testMatch: /(phone|safe-area)\.spec\.js$/,
       // 375x812 with touch (the iPhone X profile), in Chromium: the only browser installed.

@@ -70,7 +70,7 @@ export default function BulkTagDialog({ posts, tags, onApplied, onCancel }) {
           <ul className="tag-chips">
             {add.map(name => (
               <li key={name} className="tag-chip is-add">
-                <span>+ {name}</span>
+                <span><span className="tag-chip-name">+ {name}</span></span>
                 <button type="button" className="tag-chip-x" onClick={() => setAdd(add.filter(a => a !== name))} aria-label={`Do not add ${name}`}>
                   <Icon name="close" size={10} />
                 </button>
@@ -88,7 +88,7 @@ export default function BulkTagDialog({ posts, tags, onApplied, onCancel }) {
                   <li key={name} className={`tag-chip${on ? " is-remove" : ""}`}>
                     <button type="button" className="tag-chip-toggle" onClick={() => toggleRemove(name)} aria-pressed={on}
                             title={on ? `Keep ${name}` : `Remove ${name} from the ${count} post${count === 1 ? "" : "s"} that have it`}>
-                      {on ? "− " : ""}{name} <span className="dim">{count}/{n}</span>
+                      <span className="tag-chip-name">{on ? "− " : ""}{name}</span> <span className="dim">{count}/{n}</span>
                     </button>
                   </li>
                 );

@@ -8,6 +8,9 @@
   --surface-2: #191d28;
   --border: #262b39;
   --border-soft: #1d2230;
+  /* The edge of a field or a button: 3:1 against the surfaces it sits on
+     (WCAG 1.4.11), where --border is a divider's hairline. */
+  --edge: #646b89;
   /* accent: phosphor green by default. lib/theme.js overrides all of these
      at runtime from the theme picked in Settings; keep the two in step. */
   --accent: #2f9e4f;
@@ -22,11 +25,15 @@
   --glow-rgb: 74, 222, 128;
   /* signals */
   --danger: #e5484d;
+  /* A danger button's fill: white on it reads at 4.5:1 (--danger: 3.9:1). */
+  --danger-fill: #c93a3f;
+  --danger-fill-hover: #d03f44;
   --blue: #5b9dff;
   /* type */
   --text: #e8ecf6;
   --text-dim: #aab1c7;
-  --muted: #6c7293;
+  /* 4.5:1 on every surface, the lightest (--surface-2) included. */
+  --muted: #858cab;
   --mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   --display: 'Bricolage Grotesque', system-ui, sans-serif;
   --body: system-ui, -apple-system, sans-serif;
@@ -36,9 +43,21 @@
      flush under it and card anchors land below it. Plus the notch, when
      index.html's viewport-fit=cover lets the page reach under it (0 elsewhere). */
   --header-h: calc(57px + env(safe-area-inset-top));
-  --ring: 0 0 0 1px rgba(var(--glow-rgb), 0.45), 0 0 22px -4px rgba(var(--glow-rgb), 0.4);
+  /* The ring's edge at 3:1 against the page in every theme (0.45 was 1.6:1
+     in Iris); the glow around it is decoration. */
+  --ring: 0 0 0 1px rgba(var(--glow-rgb), 0.9), 0 0 22px -4px rgba(var(--glow-rgb), 0.4);
   --lift: 0 12px 30px -16px rgba(0, 0, 0, 0.85);
 }
+
+/* Keyboard focus and #links scroll their target clear of the sticky header,
+   and a little off the window's bottom edge, where a ring would be cut. */
+html {
+  scroll-padding-top: calc(var(--header-h) + 8px);
+  scroll-padding-bottom: 8px;
+}
+/* In select mode, clear of the selection bar too: its height (set by
+   SelectionBar.jsx), the 16px under it and 8px above. */
+html:has(.select-bar) { scroll-padding-bottom: calc(var(--select-bar-h, 60px) + 24px + env(safe-area-inset-bottom)); }
 
 body {
   color: var(--text);
@@ -53,6 +72,9 @@ body {
 /* Links inherit their surroundings — no browser blue, no underline anywhere.
    Anything that needs to read as a link says so with colour or hover state. */
 :where(a, a:visited) { color: inherit; text-decoration: none; }
+
+/* The browser's grey placeholder is 4.25:1 on the fields' dark fill. */
+::placeholder { color: var(--muted); opacity: 1; }
 
 /* ── Cyber backdrop ─────────────────────────────────────── */
 /* Painted by components/CyberBackground.jsx: columns of coloured glyphs falling
@@ -115,7 +137,7 @@ body {
   flex-shrink: 0;
   padding: 0;
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 9px;
   color: var(--text-dim);
   transition: color 0.15s, border-color 0.15s, background 0.15s;
@@ -204,7 +226,7 @@ input[type="text"].header-search {
   font-size: 13px;
   color: var(--text);
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 18px;
   outline: none;
   transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
@@ -514,8 +536,9 @@ main {
   border-radius: 12px;
   padding: 22px;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 18px 40px -30px rgba(0, 0, 0, 0.8);
-  /* A link to a card (/settings#downloaders) lands below the sticky header. */
-  scroll-margin-top: calc(var(--header-h) + 16px);
+  /* A link to a card (/settings#downloaders) lands 16px below the sticky
+     header: html's scroll-padding-top keeps it clear, this adds the rest. */
+  scroll-margin-top: 8px;
 }
 
 .card-title {
@@ -535,7 +558,7 @@ main {
 input[type="text"] {
   flex: 1;
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 8px;
   color: var(--text);
   font-family: var(--mono);
@@ -560,18 +583,22 @@ button {
 button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { opacity: 0.4; cursor: default; }
 
+/* Filled buttons have a clear 1px border, as tall as an outlined one
+   (.btn-secondary) beside them; the fill runs under it. */
 .btn-primary {
-  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  border: 1px solid transparent;
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent)) border-box;
   color: var(--on-accent);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 8px 20px -10px rgba(var(--glow-rgb), 0.55);
 }
-.btn-primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover));
+.btn-primary:hover:not(:disabled) { background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)) border-box; }
+/* Not while focused: the hover shadow would hide the focus ring. */
+.btn-primary:hover:not(:disabled):not(:focus-visible) {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset, 0 10px 26px -8px rgba(var(--glow-rgb), 0.7);
 }
-.btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
-.btn-secondary:hover:not(:disabled) { background: #222736; border-color: #333a4f; }
-.btn-danger { background: var(--danger); color: #fff; }
+.btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--edge); }
+.btn-secondary:hover:not(:disabled) { background: #222736; border-color: var(--muted); }
+.btn-danger { background: var(--danger-fill); color: #fff; border: 1px solid transparent; }
 .btn-ghost { background: transparent; color: var(--muted); font-size: 12px; padding: 5px 10px; }
 .btn-ghost:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
 
@@ -671,7 +698,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%237b7f9e' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 9px;
   color: var(--text);
   font-family: var(--body);
@@ -905,10 +932,11 @@ button:disabled { opacity: 0.4; cursor: default; }
    interactive element. Mouse clicks do not trigger it (focus-visible). */
 :where(a, button, select, summary, [tabindex], video):focus-visible {
   outline: none;
-  box-shadow: var(--ring);
   border-radius: 8px;
 }
-.side-link:focus-visible { box-shadow: var(--ring); }
+/* The ring itself outranks a single class: a button's own shadow (.btn-keep,
+   .btn-primary) must not hide it. */
+:is(a, button, select, summary, [tabindex], video):focus-visible { box-shadow: var(--ring); }
 
 .mono { font-family: var(--mono); }
 .dim  { color: var(--muted); }
@@ -1086,7 +1114,13 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
     #07090e;
   border-radius: 0;
 }
-.post-cover:focus-visible { border-radius: 0; box-shadow: inset 0 0 0 2px var(--glow); }
+/* Links that fill a tile cut to its rounded edge (overflow: hidden) ring
+   inside themselves: a ring outside would be cut off. */
+.post-cover:focus-visible, .post-textbody:focus-visible, .stats-hero-cell:focus-visible,
+.big-file-link:focus-visible, .collection-card-link:focus-visible, .th-sort:focus-visible {
+  border-radius: 0;
+  box-shadow: inset 0 0 0 2px var(--glow);
+}
 .post-cover-media {
   display: block;
   width: 100%;
@@ -1845,7 +1879,8 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 
 /* ── Danger, keep ───────────────────────────────────────── */
 .btn-danger { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
-.btn-danger:hover:not(:disabled) { background: #f0595e; box-shadow: 0 8px 20px -10px rgba(229, 72, 77, 0.7); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-fill-hover); }
+.btn-danger:hover:not(:disabled):not(:focus-visible) { box-shadow: 0 8px 20px -10px rgba(229, 72, 77, 0.7); }
 .btn-danger-soft {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   background: rgba(229, 72, 77, 0.1);
@@ -1855,11 +1890,12 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .btn-danger-soft:hover:not(:disabled) { background: rgba(229, 72, 77, 0.2); border-color: rgba(229, 72, 77, 0.6); color: #ffd0d2; }
 .btn-keep {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  border: 1px solid transparent;
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent)) border-box;
   color: var(--on-accent);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 8px 20px -10px rgba(var(--glow-rgb), 0.55);
 }
-.btn-keep:hover:not(:disabled) { background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)); }
+.btn-keep:hover:not(:disabled) { background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)) border-box; }
 .ok-text { color: #a5f0bf; }
 
 /* ── Modal / confirm ────────────────────────────────────── */
@@ -2001,7 +2037,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 /* Shift and Esc mean nothing on a phone, and the line made the bar a row taller
    over the list it selects from. */
 @media (max-width: 640px), (pointer: coarse) { .select-hint { display: none; } }
-.select-bar .btn-danger, .select-bar .btn-keep { padding: 8px 14px; }
+.select-bar .btn-danger, .select-bar .btn-keep { padding: 9px 14px; }
 
 /* ── Creators review link ───────────────────────────────── */
 .creator-card { padding: 0; gap: 0; }
@@ -2041,8 +2077,10 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px;
   font-family: var(--mono); font-size: 10px; font-weight: 700; line-height: 1;
-  color: inherit; opacity: 0.75;
-  border: 1px solid currentColor; border-radius: 4px;
+  /* The key in the button's own colour (at 0.75 it was under 4.5:1), the
+     frame around it fainter. */
+  color: inherit;
+  border: 1px solid color-mix(in srgb, currentColor 55%, transparent); border-radius: 4px;
 }
 .review {
   display: grid;
@@ -2101,17 +2139,23 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .review-session { flex-basis: 100%; font-size: 11px; color: var(--muted); }
 /* Many tags or collections: the info shrinks to leave the buttons room and
    scrolls, never runs under them. */
-.review-info { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; }
+/* 3px of room around what scrolls inside, for a focus ring, taken back
+   by the margin (the content sits where it did), and kept when focus
+   scrolls a control into view (scroll-padding). */
+.review-info { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding: 3px; margin: -3px; scroll-padding: 3px; }
+/* What it holds keeps its height and the panel scrolls: shrunk, the caption
+   went down to nothing at 1280x800. */
+.review-info > * { flex-shrink: 0; }
 .review-byline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* At the top of a scrolling box its 24px target grows down: above, it would be cut off. */
 .review-byline .post-byline-handle { flex: 1; min-width: 0; padding: 0 0 3px; margin: 0 0 -3px; }
 .review-meta { font-size: 11.5px; color: var(--text-dim); }
 .review-album { font-size: 12px; }
-.review-caption { max-height: 30vh; overflow-y: auto; font-size: 13px; }
+.review-caption { max-height: 30vh; overflow-y: auto; font-size: 13px; padding: 3px; margin: -3px; scroll-padding: 3px; }
 .review-caption .rich-text { font-size: 13px; line-height: 1.55; }
 .review-open { font-size: 12px; align-self: flex-start; padding-block: 4px; min-height: 24px; }
 .review-actions { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
-.review-actions > button { padding: 10px 14px; }
+.review-actions > button { padding: 9px 14px; }
 .review-actions-row { display: flex; gap: 6px; }
 .review-actions-row .btn-secondary { flex: 1; padding: 7px 8px; font-size: 12px; gap: 5px; }
 .review-help {
@@ -2226,7 +2270,9 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   color: inherit;
   cursor: pointer;
 }
-.data-table th.num .th-sort { justify-content: flex-end; }
+/* A number column's arrow goes left of its name, so the name lines up
+   with the figures under it whether the column is sorted or not. */
+.data-table th.num .th-sort { flex-direction: row-reverse; justify-content: flex-start; }
 .th-sort:hover, .th-sort.is-on { color: var(--accent-hover); }
 .th-sort-arrow { display: inline-block; width: 8px; font-family: var(--mono); }
 .storage-creator { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 240px; }
@@ -2387,7 +2433,9 @@ a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline
 .dup-badge-kept { color: var(--glow); border-color: rgba(var(--glow-rgb), 0.5); }
 .dup-member-foot { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px 8px; min-width: 0; }
 .dup-folder { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dup-member-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dup-member-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 3px; margin: -3px; }
+/* A long handle is cut inside its own link, whose ring then fits the line. */
+.dup-member-sub > .text-link { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
 .dup-diff { font-family: var(--mono); font-size: 10.5px; color: #ffd59a; }
 .dup-state.is-similar { color: #9fd8ff; background: rgba(90, 170, 255, 0.1); border: 1px solid rgba(120, 190, 255, 0.32); }
 .dup-member .big-file-link.is-viewable { cursor: zoom-in; }
@@ -2461,7 +2509,7 @@ a.btn-primary { color: var(--on-accent); }
 /* A tag's default colour, not the accent: it stays green under every theme. */
 .tag-chip {
   display: inline-flex; align-items: center; gap: 2px;
-  max-width: 100%;
+  max-width: 100%; min-width: 0;
   font-size: 11.5px; line-height: 1;
   color: #a5f0bf;
   background: rgba(47, 158, 79, 0.1);
@@ -2470,6 +2518,7 @@ a.btn-primary { color: var(--on-accent); }
 }
 .tag-chip > a, .tag-chip > span, .tag-chip-toggle {
   display: inline-flex; align-items: center; gap: 4px;
+  min-width: 0;
   padding: 4px 9px;
   color: inherit;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -2480,6 +2529,11 @@ a.btn-primary { color: var(--on-accent); }
 /* The × has 3px of its own padding on the left: the gap stays 9px. */
 .tag-chip > :is(a, span):has(+ .tag-chip-x) { padding-right: 6px; }
 .tag-chip > a:hover { color: var(--glow); }
+/* A name too long for the chip ends in an ellipsis (a flex box's own text
+   cannot), from its start: centred, it was cut at both ends. */
+.tag-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tag-chip svg { flex-shrink: 0; }
+.tag-chip-toggle > .dim { flex-shrink: 0; }
 /* A tag's own colour (--tag, set on the chip), toned for the dark surface. */
 .tag-chip.has-color {
   color: color-mix(in srgb, var(--tag) 65%, #fff);
@@ -2827,6 +2881,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 
 .person-page .page-head .avatar-letter { flex-shrink: 0; }
 .person-rename { display: flex; align-items: center; gap: 6px; }
+.person-delete { flex-shrink: 0; white-space: nowrap; }
 .person-delete:hover:not(:disabled) { color: #ffb3b5; }
 .person-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 20px; }
 .person-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -8px 0 20px; }
@@ -2901,6 +2956,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   display: flex; align-items: center; gap: 10px;
   padding: 9px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
 }
+/* One width for TT, IG and X, so the names after them line up. */
+.source-row > .platform-chip { min-width: 28px; justify-content: center; }
 .source-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
 .source-summary { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .source-schedule {

@@ -289,7 +289,7 @@ export default function PostPage() {
             {post.collections?.length > 0 ? (
               <ul className="tag-chips">
                 {post.collections.map(c => (
-                  <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`} title={c.name}>{c.name}</Link></li>
+                  <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`} title={c.name}><span className="tag-chip-name">{c.name}</span></Link></li>
                 ))}
               </ul>
             ) : <p className="dim post-tags-none">In no collection.</p>}
