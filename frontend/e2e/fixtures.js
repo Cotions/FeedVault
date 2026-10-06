@@ -549,7 +549,9 @@ function installProbes() {
         const h = hit(el, r);
         if (under && !own) {
           if (h.ok && !allowed(allow, "covered", el)) out.push({ rule: "covered", detail: `under ${cssPath(under.el)} yet a click there reaches it`, a: describe(el) });
-        } else if (!h.ok && h.top && !allowed(allow, "covered", el)) {
+        // A click that lands on a bar finds the element under it, out of
+        // reach, which is fine (its centre can sit on the bar's very edge).
+        } else if (!h.ok && h.top && !pinned.some(b => !b.el.contains(el) && b.el.contains(h.top)) && !allowed(allow, "covered", el)) {
           out.push({ rule: "covered", detail: `a click on its centre reaches ${cssPath(h.top)} "${textOf(h.top)}"`, a: describe(el) });
         }
       }
