@@ -1,14 +1,70 @@
 # FeedVault API
 
-Backend listens on `127.0.0.1:3380`. Every `/api/*` request must carry the
-header `X-FeedVault: 1`, GET included, or it gets a 403. `/media/*` URLs are
-exempt so they work in `<img>` and `<video>` tags.
-
-No CORS headers are ever sent. The built dashboard is served by the backend
-itself (same origin). The Vite dev server proxies `/api` and `/media` to the
-backend, so dev mode also runs same-origin.
+Backend listens on `127.0.0.1:3380` (the port is `FEEDVAULT_PORT`'s when
+set). The built dashboard is served by the backend itself (same origin). The
+Vite dev server (`./run.sh --dev`) proxies `/api`, `/media`, trash
+thumbnails and `/userscript` to `127.0.0.1:3380`, so dev mode also runs
+same-origin; it does not follow `FEEDVAULT_PORT` (#100, open).
 
 Times are Unix seconds (UTC). Absent values are `null`, never missing keys.
+
+Every route is a table row that starts with its method and its path in
+backticks: `` | GET | `/api/posts?…` | … | ``. `backend/tests/test_api_doc.py`
+reads those rows and fails when a route of the app is missing from this file,
+or a row names a route the app does not have. Keep that format for new
+routes.
+
+## Security rules
+
+The rules every request is under (`backend/app.py`, `_origin_guard`,
+`_no_frames`, `_foreign_origin`). They keep other websites open in the same
+browser from reading or changing the library; they are not a login.
+
+- **Bound to this machine.** The server listens on `127.0.0.1` only. Do not
+  expose the port: whoever reaches it can do anything the dashboard can,
+  including running the user's [scripts](#scripts).
+- **Host.** Every request (pages, media and the userscript included) must
+  carry a `Host` of `localhost`, `127.0.0.1` or `[::1]`, any port, or it gets
+  403 `{ "ok": false, "error": "forbidden host" }`. This blocks DNS
+  rebinding.
+- **`X-FeedVault` header.** Every `/api/*` request, whatever its method (GET
+  included; OPTIONS aside), must carry a non-empty `X-FeedVault` header
+  (the dashboard sends `X-FeedVault: 1`), or it gets 403 `{ "ok": false,
+  "error": "missing X-FeedVault header" }`. A page on another origin cannot
+  add a custom header without a CORS preflight, and **no CORS header is ever
+  sent**. The userscript sends it through `GM_xmlhttpRequest`.
+- **Exempt from the header**, because they cannot send one: `/media/*` and
+  `/trash/<key>/thumb` (loaded by `<img>` and `<video>`),
+  `/userscript/feedvault.user.js` (installed by the userscript manager) and
+  the dashboard's own pages and files (`/`, `/<path>`). They are still under
+  the Host rule.
+- **Media from other sites.** `/media/*` and `/trash/<key>/thumb` answer 403
+  before doing any work when the request comes from another site's page: an
+  `Origin` that is not `http://` on `localhost`, `127.0.0.1` or `[::1]`, or a
+  `Sec-Fetch-Site` other than `same-origin` or `none`.
+- **Scripts from other sites.** The same test refuses (403) listing, reading
+  or running a script, setting a source's `script`, and syncing a source that
+  has one; Sync all and a person's Sync skip such sources with an error. The
+  userscript's requests from instagram.com are "another site" here. See
+  [Who can run one](#scripts).
+- **No framing.** Every response carries `X-Frame-Options: DENY` and a
+  `Content-Security-Policy` with `frame-ancestors 'none'`, so no page can put
+  the dashboard under its own and steer clicks into it.
+- **Media is never a page.** A media file is served only from a path the
+  scanner recorded (the URL carries a row id, never a path), only when what
+  it opens as is inside a media root and outside its trash (see the end of
+  [Endpoints](#endpoints)), with `X-Content-Type-Options: nosniff`,
+  `Content-Security-Policy: sandbox; default-src 'none'` and
+  `Cross-Origin-Resource-Policy: same-origin`. Its type comes from its own
+  file name, from a fixed list of image, video and audio types (a poster
+  named `.image`, as yt-dlp keeps TikTok's, is typed by its first bytes, as
+  JPEG, PNG, WebP or GIF only); anything else
+  is sent as an `application/octet-stream` download, so an HTML file in a
+  media folder never runs on this origin.
+- **No commands from the API.** Jobs are started by kind, with parameters
+  each kind checks, and every program runs without a shell. The only
+  user-written commands are the files in the scripts folder, which no route
+  writes.
 
 ## Post
 
@@ -28,7 +84,7 @@ A **post summary** (list endpoints):
   "stats": { "likes": 120, "comments": 4, "views": null },
   "media_count": 3,
   "bytes": 5447680,
-  "cover": { "kind": "image", "url": "/media/17" },
+  "cover": { "kind": "image", "url": "/media/17/thumb" },
   "missing": false,
   "decision": null,
   "tags": ["outfits", "summer"]
@@ -36,7 +92,8 @@ A **post summary** (list endpoints):
 ```
 
 - `platform`: `instagram`, `twitter` (X; `url` points at x.com), `tiktok`; posts
-  from other gallery-dl sites carry the gallery-dl category (`reddit`, …)
+  from other gallery-dl sites carry the gallery-dl category (`reddit`, …), and
+  yt-dlp posts their extractor's name in lower case (`youtube`, `tiktok`, …)
 - `kind`: `image` | `video` | `carousel` | `story` | `text`
 - `cover`: a thumbnail of the first media item (`/media/<id>/thumb`, a JPEG
   at most 480 px wide), or `null` for text-only posts. For a video,
@@ -74,9 +131,10 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
   note such as `"Retweeted by @someone"` or `"Quoted by @someone"`; `null` otherwise
 - `collections`: the user's collections this post is in (see
   [Collections](#collections)), `[{ "id": 3, "name": "Moodboard" }]`, by name
-- `source.tool`: `"instaloader"` or `"gallery-dl"` (`version` is `null` for
-  gallery-dl, which does not record it); `meta_path` of a gallery-dl post is the
-  JSON of its first media file, or the post-level JSON of a text-only tweet
+- `source.tool`: `"instaloader"`, `"gallery-dl"` or `"yt-dlp"` (`version` is
+  `null` for gallery-dl, which does not record it); `meta_path` of a gallery-dl
+  post is the JSON of its first media file, or the post-level JSON of a
+  text-only tweet; of a yt-dlp post, its `.info.json`
 - `source.tool` is `"instaloader (filenames)"` when the post was rebuilt from
   file names alone (downloads made with `save_metadata=False`); `meta_path`
   is then the first media file
@@ -85,7 +143,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/posts?q=&platform=&author=&person=&collection=&kind=&tag=&untagged=&new=&notification=&sort=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
+| GET | `/api/posts?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=&notification=&sort=&order=&offset=&limit=` | `{ "total": 123, "posts": [summary, …] }` |
 | GET | `/api/posts/<platform>/<post_id>` | full post, or 404 `{ "ok": false, "error": "not found" }` |
 | GET | `/api/posts/summary?q=&platform=&author=&person=&collection=&kind=&review=&tag=&untagged=&new=&notification=` | `{ "posts": 12, "media": 30, "bytes": 1048576 }`, see below |
 | GET | `/api/new` | posts new since the last "Mark all seen", see [New posts](#new-posts) |
@@ -102,15 +160,17 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false }` |
 | POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
-| GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled |
-| POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
+| GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled; `{ "ok": false, "error": "zenity is not installed", "path": null }` without zenity |
+| POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` (the first 500 are looked up) → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
 | POST | `/api/save` | body `{ "platform": "instagram", "shortcode": "…" }` or `{ "url": "<an X or TikTok post's link>" }`: download one post (used by the userscript), see [Save from the browser](#save-from-the-browser-userscript) |
 | POST | `/api/quit` | stops the backend |
 | GET | `/media/<id>` | the media file bytes (Range supported, for video) |
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
-| GET | `/userscript/feedvault.user.js` | the userscript (no header needed), with this instance's port in `API_BASE`, `@updateURL` and `@downloadURL`, see [Save from the browser](#save-from-the-browser-userscript) |
+| GET | `/userscript/feedvault.user.js` | the userscript (no header needed), with this instance's port in `API_BASE`, `@updateURL` and `@downloadURL` (the port the server listens on, never one from the request), see [Save from the browser](#save-from-the-browser-userscript) |
+| GET | `/` | the dashboard (`frontend/dist/index.html`; no header needed). Without a built dashboard, a plain-text note to run `./run.sh --build` |
+| GET | `/<path>` | a file of the built dashboard, else `index.html` (the dashboard's own routes, such as `/review`); `api/…`, `media/…` and `userscript/…` paths are a 404 here |
 
 A media file (its poster, what a thumbnail is made from) is served only when
 what it opens as, symlinks followed, is inside a media root and outside its
@@ -190,8 +250,9 @@ new.
   nobody.
 
 `POST /api/new/mute` mutes (`"muted": true`) or unmutes a person or an
-account linked to nobody (an account linked to a person is a 400: mute the
-person). The body is `muted` and one of `person` or `account`, as for
+account linked to nobody (muting an account linked to a person is a 400:
+mute the person; unmuting one is always allowed, since it may have been
+muted before it was linked). The body is `muted` and one of `person` or `account`, as for
 `/api/new/seen`; anything else is a 400.
 
 `POST /api/new/seen` marks everything seen: `at` (Unix seconds, optional,
@@ -201,7 +262,8 @@ moves backwards, nor past now. `{ "ok": true, "since": <the mark> }`.
 With `"person": <id>` or `"account": { "platform": "instagram", "id":
 "123456" }` (an indexed account, or a folder-name alias of one), only that
 person's or account's posts are marked seen, up to `at` the same way:
-`{ "ok": true, "since": <the global mark>, "at": <the mark set> }`. A body
+`{ "ok": true, "since": <the global mark>, "at": <the at asked for, at most now> }`
+(a mark of theirs that was already later stays). A body
 that is not `{}`, empty, or made of `at` and one of `person` or `account`
 is a 400, and so is a person or account that does not exist.
 The dashboard's **Mark all seen** sends `new_until` from `GET /api/jobs` (the
@@ -286,7 +348,7 @@ Only **Empty trash** and **purge** (below) remove files for good.
 
 | Method | Path | Returns |
 |---|---|---|
-| POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted) → see below |
+| POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted, not both; at most 5000 of each are taken) → see below |
 | GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }`: the trash as `GET /api/trash/items` counts it (`trash` there), from the manifests, without looking at any trashed file (see [Trash contents](#trash-contents)) |
 | POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }`: every file that was in them, counted on disk right before |
 | GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=&upto=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
@@ -508,8 +570,9 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `untagged=1`: only posts with no tag
 - `new=1`: only posts new since the last "Mark all seen" (see
   [New posts](#new-posts))
-- `platform`: `instagram`, `twitter` (X, x.com included), `tiktok`, or another
-  gallery-dl category name for sites without their own mapping (`reddit`, `bluesky`, …)
+- `platform`: `instagram`, `twitter` (X, x.com included), `tiktok`, `youtube`,
+  or another gallery-dl category or yt-dlp extractor name for sites without
+  their own mapping (`reddit`, `bluesky`, …)
 - `author`: author id (from `/api/authors`) or one of its folder-name aliases;
   either way the whole account's posts (see [People](#people))
 - `person`: a person id: posts of every account linked to that person, across
@@ -524,7 +587,7 @@ post id; after a keep, call `/api/review` with `decision: null`.
 - `offset` (default 0), `limit` (default 60, max 200)
 
 `/api/posts/summary` takes the same filter parameters as `/api/posts` (`q`,
-`platform`, `author`, `person`, `collection`, `kind`, `review`, `tag`, `untagged`, `new`; `sort`, `order`, `offset` and `limit`
+`platform`, `author`, `person`, `collection`, `kind`, `review`, `tag`, `untagged`, `new`, `notification`; `sort`, `order`, `offset` and `limit`
 are ignored) and totals everything they match, not just one page: `posts` is
 always equal to the `total` that `/api/posts` returns for the same filters,
 `media` and `bytes` count the media items of those posts that are not missing.
@@ -600,8 +663,9 @@ A picture that cannot be decoded is tried again only when its file changes.
 | POST | `/api/duplicates/dismiss` | body `{ "group": "…" }`, plus `"threshold"` for a similar group → `{ "ok": true }`: "not a duplicate", for good |
 
 `GET /api/duplicates`: `kind` is `copies` (default), `content` or
-`similar`, `offset` (default 0), `limit` (default 50, max 500), `threshold`
-(similar only: 0 to 10, default from the config; anything else is a 400).
+`similar` (anything else is a 400), `offset` (default 0), `limit` (default
+50, max 500), `threshold` (used by similar only: 0 to 10, default from the
+config; anything else is a 400, whatever the kind).
 Groups come biggest saving first. Resolve and dismiss rebuild a similar
 group at the threshold they are given, so send the one it was listed at.
 
@@ -622,8 +686,8 @@ group at the threshold they are given, so send the one it was listed at.
         "files": 1, "bytes": 5242880, "saved_at": 1727500000, "posted_at": 1727400000, "match": null,
         "kept": false, "thumb_url": "/media/17/thumb" },
       { "id": "copy:3", "type": "copy", "copy_id": 3, "post_id": "instagram:C8x…", "post": null,
-        "folder": "/abs/cherrrieskyl", "meta_path": "/abs/cherrrieskyl/…_1.jpg",
-        "paths": ["/abs/cherrrieskyl/…_1.jpg"],
+        "folder": "/abs/somebody", "meta_path": "/abs/somebody/…_1.jpg",
+        "paths": ["/abs/somebody/…_1.jpg"],
         "items": [{ "idx": 1, "kind": "image", "size": 5242880, "path": "…", "hash": "9a0c…", "width": 1080, "height": 1350,
                     "url": null, "thumb_url": null }],
         "files": 1, "bytes": 5242880, "saved_at": 1727400000, "posted_at": null, "match": null,
@@ -704,6 +768,7 @@ of it moved) when:
 
 - it no longer exists with these members (a scan or another resolve
   changed it): reload;
+- the member to keep is not in the group;
 - it is still being hashed;
 - a file of any member changed (size or mtime) since it was hashed;
 - a file of the member to keep is gone;
@@ -759,12 +824,13 @@ index gets them back.
 | POST | `/api/tags/apply` | body `{ "posts": ["instagram:C8x…"], "add": ["outfits"], "remove": ["todo"] }` → see below |
 | POST | `/api/tags/rename` | body `{ "from": "outfit", "to": "outfits" }` → `{ "ok": true, "name": "outfits", "merged": true }` |
 | POST | `/api/tags/delete` | body `{ "name": "outfits" }` → `{ "ok": true, "posts": 12 }`: removes the tag from every post |
-| POST | `/api/tags/color` | body `{ "name": "outfits", "color": "#3b82f6" }`, or `null` for none → `{ "ok": true, "name": "outfits", "color": "#3b82f6" }` |
+| POST | `/api/tags/color` | body `{ "name": "outfits", "color": "#3b82f6" }`, or `null` for none → `{ "ok": true, "color": "#3b82f6" }`; a body without `color` is a 400 |
 | POST | `/api/tags/delete-unused` | body `{ "names": ["old", "todo"] }` → `{ "ok": true, "deleted": ["old"] }`, see below |
 
 `/api/tags/apply` adds and removes tags on up to 5000 posts at once (more is
 a 400). `add` and `remove` are lists of names, either may be omitted but not
-both; a name in `add` that does not exist yet is created. Ids that are not
+both; a name in `add` that does not exist yet is created (unless none of
+the ids is in the index: then nothing is created). Ids that are not
 in the index are ignored. Response:
 
 ```json
@@ -777,7 +843,7 @@ actually changed, `created` the new tags.
 `/api/tags/rename` renames a tag. When `to` already names another tag, the
 two are merged: every post of `from` gets `to`, and `from` is gone
 (`merged: true`). Changing only the case of a name is a rename. An unknown
-`from` is a 404, a bad `to` a 400. `/api/tags/delete` of an unknown name is a
+`from` is a 404, a `from` or `to` that cannot be a tag name a 400. `/api/tags/delete` of an unknown name is a
 404.
 
 `color` is the colour the tag's chips wear, `#rrggbb` (stored in lower
@@ -811,7 +877,9 @@ A **collection**:
 
 - `count` covers posts in the index (not those in the trash).
 - `cover_post` is the post chosen as cover, `null` when none is chosen; then
-  `cover` is that of the first post in the collection. `cover` is a post
+  (or while the chosen post is in the trash) `cover` is that of the first
+  indexed post in the collection. Removing the cover post from the
+  collection clears `cover_post`. `cover` is a post
   summary's `cover` (see [Post](#post)), `null` for an empty collection.
 
 | Method | Path | Returns |
@@ -822,8 +890,8 @@ A **collection**:
 | POST | `/api/collections/<id>/rename` | body `{ "name": "…" }` → `{ "ok": true, "collection": {…} }`; 400 for a bad or taken name |
 | POST | `/api/collections/<id>/delete` | → `{ "ok": true, "posts": 24 }`; the posts stay |
 | POST | `/api/collections/<id>/add` | body `{ "posts": ["instagram:C8x…"] }` (at most 5000) → `{ "ok": true, "added": ["instagram:C8x…"] }`, appended at the end in the order given; posts not in the index or already there are skipped |
-| POST | `/api/collections/<id>/remove` | body `{ "posts": […] }` → `{ "ok": true, "removed": 2 }` |
-| POST | `/api/collections/<id>/order` | body `{ "posts": […] }` → `{ "ok": true }`, see below |
+| POST | `/api/collections/<id>/remove` | body `{ "posts": […] }` (1 to 5000 ids) → `{ "ok": true, "removed": 2 }` |
+| POST | `/api/collections/<id>/order` | body `{ "posts": […] }` (1 to 5000 ids) → `{ "ok": true }`, see below |
 | POST | `/api/collections/<id>/cover` | body `{ "post": "instagram:C8x…" }`, or `null` for the first post → `{ "ok": true, "collection": {…} }`; 400 if the post is not in it |
 | POST | `/api/collections/reorder` | body `{ "ids": [3, 1, 2] }` (1 to 5000 ids) → `{ "ok": true, "collections": [collection, …] }` in the new order |
 
@@ -897,8 +965,8 @@ An **account** (`/api/authors` rows, a person's `accounts`):
   new handle of a rename the user accepted after it.
 - `count` and `bytes` cover the posts in the index, aliases included;
   `newest` is the newest `posted_at`.
-- `url`: the profile's address for `instagram`, `twitter` and `tiktok`,
-  `null` otherwise.
+- `url`: the profile's address for `instagram`, `twitter`, `tiktok` and
+  `youtube`, `null` otherwise.
 - `person`: the person the account is linked to, or `null`.
 - `handles` and `names`: **handle history**, every handle and display name
   the account's posts (aliases included) carry, with the `posted_at` of the
@@ -933,12 +1001,12 @@ A **person**:
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/people` | `[person, …]`, by name |
-| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
+| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted; at most 500 accounts and 20 profiles; `profiles` with no media root set is a 400) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
 | POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }] }`: a sync of each of the person's sources, as Sync all does for every source; 404 for an unknown id |
 | GET | `/api/people/<id>` | person, or 404 |
-| POST | `/api/people/<id>` | body `{ "name": "…" }` and/or `{ "notes": "…" }` → `{ "ok": true, "person": {…} }` |
+| POST | `/api/people/<id>` | body `{ "name": "…" }` and/or `{ "notes": "…" }` (neither is a 400) → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post |
-| POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
+| POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted; at most 500 each) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
 | POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }] }` → `{ "ok": true, "person": {…} }`, see below |
 
 - An account belongs to one person at most: adding it to a person (create,
@@ -1051,12 +1119,12 @@ no person yet.
                "login": ["stories", "highlights", "tagged"], "media": true, "since": true, "first_posts": false },
   "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
   "last_result": { "state": "failed", "error": "rate_limited",
-                   "message": "Instagram is limiting requests: wait before syncing again",
+                   "message": "Instagram is limiting requests: wait a while before syncing again",
                    "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false,
                    "failures": 1, "health": "rate_limited", "ok_at": 1727420000 },
   "health": { "state": "rate_limited", "result": "failed", "ok_at": 1727420000, "last_sync_at": 1727503600,
               "line": "…429 Too Many Requests…", "failures": 1, "rename": null,
-              "login": { "mode": "login", "found": true, "accepted": null } },
+              "login": { "mode": "login", "found": true, "accepted": null }, "paused": null, "warning": null },
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
   "session": { "mode": "login", "user": "me", "session_file": true },
   "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "stopped": null,
@@ -1184,8 +1252,8 @@ no person yet.
   - `paused`: `"account not found"` or `"login required"` while the
     scheduler no longer syncs it (see [Schedules](#schedules)), else `null`
   - `warning`: why the Creators list warns about it: what stops the
-    scheduler (as `paused`, also when its schedule is off) or `"3 failed
-    syncs in a row"` (3 or more), else `null`. A lone `not_found` or
+    scheduler (as `paused`, also when its schedule is off) or `"<n> failed
+    syncs in a row"` (n of 3 or more), else `null`. A lone `not_found` or
     `login_required` only backs off (the scheduler tries again), so it
     shows as the state's badge, not as a warning
   - `rename`: `{ "from": "old.name", "to": "new.name", "at": 1727503600 }`
@@ -1217,14 +1285,17 @@ no person yet.
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, and for an `options.script` that does not exist or is refused; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
-| POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target |
+| POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile |
 | DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back) |
-| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root) |
-| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors` |
+| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script and the request comes from another site; 404 for an unknown id |
+| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root, or a source that runs a script when the request comes from another site) listed in `errors` |
+
+Every `/api/sources/<id>…` call answers 404 `{ "ok": false, "error": "no
+such source" }` for an unknown id.
 
 - `target`: a profile link. Its host picks the tool from the routing
   table; `tool` is optional, and when sent must be that tool (else a 400
@@ -1309,16 +1380,19 @@ entries). The defaults:
 ### How a sync runs
 
 Job kind `instaloader-sync`, group `instaloader` (one instaloader at a
-time), params `{ "source": "<id>" }` and nothing else. The argument list
+time), params `{ "source": "<id>" }` (plus `"scheduled": "1"` when the
+scheduler queued it), nothing from the request. The argument list
 comes from the stored source:
 
 ```
 instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-update]
             --no-compress-json --dirname-pattern <folder> --filename-pattern <pattern>
-            --title-pattern {date_utc}_UTC_{typename} [content flags] [session flags] -- <target>
+            --title-pattern {date_utc}_UTC_{typename} [--sanitize-paths] [content flags] [session flags] -- <target>
 ```
 
-(content flags: see [What a source downloads](#what-a-source-downloads))
+(content flags: see [What a source downloads](#what-a-source-downloads);
+`--sanitize-paths` only when the folder is on exFAT, FAT or NTFS, where the
+`:` in tagged posts' and highlights' names is not allowed)
 
 - **Incremental.** `--latest-stamps` keeps, per profile, the time of the
   newest post downloaded, in FeedVault's data directory, not next to the
@@ -1329,8 +1403,8 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   own (the userscript's Save) newer than the stamp, and the posts between
   them would never be fetched. It is passed only when `stamps.ini` has no
   entry for the target (a first sync that could not be seeded, and not
-  with `full_history`, with reels, without posts, or with a `since`
-  floor, which sets the stamp); decided from that file when the job is queued and
+  with `full_history`, with reels, without posts, with `media: videos`, or
+  with a `since` floor, which sets the stamp); decided from that file when the job is queued and
   again right before it starts, after seeding (the job's `argv` shows what
   ran).
 - **Saved posts join the folder.** Right before each sync, the posts of
@@ -1380,7 +1454,9 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   in `waits_until`.
 - **Result.** The source folder is indexed when the job ends (exit code 0
   or not, but not when cancelled): `result` `{ "added", "updated", "error",
-  "line", "account", "person" }`, `message` `"3 new posts"`, or for a failure the plain-language
+  "line", "account", "person", "login" }`, plus `seen` (the `first_seen`
+  range of the posts it added), `rename`, `outdated`, `muted` and
+  `notification` when they apply, `message` `"3 new posts"`, or for a failure the plain-language
   message of `error`. The outcome is stored on the source (`last_result`).
   `account` (`{ "platform", "id" }`: the source's account, else that of its
   folder's posts, else `null`) and `person` (an id or `null`) are for the
@@ -1390,14 +1466,16 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
 ### instaloader settings
 
 `GET /api/config` has `"instaloader": { "session": {…}, "pause": 60 }`;
-`POST /api/config` with `{ "instaloader": { "session": {…} } }` and/or
-`"pause"` changes them.
+`POST /api/config` with `{ "instaloader": { "session": {…}, "pause": 60 } }`
+(either key may be left out; any other key there is refused) changes them.
+A refused value answers `{ "ok": false, "error" }` with a 200, as every
+`POST /api/config` error does.
 
 | `session` | Flags | What it means |
 |---|---|---|
 | `{ "mode": "none" }` (default) | none | Anonymous: public profiles only, and Instagram rate-limits sooner |
 | `{ "mode": "cookies", "browser": "firefox" }` | `--load-cookies firefox` | instaloader reads that browser's Instagram cookies itself. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
-| `{ "mode": "login", "user": "name" }` | `--login name` | instaloader uses the session file it saved after a `instaloader --login name` run in a terminal. Without one, the sync fails (`login_required`); it never asks for a password |
+| `{ "mode": "login", "user": "name" }` (1 to 30 of `A-Z a-z 0-9 . _`) | `--login name` | instaloader uses the session file it saved after a `instaloader --login name` run in a terminal. Without one, the sync fails (`login_required`); it never asks for a password |
 
 FeedVault only passes the browser's name or the user name on. It never
 stores, reads or sends cookies, passwords or session files. `pause`: whole
@@ -1406,11 +1484,12 @@ seconds from 0 to 3600.
 ### gallery-dl and yt-dlp syncs
 
 Job kinds `gallery-dl-sync` (group `gallery-dl`) and `yt-dlp-sync` (group
-`yt-dlp`), params `{ "source": "<id>" }` and nothing else. The source must
+`yt-dlp`), params `{ "source": "<id>" }` (plus `"scheduled": "1"` from the
+scheduler), nothing from the request. The source must
 have that tool; its target is checked again (a normalized https link whose
 host is still in the routing table; a source keeps its tool when the table
 later routes the host to another one) and so is its folder
-(inside a media root; for yt-dlp, without `$`, which yt-dlp would expand):
+(inside a media root, without `$`, which both tools would expand):
 
 ```
 gallery-dl [--config-ignore] --write-metadata --download-archive <data_directory>/gallery-dl/archive.sqlite3
@@ -1464,7 +1543,7 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --download-archive 
 - **Trash.** Trashing a post adds it to the archives so no sync brings it
   back; restoring it takes out what trashing added (see [Deleting](#deleting)).
 - **Result**: as for instaloader: the folder is indexed when the job ends,
-  `result` `{ "added", "updated", "error", "line" }`, stored on the source.
+  `result` with the same keys as instaloader's, stored on the source.
   A non-zero exit whose error lines are all about single items (yt-dlp's
   `ERROR: [youtube] <id>: Private video`, against `[youtube:tab]` or
   `[tiktok:user]` for the profile; gallery-dl's `[download][error] Failed
@@ -1503,7 +1582,7 @@ the number of posts):
 | `content` | `--reels`, `--stories`, `--highlights`, `--tagged`; `--no-posts` without `posts` | `-o include=<kinds>` (`with_replies` is `with-replies`), only when not the default | — |
 | `media: images` | `--no-videos --no-video-thumbnails --post-filter "not is_video"` | `--filter "extension in exts_image"` | — |
 | `media: videos` | `--no-pictures` (file by file: a carousel keeps its videos; an image post leaves only its metadata, which is not indexed), and `--storyitem-filter "is_video"` with stories or highlights (story items ignore `--no-pictures`). Never with `--fast-update`, which instaloader refuses with it | `--filter "extension in exts_video"` (file by file) | — |
-| `since` | `--post-filter "date_utc >= datetime(2024, 1, 1)"`, and the stamps (below) | X: `--date-after 2023-12-31T23:59:59` (stops at the first older post); others: `--filter "(not date or date >= datetime(2024, 1, 1))"` | `--dateafter 20240101`, plus `--break-match-filters "upload_date >=? 20240101"` where the sync may stop (as `--break-on-existing`) |
+| `since` | `--post-filter "date_utc >= datetime(2024, 1, 1)"`, and the stamps (below) | X: `--date-after 2023-12-31T23:59:59` (stops at the first older post); others: `--filter "(not date or date >= datetime(2024, 1, 1))"` | `--dateafter 20240101`, plus `--break-match-filters "upload_date >=? 20240101"` where the listing is newest first (not TikTok, not a YouTube channel's own page), with `full_history` too |
 | `first_posts` | — | `--post-range 1-N` (N per kind of `content`: each is its own extractor) | `--playlist-items 1:N` |
 
 instaloader's filter terms are joined with `and` into one `--post-filter`,
@@ -1565,8 +1644,8 @@ this order:
 |---|---|---|---|
 | `rate_limited` | `429 Too Many Requests`, `Please wait a few minutes` | `HttpError: '429 …'`, X `Rate limit exceeded` | `HTTP Error 429` |
 | `private` | `Private but not followed`, `private but not followed` | `AuthorizationError: … Tweets are protected` | TikTok `This user's account is (likely either) private`, YouTube `Private video` |
-| `login_required` | `Login required`, `requires login`, `Redirected to login page`, `Session file does not exist yet`, `Login error:`, `No cookies found for Instagram`, `Not logged in.`, `403 Forbidden` | `AuthRequired:`, `AuthenticationError:`, other `AuthorizationError:`, X `'Could not authenticate you`, TikTok `…: Login required to access this profile` | `Sign in to confirm you're not a bot`, `Sign in to confirm your age`, `TikTok is requiring login`, `Use --cookies-from-browser or --cookies for the authentication` |
-| `not_found` | `Profile … does not exist.` | `NotFoundError:`, TikTok `…: User account could not be found` | `The channel/playlist does not exist`, `HTTP Error 404`, `Video unavailable`, `YouTube said: This channel does not exist` / `This account has been terminated` |
+| `login_required` | `Login required`, `requires login`, `Redirected to login page`, `Session file does not exist yet`, `Login error:`, `checkpoint_required`, `challenge_required`, `No cookies found for Instagram`, `Not logged in.`, `403 Forbidden` | `AuthRequired:`, `AuthenticationError:`, other `AuthorizationError:`, X `'Could not authenticate you`, TikTok `…: Login required to access this profile` | `Sign in to confirm you're not a bot`, `Sign in to confirm your age`, `TikTok is requiring login`, `Use --cookies-from-browser or --cookies for the authentication` |
+| `not_found` | `Profile … does not exist.` | `NotFoundError:`, TikTok `…: User account could not be found` | `The channel/playlist does not exist`, `HTTP Error 404`, `Video unavailable`, TikTok `Video not available, status code <n>`, `YouTube said: This channel does not exist` / `This account has been terminated` |
 
 Anything else is `error`, with its line. A TikTok user that does not exist
 only gives yt-dlp's `Unable to extract secondary user ID`, which a private
@@ -1713,7 +1792,7 @@ synced before this:
 (with `apply`, cleaned); `failed`: the first 20 `{ path, error }` (a file
 or folder that could not be read, a file that could not be rewritten),
 `failures` how many in all. `400` for an
-`apply` that is not a boolean, `409` while yt-dlp runs (a sync, a yt-dlp source's script sync, or a script running it: its lock group) or another
+`apply` that is not a boolean, `409` while a job of the `yt-dlp` lock group runs (a sync, a TikTok save, a yt-dlp source's script sync, or a script running it) or another
 check is under way. Settings counts first (`apply` false), then asks to
 confirm.
 
@@ -1770,7 +1849,8 @@ this machine is a 403 as for any URL. The host stays `localhost`, and
 - `existing`: `true` when a Save job for that post was already queued
   or running: that job is returned and no other is queued (a second click
   is not a second download).
-- At most `save_queue_max` Save jobs (config, default 20, 1 to 500), of
+- At most `save_queue_max` Save jobs (in `config.json` only, not in
+  `/api/config`; default 20, 1 to 500), of
   every platform together, are queued or running at once; one more is a
   429 `{ "ok": false, "error": "20 posts are already waiting to be saved;
   try again once some are done" }`.
@@ -1829,7 +1909,7 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
 - Once it exits (not when cancelled), the post's JSON names its owner, and
   the files move to the owner's folder: the folder of the owner's
   instaloader source, else the folder right under a media root holding most
-  of the owner's posts, else `<first media root>/<handle>` when that folder
+  of the owner's instaloader posts, else `<first media root>/<handle>` when that folder
   exists, else `<first media root>/_saved`. They are named as that
   folder's files are, the layout a sync would detect (see
   [How a sync runs](#how-a-sync-runs)), the handle in place of the target.
@@ -1888,7 +1968,7 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --no-playlist
   gallery-dl entry). Only a run that exits 0 moves or records anything.
 - `result`: as for an Instagram save, plus `archived` (how many archive
   entries were new). A tweet with no media leaves no post: `generic`,
-  "gallery-dl saved no post".
+  "gallery-dl saved no post (a post with no media?)".
 - The saving folder is emptied before each run and removed after.
 
 ## Storage
@@ -1990,8 +2070,9 @@ A **job**:
 
 - `state`: `queued` → `running` → `done` (exit code 0) | `failed` |
   `cancelled` | `interrupted` (FeedVault stopped while it was queued or
-  running; set on quit, or on the next start after a crash, and then
-  `ended_at` is `null`: when it stopped is unknown).
+  running): set on quit (`ended_at` is then when it stopped), or on the
+  next start after a crash (`ended_at` is then `null`: when it stopped is
+  unknown).
 - `argv`: for display. The first item is the tool's name; the path actually
   run is resolved when the job starts (see [Tools](#tools)).
 - `rescan`: a folder inside a media root, or `null`. When the job exits 0,
@@ -2007,9 +2088,9 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "notifications": { "unread": 1, "latest": 42 } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "notifications": { "unread": 1, "latest": 42, "desktop": false } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
-| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }` |
+| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object and for a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync) |
 | GET | `/api/jobs/<id>` | job, or 404 |
 | GET | `/api/jobs/<id>/log?after=<n>` | output lines numbered above `n` (default 0), see below; 404 if unknown |
 | POST | `/api/jobs/<id>/cancel` | → `{ "ok": true, "job": {…} }`; 404 if unknown, 409 if it has already ended, or if its process has exited and it is indexing what it downloaded |
@@ -2023,21 +2104,23 @@ Built-in kinds:
 | Kind | Params | Runs | Group |
 |---|---|---|---|
 | `tool-version` | `tool`: `instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg` | `<tool> --version` (`ffmpeg -version`); `result` `{ "version" }` (the first line) | `tool-version` |
-| `instaloader-sync` | `source`: a source id; `scheduled`: `"1"` when the scheduler queued it (optional, see [Notifications](#notifications)) | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line", "seen", "notification" }` (`seen`: the `first_seen` range of the posts it added; `notification`: its entry's id, or absent) | `instaloader` |
+| `instaloader-sync` | `source`: a source id; `scheduled`: `"1"` when the scheduler queued it (optional, see [Notifications](#notifications)) | instaloader for that source, see [Sources](#how-a-sync-runs); `result` `{ "added", "updated", "error", "line", "account", "person", "login" }`, plus `seen`, `rename`, `outdated`, `muted` and `notification` when they apply (`seen`: the `first_seen` range of the posts it added; `notification`: its entry's id), see [How a sync runs](#how-a-sync-runs) | `instaloader` |
 | `gallery-dl-sync` | `source`, `scheduled` as above | gallery-dl for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `gallery-dl` |
 | `tool-test` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | the tool once on a fixed public item, see [Downloaders](#downloaders); `result` `{ "ok", "error", "line" }` | the tool's name |
 | `tool-update` | `tool`: `instaloader`, `gallery-dl` or `yt-dlp` | pip or pipx, picked from how the tool is installed, see [Downloaders](#downloaders) | the tool's name |
 | `yt-dlp-sync` | `source`, `scheduled` as above | yt-dlp for that source, see [gallery-dl and yt-dlp syncs](#gallery-dl-and-yt-dlp-syncs); `result` as above | `yt-dlp` |
 | `instaloader-post` | `shortcode` | instaloader for one post, see [How a save runs](#how-a-save-runs); started by `POST /api/save` only | `instaloader` |
-| `gallery-dl-post` | `platform` (`twitter`), `id` | gallery-dl for one X post, see [How an X or TikTok save runs](#how-an-x-or-tiktok-save-runs); started by `POST /api/save` only | `gallery-dl` |
-| `yt-dlp-post` | `platform` (`tiktok`), `id`, `handle` | yt-dlp for one TikTok video, as above | `yt-dlp` |
+| `gallery-dl-post` | `platform` (`twitter`), `id`, `handle` (optional); the same params as `yt-dlp-post` | gallery-dl for one X post, see [How an X or TikTok save runs](#how-an-x-or-tiktok-save-runs); started by `POST /api/save` only | `gallery-dl` |
+| `yt-dlp-post` | `platform` (`tiktok`), `id`, `handle` (optional) | yt-dlp for one TikTok video, as above | `yt-dlp` |
 | `script` | `script`, `target`, `url`, `folder`, `sha256` | a script on its own, see [Scripts](#scripts); started by `POST /api/scripts/<id>/run` only | the tool's name for a downloader's command, else `scripts` |
-| `script-sync` | `source`, `script`, `target`, `sha256`, `scheduled` | a source's script instead of its tool's command, see [Scripts](#scripts); started by the source's Sync (or the scheduler) only; `result` as a sync's | the source's tool |
+| `script-sync` | `source`, `script`, `target`, `sha256` or `why`, `scheduled` | a source's script instead of its tool's command, see [Scripts](#scripts); started by the source's Sync (or the scheduler) only; `result` as a sync's | the source's tool |
 
 ### Sync all
 
-`sync_all` in `GET /api/jobs` is the last `POST /api/sources/sync-all`
-that queued anything since FeedVault started, or `null`. One sent while the
+`sync_all` in `GET /api/jobs` is the last `POST /api/sources/sync-all` (or
+`POST /api/people/<id>/sync`, which goes through the same batch) that queued
+anything since FeedVault started, or `null`. Muted sources count in
+`ended`, but not in `failed`, `added`, `profiles` or `first`. One sent while the
 last is still running adds its jobs to it (one batch, one summary):
 
 ```json
@@ -2125,8 +2208,9 @@ tool is never looked up in a job's working folder), or at the path set for
 them in Settings (`tools` in `config.json`, for a tool
 installed in a virtualenv). `POST /api/config` with `{ "tools": { "yt-dlp":
 "/abs/path" } }` sets one (an empty string clears it, back to `PATH`); the
-other tools are left as they are. A path must be absolute, an executable
-file, and named after the tool (`yt-dlp`, `yt-dlp_linux`); the file and its
+other tools are left as they are. A path (`~` expanded, made absolute) must
+be an executable file whose name starts with the tool's (`yt-dlp`,
+`yt-dlp_linux`); the file and its
 folder (the one it is in, and where it leads when it is a symlink) must be
 root's or yours and not writable by group or others, and every folder above
 those root's or yours and not writable by group or others unless sticky
@@ -2178,7 +2262,8 @@ A tool:
 - `install`, read from `real_path`: `venv` (in the `bin/` folder of a
   virtualenv: `pyvenv.cfg` beside that folder), `pipx` (the same, the
   virtualenv inside pipx's `venvs` folder: `$PIPX_HOME/venvs`, else
-  `~/.local/share/pipx/venvs` or `~/.local/pipx/venvs`), `system` (anything
+  `$XDG_DATA_HOME/pipx/venvs` (`~/.local/share/pipx/venvs`) or
+  `~/.local/pipx/venvs`), `system` (anything
   else: `/usr/bin`, `pip install --user`, a standalone binary) or `missing`.
   `venv`: the virtualenv's folder for `venv` and `pipx`, else `null`.
 - `version`: the first line `<path> --version` prints (`ffmpeg -version`, up
@@ -2275,7 +2360,8 @@ its new version.
 Your own download commands and shell scripts. They are **files on disk
 only**: they are written and edited in a text editor in
 `<config dir>/scripts/`, the folder of `config.json`
-(`~/.config/feedvault/scripts/`, or beside `FEEDVAULT_CONFIG`). The API
+(`$XDG_CONFIG_HOME/feedvault/scripts/`, by default
+`~/.config/feedvault/scripts/`, or beside `FEEDVAULT_CONFIG`). The API
 lists them, shows them read-only and runs them. No request writes,
 renames or deletes a script, and none ever carries a command. The folder
 is read again on every request, so an edit counts right away.
@@ -2307,7 +2393,7 @@ be run as they are, or copied into a file.
   A run is refused (400) when a value puts a `$` in that folder (gallery-dl
   expands `$NAME` there) or `\f` in the file name. This holds for a
   gallery-dl named by its path or run behind `env` too.
-  So is a `{url}` or `{target}` putting a `..` or leading `~` in that folder, or a `..`, `~` or `$` in a path option (`-D`, `-o`, env's `-C`…).
+  So is a `{url}` or `{target}` putting a `..` or leading `~` in that folder, or a `..` in a path option (`-D`, `-o`, env's `-C`…), or a leading `~` or a `$` in one where the tool expands them (gallery-dl, yt-dlp).
 - `needs`: `target`, `url` or `none`. A script that uses `{target}` or
   `{url}` without needing it is refused.
 - `rescan`: a folder template indexed once it has run (it must be inside
@@ -2331,9 +2417,11 @@ put in a sealed memfd, and its `#!` interpreter (read as the kernel reads
 it: the path, then at most one argument, the rest of the line) runs
 `/dev/fd/N`. So `$0` is `/dev/fd/N`, not the file's path; `FV_SCRIPT` is
 the file's path. Its inputs are only environment variables: `FV_TARGET`,
-`FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE`. The rest of its environment is minimal:
+`FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE` (plus `FV_SCRIPT`, its path). The rest of its environment is minimal:
 `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME`,
-`TMPDIR` and the `XDG_*_HOME` folders. The header keys are `name`,
+`TMPDIR` and the `XDG_*_HOME` folders (`PATH` the system default when
+FeedVault has none), plus `PYTHONUNBUFFERED=1`, which every job gets. The
+header keys are `name`,
 `description`, `needs` and `rescan`; `needs` is required.
 
 **Values:**
@@ -2373,14 +2461,24 @@ logs it. It never changes a folder above them.
   `[a-z0-9_-]{1,64}` + `.json` / `.sh` (anything else in the folder is
   listed too);
 - two files with the same id;
-- a command whose JSON is malformed;
+- a file that is not UTF-8, or changed while it was read;
+- a command whose JSON is malformed: not an object, an unknown key, an
+  `argv` that is not 1 to 200 strings (each at most 4096 characters, no
+  NUL), an `argv[0]` that is neither a tool's name nor an absolute path
+  without a placeholder, a `name` over 100 characters or on several lines,
+  a `description` over 500, or `needs` other than `target`, `url` or
+  `none`;
 - a command with a placeholder where it would be read as code: in the
   value of yt-dlp `--exec`, `--exec-before-download`, `--netrc-cmd`,
   `--use-postprocessor` (a shell), `--downloader-args` or
   `--postprocessor-args` (split into aria2c's or ffmpeg's arguments), or
   anywhere beside `--alias`; of gallery-dl `--exec`, `--exec-after`,
   `-o` / `--option` and `-O` / `--postprocessor-option` (either can set an
-  exec post processor's command), or a `--filter` option (Python). The
+  exec post processor's command), `--filter`, `--post-filter`,
+  `--child-filter`, `--file-filter`, `--image-filter` or `--chapter-filter`
+  (Python); of yt-dlp also `--external-downloader-args` and `--ppa`; of
+  instaloader `--post-filter`, `--only-if` and `--storyitem-filter` (Python
+  it evaluates). The
   downloader may be named by its path or run through `env`; joined
   (`--exec=…`, `-o…`) and abbreviated forms count; after `--` nothing is
   an option (yt-dlp's optparse and gallery-dl's and instaloader's
@@ -2403,8 +2501,8 @@ by then, fails the job.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/scripts` | `{ "dir": "/home/me/.config/feedvault/scripts", "dir_refused": null, "scripts": [script, …] }`, built-ins first, then the files by name |
-| GET | `/api/scripts/<id>` | script with `content` (the file's text, or the built-in's JSON), or 404 (its `error` the scripts folder's refusal when it is refused) |
+| GET | `/api/scripts` | `{ "dir": "/home/me/.config/feedvault/scripts", "dir_refused": null, "shell_template": "#!/bin/sh …", "scripts": [script, …] }`, built-ins first, then the files by name |
+| GET | `/api/scripts/<id>` | script with `content` (the file's text, or the built-in's JSON), or 404 (its `error` the scripts folder's refusal when it is refused); 403 from another site, as for the listing |
 | POST | `/api/scripts/<id>/run` | body `{ "target"?, "url"?, "folder"? }` → `{ "ok": true, "job": {…} }`; 400 bad input, refused script or refused scripts folder (its reason); 403 from another origin (see below); 404 unknown id |
 
 A script:
@@ -2425,13 +2523,17 @@ could not be read.
 **Runs.** Job kind `script`, started by `POST /api/scripts/<id>/run` only
 (`POST /api/jobs` refuses it), shown in the [Jobs](#jobs) list as any job.
 
-- Lock group: the tool's for a downloader command (never beside a sync of
-  that tool, its pause between them), else `scripts`.
+- Lock group: the tool's when `argv[0]` is the tool's bare name
+  (`instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg`: never beside a sync of
+  that tool, its pause between them), else `scripts`, with no pause: a
+  downloader named by its absolute path or run behind `env` is in
+  `scripts` today: a bug, open as #98.
 - `argv` is the command as run, or the script's path. `argv` and `params`
   are scrubbed as output is (`health.scrub`).
-- The log starts with `[feedvault]` lines: the script's path, its
-  SHA-256 and, for a shell script, each `FV_*` value it was given
-  (`FV_SCRIPT` too).
+- The log starts with `[feedvault]` lines: the script's path and the
+  first 16 hex digits of its SHA-256 (a built-in: its id) and, for a shell
+  script, each `FV_*` value it was given (`FV_SCRIPT` too), scrubbed as
+  every log line is.
 - The `rescan` folder is indexed once it exits 0, as for any job.
 
 **On a source.** A source's `script` option (a script id, or `null`; see
@@ -2447,11 +2549,12 @@ being the source's. A script that is missing or refused when the sync is
 queued or starts fails that run with the reason in its log and on the
 source. It never falls back to the built-in command.
 
-**Who can run one.** Running a script, setting a source's `script`, and
-syncing a source that has one (alone, a person's, or Sync all) are refused
-with a 403 for a request whose `Origin` is not FeedVault's own, or whose
-`Sec-Fetch-Site` is `cross-site` or `same-site`. Sync all skips such
-sources with an error. The userscript's requests from instagram.com get
+**Who can run one.** Listing, reading and running scripts, setting a
+source's `script`, and syncing a source that has one are refused with a 403
+for a request whose `Origin` is present and is not `http://` on
+`localhost`, `127.0.0.1` or `[::1]` (any port: the Vite dev server is on
+another one), or whose `Sec-Fetch-Site` is anything but `same-origin` or
+`none`. Sync all and a person's Sync skip such sources with an error. The userscript's requests from instagram.com get
 nothing new here. FeedVault binds to `127.0.0.1` only. Exposing the port
 (`0.0.0.0`, a reverse proxy) would hand every script on disk to whoever
 reaches it.

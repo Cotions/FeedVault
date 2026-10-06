@@ -11,25 +11,68 @@ FeedVault does not download anything itself. It reads what
 
 The **Review** page is for sorting: one post at a time, keep or trash it from
 the keyboard. Deleting moves files to `.feedvault-trash/` inside the media
-folder; only **Empty trash** in Settings → Library removes them for good.
+folder; only **Empty trash** in Settings → Library, and purging an entry
+on the **Trash** page, remove them for good.
 
-Status: early. Instagram via instaloader, X/Twitter and TikTok via
-gallery-dl, and TikTok and YouTube Shorts via yt-dlp work end to end; see
-[PLANNING.md](PLANNING.md) for what comes next.
+Status: in daily use by its author. Instagram via instaloader, X/Twitter and
+TikTok via gallery-dl, and TikTok and YouTube Shorts via yt-dlp work end to
+end; see [PLANNING.md](PLANNING.md) for what is still open.
 
 ## Start
 
+You need Python 3 (with its `venv` module) and bun or npm. The downloaders
+(instaloader, gallery-dl, yt-dlp) and ffmpeg are optional and installed
+separately: Settings shows the install command for each.
+
 ```bash
-./run.sh            # build the UI if needed, start, open the browser
+./run.sh            # build the UI if needed, start on :3380, open the browser
+./run.sh --build    # rebuild the UI, then start
 ./run.sh --dev      # Vite hot reload + backend, real data through the dev proxy
 ./run.sh --test     # backend tests
-./testapp.sh --demo # throwaway instance on :3389 with invented demo posts
-./testapp.sh        # throwaway instance on :3389 on a copy of your database
+./run.sh --help
 ```
+
+Run from a script or an agent (no terminal, `TERM` unset), `./run.sh`
+reopens itself in a terminal window; `FEEDVAULT_NO_TERMINAL=1` stops that.
+
+On its first run `./run.sh` creates `backend/venv`, installs the Python
+dependencies (`backend/requirements-dev.txt`) into it, installs the UI's
+(`npm install` or `bun install` in `frontend/`) and builds the UI. It
+reinstalls the Python ones when a requirements file changes, and rebuilds
+the UI when `frontend/src` is newer than the build. If the port is taken,
+it asks before stopping what holds it.
 
 Then open **Settings** (Library tab), add the folder your downloader writes into, and the scan
 starts on its own. **Settings → Appearance** changes the accent colour: one of
 eight presets, or a theme of your own, saved in that browser.
+
+### A test instance
+
+`./testapp.sh` runs a throwaway FeedVault on port 3389 (`FEEDVAULT_TEST_PORT`)
+beside the real one. It needs `./run.sh` to have run once (the virtualenv
+and a built UI).
+
+```bash
+./testapp.sh --demo   # invented demo posts, no real data involved
+./testapp.sh          # a copy of your database (media read-only with bwrap)
+./testapp.sh --reset  # throw the copy away and take a fresh one
+./testapp.sh --status # show what exists and where, then exit
+```
+
+- `--demo` builds a demo vault once with `scripts/make_demo.py`, in
+  `~/.cache/feedvault-demo` (`$XDG_CACHE_HOME`, or `FEEDVAULT_DEMO_DIR`),
+  with fake downloaders in it, and reuses it afterwards.
+- Without `--demo` it copies `feedvault.db` (SQLite's backup, safe while the
+  live app runs) into `<data_directory>-test` (or `FEEDVAULT_TEST_DATA`), uses
+  `config.test.json` in `~/.config/feedvault/` (`$XDG_CONFIG_HOME`;
+  `FEEDVAULT_CONFIG` is not read here), and pauses all schedules. With
+  [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) installed
+  it runs in a sandbox where your media folders, the live data directory and
+  the live config are read-only; without it, it warns and runs unprotected.
+- It is not a full sandbox: it shares your `HOME`, so your scripts folder
+  and the downloaders' own logins (instaloader's session, browser cookies)
+  are the real ones. A Sync or a script run from it runs the real tool with
+  them. Use `--demo` to try anything that downloads.
 
 ## Downloading with instaloader
 
@@ -127,6 +170,7 @@ yt-dlp --write-info-json --write-thumbnail \
   180) are not indexed: they show on the **Unmatched** page as "left to
   ChannelVault". Shorts and short clips are indexed like TikTok videos
 
+## Browser userscript
 
 Install [Tampermonkey](https://www.tampermonkey.net/) or
 [Violentmonkey](https://violentmonkey.github.io/), then click **Install the
@@ -241,10 +285,12 @@ By default syncs run without a login (public profiles only). **Settings → Sync
 Instagram sync** can make instaloader use your browser's Instagram cookies
 (`--load-cookies`) or a session it saved after `instaloader --login` in a
 terminal. FeedVault only passes the browser or user name on; it never reads
-or stores cookies, passwords or session files.
+or stores cookies, passwords or session files (the one exception is
+removing the cookies yt-dlp copies into info JSONs, below).
 
 gallery-dl and yt-dlp can use a browser's cookies the same way
-(`--cookies-from-browser`, **Settings → Sync → gallery-dl / yt-dlp sync**).
+(`--cookies-from-browser`, **Settings → Sync**, cards "X, Reddit, Bluesky,
+pixiv sync (gallery-dl)" and "YouTube and TikTok sync (yt-dlp)").
 yt-dlp copies the cookies it used into each video's `.info.json`; FeedVault
 rewrites the files of each sync without them, and **Settings → Sync → YouTube
 and TikTok sync** can do the same for info JSONs written before.
@@ -272,7 +318,9 @@ history). The folder is read again each time, so an edit counts at once.
   In `--print-to-file FORMAT FILE` only FILE's name is a format string:
   its folder (up to the last `/`) keeps a value as it is, and a run whose
   value puts a `$` there (expanded) or `\f` in the name is refused.
-  So is one whose link or target puts a `..` or leading `~` there, or a `..`, `~` or `$` in a path option (`-D`, `-o`, env's `-C`…).
+  So is one whose link or target puts a `..` or leading `~` there, or a
+  `..` in a path option (`-D`, `-o`, env's `-C`…), or a leading `~` or a
+  `$` in one where the tool expands them (gallery-dl, yt-dlp).
   After `--` nothing is an option, as the tools read it: what follows is never checked or escaped.
 - **A shell script**, `my-script.sh`, executable, with a `#!` line and a
   `# needs: url` (or `target`, `none`) header. It gets its inputs only as
@@ -291,7 +339,8 @@ or refused fails that sync with the reason, never running the built-in one.
 A file is refused, with the reason shown, and never run when it is a
 symlink, someone else's, writable by group or others (as is the folder,
 or a folder above it that is not sticky or not root's or yours),
-over 64 KiB, not named `[a-z0-9_-].json` / `.sh`, or malformed; a mode
+over 64 KiB, not named `<name>.json` / `<name>.sh` (`<name>`: 1 to 64 of
+`a-z`, `0-9`, `_` and `-`), or malformed; a mode
 refusal says the `chmod go-w '<path>'` to run. FeedVault makes its own
 folders `0700` whatever the umask, and tightens its config and scripts
 folders on start if they were left group-writable. A script
@@ -309,10 +358,14 @@ userscript's included, cannot list, run or attach a script.
 
 | What | Where |
 |---|---|
-| Config | `~/.config/feedvault/config.json` (override with `FEEDVAULT_CONFIG`) |
-| Scripts | `~/.config/feedvault/scripts/`, beside the config; FeedVault only reads it |
-| Index | `~/.local/share/feedvault/feedvault.db`, rebuilt from your folders by a rescan |
-| Media | wherever your downloader put it; FeedVault only reads it |
+| Config | `~/.config/feedvault/config.json` (`$XDG_CONFIG_HOME/feedvault/`; override with `FEEDVAULT_CONFIG`) |
+| Scripts | `scripts/` beside the config; FeedVault only reads it |
+| Data | `data_directory` in the config, by default `~/.local/share/feedvault/` (`$XDG_DATA_HOME/feedvault/`): the index `feedvault.db` (rebuilt from your folders by a rescan), `userdata/*.json` (your decisions, tags, people, sources and the rest, restored from there after a rebuild), thumbnails, and the downloaders' archives and stamps |
+| Media | wherever your downloader put it; FeedVault only reads it, and trashing moves files to `.feedvault-trash/` inside that media folder |
+| Port | 3380 (`FEEDVAULT_PORT`; `./run.sh --dev`'s Vite proxy still goes to 3380, #100); `./testapp.sh` uses 3389 |
+
+`FEEDVAULT_NO_BROWSER=1` (or `--no-browser`) starts without opening the
+browser.
 
 ## Security
 
@@ -322,7 +375,56 @@ your browser cannot read or change your library. Jobs are started by kind,
 with parameters each kind checks; the API never takes a command, and tools run
 without a shell. Your [scripts](#scripts) are the exception you write
 yourself: whoever reaches the port can run them, so never expose it. The server itself contacts the network for one thing only,
-and only if you turn it on (**Settings → Downloads → Downloaders → check for updates**):
+and only if you turn it on (**Settings → Downloads → Downloaders → Check PyPI for new versions**):
 PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
-to say when an update is out. API reference:
+to say when an update is out. The rules each request is under:
+[docs/API.md → Security rules](docs/API.md#security-rules). API reference:
 [docs/API.md](docs/API.md).
+
+## Development and tests
+
+The commands below use npm (bun alone is enough to run the app, not for
+these). Full details, including what each browser test project checks:
+[docs/TESTING.md](docs/TESTING.md).
+
+```bash
+backend/venv/bin/python -m pytest -q backend/tests   # backend, about 5 minutes
+cd frontend
+npx eslint .                                         # lint (npm run lint)
+npm test                                             # Node unit tests
+npm run build                                        # the UI, into frontend/dist
+npx playwright install chromium                      # once
+npm run e2e                                          # browser tests on a throwaway instance
+projects=$(node e2e/shards.js 2) && npm run e2e -- $projects   # one CI shard (1 to 4)
+```
+
+- **Backend tests** run under a guard (`backend/tests/toolguard.py`): each
+  test gets an empty `PATH`, its own `HOME` and XDG folders, and fails if it
+  starts a program outside its tmp dir and the fakes in `backend/tests/`,
+  imports a downloader's Python package, or reaches the network. Tests use
+  fake instaloader, gallery-dl and yt-dlp, never the real ones.
+- **Browser tests** (Playwright, `frontend/e2e/`) build a demo vault with
+  fake downloaders in a fresh `$TMPDIR/feedvault-e2e-*` folder, with its own
+  `HOME`, an empty `PATH` and the same guard, start a backend on a free port,
+  and delete it all afterwards. They refuse ports 3380 and 3389 and never
+  touch `~/.config/feedvault` or `~/.cache/feedvault-demo`. Build the UI
+  first. `FEEDVAULT_E2E_PYTHON` picks the Python that runs the backend
+  (default `backend/venv/bin/python`). Six projects: `desktop`, `layout`,
+  `layout-zoom`, `states`, `themes` and `phone`. A new project goes into a
+  shard in `frontend/e2e/shards.js`, or `npm test` fails. The checks measure
+  layout and contrast instead of comparing screenshots, because CI's font
+  (DejaVu Sans) differs from a desktop's; TESTING.md shows how to run them
+  with CI's font.
+- **CI** (`.github/workflows/ci.yml`) runs `backend`, `frontend` (lint,
+  `npm test`, build) and the browser tests in four shards, `e2e shard 1/4`
+  to `4/4`. The `e2e` job is the one result for them: green only when every
+  shard passed.
+
+**Rules for contributors and coding agents:**
+
+- Never run the real download tools from a test, not even `--help`: use the
+  fakes. Never add `tool_guard.allow` to get past the guard.
+- Never test deleting (trash, purge, Empty trash) on real data: use the demo
+  vault or a temp directory.
+- Never loosen a security rule (the header, Host, frame and media rules, the
+  test guard, the browser harness's refusals) to make something pass.
