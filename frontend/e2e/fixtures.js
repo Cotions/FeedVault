@@ -373,3 +373,290 @@ export async function checkLayout(page, testInfo, { view, size, scope = null }) 
   }
   return list;
 }
+
+/* ── State checks (states.spec.js) ──────────────────────────── */
+
+// Findings the state checks let through, each with its reason: a rule
+// (focus-ring, focus-hidden, covered, hover-moved, popover) and the
+// selector its element matches.
+export const STATE_ALLOW = [];
+
+// In the page, before its own scripts (page.addInitScript): window.__fv,
+// the probes states.spec.js calls between key presses
+// and mouse moves. Self-contained: it is serialized into the page.
+function installProbes() {
+  const CLIPS = new Set(["hidden", "clip", "auto", "scroll"]);
+  const INTERACTIVE = "a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]:not([tabindex='-1']), "
+    + "[role=button], [role=link], [role=tab], [role=checkbox], [role=switch], [role=menuitem], [role=option]";
+  const cssPath = el => {
+    const parts = [];
+    for (let e = el; e && e !== document.body && parts.length < 4; e = e.parentElement) {
+      let p = e.tagName.toLowerCase();
+      if (e.id) { parts.unshift(`${p}#${e.id}`); break; }
+      const cls = [...e.classList].filter(c => !/^is-/.test(c)).slice(0, 2);
+      if (cls.length) p += "." + cls.join(".");
+      parts.unshift(p);
+    }
+    return parts.join(" > ");
+  };
+  const textOf = el => (el.getAttribute("aria-label") || el.textContent || el.value || el.placeholder || "").replace(/\s+/g, " ").trim().slice(0, 50);
+  const boxOf = r => ({ x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.right - r.left), h: Math.round(r.bottom - r.top) });
+  const shown = el => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !el.closest("[inert], [aria-hidden=true]");
+  const allowed = (allow, rule, el) => allow.some(x => x.rule === rule && el.matches(x.el));
+  const describe = el => ({ sel: cssPath(el), text: textOf(el), box: boxOf(el.getBoundingClientRect()) });
+
+  // The part of the window an element's overflow ancestors let show.
+  function clipOf(el) {
+    const de = document.documentElement;
+    const box = { left: 0, top: 0, right: de.clientWidth, bottom: innerHeight };
+    let by = null;
+    const pos = getComputedStyle(el).position;
+    if (pos === "fixed") return { box, by };
+    const cb = pos === "absolute" ? el.offsetParent : null;
+    for (let a = el.parentElement; a && a !== de && a !== document.body; a = a.parentElement) {
+      if (cb && !a.contains(cb)) continue;
+      const cs = getComputedStyle(a);
+      const cx = CLIPS.has(cs.overflowX), cy = CLIPS.has(cs.overflowY);
+      if (cx || cy) {
+        const r = a.getBoundingClientRect();
+        const l = r.left + a.clientLeft, t = r.top + a.clientTop;
+        const next = { ...box };
+        if (cx) { next.left = Math.max(box.left, l); next.right = Math.min(box.right, l + a.clientWidth); }
+        if (cy) { next.top = Math.max(box.top, t); next.bottom = Math.min(box.bottom, t + a.clientHeight); }
+        if (next.left > box.left || next.top > box.top || next.right < box.right || next.bottom < box.bottom) by = by || a;
+        Object.assign(box, next);
+      }
+      if (cs.position === "fixed") break;
+    }
+    return { box, by };
+  }
+
+  // The bars pinned over the page: the sticky header, and the selection
+  // bar at the bottom in select mode.
+  const bars = () => [...document.querySelectorAll("body > #root > header, header, .select-bar")]
+    .filter((el, i, all) => all.indexOf(el) === i && shown(el))
+    .map(el => ({ el, r: el.getBoundingClientRect() }));
+  const overlap = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left))
+    * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+
+  // Whether a click at the element's centre reaches it (or what it wraps:
+  // a label's field), and if not, what does.
+  function hit(el, r = el.getBoundingClientRect()) {
+    const x = Math.min(Math.max(r.left + r.width / 2, 0), document.documentElement.clientWidth - 1);
+    const y = Math.min(Math.max(r.top + r.height / 2, 0), innerHeight - 1);
+    const top = document.elementFromPoint(x, y);
+    const ok = !!top && (top === el || el.contains(top) || (top.tagName === "LABEL" && top.contains(el))
+      || (top.control && top.control === el));
+    return { ok, top, x, y };
+  }
+
+  // The outline and box-shadow of each element a focus ring may sit on: the
+  // element, its next sibling (a styled box after a hidden input) and three
+  // ancestors (a card that shows the ring of a link inside it).
+  const RING = ["outlineStyle", "outlineWidth", "outlineColor", "outlineOffset", "boxShadow"];
+  const ringOf = el => RING.map(k => getComputedStyle(el)[k]).join("|");
+  function ringCarriers(el) {
+    const list = [el];
+    if (el.nextElementSibling) list.push(el.nextElementSibling);
+    for (let a = el.parentElement; a && a !== document.body && list.length < 5; a = a.parentElement) list.push(a);
+    return list;
+  }
+  // How far a ring reaches out of its element: an outline's width and
+  // offset, or the spread of an outer box-shadow (its blur is a glow, not
+  // the edge). Inset shadows stay inside.
+  function ringReach(el) {
+    const cs = getComputedStyle(el);
+    let reach = 0;
+    if (cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) > 0) {
+      reach = Math.max(reach, parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset || "0"));
+    }
+    if (cs.boxShadow && cs.boxShadow !== "none") {
+      for (const s of cs.boxShadow.split(/,(?![^(]*\))/)) {
+        if (/\binset\b/.test(s)) continue;
+        const n = (s.replace(/rgba?\([^)]*\)/g, "").match(/-?[\d.]+px/g) || []).map(parseFloat);
+        const [dx = 0, dy = 0, , spread = 0] = n;
+        if (spread > 0) reach = Math.max(reach, spread + Math.max(Math.abs(dx), Math.abs(dy)));
+      }
+    }
+    return reach;
+  }
+
+  window.__fv = {
+    // The element that has focus, checked: its ring shows (an outline or a
+    // box-shadow that differs from its unfocused look), is not cut off by
+    // an overflow ancestor, not under a pinned bar, and it is not hidden.
+    focusStop(allow) {
+      const el = document.activeElement;
+      if (!el || el === document.body || el === document.documentElement) return null;
+      const carriers = ringCarriers(el);
+      // No transition while it is measured: a style read right after blur
+      // would still give the focused value, where the transition starts.
+      const kept = carriers.map(c => c.style.getPropertyValue("transition"));
+      carriers.forEach(c => c.style.setProperty("transition", "none", "important"));
+      const on = carriers.map(ringOf);
+      el.blur();
+      const off = carriers.map(ringOf);
+      el.focus({ preventScroll: true });
+      carriers.forEach((c, i) => (kept[i] ? c.style.setProperty("transition", kept[i]) : c.style.removeProperty("transition")));
+      const carrier = carriers.find((c, i) => on[i] !== off[i]);
+      const out = { ...describe(el), scrollY, problems: [] };
+      const flag = (rule, detail) => { if (!allowed(allow, rule, el)) out.problems.push({ rule, detail }); };
+      const visible = c => shown(c) && c.getBoundingClientRect().width > 1 && c.getBoundingClientRect().height > 1;
+      if (!visible(el) && !(carrier && carrier !== el && visible(carrier))) {
+        flag("focus-hidden", "focus went to an element that does not show");
+        return out;
+      }
+      if (!carrier) { flag("focus-ring", "no outline or box-shadow changes on focus"); return out; }
+      const r = carrier.getBoundingClientRect();
+      const reach = ringReach(carrier);
+      const ring = { left: r.left - reach, top: r.top - reach, right: r.right + reach, bottom: r.bottom + reach };
+      out.ring = boxOf(ring);
+      const { box, by } = clipOf(carrier);
+      const cut = Math.max(box.left - ring.left, box.top - ring.top, ring.right - box.right, ring.bottom - box.bottom);
+      if (cut > 0.5) {
+        flag("focus-clipped", `ring cut by ${Math.round(cut * 10) / 10}px` + (by ? ` (overflow of ${cssPath(by)})` : " (window edge)"));
+      }
+      for (const b of bars()) {
+        if (b.el.contains(el) || el.contains(b.el)) continue;
+        const pinned = (() => { for (let a = el; a; a = a.parentElement) { const p = getComputedStyle(a).position; if (p === "fixed") return true; } return false; })();
+        if (!pinned && overlap(ring, b.r) > 1) flag("focus-covered", `ring under ${cssPath(b.el)}`);
+      }
+      const h = hit(el, r);
+      if (!h.ok && h.top && !carrier.contains(h.top) && !h.top.contains(el)) {
+        const under = bars().find(b => b.el.contains(h.top));
+        if (!under) flag("focus-covered", `centre covered by ${cssPath(h.top)}`);
+      }
+      return out;
+    },
+
+    // Interactive elements in the window, checked with the hit test: one
+    // whose centre is under a pinned bar must not be what a click there
+    // reaches, and one in the open must be.
+    covered(allow) {
+      const out = [];
+      const vw = document.documentElement.clientWidth, vh = innerHeight;
+      const pinned = bars();
+      for (const el of document.querySelectorAll(INTERACTIVE)) {
+        if (!shown(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        if (cx < 0 || cy < 0 || cx >= vw || cy >= vh) continue;
+        const { box } = clipOf(el);
+        if (cx < box.left || cx > box.right || cy < box.top || cy > box.bottom) continue;   // scrolled out of its box
+        const own = pinned.find(b => b.el.contains(el));
+        const under = pinned.find(b => !b.el.contains(el) && cx >= b.r.left && cx <= b.r.right && cy >= b.r.top && cy <= b.r.bottom);
+        const h = hit(el, r);
+        if (under && !own) {
+          if (h.ok && !allowed(allow, "covered", el)) out.push({ rule: "covered", detail: `under ${cssPath(under.el)} yet a click there reaches it`, a: describe(el) });
+        } else if (!h.ok && h.top && !allowed(allow, "covered", el)) {
+          out.push({ rule: "covered", detail: `a click on its centre reaches ${cssPath(h.top)} "${textOf(h.top)}"`, a: describe(el) });
+        }
+      }
+      return out;
+    },
+
+    // Elements a mouse can hover, one of each kind, in the window and
+    // clear of the bars: marked data-fv-hover="<n>", their count returned.
+    markHoverTargets(selector, max) {
+      const kinds = new Set();
+      let n = 0;
+      for (const el of document.querySelectorAll(selector)) {
+        if (n >= max) break;
+        if (!shown(el) || el.disabled) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2 || r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > document.documentElement.clientWidth) continue;
+        if (!hit(el, r).ok || bars().some(b => !b.el.contains(el) && overlap(r, b.r) > 0)) continue;
+        const kind = `${el.tagName}.${[...el.classList].filter(c => !/^is-|active/.test(c)).sort().join(".")}<${el.parentElement?.className || ""}`;
+        if (kinds.has(kind)) continue;
+        kinds.add(kind);
+        el.dataset.fvHover = String(n++);
+      }
+      return n;
+    },
+
+    // The boxes hover must not move: the element, its parent and their
+    // siblings. And what floats (absolute or fixed, shown): a popover.
+    hoverBoxes(n, allow) {
+      const el = document.querySelector(`[data-fv-hover="${n}"]`);
+      if (!el) return null;
+      const set = new Set([el, el.parentElement, ...(el.parentElement?.children || []), ...(el.parentElement?.parentElement?.children || [])]);
+      const boxes = [...set].filter(Boolean).map(e => ({ sel: cssPath(e), self: e === el, box: e.getBoundingClientRect().toJSON() }));
+      // Within 300px of the element: what its hover may have opened (not a
+      // card the Feed loaded meanwhile, far down the page).
+      const near = (r, q) => r.right > q.left - 300 && r.left < q.right + 300 && r.bottom > q.top - 300 && r.top < q.bottom + 300;
+      const self = el.getBoundingClientRect();
+      const floats = [...document.querySelectorAll("body *")].filter(e => {
+        const p = getComputedStyle(e).position;
+        if (p !== "absolute" && p !== "fixed") return false;
+        const r = e.getBoundingClientRect();
+        return shown(e) && r.width > 4 && r.height > 4 && near(r, self) && !e.closest("header, .cyber-bg");
+      });
+      for (const e of floats) e.dataset.fvFloat ??= String(window.__fvFloats = (window.__fvFloats || 0) + 1);
+      return { ...describe(el), boxes, floats: floats.map(e => e.dataset.fvFloat), allowMove: allowed(allow, "hover-moved", el) };
+    },
+
+    // A popover (or any box): inside the window, clear of the pinned bars,
+    // and on top where it shows (a click on its corners reaches it).
+    popover(selector) {
+      const el = document.querySelector(selector);
+      if (!el || !shown(el)) return [{ rule: "popover", detail: `nothing shows for ${selector}` }];
+      const out = [];
+      const r = el.getBoundingClientRect();
+      const vw = document.documentElement.clientWidth;
+      if (r.left < -0.5 || r.top < -0.5 || r.right > vw + 0.5 || r.bottom > innerHeight + 0.5) {
+        out.push({ rule: "popover", detail: `out of the ${vw}x${innerHeight} window`, a: describe(el) });
+      }
+      for (const b of bars()) {
+        if (b.el.contains(el)) continue;
+        if (overlap(r, b.r) > 1) {
+          // Over the bar is fine (a modal above it); under it is not.
+          const pts = [[r.left + 3, Math.max(r.top, b.r.top) + 3], [r.right - 3, Math.max(r.top, b.r.top) + 3]];
+          const hidden = pts.some(([x, y]) => { const t = document.elementFromPoint(x, y); return t && !el.contains(t) && b.el.contains(t); });
+          if (hidden) out.push({ rule: "popover", detail: `under ${cssPath(b.el)}`, a: describe(el) });
+        }
+      }
+      return out;
+    },
+
+    bars: () => bars().map(b => ({ kind: b.el.matches("header") ? "header" : "select-bar", sel: cssPath(b.el), ...boxOf(b.r) })),
+  };
+}
+
+// Installs the probes in every page the test opens from now on, and plays
+// CSS animations and transitions at once (through the DevTools protocol: a
+// stylesheet on every element would restyle the whole page at each focus
+// change, many times slower): boxes are measured where they end.
+const inFlight = new WeakMap();
+export async function addProbes(page) {
+  // /api requests in flight, for quiet() below.
+  const n = { now: 0, last: Date.now() };
+  inFlight.set(page, n);
+  const api = r => new URL(r.url()).pathname.startsWith("/api/");
+  page.on("request", r => { if (api(r)) { n.now++; n.last = Date.now(); } });
+  for (const ev of ["requestfinished", "requestfailed"]) page.on(ev, r => { if (api(r)) { n.now--; n.last = Date.now(); } });
+  await page.addInitScript(installProbes);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Animation.enable");
+  await cdp.send("Animation.setPlaybackRate", { playbackRate: 100000 });
+}
+
+// Loaded: ``ready`` shows and no /api request has been in flight for
+// ``ms`` (networkidle waits 500ms, many times over in these specs).
+export async function quiet(page, ready, ms = 150) {
+  if (ready) await expect(page.locator(ready).first()).toBeVisible();
+  const n = inFlight.get(page);
+  const end = Date.now() + 10_000;
+  while (Date.now() < end && (n.now > 0 || Date.now() - n.last < ms)) await page.waitForTimeout(25);
+  await settle(page);
+}
+
+// One frame: the styles of a new focus or hover applied.
+export async function frame(page) {
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => r())));
+}
+
+export function formatStateFindings(list) {
+  return list.map(f => `  ${f.view} @ ${f.size}${f.state ? ` (${f.state})` : ""}: ${f.rule} ${f.detail}`
+    + (f.a ? `\n      ${f.a.sel} "${f.a.text}" ${fmtBox(f.a.box)}` : "")).join("\n");
+}

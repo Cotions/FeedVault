@@ -1,0 +1,322 @@
+// Desktop state checks, at 1280x800 and 1440x900: what the resting layout
+// checks (layout.spec.js) cannot see.
+//  - Focus: Tab (then Shift+Tab back) through every page in the nav and a
+//    post page. Each stop shows a ring (an outline or box-shadow that
+//    differs from its unfocused look), not cut off by an overflow ancestor,
+//    not under the sticky header or the selection bar, and never on
+//    something hidden.
+//  - Hover: one element of each kind in sight on those pages. Its box and
+//    its neighbours' stay put, and whatever opens on hover stays in the
+//    window, clear of the bars. The popovers that open on a click
+//    (creator picker, tag suggestions, notifications, the selection bar's
+//    dialogs) too, at rest and with their field low in the window.
+//  - Scrolled: the Feed (and in select mode), a creator page, Storage and
+//    Jobs, halfway and at the bottom: nothing a click can reach sits under
+//    a bar, and what is in the open takes its clicks. Jumps (a #card link,
+//    Shift+Tab, Review's next post) land below the header.
+// The probes run in the page (fixtures.js, installProbes); STATE_ALLOW
+// lists what they let through, with a reason each.
+import fs from "node:fs";
+import {
+  test, expect, PAGES, stressData, settle, frame, quiet, addProbes, STATE_ALLOW, formatStateFindings,
+} from "./fixtures.js";
+
+const SIZES = [
+  { label: "1280x800", width: 1280, height: 800 },
+  { label: "1440x900", width: 1440, height: 900 },
+];
+const MAX_STOPS = 40;        // Tab presses per page and size: the Feed's cards go on
+const BACK_STOPS = 10;       // then Shift+Tab, which scrolls up into the header's way
+
+const S = stressData();
+const CREATOR = `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`;
+const POST = `/p/${S.post.platform}/${S.post.post_id}`;
+
+async function openUrl(page, url, ready) {
+  await page.goto(url);
+  await quiet(page, ready);
+}
+// A page in the nav: its link is the current one and its title shows.
+const READY = { Review: ".review-left" };
+async function open(page, name) {
+  const p = PAGES.find(x => x.name === name);
+  await page.goto(p.path);
+  await expect(page.locator(`#main-nav a.side-link[href="${p.path}"]`)).toHaveAttribute("aria-current", "page");
+  await quiet(page, READY[name] || `h2.page-title:text-is("${name}"), h2:text-is("${name}")`);
+}
+
+const VIEWS = [
+  ...PAGES.map(p => ({ name: p.name, open: page => open(page, p.name) })),
+  { name: "Post", open: page => openUrl(page, POST, ".post-page-head") },
+];
+
+test.beforeEach(async ({ page }) => { await addProbes(page); });
+
+async function report(testInfo, found) {
+  if (found.length) {
+    const file = testInfo.outputPath("findings.json");
+    fs.writeFileSync(file, JSON.stringify(found, null, 1));
+    await testInfo.attach("findings.json", { path: file, contentType: "application/json" });
+  }
+  expect(found.length, `state findings:\n${formatStateFindings(found)}`).toBe(0);
+}
+
+async function atSize(page, s) {
+  await page.setViewportSize({ width: s.width, height: s.height });
+  await settle(page);
+}
+
+const HOVERABLE = "a[href], button, summary, [role=button], .post-card, .creator-card, .collection-card, .big-file, "
+  + ".tag-row, .theme-card, .stats-hero-cell, .data-table tbody tr, .channel-bar-row, .settings-tab";
+const MAX_HOVER = 24;
+
+// Tab, then Shift+Tab, through the page: the findings of each stop, once
+// per element and rule.
+async function walkFocus(page, view, size) {
+  const found = [], seen = new Set();
+  let first = null;
+  await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
+  const step = async key => {
+    await page.keyboard.press(key);
+    const stop = await page.evaluate(allow => window.__fv.focusStop(allow), STATE_ALLOW);
+    if (!stop) return true;
+    const id = `${stop.sel}|${stop.text}|${stop.box.x},${stop.box.y + stop.scrollY}`;
+    if (key === "Tab" && id === first) return false;             // round the page and back
+    first ??= id;
+    for (const p of stop.problems) {
+      const k = `${p.rule}|${stop.sel}|${stop.text}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      found.push({ view, size, state: key, ...p, a: stop });
+    }
+    return true;
+  };
+  for (let i = 0; i < MAX_STOPS && await step("Tab"); i++);
+  for (let i = 0; i < BACK_STOPS; i++) await step("Shift+Tab");
+  await page.evaluate(() => document.activeElement?.blur());
+  return found;
+}
+
+// The mouse on one element of each kind in sight, in turn.
+async function walkHover(page, view, size) {
+  const found = [];
+  await page.evaluate(() => { window.scrollTo(0, 0); document.querySelectorAll("[data-fv-hover]").forEach(e => delete e.dataset.fvHover); });
+  await page.mouse.move(1, size.height - 1);                      // the sidebar's empty foot
+  const n = await page.evaluate(([sel, max]) => window.__fv.markHoverTargets(sel, max), [HOVERABLE, MAX_HOVER]);
+  for (let i = 0; i < n; i++) {
+    const before = await page.evaluate(([k, allow]) => window.__fv.hoverBoxes(k, allow), [i, STATE_ALLOW]);
+    if (!before) continue;
+    const self = before.boxes.find(b => b.self).box;
+    await page.mouse.move(self.x + self.width / 2, self.y + self.height / 2);
+    await frame(page);
+    const after = await page.evaluate(([k, allow]) => window.__fv.hoverBoxes(k, allow), [i, STATE_ALLOW]);
+    if (!after) continue;
+    for (let b = 0; b < before.boxes.length && b < after.boxes.length; b++) {
+      const x = before.boxes[b].box, y = after.boxes[b].box;
+      const d = Math.max(Math.abs(x.x - y.x), Math.abs(x.y - y.y), Math.abs(x.width - y.width), Math.abs(x.height - y.height));
+      if (d > 0.5 && !(before.boxes[b].self && before.allowMove)) {
+        found.push({ view, size: size.label, state: "hover", rule: "hover-moved",
+          detail: `${before.boxes[b].self ? "the element" : `its neighbour ${before.boxes[b].sel}`} moved ${Math.round(d * 10) / 10}px`, a: before });
+        break;
+      }
+    }
+    // Opened on hover: in the window and clear of the bars.
+    for (const f of after.floats.filter(f => !before.floats.includes(f))) {
+      const probs = await page.evaluate(q => window.__fv.popover(q), `[data-fv-float="${f}"]`);
+      found.push(...probs.map(p => ({ view, size: size.label, state: `hover over "${before.text}"`, ...p })));
+    }
+  }
+  await page.mouse.move(1, size.height - 1);
+  return found;
+}
+
+test.describe("focus and hover", () => {
+  for (const v of VIEWS) {
+    test(v.name, async ({ page }, testInfo) => {
+      await v.open(page);
+      const found = [];
+      for (const s of SIZES) {
+        await atSize(page, s);
+        found.push(...await walkFocus(page, v.name, s.label));
+        // Hover does not depend on the width: at the larger size only, for CI time.
+        if (s === SIZES[SIZES.length - 1]) found.push(...await walkHover(page, v.name, s));
+      }
+      await report(testInfo, found);
+    });
+  }
+});
+
+// Popovers opened by a click: in the window, clear of the bars, at rest and
+// with their field scrolled low in the window (they must turn upward).
+const POPOVERS = [
+  {
+    name: "Feed › creator picker",
+    open: async page => {
+      await open(page, "Feed");
+      await page.locator(".feed-filters .picker-input").first().click();
+    },
+    pop: ".picker-list",
+  },
+  {
+    name: "Review › tag suggestions",
+    open: async page => {
+      await open(page, "Review");
+      await page.keyboard.press("t");
+      await page.getByRole("combobox", { name: "Tag this post…" }).fill("a");
+    },
+    pop: ".tag-suggest",
+  },
+  {
+    name: "Post › tag suggestions, field low in the window",
+    open: async page => {
+      // A post with few tags (the stress post has them all): the first in the Feed.
+      await open(page, "Feed");
+      await page.goto(await page.locator("article.post-card a.post-cover, article.post-card a.post-textbody").first().getAttribute("href"));
+      const field = page.locator(".post-tags .tag-input input");
+      await expect(field).toBeVisible();
+      await field.evaluate(el => {
+        // Room above the field for the list, none below: it has to turn up.
+        const r = el.getBoundingClientRect();
+        window.scrollBy(0, r.bottom - innerHeight + 8);
+      });
+      await field.click();
+      await page.keyboard.press("ArrowDown");          // every tag the post has not
+    },
+    pop: ".tag-suggest",
+  },
+  {
+    name: "Notifications",
+    open: async page => {
+      await open(page, "Feed");
+      await page.locator(".side-bell > button").click();
+    },
+    pop: ".notif-panel",
+  },
+  {
+    name: "Selection bar › Tag… and its suggestions",
+    open: async page => {
+      await openUrl(page, CREATOR, "article.post-card");
+      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator("article.post-card").first().click();
+      await page.getByRole("button", { name: /^Tag…/ }).click();
+      await page.locator(".modal-overlay input").first().fill("a");
+    },
+    pop: ".tag-suggest",
+    also: [".modal-overlay .modal"],
+  },
+  {
+    name: "Selection bar › Collection…",
+    open: async page => {
+      await openUrl(page, CREATOR, "article.post-card");
+      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator("article.post-card").first().click();
+      await page.getByRole("button", { name: /^Collection…/ }).click();
+    },
+    pop: ".modal-overlay .modal",
+  },
+];
+
+test.describe("popovers", () => {
+  for (const p of POPOVERS) {
+    test(p.name, async ({ page }, testInfo) => {
+      const found = [];
+      // The smaller window only (the tighter fit), for CI time.
+      for (const s of SIZES.slice(0, 1)) {
+        await page.setViewportSize({ width: s.width, height: s.height });
+        await p.open(page);
+                await expect(page.locator(p.pop).first()).toBeVisible();
+        await settle(page);
+        for (const sel of [p.pop, ...(p.also || [])]) {
+          const probs = await page.evaluate(q => window.__fv.popover(q), sel);
+          found.push(...probs.map(x => ({ view: p.name, size: s.label, ...x })));
+        }
+      }
+      await report(testInfo, found);
+    });
+  }
+});
+
+const SCROLLED = [
+  { name: "Feed", open: page => open(page, "Feed") },
+  {
+    name: "Feed, selecting",
+    open: async page => {
+      await open(page, "Feed");
+      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator("article.post-card").first().click();
+      await expect(page.locator(".select-bar")).toBeVisible();
+    },
+  },
+  { name: "Creator", open: page => openUrl(page, CREATOR, "article.post-card") },
+  { name: "Storage", open: page => open(page, "Storage") },
+  { name: "Jobs › History", open: page => open(page, "Jobs") },
+];
+
+test.describe("scrolled", () => {
+  for (const v of SCROLLED) {
+    test(v.name, async ({ page }, testInfo) => {
+      await v.open(page);
+            const found = [];
+      for (const s of SIZES) {
+        await atSize(page, s);
+        for (const [state, to] of [["halfway", 0.5], ["bottom", 1]]) {
+          await page.evaluate(f => window.scrollTo(0, (document.documentElement.scrollHeight - innerHeight) * f), to);
+          await quiet(page, null);                             // the Feed loads more at its end
+          await settle(page);
+          const probs = await page.evaluate(allow => window.__fv.covered(allow), STATE_ALLOW);
+          found.push(...probs.map(x => ({ view: v.name, size: s.label, state, ...x })));
+        }
+      }
+      await report(testInfo, found);
+    });
+  }
+});
+
+test.describe("jumps land below the header", () => {
+  test("a link to a Settings card", async ({ page }) => {
+    for (const s of SIZES) {
+      await page.setViewportSize({ width: s.width, height: s.height });
+      await openUrl(page, "/settings#downloaders", "#downloaders");
+            await settle(page);
+      const [card, bars] = await Promise.all([
+        page.locator("#downloaders").evaluate(el => el.getBoundingClientRect().top),
+        page.evaluate(() => window.__fv.bars()),
+      ]);
+      expect(await page.evaluate(() => scrollY), `${s.label}: the page scrolled to the card`).toBeGreaterThan(0);
+      const header = bars.find(b => b.kind === "header");
+      expect(card, `${s.label}: #downloaders below the header`).toBeGreaterThanOrEqual(header.y + header.h);
+    }
+  });
+
+  test("a Settings tab clicked low on a long tab", async ({ page }) => {
+    for (const s of SIZES) {
+      await page.setViewportSize({ width: s.width, height: s.height });
+      await openUrl(page, "/settings#downloads", ".settings-tab[aria-current=page]");
+            await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.locator('.settings-tab[href$="#about"]').click();
+      await settle(page);
+      const top = await page.locator(".settings-layout > :not(.settings-tabs)").first().evaluate(el => el.getBoundingClientRect().top);
+      const header = (await page.evaluate(() => window.__fv.bars())).find(b => b.kind === "header");
+      expect(top, `${s.label}: the tab's first card starts below the header`).toBeGreaterThanOrEqual(header.y + header.h);
+    }
+  });
+
+  test("Review's next post starts at the top of its panel", async ({ page }) => {
+    for (const s of SIZES) {
+      await page.setViewportSize({ width: s.width, height: s.height });
+      await openUrl(page, `/review?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`, ".review-open");
+            // A post whose details scroll (the stress post's 15 tags), scrolled down.
+      const info = page.locator(".review-info");
+      const first = await page.locator(".review-open").getAttribute("href");
+      await info.evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await page.keyboard.press("l");
+      await expect(page.locator(".review-open")).not.toHaveAttribute("href", first);
+      await settle(page);
+      expect(await info.evaluate(el => el.scrollTop), `${s.label}: the next post's details start at their top`).toBe(0);
+      await page.keyboard.press("j");
+      await expect(page.locator(".review-open")).toHaveAttribute("href", first);
+      await settle(page);
+      expect(await info.evaluate(el => el.scrollTop), `${s.label}: back to the first post, at its top`).toBe(0);
+    }
+  });
+});

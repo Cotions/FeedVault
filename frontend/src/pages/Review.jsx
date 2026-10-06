@@ -477,8 +477,10 @@ function ReviewSession({ scope, scopeControls }) {
           </span>
         </div>
 
+        {/* Keyed by post: the next one's details start at their top, not
+            where the last one's were scrolled to. */}
         {cur && (
-          <div className="review-info">
+          <div className="review-info" key={cur.id}>
             <div className="review-byline">
               <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
               <span className="chip" title={platformLabel(cur.platform)}>{platformShort(cur.platform)}</span>
