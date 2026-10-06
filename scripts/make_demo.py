@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a demo vault of invented instaloader and gallery-dl output, for trying the dashboard.
 
-    backend/venv/bin/python scripts/make_demo.py /tmp/feedvault-demo
+    backend/venv/bin/python scripts/make_demo.py [--stress] /tmp/feedvault-demo
 
 Writes <dir>/media (fake posts), <dir>/data (database goes here) and
 <dir>/config.json. It also installs stand-ins for gallery-dl and yt-dlp in
@@ -19,6 +19,11 @@ sync with cookies left it before FeedVault removed them. Start the backend again
 With the backend's virtualenv (as above) it also builds the index, so the
 demo starts with a few new posts and one notification entry (seed_news);
 with a bare python3 the first start builds it and nothing is new.
+
+--stress adds worst cases for layout checks (the browser tests' instance
+uses it): a creator with a 60-character handle and name, a long caption with
+an unbroken 80-character word and URL, and deep, long folder and file names
+on the Unmatched and Duplicates pages. Without it the vault is as before.
 
 Every handle, name and caption is made up. If ffmpeg is installed, videos are
 real 3-second clips; otherwise they are placeholders that will not play.
@@ -531,10 +536,53 @@ def add_old_yt_dlp_sync(media, root, ts):
         os.remove(data)
 
 
+# --stress: names and text as long as they get, for the layout checks.
+STRESS_CREATOR = ("the.remarkably.long.handle.of.a.layout.stress.test.creator60", 9099,
+                  "A Remarkably Long Display Name Made Up To Test Layout Limits")
+STRESS_WORD = "Unbroken" * 10                   # 80 characters, no break opportunity
+STRESS_URL = ("https://example.com/a/really/long/path/that/never/breaks/because/it/has/no/spaces"
+              "/at/all?with=query&and=more")
+STRESS_DEEP = os.path.join("Archive (old laptop, before the 2023 migration)",
+                           "Instagram export, complete and unsorted, do not delete", "2023", "November")
+
+
+def add_stress(media, ts):
+    """Worst cases for the layout checks: a creator whose handle and name
+    are 60 characters, a post with a long caption (an unbroken 80-character
+    word, a long URL, many hashtags), a carousel and a video of theirs, a
+    copy of the post in a deep folder (Duplicates) and a stray file with a
+    long name in another (Unmatched). STRESSpost01 is the one the browser
+    tests tag and put in a collection; STRESSpost02 the one they trash."""
+    handle, uid, name = STRESS_CREATOR
+    who = fakes.owner(handle, uid, name)
+    caption = (f"{STRESS_WORD}\n\nA caption long enough to wrap many times, with a link that does not break: "
+               f"{STRESS_URL} and a word that does not either. " * 2
+               + "#" + "averylonghashtagthatnobodywouldeveruse" * 2 + " #stress #layout #edgecases @" + handle)
+    first = fakes.write_post(os.path.join(media, handle), "STRESSpost01", ts - 15 * 86_400, who,
+                             kind="image", caption=caption, likes=1_234_567, comments=98_765,
+                             location="Somewhere along the old railway line between two very small villages")
+    fakes.write_post(os.path.join(media, handle), "STRESSpost02", ts - 16 * 86_400, who,
+                     kind="carousel", slides=[False, True, False], caption=f"Trashed by the tests. {STRESS_WORD}")
+    fakes.write_post(os.path.join(media, handle), "STRESSpost03", ts - 17 * 86_400, who,
+                     kind="video", caption="", views=12_345_678, product_type="clips")
+    deep = os.path.join(media, STRESS_DEEP, handle)
+    os.makedirs(deep, exist_ok=True)
+    for n in sorted(os.listdir(os.path.dirname(first))):
+        if n.startswith(os.path.basename(first)):
+            shutil.copy2(os.path.join(os.path.dirname(first), n), os.path.join(deep, n))
+    stray = os.path.join(media, STRESS_DEEP, "loose files from the phone")
+    os.makedirs(stray, exist_ok=True)
+    fakes.png(os.path.join(stray, "screen_recording_from_the_old_phone_before_the_reset_2023-11-14_at_09.41.27_final.png"),
+              (60, 60, 200))
+
+
 def main():
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    stress = "--stress" in args
+    args = [a for a in args if a != "--stress"]
+    if len(args) != 1:
         sys.exit(__doc__)
-    root = os.path.abspath(sys.argv[1])
+    root = os.path.abspath(args[0])
     # The demo's config folder (its scripts folder's parent) and its tools'
     # folder: not group-writable whatever the umask, or they are refused (#75).
     for folder in (root, os.path.join(root, "bin")):
@@ -582,6 +630,8 @@ def main():
     add_gallery_dl(media, ts)
     add_person(media, ts)
     add_old_yt_dlp_sync(media, root, ts)
+    if stress:
+        add_stress(media, ts)
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     seed_tags(os.path.join(root, "data"), tagged)

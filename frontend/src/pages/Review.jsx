@@ -15,6 +15,7 @@ import CreatorPicker from "../components/CreatorPicker";
 import { PHONE } from "../lib/layout";
 import { useFiltersOpen } from "../lib/useFiltersOpen";
 import FiltersToggle from "../components/FiltersToggle";
+import { PAGE, initial, nextUndecided, reducer } from "../lib/reviewQueue";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
 
@@ -28,70 +29,12 @@ import FiltersToggle from "../components/FiltersToggle";
    out of a tag scope (or the untagged one) on the server too, so those are
    not counted either. */
 
-const PAGE = 50;
 const TOP_UP_BELOW = 10;
 const PRELOAD_AHEAD = 2;
 const MUTE_KEY = "feedvault.review.muted";
 
 function readMuted() {
   try { return localStorage.getItem(MUTE_KEY) !== "0"; } catch { return true; }
-}
-
-function nextUndecided(queue, status, from) {
-  for (let i = from + 1; i < queue.length; i++) if (!status[queue[i].id]) return i;
-  return -1;
-}
-function prevUndecided(queue, status, from) {
-  for (let i = Math.min(from, queue.length) - 1; i >= 0; i--) if (!status[queue[i].id]) return i;
-  return -1;
-}
-
-const initial = { queue: [], status: {}, pos: 0, left: null, exhausted: false, error: null };
-
-function reducer(s, a) {
-  switch (a.type) {
-    case "loaded": {
-      const have = new Set(s.queue.map(p => p.id));
-      const fresh = a.posts.filter(p => !have.has(p.id));
-      return {
-        ...s,
-        queue: fresh.length ? [...s.queue, ...fresh] : s.queue,
-        left: a.total,
-        // No new post in a page means we have everything (or the list shifted
-        // under us; stopping is safer than refetching the same page forever).
-        exhausted: fresh.length === 0 || a.posts.length < PAGE,
-        error: null,
-      };
-    }
-    case "error":
-      return { ...s, error: a.error, exhausted: true };
-    case "decide": {
-      const status = { ...s.status, [a.id]: a.decision };
-      let pos = s.pos;
-      if (s.queue[pos]?.id === a.id) {
-        const n = nextUndecided(s.queue, status, pos);
-        pos = n === -1 ? s.queue.length : n;
-      }
-      return { ...s, status, pos, left: s.left == null ? null : Math.max(0, s.left - 1) };
-    }
-    case "undecide": {
-      const status = { ...s.status };
-      delete status[a.id];
-      return { ...s, status, pos: a.index, left: s.left == null ? null : s.left + 1 };
-    }
-    case "goto":
-      return { ...s, pos: a.index };
-    case "next": {
-      const n = nextUndecided(s.queue, s.status, s.pos);
-      return { ...s, pos: n === -1 ? s.queue.length : n };
-    }
-    case "prev": {
-      const p = prevUndecided(s.queue, s.status, s.pos);
-      return p === -1 ? s : { ...s, pos: p };
-    }
-    default:
-      return s;
-  }
 }
 
 function errorText(r, fallback) {
@@ -290,8 +233,10 @@ function ReviewSession({ scope, scopeControls }) {
       const r = await restorePosts([e.post.id]);
       if (!r?.posts?.includes(e.post.id)) { toast(errorText(r, "Could not restore from the trash."), "err"); return; }
       if (r.errors?.length) toast(errorText(r, ""), "err");
-      // Restoring re-indexes the post, so its media ids may have changed.
+      // Restoring re-indexes the post, so its media ids may have changed:
+      // its full data and its queue cover are both stale (#90).
       refetchFull(e.post);
+      dispatch({ type: "restored", id: e.post.id });
       if (e.type === "trash" || e.postGone) {
         setSession(s => ({ ...s, trashed: s.trashed - 1, items: s.items - (e.type === "item" ? 1 : 0) }));
         dispatch({ type: "undecide", id: e.post.id, index: e.index });
@@ -569,7 +514,7 @@ function ReviewSession({ scope, scopeControls }) {
               {post?.collections?.length > 0 && (
                 <ul className="tag-chips">
                   {post.collections.map(c => (
-                    <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`}>{c.name}</Link></li>
+                    <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`} title={c.name}>{c.name}</Link></li>
                   ))}
                 </ul>
               )}

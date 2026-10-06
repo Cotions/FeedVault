@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cleanName, foldTag, sameTag } from "../lib/tags";
 
 const MAX_SUGGESTIONS = 8;
@@ -17,6 +17,7 @@ export default function TagInput({ tags = [], exclude = [], onAdd, onClose, onEm
   const [open,   setOpen]   = useState(false);
   const ownRef = useRef(null);
   const ref = inputRef || ownRef;
+  const listRef = useRef(null);
   const listId = useId();
 
   useEffect(() => { if (autoFocus) ref.current?.focus(); }, [autoFocus, ref]);
@@ -31,6 +32,37 @@ export default function TagInput({ tags = [], exclude = [], onAdd, onClose, onEm
   }, [tags, exclude, text]);
   const exact = suggestions.find(x => sameTag(x.name, text.trim()));
   const shown = open && suggestions.length > 0;
+
+  // The list is a popover (the top layer), placed under the field, or over
+  // it when there is no room below: a scrolling box around the field
+  // (Review's info panel, a dialog) does not cut it off.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!shown || !list) return undefined;
+    if (list.showPopover && !list.matches(":popover-open")) list.showPopover();
+    function place() {
+      const r = ref.current?.getBoundingClientRect();
+      if (!r) return;
+      // The width first: at the field's width a long name wraps, and the
+      // list is taller than at its own.
+      list.style.left = `${r.left}px`;
+      list.style.width = `${r.width}px`;
+      const h = list.offsetHeight;
+      const below = r.bottom + 4 + h <= window.innerHeight || r.top - 4 - h < 0;
+      list.style.top = `${below ? r.bottom + 4 : r.top - 4 - h}px`;
+    }
+    place();
+    // A late font changes its height too.
+    const sized = typeof ResizeObserver === "function" ? new ResizeObserver(place) : null;
+    sized?.observe(list);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      sized?.disconnect();
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [shown, suggestions, ref]);
 
   function add(name) {
     const clean = cleanName(name);
@@ -88,7 +120,7 @@ export default function TagInput({ tags = [], exclude = [], onAdd, onClose, onEm
         onKeyDown={onKeyDown}
       />
       {shown && (
-        <ul className="tag-suggest" id={listId} role="listbox">
+        <ul ref={listRef} className="tag-suggest" id={listId} role="listbox" popover="manual">
           {suggestions.map((x, i) => (
             <li
               key={x.name}

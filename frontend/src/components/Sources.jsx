@@ -154,11 +154,11 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
     <li className="source-row">
       <span className="chip platform-chip" title={platformLabel(s.platform)}>{platformShort(s.platform)}</span>
       <span className="source-id">
-        <span className="creator-name">
+        <span className="creator-name" title={sourceName(s)}>
           {sourceName(s)}
           {s.person && !s.account && <span className="creator-sub"> · first sync not done yet</span>}
         </span>
-        {summary && <span className="source-summary" title="What it downloads">{summary}</span>}
+        {summary && <span className="source-summary" title={`What it downloads: ${summary}`}>{summary}</span>}
         <ScheduleLine source={s} />
         <SourceHealth source={s} job={job} onSaved={onSaved} />
         <code className="source-folder" title={s.folder}>{s.folder}</code>

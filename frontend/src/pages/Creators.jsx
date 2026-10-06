@@ -107,7 +107,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
         <span className="person-chips">
           {p.accounts.length === 0 && <span className="creator-sub">No account linked</span>}
           {p.accounts.map(a => (
-            <span key={accountKey(a)} className="chip platform-chip" title={platformLabel(a.platform)}>
+            <span key={accountKey(a)} className="chip platform-chip" title={`${platformLabel(a.platform)} @${a.handle || a.id}`}>
               {platformShort(a.platform)} @{a.handle || a.id}
             </span>
           ))}
@@ -193,15 +193,13 @@ function CardOptionsButton({ sync, onEdit }) {
 
 function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted }) {
   const former = matchedFormer(a, query);
+  const sub = `${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}${former ? ` · was @${former}` : ""}`;
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(a.handle || a.name || "?").charAt(0).toUpperCase()}</span>
       <span className="creator-id">
         <span className="creator-name">@{a.handle || a.id}</span>
-        <span className="creator-sub">
-          {a.name && a.name !== a.handle ? `${a.name} · ` : ""}{platformLabel(a.platform)}
-          {former && ` · was @${former}`}
-        </span>
+        <span className="creator-sub" title={sub}>{sub}</span>
         <CardSyncStatus sync={sync} />
       </span>
       <span className="person-stats">

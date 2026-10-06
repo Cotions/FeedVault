@@ -19,13 +19,15 @@ function AccountRow({ account: a, busy, onUnlink }) {
   const url = safeUrl(a.url);
   const former = (a.handles || []).filter(h => h.handle !== a.handle);
   const names = (a.names || []).map(n => n.name).filter(n => n !== a.name);
+  const handle = `@${a.handle || a.id}`;
+  const named = a.name && a.name !== a.handle;
   return (
     <li className="person-account">
       <span className="chip platform-chip" title={platformLabel(a.platform)}>{platformShort(a.platform)}</span>
       <span className="person-account-id">
-        <span className="creator-name">
-          @{a.handle || a.id}
-          {a.name && a.name !== a.handle && <span className="creator-sub"> · {a.name}</span>}
+        <span className="creator-name" title={named ? `${handle} · ${a.name}` : handle}>
+          {handle}
+          {named && <span className="creator-sub"> · {a.name}</span>}
         </span>
         <span className="creator-sub">
           {platformLabel(a.platform)} · id {a.id}

@@ -99,7 +99,7 @@ export default function Collections() {
                       : <Icon name="bookmark" size={28} />}
                   </span>
                   <span className="collection-card-info">
-                    <span className="collection-card-name">{c.name}</span>
+                    <span className="collection-card-name" title={c.name}>{c.name}</span>
                     <span className="creator-count">{c.count}</span>
                   </span>
                 </Link>

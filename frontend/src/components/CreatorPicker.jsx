@@ -1,8 +1,17 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { platformLabel, platformShort } from "../lib/fmt";
 import { accountKey, accountText, matchedFormer, matches, personText } from "../lib/people";
 
 const MAX_SHOWN = 60;
+
+// An option's second line: platforms and count, and what matched.
+function personSub(p) {
+  return `${p.platforms.map(platformShort).join(" · ") || "no account"} · ${p.count}`;
+}
+function accountSub(a, query) {
+  const former = matchedFormer(a, query);
+  return `${platformLabel(a.platform)} · ${a.count}${former ? ` · was @${former}` : ""}${a.person ? ` · ${a.person.name}` : ""}`;
+}
 
 /* A searchable creator filter: people first, then accounts, matched by name,
    any handle the account ever had, or a folder alias. Replaces a <select>,
@@ -20,6 +29,7 @@ export default function CreatorPicker({
   const [query,  setQuery]  = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef(null);
+  const listRef = useRef(null);
   const listId = useId();
 
   const options = useMemo(() => {
@@ -33,6 +43,33 @@ export default function CreatorPicker({
     }
     return out.slice(0, MAX_SHOWN);
   }, [people, accounts, platform, exclude, query]);
+
+  // The list hangs from the field's left edge. When that would run it past
+  // the right edge of the room it has (the window, or a scrolling box around
+  // the picker such as Review's side panel), it hangs from the field's right
+  // edge if that fits, else it is only as wide as the room.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!open || !list) return undefined;
+    function place() {
+      delete list.dataset.side;
+      list.style.maxWidth = "";
+      const box = list.parentElement.getBoundingClientRect(), w = list.offsetWidth;
+      let lo = 0, hi = document.documentElement.clientWidth;
+      for (let a = list.parentElement.parentElement; a && a !== document.body; a = a.parentElement) {
+        if (getComputedStyle(a).overflowX === "visible") continue;
+        const r = a.getBoundingClientRect();
+        lo = Math.max(lo, r.left + a.clientLeft);
+        hi = Math.min(hi, r.left + a.clientLeft + a.clientWidth);
+      }
+      if (box.left + w <= hi) return;
+      if (box.right - w >= lo) list.dataset.side = "left";
+      else list.style.maxWidth = `${Math.max(box.width, hi - box.left)}px`;
+    }
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, options]);
 
   const current = value?.person != null
     ? (people || []).find(p => p.id === Number(value.person))
@@ -86,7 +123,7 @@ export default function CreatorPicker({
         onKeyDown={onKeyDown}
       />
       {open && (
-        <ul className="picker-list" id={listId} role="listbox" aria-label={label}>
+        <ul ref={listRef} className="picker-list" id={listId} role="listbox" aria-label={label}>
           {!query && value && (
             <li role="option" aria-selected={false} className="picker-option picker-all"
                 onMouseDown={e => { e.preventDefault(); pick(null); }}>
@@ -107,18 +144,12 @@ export default function CreatorPicker({
               {o.person ? (
                 <>
                   <span className="picker-person">{o.person.name}</span>
-                  <span className="picker-sub">
-                    {o.person.platforms.map(platformShort).join(" · ") || "no account"} · {o.person.count}
-                  </span>
+                  <span className="picker-sub" title={personSub(o.person)}>{personSub(o.person)}</span>
                 </>
               ) : (
                 <>
                   <span className="picker-handle">@{o.account.handle || o.account.id}</span>
-                  <span className="picker-sub">
-                    {platformLabel(o.account.platform)} · {o.account.count}
-                    {matchedFormer(o.account, query) && <> · was @{matchedFormer(o.account, query)}</>}
-                    {o.account.person && <> · {o.account.person.name}</>}
-                  </span>
+                  <span className="picker-sub" title={accountSub(o.account, query)}>{accountSub(o.account, query)}</span>
                 </>
               )}
             </li>

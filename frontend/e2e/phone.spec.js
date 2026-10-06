@@ -45,13 +45,13 @@ test("the menu drawer opens, takes focus, closes on Escape and on a link", async
   await expect(page.getByRole("heading", { level: 2, name: "Storage", exact: true })).toBeVisible();
 });
 
-test("Review: Keep is on screen without a scroll; keep, trash and undo by tap", async ({ page, pageErrors }) => {
+test("Review: Keep is on screen without a scroll; keep, trash and undo by tap", async ({ page }) => {
   await openPage(page, { name: "Review", path: "/review" });
   const bar = page.locator(".review-actions");
   const keep = bar.getByRole("button", { name: /^Keep/ });
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   await expect(keep).toBeInViewport({ ratio: 1 });
-  await keepTrashUndo(page, pageErrors, {
+  await keepTrashUndo(page, {
     keep: () => keep.tap(),
     trash: () => bar.getByRole("button", { name: /^Trash post/ }).tap(),
     undo: () => bar.getByRole("button", { name: /^Undo/ }).tap(),
