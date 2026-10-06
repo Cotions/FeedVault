@@ -115,15 +115,28 @@ export default function CollectionView() {
     navigate("/collections");
   });
 
+  // Before the collection loads, or when it cannot: the same head, with a
+  // stand-in title, so nothing jumps when it comes.
+  const back = <Link to="/collections" className="btn-secondary btn-back"><Icon name="back" size={15} />Collections</Link>;
   if (error && (!current || !collection)) {
     return (
-      <div className="card"><div className="empty">
-        {error.status === 404 ? "No such collection." : `Could not load the collection: ${error.message}`}{" "}
-        <Link to="/collections" className="text-link">All collections</Link>
-      </div></div>
+      <>
+        <PageHeader title="Collection" back={back} />
+        <div className="card"><div className="empty">
+          {error.status === 404 ? "No such collection." : `Could not load the collection: ${error.message}`}{" "}
+          <Link to="/collections" className="text-link">All collections</Link>
+        </div></div>
+      </>
     );
   }
-  if (!current || !collection) return <div className="card"><div className="empty">Loading…</div></div>;
+  if (!current || !collection) {
+    return (
+      <>
+        <PageHeader title="Collection" back={back} />
+        <div className="card"><div className="empty">Loading…</div></div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -139,7 +152,7 @@ export default function CollectionView() {
           </form>
         )}
         sub={total.toLocaleString()}
-        back={<Link to="/collections" className="btn-secondary btn-back"><Icon name="back" size={15} />Collections</Link>}
+        back={back}
         actions={<>
           {renaming == null && (
             <button type="button" className="btn-ghost" onClick={() => setRenaming(collection.name)}>Rename</button>

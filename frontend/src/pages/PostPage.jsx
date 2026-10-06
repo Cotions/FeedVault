@@ -135,17 +135,19 @@ export default function PostPage() {
     }
   }
 
+  // Not after a reload found the post gone: no handle, nothing to delete.
+  const shown = matches && error?.status !== 404;
   const head = (
     <PageHeader
       className="post-page-head"
       title="Post"
-      sub={matches && `@${post.author?.handle || "unknown"} · ${platformLabel(post.platform)}`}
+      sub={shown && `@${post.author?.handle || "unknown"} · ${platformLabel(post.platform)}`}
       back={(
         <button type="button" className="btn-secondary btn-back" onClick={back}>
           <Icon name="back" size={15} />Back
         </button>
       )}
-      actions={matches && (
+      actions={shown && (
         <button type="button" className="btn-danger-soft" onClick={() => ask({ type: "post" })}>
           <Icon name="trash" size={14} />Delete post
         </button>

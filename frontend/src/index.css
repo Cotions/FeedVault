@@ -780,7 +780,6 @@ button:disabled { opacity: 0.4; cursor: default; }
 :is(.page-head, .feed-filters) .btn-secondary:not(.is-on):hover:not(:disabled) { background: var(--bg); border-color: var(--muted); }
 :is(.page-head, .feed-filters) .select-toggle.is-on { color: var(--glow); }
 :is(.page-head, .feed-filters) :is(.picker-input, input[type="text"].page-filter) { height: 34px; border-radius: 9px; }
-.page-head .icon-btn { width: 34px; height: 34px; }
 
 .vp-stats {
   display: grid;
@@ -2115,10 +2114,10 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   flex-direction: column;
   gap: 20px;
   height: calc(100vh - var(--header-h) - 56px);
-  min-height: min-content;
 }
+/* A zero basis: the window sets the height, never the media's own size. */
 .review {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: 16px;
@@ -2274,12 +2273,14 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
-  /* No entry animation and no lift on a collection card. Specific enough
+  /* No entry animation and no lift on a collection card, and no scale on
+     a drop target (card or tile). Specific enough
      to win over the card's own rules, further down. Cards that start at
      opacity 0 (post, creator, big file) keep their 0.01ms animation: it is
      what shows them. */
   .collection-grid .collection-card { animation: none; }
   .collection-grid .collection-card:is(:hover, .is-over) { transform: none; }
+  .collection-posts .collection-tile.is-over { transform: none; }
 }
 
 /* ── Storage page ───────────────────────────────────────── */

@@ -404,26 +404,41 @@ function installProbes() {
   const shown = el => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !el.closest("[inert], [aria-hidden=true]");
   const allowed = (allow, rule, el) => allow.some(x => x.rule === rule && el.matches(x.el));
   // Whether a style sheet gives the element itself a transform on hover
-  // (a lift): a rule with a transform whose selector's last part has
-  // :hover and, with it taken out, matches the element.
-  const hoverTransform = el => {
-    for (const sheet of document.styleSheets) {
-      let rules;
-      try { rules = [...sheet.cssRules]; } catch { continue; }
-      // Into @media blocks that apply (and @supports, @layer).
-      const flat = rs => rs.flatMap(r => (r.cssRules && !r.selectorText
-        ? (r.media && !matchMedia(r.media.mediaText).matches ? [] : flat([...r.cssRules])) : [r]));
-      for (const r of flat(rules)) {
-        if (!r.selectorText || !r.style?.transform || r.style.transform === "none") continue;
-        for (const part of r.selectorText.split(",")) {
-          const last = part.trim().split(/\s*[\s>+~]\s*/).pop();
-          if (!last.includes(":hover")) continue;
-          try { if (el.matches(part.replace(/:hover/g, "").trim() || "*")) return true; } catch { /* a selector matches() refuses */ }
+  // (a lift: transform, translate, scale or rotate): a rule whose selector
+  // has :hover in its last compound and, with :hover taken out, matches
+  // the element. The selectors are gathered once per page.
+  const MOVES = ["transform", "translate", "scale", "rotate"];
+  // Splits at the top level only: not inside :is(), :not() or [attr].
+  const splitTop = (text, at) => {
+    const out = [];
+    let depth = 0, cur = "";
+    for (const ch of text) {
+      if ("([".includes(ch)) depth++;
+      else if (")]".includes(ch)) depth--;
+      if (depth === 0 && at.test(ch)) { out.push(cur); cur = ""; } else cur += ch;
+    }
+    return [...out, cur].map(x => x.trim()).filter(Boolean);
+  };
+  let lifts = null;
+  const liftSelectors = () => {
+    if (lifts) return lifts;
+    lifts = [];
+    const walk = rules => {
+      for (const r of rules) {
+        if (r.styleSheet) { try { walk(r.styleSheet.cssRules); } catch { /* another origin */ } continue; }
+        if (r.media && !matchMedia(r.media.mediaText).matches) continue;
+        if (r.conditionText && r.constructor.name === "CSSSupportsRule" && !CSS.supports(r.conditionText)) continue;
+        if (r.cssRules && !r.selectorText) { walk(r.cssRules); continue; }
+        if (!r.selectorText || !MOVES.some(m => r.style?.[m] && r.style[m] !== "none")) continue;
+        for (const part of splitTop(r.selectorText, /,/)) {
+          if (splitTop(part, /[\s>+~]/).pop().includes(":hover")) lifts.push(part.replace(/:hover/g, "") || "*");
         }
       }
-    }
-    return false;
+    };
+    for (const sheet of document.styleSheets) { try { walk(sheet.cssRules); } catch { /* another origin */ } }
+    return lifts;
   };
+  const hoverTransform = el => liftSelectors().some(sel => { try { return el.matches(sel); } catch { return false; } });
   const describe = el => ({ sel: cssPath(el), text: textOf(el), box: boxOf(el.getBoundingClientRect()) });
 
   // The part of the window an element's overflow ancestors let show.
@@ -617,7 +632,7 @@ function installProbes() {
       });
       for (const e of floats) e.dataset.fvFloat ??= String(window.__fvFloats = (window.__fvFloats || 0) + 1);
       return { ...describe(el), boxes, floats: floats.map(e => e.dataset.fvFloat), allowMove: allowed(allow, "hover-moved", el),
-        lifts: hoverTransform(el), transform: getComputedStyle(el).transform };
+        lifts: hoverTransform(el), transform: MOVES.map(m => getComputedStyle(el)[m]).join(" ") };
     },
 
     // A popover (or any box): inside the window, clear of the pinned bars,

@@ -166,7 +166,8 @@ test.describe("dialogs", () => {
 
 // One page shell (#93): every page opens on the same head, above its cards.
 // The title (h2) starts at the same x and y on each page, to 1px, and the
-// head ends above whatever follows it and above the first card.
+// head ends above whatever follows it and above the first card. Review,
+// head included, fits the window.
 const SHELL_SIZES = [SIZES[1], SIZES[2]];   // 1280x800, 1440x900
 const SHELL_VIEWS = [
   ...VIEWS.filter(v => !v.name.startsWith("Settings ›")),
@@ -192,7 +193,8 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
         const hb = head.getBoundingClientRect(), tb = h2.getBoundingClientRect();
         const next = head.nextElementSibling?.getBoundingClientRect();
         const card = [...document.querySelectorAll("main .card")].find(c => c.getBoundingClientRect().height > 0)?.getBoundingClientRect();
-        return { x: tb.x, y: tb.y, bottom: hb.bottom, next: next?.top ?? null, card: card?.top ?? null };
+        return { x: tb.x, y: tb.y, bottom: hb.bottom, next: next?.top ?? null, card: card?.top ?? null,
+          tall: document.documentElement.scrollHeight - innerHeight };
       });
       const at = `${v.name} at ${s.label}`;
       if (!m) { problems.push(`${at}: no .page-head with an h2 in <main>`); continue; }
@@ -201,6 +203,8 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
         problems.push(`${at}: title at (${m.x}, ${m.y}), ${first.name} has it at (${first.x}, ${first.y})`);
       }
       if (m.next != null && m.next < m.bottom - 0.5) problems.push(`${at}: the head (bottom ${m.bottom}) overlaps what follows it (top ${m.next})`);
+      // Review fits the window with its head: the media never sets its height.
+      if (v.name.startsWith("Review") && m.tall > 1) problems.push(`${at}: Review is ${m.tall}px taller than the window`);
       if (m.card != null && m.card < m.bottom - 0.5) problems.push(`${at}: the head (bottom ${m.bottom}) overlaps the first card (top ${m.card})`);
     }
   }

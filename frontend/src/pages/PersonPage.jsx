@@ -180,14 +180,20 @@ export default function PersonPage() {
     }
   }
 
+  // Before the person loads, or when they cannot: the same head, with a
+  // stand-in title, so nothing jumps when they come.
+  const back = <Link to="/creators" className="btn-secondary btn-back"><Icon name="back" size={15} />Creators</Link>;
   if (!p) {
     return (
-      <div className="card">
-        <div className="empty">
-          {error?.status === 404 ? <>No such person. <Link to="/creators" className="text-link">All creators</Link></>
-            : error ? `Could not load: ${error.message}` : "Loading…"}
+      <>
+        <PageHeader title="Person" back={back} />
+        <div className="card">
+          <div className="empty">
+            {error?.status === 404 ? <>No such person. <Link to="/creators" className="text-link">All creators</Link></>
+              : error ? `Could not load: ${error.message}` : "Loading…"}
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
@@ -220,7 +226,7 @@ export default function PersonPage() {
           </form>
         )}
         sub={`${fmtInt(p.count)} posts · ${fmtBytes(p.bytes)}${p.newest ? ` · newest ${fmtAgo(p.newest)}` : ""}`}
-        back={<Link to="/creators" className="btn-secondary btn-back"><Icon name="back" size={15} />Creators</Link>}
+        back={back}
         actions={<>
           {editName == null && (
             <button type="button" className="btn-ghost" onClick={() => setEditName(p.name)}>Rename</button>
