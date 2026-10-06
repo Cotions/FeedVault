@@ -1,9 +1,11 @@
-// run.sh and testapp.sh, read as text. run.sh is never started: only its port
-// block runs, on its own in bash, with no backend, Vite or npm behind it.
+// run.sh and testapp.sh, read as text. Neither is started but with --help
+// (which prints and exits before anything else); run.sh's port block runs on
+// its own in bash, with no backend, Vite or npm behind it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -50,3 +52,28 @@ test("run.sh checks and exports the port before dev mode starts Vite", () => {
   assert.match(devBranch, /proxies \/api and \/media to :\$PORT/);
   assert.doesNotMatch(devBranch, /3380/);
 });
+
+// --help prints the comment block under the #! line, and only that.
+for (const script of ["run.sh", "testapp.sh"]) {
+  test(`${script} --help prints its header and nothing else`, () => {
+    const text = readFileSync(`${repo}/${script}`, "utf8").split("\n");
+    const header = [];
+    for (const line of text.slice(1)) {
+      if (!line.startsWith("#")) break;
+      header.push(line.replace(/^# ?/, ""));
+    }
+    const home = mkdtempSync(`${tmpdir()}/feedvault-help-`);
+    try {
+      // No terminal: FEEDVAULT_NO_TERMINAL keeps run.sh from opening one.
+      const got = spawnSync("bash", [`${repo}/${script}`, "--help"], {
+        env: { PATH: process.env.PATH, HOME: home, TERM: "dumb", FEEDVAULT_NO_TERMINAL: "1" },
+        encoding: "utf8", timeout: 10000,
+      });
+      assert.equal(got.status, 0, got.stderr);
+      assert.equal(got.stdout, header.join("\n") + "\n");
+      assert.doesNotMatch(got.stdout, /set -euo|ROOT=/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+}

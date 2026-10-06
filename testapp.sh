@@ -29,7 +29,8 @@ for arg in "$@"; do
     --demo)   MODE=demo ;;
     --reset)  MODE=reset ;;
     --status) MODE=status ;;
-    --help|-h) sed -n '2,12p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    # The comment block under the #! line, up to the first line that is not one.
+    --help|-h) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     *) die "Unknown option: $arg (try --help)" ;;
   esac
 done

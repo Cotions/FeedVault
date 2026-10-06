@@ -28,7 +28,8 @@ for arg in "$@"; do
     --dev)   MODE=dev ;;
     --build) MODE=build ;;
     --test)  MODE=test ;;
-    --help|-h) sed -n '2,7p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    # The comment block under the #! line, up to the first line that is not one.
+    --help|-h) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
   esac
 done
 
