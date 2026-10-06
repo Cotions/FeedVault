@@ -176,14 +176,15 @@ const SHELL_VIEWS = [
 
 test("every page's title is in the same place", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "layout-zoom", "the zoomed project checks the resting layout only");
-  test.setTimeout(120_000);
+  test.setTimeout(90_000);
   const problems = [];
-  for (const s of SHELL_SIZES) {
-    await page.setViewportSize({ width: s.width, height: s.height });
-    let first = null;
-    for (const v of SHELL_VIEWS) {
-      await v.open(page);
-      await stillPage(page);
+  const first = {};                                   // per size: the first page's title
+  // Each page opens once and is measured at both sizes.
+  for (const v of SHELL_VIEWS) {
+    await v.open(page);
+    await stillPage(page);
+    for (const s of SHELL_SIZES) {
+      await page.setViewportSize({ width: s.width, height: s.height });
       await settle(page);
       const m = await page.evaluate(() => {
         window.scrollTo(0, 0);
@@ -198,9 +199,9 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
       });
       const at = `${v.name} at ${s.label}`;
       if (!m) { problems.push(`${at}: no .page-head with an h2 in <main>`); continue; }
-      first ??= { ...m, name: v.name };
-      if (Math.abs(m.x - first.x) > 1 || Math.abs(m.y - first.y) > 1) {
-        problems.push(`${at}: title at (${m.x}, ${m.y}), ${first.name} has it at (${first.x}, ${first.y})`);
+      const f = first[s.label] ??= { ...m, name: v.name };
+      if (Math.abs(m.x - f.x) > 1 || Math.abs(m.y - f.y) > 1) {
+        problems.push(`${at}: title at (${m.x}, ${m.y}), ${f.name} has it at (${f.x}, ${f.y})`);
       }
       if (m.next != null && m.next < m.bottom - 0.5) problems.push(`${at}: the head (bottom ${m.bottom}) overlaps what follows it (top ${m.next})`);
       // Review fits the window with its head: the media never sets its height.
