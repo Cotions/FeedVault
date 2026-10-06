@@ -580,18 +580,21 @@ button {
 button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { opacity: 0.4; cursor: default; }
 
+/* Filled buttons have a clear 1px border, as tall as an outlined one
+   (.btn-secondary) beside them; the fill runs under it. */
 .btn-primary {
-  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  border: 1px solid transparent;
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent)) border-box;
   color: var(--on-accent);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 8px 20px -10px rgba(var(--glow-rgb), 0.55);
 }
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover));
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)) border-box;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset, 0 10px 26px -8px rgba(var(--glow-rgb), 0.7);
 }
 .btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--edge); }
 .btn-secondary:hover:not(:disabled) { background: #222736; border-color: var(--muted); }
-.btn-danger { background: var(--danger-fill); color: #fff; }
+.btn-danger { background: var(--danger-fill); color: #fff; border: 1px solid transparent; }
 .btn-ghost { background: transparent; color: var(--muted); font-size: 12px; padding: 5px 10px; }
 .btn-ghost:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
 
@@ -1883,11 +1886,12 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .btn-danger-soft:hover:not(:disabled) { background: rgba(229, 72, 77, 0.2); border-color: rgba(229, 72, 77, 0.6); color: #ffd0d2; }
 .btn-keep {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  border: 1px solid transparent;
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent)) border-box;
   color: var(--on-accent);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 8px 20px -10px rgba(var(--glow-rgb), 0.55);
 }
-.btn-keep:hover:not(:disabled) { background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)); }
+.btn-keep:hover:not(:disabled) { background: linear-gradient(180deg, var(--accent-bright), var(--accent-hover)) border-box; }
 .ok-text { color: #a5f0bf; }
 
 /* ── Modal / confirm ────────────────────────────────────── */
@@ -2029,7 +2033,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 /* Shift and Esc mean nothing on a phone, and the line made the bar a row taller
    over the list it selects from. */
 @media (max-width: 640px), (pointer: coarse) { .select-hint { display: none; } }
-.select-bar .btn-danger, .select-bar .btn-keep { padding: 8px 14px; }
+.select-bar .btn-danger, .select-bar .btn-keep { padding: 9px 14px; }
 
 /* ── Creators review link ───────────────────────────────── */
 .creator-card { padding: 0; gap: 0; }
@@ -2147,7 +2151,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .review-caption .rich-text { font-size: 13px; line-height: 1.55; }
 .review-open { font-size: 12px; align-self: flex-start; padding-block: 4px; min-height: 24px; }
 .review-actions { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
-.review-actions > button { padding: 10px 14px; }
+.review-actions > button { padding: 9px 14px; }
 .review-actions-row { display: flex; gap: 6px; }
 .review-actions-row .btn-secondary { flex: 1; padding: 7px 8px; font-size: 12px; gap: 5px; }
 .review-help {
@@ -2262,7 +2266,9 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   color: inherit;
   cursor: pointer;
 }
-.data-table th.num .th-sort { justify-content: flex-end; }
+/* A number column's arrow goes left of its name, so the name lines up
+   with the figures under it whether the column is sorted or not. */
+.data-table th.num .th-sort { flex-direction: row-reverse; justify-content: flex-start; }
 .th-sort:hover, .th-sort.is-on { color: var(--accent-hover); }
 .th-sort-arrow { display: inline-block; width: 8px; font-family: var(--mono); }
 .storage-creator { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 240px; }
@@ -2499,7 +2505,7 @@ a.btn-primary { color: var(--on-accent); }
 /* A tag's default colour, not the accent: it stays green under every theme. */
 .tag-chip {
   display: inline-flex; align-items: center; gap: 2px;
-  max-width: 100%;
+  max-width: 100%; min-width: 0;
   font-size: 11.5px; line-height: 1;
   color: #a5f0bf;
   background: rgba(47, 158, 79, 0.1);
@@ -2508,6 +2514,7 @@ a.btn-primary { color: var(--on-accent); }
 }
 .tag-chip > a, .tag-chip > span, .tag-chip-toggle {
   display: inline-flex; align-items: center; gap: 4px;
+  min-width: 0;
   padding: 4px 9px;
   color: inherit;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -2518,6 +2525,10 @@ a.btn-primary { color: var(--on-accent); }
 /* The × has 3px of its own padding on the left: the gap stays 9px. */
 .tag-chip > :is(a, span):has(+ .tag-chip-x) { padding-right: 6px; }
 .tag-chip > a:hover { color: var(--glow); }
+/* A name too long for the chip ends in an ellipsis (a flex box's own text
+   cannot), from its start: centred, it was cut at both ends. */
+.tag-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tag-chip-toggle > .dim { flex-shrink: 0; }
 /* A tag's own colour (--tag, set on the chip), toned for the dark surface. */
 .tag-chip.has-color {
   color: color-mix(in srgb, var(--tag) 65%, #fff);
@@ -2865,6 +2876,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 
 .person-page .page-head .avatar-letter { flex-shrink: 0; }
 .person-rename { display: flex; align-items: center; gap: 6px; }
+.person-delete { flex-shrink: 0; white-space: nowrap; }
 .person-delete:hover:not(:disabled) { color: #ffb3b5; }
 .person-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 20px; }
 .person-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -8px 0 20px; }
@@ -2939,6 +2951,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   display: flex; align-items: center; gap: 10px;
   padding: 9px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
 }
+/* One width for TT, IG and X, so the names after them line up. */
+.source-row > .platform-chip { min-width: 28px; justify-content: center; }
 .source-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
 .source-summary { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .source-schedule {

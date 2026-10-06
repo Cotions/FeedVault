@@ -19,7 +19,7 @@ export default function TagChips({ tags = [], onRemove, max, compact = false, bu
         return (
           <li key={name} className={`tag-chip${color ? " has-color" : ""}`} style={color ? { "--tag": color } : undefined}>
             <Link to={tagFeedPath(name)} title={`Posts tagged ${name}`}>
-              {!compact && <Icon name="tag" size={11} />}{name}
+              {!compact && <Icon name="tag" size={11} />}<span className="tag-chip-name">{name}</span>
             </Link>
             {onRemove && (
               <button type="button" className="tag-chip-x" onClick={() => onRemove(name)} disabled={busy}
