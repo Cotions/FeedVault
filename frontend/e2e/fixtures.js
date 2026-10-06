@@ -5,8 +5,34 @@
 // its issue.
 import { test as base, expect } from "@playwright/test";
 
+// Requests in flight on a page, counted from its start (the fixture below,
+// addProbes for a tab of a test's own): its /api ones, for quiet(), and
+// every one, for idle().
+const inFlight = new WeakMap();
+function trackRequests(page) {
+  if (inFlight.has(page)) return;
+  const n = { api: { now: 0, last: Date.now() }, all: { now: 0, last: Date.now() } };
+  inFlight.set(page, n);
+  const api = r => new URL(r.url()).pathname.startsWith("/api/");
+  const count = (r, d) => {
+    for (const c of api(r) ? [n.api, n.all] : [n.all]) { c.now += d; c.last = Date.now(); }
+  };
+  page.on("request", r => count(r, 1));
+  for (const ev of ["requestfinished", "requestfailed"]) page.on(ev, r => count(r, -1));
+}
+
+// Until none of ``c``'s requests has been in flight for ``ms``.
+async function noRequestFor(page, c, ms, what) {
+  const end = Date.now() + 10_000;
+  while (c.now > 0 || Date.now() - c.last < ms) {
+    if (Date.now() > end) throw new Error(`${what}: still busy after 10s (${c.now} in flight)`);
+    await page.waitForTimeout(25);
+  }
+}
+
 export const test = base.extend({
   pageErrors: [async ({ page }, provide) => {
+    trackRequests(page);
     const errors = [];
     page.on("console", msg => {
       if (msg.type() !== "error") return;
@@ -27,7 +53,13 @@ export const test = base.extend({
     });
     const allowed = [];
     await provide({ allow: re => allowed.push(re) });
-    expect(errors.filter(e => !allowed.some(re => re.test(e))), "console errors and failed /api requests").toEqual([]);
+    try {
+      expect(errors.filter(e => !allowed.some(re => re.test(e))), "console errors and failed /api requests").toEqual([]);
+    } finally {
+      // The test's pages closed before its context: a context closed with
+      // the app still open takes some 0.8 s more, in every test.
+      await Promise.all(page.context().pages().map(p => p.close()));
+    }
   }, { auto: true }],
 });
 
@@ -58,7 +90,14 @@ export async function openPage(page, { name, path }) {
   await expect(page.locator(`#main-nav a.side-link[href="${path}"]`)).toHaveAttribute("aria-current", "page");
   if (name === "Review") await expect(page.locator(".review-left")).toHaveText(/^\d[\d,]*$/);
   else await expect(page.getByRole("heading", { level: 2, name, exact: true })).toBeVisible();
-  await page.waitForLoadState("networkidle");
+  await idle(page);
+}
+
+// No request of any kind (the API, scripts, images, media) has been in
+// flight for ``ms``: what networkidle waits for, without its fixed 500ms
+// after every load.
+export async function idle(page, ms = 150) {
+  await noRequestFor(page, inFlight.get(page).all, ms, "idle");
 }
 
 // Review's count of posts left, once known.
@@ -896,14 +935,8 @@ function installProbes() {
 // CSS animations and transitions at once (through the DevTools protocol: a
 // stylesheet on every element would restyle the whole page at each focus
 // change, many times slower): boxes are measured where they end.
-const inFlight = new WeakMap();
 export async function addProbes(page) {
-  // /api requests in flight, for quiet() below.
-  const n = { now: 0, last: Date.now() };
-  inFlight.set(page, n);
-  const api = r => new URL(r.url()).pathname.startsWith("/api/");
-  page.on("request", r => { if (api(r)) { n.now++; n.last = Date.now(); } });
-  for (const ev of ["requestfinished", "requestfailed"]) page.on(ev, r => { if (api(r)) { n.now--; n.last = Date.now(); } });
+  trackRequests(page);                     // a tab the test opened itself
   await page.addInitScript(installProbes);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Animation.enable");
@@ -914,12 +947,7 @@ export async function addProbes(page) {
 // ``ms`` (networkidle waits 500ms, many times over in these specs).
 export async function quiet(page, ready, ms = 150) {
   if (ready) await expect(page.locator(ready).first()).toBeVisible();
-  const n = inFlight.get(page);
-  const end = Date.now() + 10_000;
-  while (n.now > 0 || Date.now() - n.last < ms) {
-    if (Date.now() > end) throw new Error(`quiet: /api still busy after 10s (${n.now} in flight)`);
-    await page.waitForTimeout(25);
-  }
+  await noRequestFor(page, inFlight.get(page).api, ms, "quiet: /api");
   await settle(page);
 }
 

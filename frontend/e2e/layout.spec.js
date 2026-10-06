@@ -9,7 +9,7 @@
 // 24x24 px. The demo has the stress cases of make_demo.py --stress and
 // stress.js: a 60-character creator, 15 tags, long names and paths.
 import fs from "node:fs";
-import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle } from "./fixtures.js";
+import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle } from "./fixtures.js";
 
 const SIZES = [
   { label: "1024x768", width: 1024, height: 768 },
@@ -48,7 +48,7 @@ async function checkSizes(page, testInfo, view, { scope = null } = {}) {
 async function openUrl(page, url, ready) {
   await page.goto(url);
   await expect(ready(page)).toBeVisible();
-  await page.waitForLoadState("networkidle");
+  await idle(page);
 }
 
 const S = stressData();
