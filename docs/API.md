@@ -964,7 +964,13 @@ An **account** (`/api/authors` rows, a person's `accounts`):
 ```
 
 - `handle` and `name` are those of the newest post (handles change), or the
-  new handle of a rename the user accepted after it.
+  new handle of a rename the user accepted after it. An account whose posts
+  are all rebuilt from file names, its id a profile folder's name, reads as
+  that folder's handle instead (as a post's file name wrote it, else the
+  id), whatever its newest file is named: a file name holds the target it
+  was downloaded for, which may be someone else's or an older name. Each
+  post keeps the handle its file name gives (its `author.handle`, and in
+  `handles` below).
 - `count` and `bytes` cover the posts in the index, aliases included;
   `newest` is the newest `posted_at`.
 - `url`: the profile's address for `instagram`, `twitter`, `tiktok` and

@@ -2,7 +2,7 @@ import json
 import os
 
 from conftest import H
-from fakes import gallery_dl_case, owner, png, write_meta, write_post
+from fakes import gallery_dl_case, owner, png, write_filename_post, write_meta, write_post
 
 import config
 import db
@@ -13,6 +13,7 @@ from test_duplicates import hashed_copies, listing
 ALICE = owner("alice.example", 111, "Alice Example")
 BOB = owner("bob.example", 222, "Bob Example")
 TS = 1717243200
+DAY = 86400
 
 
 def archive(env):
@@ -190,6 +191,85 @@ def test_id_files_as_instaloader_writes_them(env):
     os.remove(d / "id")
     scanner.index_dirs(env["roots"], [str(d)])
     assert [r[0] for r in db.connect().execute("SELECT author_id FROM account_files")] == ["456"]
+
+
+def test_a_filename_only_folder_reads_as_its_handle(env, client):
+    """#99: the newest file named after someone else (and an older one after
+    a third) does not make the folder's account read as theirs. Each post
+    keeps the handle its file name gives, listed among the account's."""
+    folder = env["media"] / "carol.cooks"
+    write_filename_post(folder, "carol.cooks", "CCCCCCCCCC1", TS)
+    write_filename_post(folder, "eve.eats", "EEEEEEEEEE1", TS + DAY)
+    write_filename_post(folder, "carol.cooks", "CCCCCCCCCC2", TS + 2 * DAY, slides=2)
+    write_filename_post(folder, "dee.dates", "DDDDDDDDDD1", TS + 3 * DAY)
+    scanner.scan(env["roots"])
+    [a] = get(client, "/api/authors")
+    assert (a["id"], a["handle"], a["count"]) == ("carol.cooks", "carol.cooks", 4)
+    assert a["url"] == "https://www.instagram.com/carol.cooks/"
+    assert [h["handle"] for h in a["handles"]] == ["dee.dates", "carol.cooks", "eve.eats"]
+    newest = get(client, "/api/posts/instagram/DDDDDDDDDD1")
+    assert newest["author"] == {"id": "carol.cooks", "handle": "dee.dates", "name": None}
+    # No file named as the folder: its id, the folder's name as indexed.
+    write_filename_post(env["media"] / "feyafern", "feya.fern", "FFFFFFFFFF1", TS)
+    scanner.scan(env["roots"])
+    assert account(client, "instagram", "feyafern")["handles"][0]["handle"] == "feya.fern"
+
+
+def test_a_filename_only_folder_keeps_a_rename_the_user_accepted(env, client):
+    folder = env["media"] / "carol.cooks"
+    write_filename_post(folder, "carol.cooks", "CCCCCCCCCC1", TS)
+    write_filename_post(folder, "carol.bakes", "CCCCCCCCCC2", TS + DAY)
+    scanner.scan(env["roots"])
+    conn = db.connect()
+    with conn:
+        conn.execute("INSERT INTO handle_renames(platform, author_id, old, new, at) "
+                     "VALUES ('instagram', 'carol.cooks', 'carol.cooks', 'carol.bakes', ?)", (TS + 2 * DAY,))
+    [a] = get(client, "/api/authors")
+    assert (a["id"], a["handle"]) == ("carol.cooks", "carol.bakes")
+
+
+def test_accounts_with_metadata_read_as_before(env, client):
+    """Their handle is still the newest post's: a rename shows."""
+    write_post(env["media"] / "alice.example", "A1", TS, ALICE, "image")
+    write_post(env["media"] / "alice.example", "A2", TS + 100, owner("alice.renamed", 111, "Alice"), "image")
+    # A file-name post beside metadata posts: an account of its own, the folder's (not Bob's).
+    write_post(env["media"] / "bob", "B1", TS, BOB, "image")
+    write_filename_post(env["media"] / "bob", "someone.else", "BBBBBBBBBB2", TS + 300)
+    scanner.scan(env["roots"])
+    by_id = {a["id"]: a for a in get(client, "/api/authors")}
+    assert by_id["111"]["handle"] == "alice.renamed"
+    assert by_id["222"]["handle"] == "bob.example"
+    assert by_id["bob"]["handle"] == "bob"
+
+
+def test_a_rescan_shows_the_folder_handle_and_keeps_what_the_user_did(env, client):
+    """#99 on an existing index: a rescan that brings a newer file named after
+    someone else keeps the account's handle, its person link, and every
+    post's tags, collections, keep and trash."""
+    folder = env["media"] / "carol.cooks"
+    write_filename_post(folder, "carol.cooks", "CCCCCCCCCC1", TS)
+    write_filename_post(folder, "carol.cooks", "CCCCCCCCCC2", TS + DAY)
+    write_filename_post(folder, "carol.cooks", "CCCCCCCCCC3", TS + 2 * DAY)
+    scanner.scan(env["roots"])
+    [a] = get(client, "/api/authors")
+    pid = create(client, "Carol", a)["person"]["id"]
+    one, two, three = (f"instagram:CCCCCCCCCC{i}" for i in (1, 2, 3))
+    post(client, "/api/tags/apply", {"posts": [one, two], "add": ["soup"]})
+    cid = post(client, "/api/collections", {"name": "Dinners"})["collection"]["id"]
+    post(client, f"/api/collections/{cid}/add", {"posts": [two]})
+    post(client, "/api/review", {"posts": [one], "decision": "keep"})
+    assert post(client, "/api/delete", {"posts": [three]})["posts"] == [three]
+    write_filename_post(folder, "dee.dates", "DDDDDDDDDD1", TS + 3 * DAY)
+    scanner.scan(env["roots"])
+    [a] = get(client, "/api/authors")
+    assert (a["id"], a["handle"], a["count"], a["person"]["id"]) == ("carol.cooks", "carol.cooks", 3, pid)
+    assert links() == [("Carol", "instagram", "carol.cooks")]
+    assert ids(client, f"person={pid}") == sorted([one, two, "instagram:DDDDDDDDDD1"])
+    assert ids(client, "tag=soup") == [one, two]
+    assert [p["id"] for p in get(client, f"/api/collections/{cid}")["posts"]] == [two]
+    assert get(client, "/api/posts/instagram/CCCCCCCCCC1")["decision"] == "keep"
+    assert get(client, "/api/posts/instagram/CCCCCCCCCC3", status=404) is not None
+    assert [e["post"] for e in get(client, "/api/trash/items")["entries"]] == [three]
 
 
 def test_a_folder_renamed_by_the_tool_keeps_its_person(env, client):

@@ -1149,23 +1149,40 @@ def _seen(table, value, first, last):
         span[1] = last
 
 
+FILENAMES = "% (filenames)"                    # tool of posts rebuilt from file names (as people.py)
+_FOLDER_HANDLE_RE = re.compile(r"[a-z0-9._]{1,30}")
+
+
 def _history(conn):
     """Per account as indexed (aliases not merged), in one pass: post count,
     newest post time, the handle and name of the newest post (handles
     change), and every handle and display name seen with the first and last
-    post time under it."""
+    post time under it.
+
+    An account of posts rebuilt from file names only, its id a profile
+    folder's name, reads as that folder's handle (#99): a file name holds
+    the target it was downloaded for, which may be another account's or an
+    older name, and the folder is the account (parsers.instaloader). Its
+    posts keep their own handles, listed among the account's."""
     out = {}
-    for platform, aid, handle, name, n, first, last in conn.execute("""
-            SELECT platform, author_id, author_handle, author_name, COUNT(*), MIN(posted_at), MAX(posted_at)
-            FROM posts WHERE author_id IS NOT NULL GROUP BY 1, 2, 3, 4"""):
+    for platform, aid, handle, name, n, first, last, named in conn.execute("""
+            SELECT platform, author_id, author_handle, author_name, COUNT(*), MIN(posted_at), MAX(posted_at),
+                   SUM(tool LIKE ?)
+            FROM posts WHERE author_id IS NOT NULL GROUP BY 1, 2, 3, 4""", (FILENAMES,)):
         a = out.setdefault((platform, aid), {"count": 0, "newest": None, "handle": None, "name": None,
-                                            "handles": {}, "names": {}, "top": None})
+                                            "handles": {}, "names": {}, "top": None, "named": 0})
         a["count"] += n
+        a["named"] += named
         top = (last is not None, last or 0)
         if a["top"] is None or top > a["top"]:
             a["top"], a["newest"], a["handle"], a["name"] = top, last, handle, name
         _seen(a["handles"], handle, first, last)
         _seen(a["names"], name, first, last)
+    for (_, aid), a in out.items():
+        if a["named"] == a["count"] and _FOLDER_HANDLE_RE.fullmatch(aid):
+            # As a post wrote it (its case), the newest such, else the folder's id.
+            same = [h for h in a["handles"] if h.lower() == aid]
+            a["handle"] = max(same, key=lambda h: (a["handles"][h][1] or 0, h), default=aid)
     return out
 
 
