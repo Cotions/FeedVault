@@ -32,12 +32,21 @@ for arg in "$@"; do
   esac
 done
 
-PORT="${FEEDVAULT_PORT:-3380}"
 VENV="$ROOT/backend/venv"
 DIST="$ROOT/frontend/dist"
 
 say() { printf '\033[1;32m▸\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+
+# --- port -----------------------------------------------------------------
+# Checked, then exported, so the backend and the Vite dev server's proxy
+# (frontend/vite.config.js) always use this same port (#100).
+PORT="${FEEDVAULT_PORT:-3380}"
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$PORT >= 1 && 10#$PORT <= 65535 )) \
+  || die "FEEDVAULT_PORT must be a port number from 1 to 65535, not '$PORT'"
+PORT=$((10#$PORT))
+export FEEDVAULT_PORT="$PORT"
+# --- port end -------------------------------------------------------------
 
 command -v python3 &>/dev/null || die "python3 not found"
 

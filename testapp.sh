@@ -112,5 +112,5 @@ else
   warn "bwrap not found — running without the read-only protection"
 fi
 
-say "Test instance → http://localhost:$PORT   (live app stays on 3380)"
+say "Test instance → http://localhost:$PORT   (live app stays on ${FEEDVAULT_PORT:-3380})"
 exec "${CMD[@]}"

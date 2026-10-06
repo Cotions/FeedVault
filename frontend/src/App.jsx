@@ -487,8 +487,8 @@ export default function App() {
             <div className="offline-banner" role="alert">
               <Icon name="warn" size={16} />
               <span>
-                <strong>Backend offline.</strong> The dashboard cannot reach FeedVault on
-                {" "}<code>127.0.0.1:3380</code>. Start it again; this page reconnects on its own.
+                <strong>Backend offline.</strong> The dashboard cannot reach the FeedVault
+                backend. Start it again; this page reconnects on its own.
               </span>
               <button type="button" className="btn-secondary" onClick={poll}>Retry now</button>
             </div>

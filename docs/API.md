@@ -3,8 +3,10 @@
 Backend listens on `127.0.0.1:3380` (the port is `FEEDVAULT_PORT`'s when
 set). The built dashboard is served by the backend itself (same origin). The
 Vite dev server (`./run.sh --dev`) proxies `/api`, `/media`, trash
-thumbnails and `/userscript` to `127.0.0.1:3380`, so dev mode also runs
-same-origin; it does not follow `FEEDVAULT_PORT` (#100, open).
+thumbnails and `/userscript` to the backend's port on `127.0.0.1`, so dev
+mode also runs same-origin. `run.sh` exports the port it starts the backend
+on, and Vite reads `FEEDVAULT_PORT` (3380 when unset); a value that is not a
+port from 1 to 65535 stops both rather than falling back to 3380.
 
 Times are Unix seconds (UTC). Absent values are `null`, never missing keys.
 

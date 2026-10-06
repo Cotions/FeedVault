@@ -362,7 +362,7 @@ userscript's included, cannot list, run or attach a script.
 | Scripts | `scripts/` beside the config; FeedVault only reads it |
 | Data | `data_directory` in the config, by default `~/.local/share/feedvault/` (`$XDG_DATA_HOME/feedvault/`): the index `feedvault.db` (rebuilt from your folders by a rescan), `userdata/*.json` (your decisions, tags, people, sources and the rest, restored from there after a rebuild), thumbnails, and the downloaders' archives and stamps |
 | Media | wherever your downloader put it; FeedVault only reads it, and trashing moves files to `.feedvault-trash/` inside that media folder |
-| Port | 3380 (`FEEDVAULT_PORT`; `./run.sh --dev`'s Vite proxy still goes to 3380, #100); `./testapp.sh` uses 3389 |
+| Port | 3380 (`FEEDVAULT_PORT`, 1 to 65535; `./run.sh --dev`'s Vite proxy follows it); `./testapp.sh` uses 3389 |
 
 `FEEDVAULT_NO_BROWSER=1` (or `--no-browser`) starts without opening the
 browser.

@@ -46,9 +46,9 @@ export default [
     },
   },
   {
-    // Node checks run by `npm test` (node --test) and the browser tests run by
-    // `npm run e2e` (Playwright), outside the browser bundle.
-    files: ['scripts/**/*.js', 'e2e/**/*.js', 'playwright.config.js'],
+    // Node checks run by `npm test` (node --test), the browser tests run by
+    // `npm run e2e` (Playwright), and Vite's config: outside the browser bundle.
+    files: ['scripts/**/*.js', 'e2e/**/*.js', 'playwright.config.js', 'vite.config.js'],
     languageOptions: { globals: globals.node },
   },
 ]
