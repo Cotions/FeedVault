@@ -60,9 +60,20 @@ jobs:
   # its own HOME and an empty PATH, under the backend tests' guard. No real
   # tool is looked for or run (the runner's own yt-dlp included), and nothing
   # leaves this machine.
-  e2e:
+  #
+  # Split in shards (frontend/e2e/shards.js: sets of Playwright projects),
+  # each a job on a runner of its own, with its own instance built from
+  # scratch by its own global setup: no two shards share a vault, a port or
+  # a browser, and each starts from the same demo data.
+  e2e-shard:
+    name: e2e shard ${{ matrix.shard }}/4
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    strategy:
+      # Every shard runs to its end: one failure does not hide another's.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -90,22 +101,46 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      # The headless shell only: the tests never start a headed Chrome.
       - name: Install Chromium
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
 
       - name: Browser tests
         working-directory: frontend
         env:
           FEEDVAULT_E2E_PYTHON: ${{ steps.python.outputs.python-path }}
-        run: npm run e2e
+          SHARD: ${{ matrix.shard }}
+        run: |
+          # On a line of its own: an unknown shard fails here, never runs
+          # every project.
+          projects=$(node e2e/shards.js "$SHARD")
+          echo "shard $SHARD: $projects"
+          npm run e2e -- $projects
 
+      # The report, the traces and screenshots, and the backend's log
+      # (test-results/backend.log, saved by global-setup.js).
       - name: Upload the Playwright report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: playwright-report
+          name: playwright-report-shard-${{ matrix.shard }}
           path: |
             frontend/playwright-report/
             frontend/test-results/
           retention-days: 7
+
+  # The one e2e result for the PR checks: green only if every shard passed
+  # (a failed, cancelled or skipped shard fails it).
+  e2e:
+    needs: e2e-shard
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 2
+    steps:
+      - name: Every shard passed
+        env:
+          RESULT: ${{ needs.e2e-shard.result }}
+        run: |
+          echo "e2e shards: $RESULT"
+          test "$RESULT" = success
