@@ -422,23 +422,36 @@ def _known(name):
         or PYTHON_RE.fullmatch(name) is not None
 
 
+LINK_HOPS = 40                                 # as the kernel's limit on a path's symlinks
+
+
 def _name(item):
     """The name of the program ``item`` runs: its file name, or, for an
-    absolute path whose name is none of the known ones (_known), the name
-    of the file a symlink there leads to when that one is (~/bin/ytdl to
-    yt-dlp). A name found on PATH is not followed: the job's PATH decides."""
+    absolute path whose name is none of the known ones (_known), the first
+    known name along the symlinks it leads through, one at a time (~/bin/ytdl
+    to yt-dlp; ~/bin/ytdl to /snap/bin/yt-dlp to /usr/bin/snap: yt-dlp). A
+    name found on PATH is not followed: the job's PATH decides."""
     name = os.path.basename(item)
     if _known(name) or not os.path.isabs(item):
         return name
-    real = os.path.basename(os.path.realpath(item))
-    return real if _known(real) else name
+    path = item
+    for _ in range(LINK_HOPS):
+        try:
+            link = os.readlink(path)
+        except OSError:                        # not a link (any more), or unreadable
+            break
+        path = os.path.join(os.path.dirname(path), link)
+        if _known(os.path.basename(path)):
+            return os.path.basename(path)
+    return name
 
 
 def _python(argv, i):
     """(the index of the item naming the downloader the Python at ``i``
     runs, its name) for `-m yt_dlp` (`-m yt_dlp.__main__`, `-Im yt_dlp`,
-    `-myt_dlp`) or a file named as one (`python3 /usr/bin/yt-dlp`), else
-    None. Its own options go after that item."""
+    `-myt_dlp`, `-m runpy yt_dlp`), a file named as one (`python3
+    /usr/bin/yt-dlp`) or its package (`python3 /x/yt_dlp`, `.../yt_dlp/__main__.py`),
+    else None. Its own options go after that item."""
     n = i + 1
     while n < len(argv) and argv[n].startswith("-") and argv[n] != "-":
         a = argv[n]
@@ -453,6 +466,8 @@ def _python(argv, i):
         for k, c in enumerate(a[1:], 1):
             if c == "m":
                 at, module = (n, a[k + 1:]) if a[k + 1:] else (n + 1, argv[n + 1] if n + 1 < len(argv) else "")
+                if module == "runpy":          # runpy's own __main__ runs the module named next
+                    at, module = at + 1, argv[at + 1] if at + 1 < len(argv) else ""
                 name = MODULES.get(module.removesuffix(".__main__"))
                 return (at, name) if name else None
             if c in PY_VALUES:
@@ -461,9 +476,18 @@ def _python(argv, i):
             if c not in PY_FLAGS:
                 return None
         n += 1
-    if n < len(argv) and _name(argv[n]) in TOOLS:
-        return n, _name(argv[n])
-    return None
+    if n >= len(argv):
+        return None
+    # The tool's file, its package's folder (python3 /x/yt_dlp) or that
+    # folder's __main__.py: yt-dlp's and gallery-dl's put their folder's
+    # parent on sys.path when run so.
+    item = argv[n].rstrip("/") or argv[n]
+    name = _name(item)
+    if name == "__main__.py":
+        name = MODULES.get(os.path.basename(os.path.dirname(item)))
+    else:
+        name = name if name in TOOLS else MODULES.get(name)
+    return (n, name) if name else None
 
 
 def _walk(argv):

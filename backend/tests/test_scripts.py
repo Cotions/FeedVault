@@ -1101,6 +1101,10 @@ NAMED = [
     (["/usr/bin/python3", "--", "/opt/venv/bin/gallery-dl"], "gallery-dl"),
     (["/usr/bin/env", "python3", "-m", "gallery_dl"], "gallery-dl"),
     (["/usr/bin/env", "-i", "PYTHONUTF8=1", "python3", "-u", "-m", "instaloader"], "instaloader"),
+    (["/usr/bin/python3", "-m", "runpy", "yt_dlp"], "yt-dlp"),
+    (["/usr/bin/python3", "/usr/lib/python3/dist-packages/yt_dlp/__main__.py"], "yt-dlp"),
+    (["/usr/bin/python3", "/opt/src/gallery_dl"], "gallery-dl"),
+    (["/usr/bin/python3", "/opt/src/gallery_dl/"], "gallery-dl"),
 ]
 NOT_DOWNLOADERS = [
     ["/usr/bin/echo", "yt-dlp"],
@@ -1110,6 +1114,8 @@ NOT_DOWNLOADERS = [
     ["/usr/bin/python3", "-m", "yt_dlpx"],
     ["/usr/bin/python3", "--version", "-m", "yt_dlp"],
     ["/usr/bin/python3", "/opt/bin/other.py", "yt-dlp"],
+    ["/usr/bin/python3", "-m", "runpy", "json.tool"],
+    ["/usr/bin/python3", "/opt/src/other/__main__.py"],
     ["/usr/bin/env", "-S", "yt-dlp --version"],          # env -S: its text is not read (see API.md)
 ]
 PAUSES = {"instaloader": 41, "gallery-dl": 42, "yt-dlp": 43}
@@ -1147,6 +1153,8 @@ def test_another_program_stays_in_the_scripts_group_with_no_pause(client, folder
     ["/usr/bin/python3", "-m", "yt_dlp"],
     ["/usr/bin/env", "-i", "python3", "-Im", "yt_dlp"],
     ["/usr/bin/python3", "/opt/venv/bin/yt-dlp"],
+    ["/usr/bin/python3", "-m", "runpy", "yt_dlp"],
+    ["/usr/bin/python3", "/opt/src/yt_dlp/__main__.py"],
 ])
 def test_a_downloader_run_by_python_gets_the_same_checks(client, folder, argv):
     """Its options are read as the tool's: a placeholder in --exec is refused,
@@ -1169,6 +1177,15 @@ def test_a_symlink_to_a_downloader_runs_in_its_lock_group(client, folder, runner
     assert job["group"] == "yt-dlp"
     assert ended(job["id"])["state"] == "done"
     assert runner.runs()[-1]["args"] == ["--", "https://www.youtube.com/watch?v=abc"]
+    # Through a chain of links whose last file has another name (a snap's launcher):
+    # the first known name along it.
+    (env["tmp"] / "links" / "snap").write_text("")
+    snap_yt = env["tmp"] / "links" / "yt-dlp"
+    snap_yt.symlink_to(env["tmp"] / "links" / "snap")
+    chained = env["tmp"] / "links" / "yt"
+    chained.symlink_to(snap_yt)
+    write(folder, "chained.json", {"needs": "none", "argv": [str(chained), "--version"]})
+    assert scripts.group(scripts.get("chained")) == "yt-dlp"
     # A target is checked as yt-dlp's too: a link.
     write(folder, "linked-t.json", {"needs": "target", "argv": [str(link), "--", "{target}"]})
     assert "an http(s) link for yt-dlp" in run(client, "linked-t", status=400, target="carol")["error"]

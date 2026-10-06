@@ -1149,8 +1149,7 @@ def _seen(table, value, first, last):
         span[1] = last
 
 
-FILENAMES = "% (filenames)"                    # tool of posts rebuilt from file names (as people.py)
-_FOLDER_HANDLE_RE = re.compile(r"[a-z0-9._]{1,30}")
+FILENAMES = "% (filenames)"                    # tool of posts rebuilt from file names
 
 
 def _history(conn):
@@ -1160,10 +1159,13 @@ def _history(conn):
     post time under it.
 
     An account of posts rebuilt from file names only, its id a profile
-    folder's name, reads as that folder's handle (#99): a file name holds
-    the target it was downloaded for, which may be another account's or an
-    older name, and the folder is the account (parsers.instaloader). Its
-    posts keep their own handles, listed among the account's."""
+    folder's name (some file in it is named so), reads as that folder's
+    handle (#99): a file name holds the target it was downloaded for, which
+    may be another account's or an older name, and the folder is the
+    account (parsers.instaloader). Its posts keep their own handles, listed
+    among the account's. A folder no file is named after ("saved", or a
+    profile renamed since) keeps its newest post's handle: its name may be
+    nobody's handle."""
     out = {}
     for platform, aid, handle, name, n, first, last, named in conn.execute("""
             SELECT platform, author_id, author_handle, author_name, COUNT(*), MIN(posted_at), MAX(posted_at),
@@ -1179,10 +1181,10 @@ def _history(conn):
         _seen(a["handles"], handle, first, last)
         _seen(a["names"], name, first, last)
     for (_, aid), a in out.items():
-        if a["named"] == a["count"] and _FOLDER_HANDLE_RE.fullmatch(aid):
-            # As a post wrote it (its case), the newest such, else the folder's id.
-            same = [h for h in a["handles"] if h.lower() == aid]
-            a["handle"] = max(same, key=lambda h: (a["handles"][h][1] or 0, h), default=aid)
+        same = [h for h in a["handles"] if h.lower() == aid]
+        if same and a["named"] == a["count"]:
+            # As a post wrote it (its case), the newest such.
+            a["handle"] = max(same, key=lambda h: (a["handles"][h][1] or 0, h))
     return out
 
 

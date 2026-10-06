@@ -39,15 +39,6 @@ DIST="$ROOT/frontend/dist"
 say() { printf '\033[1;32m▸\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 
-# --- port -----------------------------------------------------------------
-# Checked, then exported, so the backend and the Vite dev server's proxy
-# (frontend/vite.config.js) always use this same port (#100).
-PORT="${FEEDVAULT_PORT:-3380}"
-[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$PORT >= 1 && 10#$PORT <= 65535 )) \
-  || die "FEEDVAULT_PORT must be a port number from 1 to 65535, not '$PORT'"
-PORT=$((10#$PORT))
-export FEEDVAULT_PORT="$PORT"
-# --- port end -------------------------------------------------------------
 
 command -v python3 &>/dev/null || die "python3 not found"
 
@@ -66,6 +57,17 @@ fi
 if [ "$MODE" = test ]; then
   exec "$VENV/bin/python" -m pytest -q "$ROOT/backend/tests"
 fi
+
+# --- port -----------------------------------------------------------------
+# Checked, then exported, so the backend and the Vite dev server's proxy
+# (frontend/vite.config.js) always use this same port (#100). Set but empty
+# is no port either, as for the backend (config.py) and Vite.
+PORT="${FEEDVAULT_PORT-3380}"
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$PORT >= 1 && 10#$PORT <= 65535 )) \
+  || die "FEEDVAULT_PORT must be a port number from 1 to 65535, not '$PORT'"
+PORT=$((10#$PORT))
+export FEEDVAULT_PORT="$PORT"
+# --- port end -------------------------------------------------------------
 
 # --- port check -----------------------------------------------------------
 if python3 -c "import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex(('127.0.0.1',$PORT))==0 else 1)"; then

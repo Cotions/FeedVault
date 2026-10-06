@@ -16,7 +16,7 @@ CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/feedvault"
 LIVE_CONFIG="$CONFIG_HOME/config.json"
 TEST_CONFIG="$CONFIG_HOME/config.test.json"
 DEMO_DIR="${FEEDVAULT_DEMO_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/feedvault-demo}"
-PORT="${FEEDVAULT_TEST_PORT:-3389}"
+PORT="${FEEDVAULT_TEST_PORT-3389}"
 VENV="$ROOT/backend/venv"
 
 say()  { printf '\033[1;32m▸\033[0m %s\n' "$*"; }
@@ -34,6 +34,11 @@ for arg in "$@"; do
     *) die "Unknown option: $arg (try --help)" ;;
   esac
 done
+
+# A number from 1 to 65535 before it goes anywhere (the Python check below).
+[[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$PORT >= 1 && 10#$PORT <= 65535 )) \
+  || die "FEEDVAULT_TEST_PORT must be a port number from 1 to 65535, not '$PORT'"
+PORT=$((10#$PORT))
 
 [ -x "$VENV/bin/python" ] || die "No virtualenv at $VENV. Run ./run.sh once."
 [ -f "$ROOT/frontend/dist/index.html" ] || die "UI not built. Run: ./run.sh --build"

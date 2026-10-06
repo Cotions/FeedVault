@@ -27,7 +27,7 @@ function runPortBlock(port) {
 }
 
 test("run.sh exports the port it uses, 3380 by default (#100)", () => {
-  for (const [given, used] of [[undefined, "3380"], ["", "3380"], ["4000", "4000"], ["65535", "65535"], ["03389", "3389"]]) {
+  for (const [given, used] of [[undefined, "3380"], ["4000", "4000"], ["65535", "65535"], ["03389", "3389"]]) {
     const got = runPortBlock(given);
     assert.equal(got.status, 0, `${given}: ${got.stderr}`);
     assert.equal(got.stdout, `${used} ${used}`, String(given));
@@ -35,7 +35,7 @@ test("run.sh exports the port it uses, 3380 by default (#100)", () => {
 });
 
 test("run.sh stops on an invalid FEEDVAULT_PORT instead of using 3380", () => {
-  for (const bad of ["abc", "0", "65536", "99999", "-1", "4000x", "1e3", "123456", "4000);import os"]) {
+  for (const bad of ["", "abc", "0", "65536", "99999", "-1", "4000x", "1e3", "123456", "4000);import os"]) {
     const got = runPortBlock(bad);
     assert.notEqual(got.status, 0, bad);
     assert.equal(got.stdout, "", bad);
@@ -45,6 +45,7 @@ test("run.sh stops on an invalid FEEDVAULT_PORT instead of using 3380", () => {
 
 test("run.sh checks and exports the port before dev mode starts Vite", () => {
   const block = runSh.indexOf("# --- port end");
+  assert.ok(block > runSh.indexOf('exec "$VENV/bin/python" -m pytest'), "--test never reads the port");
   const dev = runSh.indexOf('if [ "$MODE" = dev ]');
   assert.ok(block > 0 && dev > block, "the port block comes before dev mode");
   assert.ok(runSh.indexOf("python3 -c \"import socket") > block, "the busy-port check uses the checked port");
@@ -77,3 +78,10 @@ for (const script of ["run.sh", "testapp.sh"]) {
     }
   });
 }
+
+test("testapp.sh checks FEEDVAULT_TEST_PORT before any use", () => {
+  const text = readFileSync(`${repo}/testapp.sh`, "utf8");
+  const check = text.indexOf("FEEDVAULT_TEST_PORT must be a port number from 1 to 65535");
+  assert.ok(check > 0 && check < text.indexOf("python3 -c \"import socket"), "checked before the Python port check");
+  assert.match(text, /^PORT="\$\{FEEDVAULT_TEST_PORT-3389\}"$/m);
+});

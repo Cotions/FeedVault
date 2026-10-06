@@ -6,7 +6,8 @@ Vite dev server (`./run.sh --dev`) proxies `/api`, `/media`, trash
 thumbnails and `/userscript` to the backend's port on `127.0.0.1`, so dev
 mode also runs same-origin. `run.sh` exports the port it starts the backend
 on, and Vite reads `FEEDVAULT_PORT` (3380 when unset); a value that is not a
-port from 1 to 65535 stops both rather than falling back to 3380.
+port from 1 to 65535 (empty too) stops `run.sh`, Vite and the backend
+rather than falling back to 3380.
 
 Times are Unix seconds (UTC). Absent values are `null`, never missing keys.
 
@@ -965,12 +966,13 @@ An **account** (`/api/authors` rows, a person's `accounts`):
 
 - `handle` and `name` are those of the newest post (handles change), or the
   new handle of a rename the user accepted after it. An account whose posts
-  are all rebuilt from file names, its id a profile folder's name, reads as
-  that folder's handle instead (as a post's file name wrote it, else the
-  id), whatever its newest file is named: a file name holds the target it
-  was downloaded for, which may be someone else's or an older name. Each
-  post keeps the handle its file name gives (its `author.handle`, and in
-  `handles` below).
+  are all rebuilt from file names, in a profile folder (one of its files is
+  named after the folder), reads as that folder's handle instead, whatever
+  its newest file is named: a file name holds the target it was downloaded
+  for, which may be someone else's or an older name. A folder no file is
+  named after (`saved`, a profile renamed since) keeps the newest post's
+  handle. Each post keeps the handle its file name gives (its
+  `author.handle`, and in `handles` below).
 - `count` and `bytes` cover the posts in the index, aliases included;
   `newest` is the newest `posted_at`.
 - `url`: the profile's address for `instagram`, `twitter`, `tiktok` and
@@ -2540,9 +2542,11 @@ could not be read.
   (`/opt/venv/bin/yt-dlp`, `env ./yt-dlp`), behind `env` and its options
   and variables (`env -i`, `env LANG=C yt-dlp`), run by Python (`python3
   -m yt_dlp`, `-m gallery_dl`, `-m instaloader`, with Python's own options
-  before `-m`, or `python3 /path/yt-dlp`), or an absolute path that is a
-  symlink to one of them under another name (`~/bin/ytdl`, followed when
-  the script is read). Not read: `env -S` (its text is split by env's own
+  before `-m`, `-m runpy yt_dlp`, `python3 /path/yt-dlp`, or the package's
+  folder or its `__main__.py`), or an absolute path that is a symlink to
+  one of them under another name (`~/bin/ytdl`; links are followed one at
+  a time, so the first known name along them counts, whenever the command
+  is read). Not read: `env -S` (its text is split by env's own
   rules), a name looked up on `PATH` that is a symlink, and other
   launchers (`nice`, `timeout`, a wrapper script): those run in
   `scripts`.

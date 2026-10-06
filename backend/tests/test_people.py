@@ -209,10 +209,12 @@ def test_a_filename_only_folder_reads_as_its_handle(env, client):
     assert [h["handle"] for h in a["handles"]] == ["dee.dates", "carol.cooks", "eve.eats"]
     newest = get(client, "/api/posts/instagram/DDDDDDDDDD1")
     assert newest["author"] == {"id": "carol.cooks", "handle": "dee.dates", "name": None}
-    # No file named as the folder: its id, the folder's name as indexed.
-    write_filename_post(env["media"] / "feyafern", "feya.fern", "FFFFFFFFFF1", TS)
+    # No file named as the folder ("saved", a renamed profile): the newest post's, as before.
+    write_filename_post(env["media"] / "saved", "feya.fern", "FFFFFFFFFF1", TS)
+    write_filename_post(env["media"] / "saved", "gil.grills", "GGGGGGGGGG1", TS + DAY)
     scanner.scan(env["roots"])
-    assert account(client, "instagram", "feyafern")["handles"][0]["handle"] == "feya.fern"
+    assert {a["id"]: a["handle"] for a in get(client, "/api/authors")} == \
+        {"carol.cooks": "carol.cooks", "saved": "gil.grills"}
 
 
 def test_a_filename_only_folder_keeps_a_rename_the_user_accepted(env, client):
@@ -232,14 +234,15 @@ def test_accounts_with_metadata_read_as_before(env, client):
     """Their handle is still the newest post's: a rename shows."""
     write_post(env["media"] / "alice.example", "A1", TS, ALICE, "image")
     write_post(env["media"] / "alice.example", "A2", TS + 100, owner("alice.renamed", 111, "Alice"), "image")
-    # A file-name post beside metadata posts: an account of its own, the folder's (not Bob's).
+    # A file-name post beside metadata posts: an account of its own, the folder's (not
+    # Bob's); no file is named "bob", so its newest post's handle.
     write_post(env["media"] / "bob", "B1", TS, BOB, "image")
     write_filename_post(env["media"] / "bob", "someone.else", "BBBBBBBBBB2", TS + 300)
     scanner.scan(env["roots"])
     by_id = {a["id"]: a for a in get(client, "/api/authors")}
     assert by_id["111"]["handle"] == "alice.renamed"
     assert by_id["222"]["handle"] == "bob.example"
-    assert by_id["bob"]["handle"] == "bob"
+    assert by_id["bob"]["handle"] == "someone.else"
 
 
 def test_a_rescan_shows_the_folder_handle_and_keeps_what_the_user_did(env, client):
