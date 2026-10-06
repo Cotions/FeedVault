@@ -5,33 +5,42 @@
 // its issue.
 import { test as base, expect } from "@playwright/test";
 
-// Requests in flight on a page, counted from its start (the fixture below,
-// addProbes for a tab of a test's own): its /api ones, for quiet(), and
-// every one, for idle().
+// Requests in flight on a page, from its start (the fixture below, addProbes
+// for a tab of a test's own), and when the last of them, and of its /api
+// ones, started or ended: for idle() and quiet(). As networkidle does, a
+// new document drops the old one's requests, and a stream (EventSource,
+// WebSocket) does not count.
 const inFlight = new WeakMap();
+const isApi = r => new URL(r.url()).pathname.startsWith("/api/");
 function trackRequests(page) {
   if (inFlight.has(page)) return;
-  const n = { api: { now: 0, last: Date.now() }, all: { now: 0, last: Date.now() } };
-  inFlight.set(page, n);
-  const api = r => new URL(r.url()).pathname.startsWith("/api/");
-  const count = (r, d) => {
-    for (const c of api(r) ? [n.api, n.all] : [n.all]) { c.now += d; c.last = Date.now(); }
-  };
-  page.on("request", r => count(r, 1));
-  for (const ev of ["requestfinished", "requestfailed"]) page.on(ev, r => count(r, -1));
+  const t = { open: new Set(), last: { all: Date.now(), api: Date.now() } };
+  inFlight.set(page, t);
+  const touch = r => { t.last.all = Date.now(); if (isApi(r)) t.last.api = t.last.all; };
+  page.on("request", r => {
+    if (["eventsource", "websocket"].includes(r.resourceType())) return;
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame()) t.open.clear();
+    t.open.delete(r.redirectedFrom());
+    t.open.add(r);
+    touch(r);
+  });
+  for (const ev of ["requestfinished", "requestfailed"]) page.on(ev, r => { if (t.open.delete(r)) touch(r); });
 }
 
-// Until none of ``c``'s requests has been in flight for ``ms``.
-async function noRequestFor(page, c, ms, what) {
-  const end = Date.now() + 10_000;
-  while (c.now > 0 || Date.now() - c.last < ms) {
-    if (Date.now() > end) throw new Error(`${what}: still busy after 10s (${c.now} in flight)`);
+const busy = (t, kind) => [...t.open].filter(r => kind === "all" || isApi(r)).length;
+
+// Until none of the page's requests of ``kind`` ("all", "api") has been in
+// flight for ``ms``.
+async function noRequestFor(page, kind, ms, end, what) {
+  const t = inFlight.get(page);
+  while (busy(t, kind) || Date.now() - t.last[kind] < ms) {
+    if (Date.now() > end) throw new Error(`${what}: still busy after 10s (${busy(t, kind)} in flight)`);
     await page.waitForTimeout(25);
   }
 }
 
 export const test = base.extend({
-  pageErrors: [async ({ page }, provide) => {
+  pageErrors: [async ({ page }, provide, testInfo) => {
     trackRequests(page);
     const errors = [];
     page.on("console", msg => {
@@ -53,12 +62,12 @@ export const test = base.extend({
     });
     const allowed = [];
     await provide({ allow: re => allowed.push(re) });
-    try {
-      expect(errors.filter(e => !allowed.some(re => re.test(e))), "console errors and failed /api requests").toEqual([]);
-    } finally {
-      // The test's pages closed before its context: a context closed with
-      // the app still open takes some 0.8 s more, in every test.
-      await Promise.all(page.context().pages().map(p => p.close()));
+    expect(errors.filter(e => !allowed.some(re => re.test(e))), "console errors and failed /api requests").toEqual([]);
+    // A test that passed: its pages closed before its context, which takes
+    // some 0.8 s more with the app still open. A failed one keeps them for
+    // Playwright's screenshot and page snapshot, taken as the context closes.
+    if (testInfo.status === testInfo.expectedStatus) {
+      await Promise.all(page.context().pages().map(p => p.close().catch(() => {})));
     }
   }, { auto: true }],
 });
@@ -94,10 +103,18 @@ export async function openPage(page, { name, path }) {
 }
 
 // No request of any kind (the API, scripts, images, media) has been in
-// flight for ``ms``: what networkidle waits for, without its fixed 500ms
-// after every load.
+// flight for ``ms``, and none starts in the two frames after: what the
+// last answer renders has asked for its images. What networkidle waits
+// for, without its fixed 500ms after every load.
 export async function idle(page, ms = 150) {
-  await noRequestFor(page, inFlight.get(page).all, ms, "idle");
+  const t = inFlight.get(page);
+  const end = Date.now() + 10_000;
+  for (;;) {
+    await noRequestFor(page, "all", ms, end, "idle");
+    const last = t.last.all;
+    await settle(page);
+    if (t.last.all === last && !busy(t, "all")) return;
+  }
 }
 
 // Review's count of posts left, once known.
@@ -947,7 +964,7 @@ export async function addProbes(page) {
 // ``ms`` (networkidle waits 500ms, many times over in these specs).
 export async function quiet(page, ready, ms = 150) {
   if (ready) await expect(page.locator(ready).first()).toBeVisible();
-  await noRequestFor(page, inFlight.get(page).api, ms, "quiet: /api");
+  await noRequestFor(page, "api", ms, Date.now() + 10_000, "quiet: /api");
   await settle(page);
 }
 

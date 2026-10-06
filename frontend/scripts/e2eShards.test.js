@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import config from "../playwright.config.js";
 import { SHARDS, shardArgs } from "../e2e/shards.js";
 
@@ -27,13 +28,15 @@ test("shardArgs gives a shard's --project arguments, and refuses one that does n
 });
 
 test("node e2e/shards.js <n> prints them", () => {
-  const out = execFileSync(process.execPath, ["e2e/shards.js", "2"], { encoding: "utf8" }).trim();
+  const out = execFileSync(process.execPath, [fileURLToPath(new URL("../e2e/shards.js", import.meta.url)), "2"], { encoding: "utf8" }).trim();
   assert.equal(out, shardArgs(2).join(" "));
 });
 
 test("CI's matrix runs every shard, and only those", () => {
   const ci = fs.readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const job = ci.slice(ci.indexOf("\n  e2e-shard:"), ci.indexOf("\n  e2e:\n"));
+  const [from, to] = [ci.indexOf("\n  e2e-shard:"), ci.indexOf("\n  e2e:\n")];
+  assert.ok(from >= 0 && to > from, "ci.yml has the e2e-shard job, then the e2e one");
+  const job = ci.slice(from, to);
   const n = SHARDS.length;
   assert.match(job, new RegExp(`\\n {8}shard: \\[${Array.from({ length: n }, (_, i) => i + 1).join(", ")}\\]\\n`));
   assert.match(job, new RegExp(`name: e2e shard \\$\\{\\{ matrix.shard \\}\\}/${n}\\n`));
