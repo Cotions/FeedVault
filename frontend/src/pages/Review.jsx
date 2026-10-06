@@ -15,6 +15,7 @@ import CreatorPicker from "../components/CreatorPicker";
 import { PHONE } from "../lib/layout";
 import { useFiltersOpen } from "../lib/useFiltersOpen";
 import FiltersToggle from "../components/FiltersToggle";
+import PageHeader from "../components/PageHeader";
 import { PAGE, initial, nextUndecided, reducer } from "../lib/reviewQueue";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
@@ -453,149 +454,152 @@ function ReviewSession({ scope, scopeControls }) {
   }
 
   return (
-    <div className="review" ref={rootRef}>
-      <div className="review-stage" ref={stageRef}>
-        {stage}
-        {media.length > 1 && cur && (
-          <>
-            <button type="button" className="carousel-arrow prev" onClick={e => act(e, () => stepItem(-1))} aria-label="Previous item (←)">
-              <Icon name="chevLeft" size={20} />
-            </button>
-            <button type="button" className="carousel-arrow next" onClick={e => act(e, () => stepItem(1))} aria-label="Next item (→)">
-              <Icon name="chevRight" size={20} />
-            </button>
-            <span className="carousel-count">{safeItem + 1}/{media.length}</span>
-          </>
-        )}
-        {busy && <span className="review-busy"><Icon name="refresh" size={14} className="spin" /></span>}
-        <div hidden aria-hidden="true">
-          {preloadVideos.map(url => <video key={url} src={url} preload="auto" muted />)}
-        </div>
-      </div>
-
-      <aside className="review-side">
-        {scopeControls}
-
-        <div className="review-progress">
-          <span className="review-left mono">{left == null ? "…" : left.toLocaleString()}</span>
-          <span className="dim">left to review</span>
-          <span className="review-session mono">
-            <span className="ok-text">{session.kept} kept</span> · <span className="warn-text">{session.trashed} trashed</span>
-            {session.items > 0 && <> · {session.items} item{session.items === 1 ? "" : "s"}</>}
-          </span>
+    <div className="review-page">
+      <PageHeader title="Review" />
+      <div className="review" ref={rootRef}>
+        <div className="review-stage" ref={stageRef}>
+          {stage}
+          {media.length > 1 && cur && (
+            <>
+              <button type="button" className="carousel-arrow prev" onClick={e => act(e, () => stepItem(-1))} aria-label="Previous item (←)">
+                <Icon name="chevLeft" size={20} />
+              </button>
+              <button type="button" className="carousel-arrow next" onClick={e => act(e, () => stepItem(1))} aria-label="Next item (→)">
+                <Icon name="chevRight" size={20} />
+              </button>
+              <span className="carousel-count">{safeItem + 1}/{media.length}</span>
+            </>
+          )}
+          {busy && <span className="review-busy"><Icon name="refresh" size={14} className="spin" /></span>}
+          <div hidden aria-hidden="true">
+            {preloadVideos.map(url => <video key={url} src={url} preload="auto" muted />)}
+          </div>
         </div>
 
-        {cur && (
-          <div className="review-info" ref={infoRef}>
-            <div className="review-byline">
-              <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
-              <span className="chip" title={platformLabel(cur.platform)}>{platformShort(cur.platform)}</span>
-              {media.length > 1 && <span className="chip">{safeItem + 1}/{media.length}</span>}
-              <span className="chip">{cur.kind}</span>
-            </div>
-            <div className="review-meta mono">
-              <time dateTime={fmtIso(cur.posted_at)}>{fmtFullDate(cur.posted_at)}</time>
-              {m?.size != null && <span className="dim"> · {fmtBytes(m.size)}</span>}
-            </div>
-            {post?.album && <div className="review-album"><span className="dim">{albumLabel(post.platform)}</span> {post.album}</div>}
-            {cur.text
-              ? <div className="review-caption"><RichText text={cur.text} /></div>
-              : <p className="dim review-caption">No caption.</p>}
-            <div className="review-tags">
-              <TagChips tags={curTags} onRemove={name => tagPost({ remove: [name] })} busy={busy} />
-              {tagging ? (
-                <TagInput
-                  autoFocus
-                  tags={tagsApi.data || []}
-                  exclude={curTags}
-                  placeholder="Tag this post…"
-                  onAdd={name => { setTagging(false); tagPost({ add: [name] }); }}
-                  onClose={() => setTagging(false)}
-                />
-              ) : (
-                <button type="button" className="btn-ghost review-tag-btn" onClick={e => act(e, openTags)} disabled={!!post?.error}>
-                  <Icon name="tag" size={13} />Tag<Kbd>T</Kbd>
+        <aside className="review-side">
+          {scopeControls}
+
+          <div className="review-progress">
+            <span className="review-left mono">{left == null ? "…" : left.toLocaleString()}</span>
+            <span className="dim">left to review</span>
+            <span className="review-session mono">
+              <span className="ok-text">{session.kept} kept</span> · <span className="warn-text">{session.trashed} trashed</span>
+              {session.items > 0 && <> · {session.items} item{session.items === 1 ? "" : "s"}</>}
+            </span>
+          </div>
+
+          {cur && (
+            <div className="review-info" ref={infoRef}>
+              <div className="review-byline">
+                <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
+                <span className="chip" title={platformLabel(cur.platform)}>{platformShort(cur.platform)}</span>
+                {media.length > 1 && <span className="chip">{safeItem + 1}/{media.length}</span>}
+                <span className="chip">{cur.kind}</span>
+              </div>
+              <div className="review-meta mono">
+                <time dateTime={fmtIso(cur.posted_at)}>{fmtFullDate(cur.posted_at)}</time>
+                {m?.size != null && <span className="dim"> · {fmtBytes(m.size)}</span>}
+              </div>
+              {post?.album && <div className="review-album"><span className="dim">{albumLabel(post.platform)}</span> {post.album}</div>}
+              {cur.text
+                ? <div className="review-caption"><RichText text={cur.text} /></div>
+                : <p className="dim review-caption">No caption.</p>}
+              <div className="review-tags">
+                <TagChips tags={curTags} onRemove={name => tagPost({ remove: [name] })} busy={busy} />
+                {tagging ? (
+                  <TagInput
+                    autoFocus
+                    tags={tagsApi.data || []}
+                    exclude={curTags}
+                    placeholder="Tag this post…"
+                    onAdd={name => { setTagging(false); tagPost({ add: [name] }); }}
+                    onClose={() => setTagging(false)}
+                  />
+                ) : (
+                  <button type="button" className="btn-ghost review-tag-btn" onClick={e => act(e, openTags)} disabled={!!post?.error}>
+                    <Icon name="tag" size={13} />Tag<Kbd>T</Kbd>
+                  </button>
+                )}
+              </div>
+              <div className="review-collections">
+                {post?.collections?.length > 0 && (
+                  <ul className="tag-chips">
+                    {post.collections.map(c => (
+                      <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`} title={c.name}><span className="tag-chip-name">{c.name}</span></Link></li>
+                    ))}
+                  </ul>
+                )}
+                <button type="button" className="btn-ghost review-tag-btn" onClick={e => act(e, openCollections)} disabled={!post || !!post.error}>
+                  <Icon name="bookmark" size={13} />Collection<Kbd>C</Kbd>
                 </button>
-              )}
+              </div>
+              <Link className="text-link review-open" to={`/p/${encodeURIComponent(cur.platform)}/${encodeURIComponent(cur.post_id)}`}>
+                Open post page
+              </Link>
             </div>
-            <div className="review-collections">
-              {post?.collections?.length > 0 && (
-                <ul className="tag-chips">
-                  {post.collections.map(c => (
-                    <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`} title={c.name}><span className="tag-chip-name">{c.name}</span></Link></li>
-                  ))}
-                </ul>
-              )}
-              <button type="button" className="btn-ghost review-tag-btn" onClick={e => act(e, openCollections)} disabled={!post || !!post.error}>
-                <Icon name="bookmark" size={13} />Collection<Kbd>C</Kbd>
+          )}
+
+          <div className="review-actions" ref={barRef}>
+            <button type="button" className="btn-keep" onClick={e => act(e, keep)} disabled={!cur || busy}>
+              <Icon name="check" size={15} />Keep<Kbd>K</Kbd>
+            </button>
+            <button type="button" className="btn-danger" onClick={e => act(e, trashPost)} disabled={!cur || busy}>
+              <Icon name="trash" size={15} />Trash post<Kbd>D</Kbd>
+            </button>
+            {media.length > 1 && (
+              <button type="button" className="btn-danger-soft" onClick={e => act(e, trashItem)} disabled={!m || busy}>
+                <Icon name="trash" size={14} />Trash <span className="review-wide">this </span>item<Kbd>X</Kbd>
+              </button>
+            )}
+            <div className="review-actions-row">
+              <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "prev" }))} title="Previous post (↑ or J)" aria-label="Previous post">
+                <Icon name="arrowUp" size={14} /><Kbd>↑</Kbd>
+              </button>
+              <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "next" }))} disabled={!cur} title="Skip to the next post (↓ or L)">
+                <Icon name="skip" size={14} />Skip<Kbd>↓</Kbd>
+              </button>
+              <button type="button" className="btn-secondary" onClick={e => act(e, undoLast)} disabled={!undo.length || busy} title="Undo the last decision (Z)">
+                <Icon name="undo" size={14} />Undo<Kbd>Z</Kbd>
               </button>
             </div>
-            <Link className="text-link review-open" to={`/p/${encodeURIComponent(cur.platform)}/${encodeURIComponent(cur.post_id)}`}>
-              Open post page
-            </Link>
+            <div className="review-actions-row">
+              <button type="button" className="btn-secondary" onClick={e => act(e, () => setMuted(v => !v))} aria-pressed={muted} title="Mute (M)" aria-label="Mute">
+                <Icon name={muted ? "volumeOff" : "volume"} size={14} /><Kbd>M</Kbd>
+              </button>
+              <button type="button" className="btn-secondary" onClick={e => act(e, toggleFullscreen)} title="Fullscreen (F)" aria-label="Fullscreen">
+                <Icon name="expand" size={14} /><Kbd>F</Kbd>
+              </button>
+              <button type="button" className="btn-secondary" onClick={e => act(e, () => setHelp(true))} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
+                <Icon name="keyboard" size={14} /><Kbd>?</Kbd>
+              </button>
+            </div>
           </div>
+        </aside>
+
+        {collecting && cur && post && (
+          <CollectionDialog
+            posts={[cur.id]}
+            member={(post.collections || []).map(c => c.id)}
+            onChanged={collectionsChanged}
+            onClose={() => setCollecting(false)}
+          />
         )}
 
-        <div className="review-actions" ref={barRef}>
-          <button type="button" className="btn-keep" onClick={e => act(e, keep)} disabled={!cur || busy}>
-            <Icon name="check" size={15} />Keep<Kbd>K</Kbd>
-          </button>
-          <button type="button" className="btn-danger" onClick={e => act(e, trashPost)} disabled={!cur || busy}>
-            <Icon name="trash" size={15} />Trash post<Kbd>D</Kbd>
-          </button>
-          {media.length > 1 && (
-            <button type="button" className="btn-danger-soft" onClick={e => act(e, trashItem)} disabled={!m || busy}>
-              <Icon name="trash" size={14} />Trash <span className="review-wide">this </span>item<Kbd>X</Kbd>
-            </button>
-          )}
-          <div className="review-actions-row">
-            <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "prev" }))} title="Previous post (↑ or J)" aria-label="Previous post">
-              <Icon name="arrowUp" size={14} /><Kbd>↑</Kbd>
-            </button>
-            <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "next" }))} disabled={!cur} title="Skip to the next post (↓ or L)">
-              <Icon name="skip" size={14} />Skip<Kbd>↓</Kbd>
-            </button>
-            <button type="button" className="btn-secondary" onClick={e => act(e, undoLast)} disabled={!undo.length || busy} title="Undo the last decision (Z)">
-              <Icon name="undo" size={14} />Undo<Kbd>Z</Kbd>
-            </button>
+        {help && (
+          <div className="review-help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onClick={() => setHelp(false)}>
+            <div className="review-help-box" onClick={e => e.stopPropagation()}>
+              <h3 className="modal-title">Keyboard shortcuts</h3>
+              <dl>
+                {SHORTCUTS.map(([k, d]) => (
+                  <div key={k}><dt><Kbd>{k}</Kbd></dt><dd>{d}</dd></div>
+                ))}
+              </dl>
+              <p className="dim">Trashing moves files to the trash folder; undo, or the Trash page, brings them back. Empty the trash from Settings.</p>
+              <button type="button" className="btn-secondary" onClick={() => setHelp(false)} autoFocus>Close</button>
+            </div>
           </div>
-          <div className="review-actions-row">
-            <button type="button" className="btn-secondary" onClick={e => act(e, () => setMuted(v => !v))} aria-pressed={muted} title="Mute (M)" aria-label="Mute">
-              <Icon name={muted ? "volumeOff" : "volume"} size={14} /><Kbd>M</Kbd>
-            </button>
-            <button type="button" className="btn-secondary" onClick={e => act(e, toggleFullscreen)} title="Fullscreen (F)" aria-label="Fullscreen">
-              <Icon name="expand" size={14} /><Kbd>F</Kbd>
-            </button>
-            <button type="button" className="btn-secondary" onClick={e => act(e, () => setHelp(true))} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
-              <Icon name="keyboard" size={14} /><Kbd>?</Kbd>
-            </button>
-          </div>
-        </div>
-      </aside>
-
-      {collecting && cur && post && (
-        <CollectionDialog
-          posts={[cur.id]}
-          member={(post.collections || []).map(c => c.id)}
-          onChanged={collectionsChanged}
-          onClose={() => setCollecting(false)}
-        />
-      )}
-
-      {help && (
-        <div className="review-help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onClick={() => setHelp(false)}>
-          <div className="review-help-box" onClick={e => e.stopPropagation()}>
-            <h3 className="modal-title">Keyboard shortcuts</h3>
-            <dl>
-              {SHORTCUTS.map(([k, d]) => (
-                <div key={k}><dt><Kbd>{k}</Kbd></dt><dd>{d}</dd></div>
-              ))}
-            </dl>
-            <p className="dim">Trashing moves files to the trash folder; undo, or the Trash page, brings them back. Empty the trash from Settings.</p>
-            <button type="button" className="btn-secondary" onClick={() => setHelp(false)} autoFocus>Close</button>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

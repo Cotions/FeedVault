@@ -7,6 +7,7 @@ import { useToast } from "../lib/toast";
 import { fmtAgo, fmtBytes } from "../lib/fmt";
 import Icon from "../components/Icon";
 import { JobLog } from "./Jobs";
+import PageHeader from "../components/PageHeader";
 
 // What a script is given (docs/API.md "Scripts").
 const NEEDS = {
@@ -192,13 +193,12 @@ export default function Scripts() {
 
   return (
     <div className="jobs-page">
+      <PageHeader
+        title="Scripts"
+        sub={data ? `${files.length} file${files.length === 1 ? "" : "s"}` : "…"}
+        actions={<button type="button" className="btn-secondary" onClick={reload}><Icon name="refresh" size={13} />Read again</button>}
+      />
       <div className="card">
-        <div className="page-head">
-          <h2 className="page-title">Scripts</h2>
-          <span className="page-count">{data ? `${files.length} file${files.length === 1 ? "" : "s"}` : "…"}</span>
-          <div className="page-head-spacer" />
-          <button type="button" className="btn-secondary" onClick={reload}><Icon name="refresh" size={13} />Read again</button>
-        </div>
         <p className="page-lede">
           Your own download commands (<code>.json</code>) and shell scripts (<code>.sh</code>), as files in
           {" "}<code className="script-path">{data?.dir || "…"}</code>. Create and edit them in a text editor:

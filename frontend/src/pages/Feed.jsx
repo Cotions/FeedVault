@@ -20,6 +20,7 @@ import CollectionDialog from "../components/CollectionDialog";
 import CreatorPicker from "../components/CreatorPicker";
 import FiltersToggle from "../components/FiltersToggle";
 import { useFiltersOpen, usePhone } from "../lib/useFiltersOpen";
+import PageHeader from "../components/PageHeader";
 
 const PAGE = 60;
 const MAX_LIMIT = 200;
@@ -305,289 +306,289 @@ export default function Feed() {
   const showEmpty = current && !error && result.total === 0;
 
   return (
-    <div className="card feed">
-      <div className="page-head">
-        <h2 className="page-title">
-          {q ? "Results" : notification && !author && !person && !tagFilter.length ? "From one sync"
-            : newOnly && !author && !person && !tagFilter.length ? "New since last visit"
-            : selectedPerson ? selectedPerson.name : selectedAuthor ? `@${selectedAuthor.handle}`
-            : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span>
-            : selectedCollection ? <span className="page-title-tag"><Icon name="bookmark" size={17} />{selectedCollection.name}</span> : "Feed"}
-        </h2>
-        <span className="page-count">
-          {current && !error
-            ? q ? `${result.total.toLocaleString()} for “${q}”` : result.total.toLocaleString()
-            : "…"}
-        </span>
-        {freeable && (
-          <span className="page-count would-free" title="What deleting every match would move to the trash (media files only)">
-            {fmtInt(freeable.posts)} post{freeable.posts === 1 ? "" : "s"} · {fmtBytes(freeable.bytes)}
+    <>
+      <PageHeader
+        title={q ? "Results" : notification && !author && !person && !tagFilter.length ? "From one sync"
+          : newOnly && !author && !person && !tagFilter.length ? "New since last visit"
+          : selectedPerson ? selectedPerson.name : selectedAuthor ? `@${selectedAuthor.handle}`
+          : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span>
+          : selectedCollection ? <span className="page-title-tag"><Icon name="bookmark" size={17} />{selectedCollection.name}</span> : "Feed"}
+        sub={<>
+          <span className="page-count">
+            {current && !error
+              ? q ? `${result.total.toLocaleString()} for “${q}”` : result.total.toLocaleString()
+              : "…"}
           </span>
-        )}
-        <div className="page-head-spacer" />
-        {newCount > 0 && (
+          {freeable && (
+            <span className="page-count would-free" title="What deleting every match would move to the trash (media files only)">
+              {fmtInt(freeable.posts)} post{freeable.posts === 1 ? "" : "s"} · {fmtBytes(freeable.bytes)}
+            </span>
+          )}
+        </>}
+        actions={newCount > 0 && (
           <button type="button" className="btn-secondary" onClick={runMarkSeen} disabled={marking}
                   title="These new posts stop being new; any indexed since stay new">
             <Icon name="check" size={14} />{marking ? "Marking…" : "Mark all seen"}
           </button>
         )}
-      </div>
-
-      <div className={`feed-filters feed-fold${filtersOpen ? " is-open" : ""}`} role="group" aria-label="Filters">
-        <FiltersToggle open={filtersOpen} onToggle={() => setFiltersOpen(v => !v)} active={activeFilters} controls="feed-scope" />
-        <div className="feed-scope" id="feed-scope">
-          <button
-            type="button"
-            className={`btn-secondary select-toggle${newOnly ? " is-on" : ""}`}
-            aria-pressed={newOnly}
-            onClick={() => setParam({ new: newOnly ? "" : "1" })}
-            title="Only posts indexed since you last marked everything seen"
-          >
-            <Icon name="refresh" size={13} />New since last visit{newCount > 0 ? ` (${fmtInt(newCount)})` : ""}
-          </button>
-          <label className="filter">
-            <span>Platform</span>
-            <select className="sort-select" value={platform} onChange={e => setParam({ platform: e.target.value, author: "" })}>
-              <option value="">All</option>
-              {platforms.map(p => <option key={p} value={p}>{platformLabel(p)}</option>)}
-            </select>
-          </label>
-          <label className="filter">
-            <span>Kind</span>
-            <select className="sort-select" value={kind} onChange={e => setParam({ kind: e.target.value })}>
-              <option value="">All</option>
-              {KINDS.map(k => <option key={k} value={k}>{k}</option>)}
-            </select>
-          </label>
-          <div className="filter filter-author">
-            <span>Creator</span>
-            <CreatorPicker
-              people={peopleApi.data || []}
-              accounts={authors}
-              platform={person ? "" : platform}
-              value={person ? { person } : author ? { platform, id: author } : null}
-              onChange={onCreator}
-            />
-          </div>
-          <label className="filter filter-tags">
-            <span>Tags</span>
-            <select className="sort-select" value="" onChange={e => onTagFilter(e.target.value)}>
-              <option value="">{untagged ? "Untagged" : tagFilter.length ? "Add another…" : "Any"}</option>
-              {!untagged && <option value="__untagged">Untagged only</option>}
-              {allTags.filter(t => !tagFilter.some(f => sameTag(f, t.name))).map(t => (
-                <option key={t.name} value={t.name}>{t.name} ({t.count})</option>
-              ))}
-            </select>
-          </label>
-          {notification && (
-            <ul className="tag-chips filter-tag-chips" aria-label="Sync filter">
-              <li className="tag-chip"><span><Icon name="bell" size={11} />this sync&apos;s posts</span>
-                <button type="button" className="tag-chip-x" onClick={() => setParam({ notification: "" })} aria-label="Remove the sync filter">
-                  <Icon name="close" size={10} />
-                </button>
-              </li>
-            </ul>
-          )}
-          {(tagFilter.length > 0 || untagged) && (
-            <ul className="tag-chips filter-tag-chips" aria-label="Tag filters">
-              {untagged && (
-                <li className="tag-chip"><span>untagged</span>
-                  <button type="button" className="tag-chip-x" onClick={() => setParam({ untagged: "" })} aria-label="Remove the untagged filter">
-                    <Icon name="close" size={10} />
-                  </button>
-                </li>
-              )}
-              {tagFilter.map(t => (
-                <li key={t} className="tag-chip"><span><Icon name="tag" size={11} /><span className="tag-chip-name">{t}</span></span>
-                  <button type="button" className="tag-chip-x" onClick={() => setParam({ tag: tagFilter.filter(x => x !== t) })} aria-label={`Remove the ${t} filter`}>
-                    <Icon name="close" size={10} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {(collections.length > 0 || collection) && (
-            <label className="filter filter-collection">
-              <span>Collection</span>
-              <select className="sort-select" value={collection} onChange={e => setParam({ collection: e.target.value })}>
-                <option value="">Any</option>
-                {collection && !selectedCollection && <option value={collection} disabled>collection {collection}</option>}
-                {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
+      />
+      <div className="card feed">
+        <div className={`feed-filters feed-fold${filtersOpen ? " is-open" : ""}`} role="group" aria-label="Filters">
+          <FiltersToggle open={filtersOpen} onToggle={() => setFiltersOpen(v => !v)} active={activeFilters} controls="feed-scope" />
+          <div className="feed-scope" id="feed-scope">
+            <button
+              type="button"
+              className={`btn-secondary select-toggle${newOnly ? " is-on" : ""}`}
+              aria-pressed={newOnly}
+              onClick={() => setParam({ new: newOnly ? "" : "1" })}
+              title="Only posts indexed since you last marked everything seen"
+            >
+              <Icon name="refresh" size={13} />New since last visit{newCount > 0 ? ` (${fmtInt(newCount)})` : ""}
+            </button>
+            <label className="filter">
+              <span>Platform</span>
+              <select className="sort-select" value={platform} onChange={e => setParam({ platform: e.target.value, author: "" })}>
+                <option value="">All</option>
+                {platforms.map(p => <option key={p} value={p}>{platformLabel(p)}</option>)}
               </select>
             </label>
-          )}
-          <label className="filter">
-            <span>Review</span>
-            <select className="sort-select" value={review} onChange={e => setParam({ review: e.target.value })}>
-              <option value="">All</option>
-              <option value="unreviewed">Unreviewed</option>
-              <option value="kept">Kept</option>
+            <label className="filter">
+              <span>Kind</span>
+              <select className="sort-select" value={kind} onChange={e => setParam({ kind: e.target.value })}>
+                <option value="">All</option>
+                {KINDS.map(k => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </label>
+            <div className="filter filter-author">
+              <span>Creator</span>
+              <CreatorPicker
+                people={peopleApi.data || []}
+                accounts={authors}
+                platform={person ? "" : platform}
+                value={person ? { person } : author ? { platform, id: author } : null}
+                onChange={onCreator}
+              />
+            </div>
+            <label className="filter filter-tags">
+              <span>Tags</span>
+              <select className="sort-select" value="" onChange={e => onTagFilter(e.target.value)}>
+                <option value="">{untagged ? "Untagged" : tagFilter.length ? "Add another…" : "Any"}</option>
+                {!untagged && <option value="__untagged">Untagged only</option>}
+                {allTags.filter(t => !tagFilter.some(f => sameTag(f, t.name))).map(t => (
+                  <option key={t.name} value={t.name}>{t.name} ({t.count})</option>
+                ))}
+              </select>
+            </label>
+            {notification && (
+              <ul className="tag-chips filter-tag-chips" aria-label="Sync filter">
+                <li className="tag-chip"><span><Icon name="bell" size={11} />this sync&apos;s posts</span>
+                  <button type="button" className="tag-chip-x" onClick={() => setParam({ notification: "" })} aria-label="Remove the sync filter">
+                    <Icon name="close" size={10} />
+                  </button>
+                </li>
+              </ul>
+            )}
+            {(tagFilter.length > 0 || untagged) && (
+              <ul className="tag-chips filter-tag-chips" aria-label="Tag filters">
+                {untagged && (
+                  <li className="tag-chip"><span>untagged</span>
+                    <button type="button" className="tag-chip-x" onClick={() => setParam({ untagged: "" })} aria-label="Remove the untagged filter">
+                      <Icon name="close" size={10} />
+                    </button>
+                  </li>
+                )}
+                {tagFilter.map(t => (
+                  <li key={t} className="tag-chip"><span><Icon name="tag" size={11} /><span className="tag-chip-name">{t}</span></span>
+                    <button type="button" className="tag-chip-x" onClick={() => setParam({ tag: tagFilter.filter(x => x !== t) })} aria-label={`Remove the ${t} filter`}>
+                      <Icon name="close" size={10} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(collections.length > 0 || collection) && (
+              <label className="filter filter-collection">
+                <span>Collection</span>
+                <select className="sort-select" value={collection} onChange={e => setParam({ collection: e.target.value })}>
+                  <option value="">Any</option>
+                  {collection && !selectedCollection && <option value={collection} disabled>collection {collection}</option>}
+                  {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
+                </select>
+              </label>
+            )}
+            <label className="filter">
+              <span>Review</span>
+              <select className="sort-select" value={review} onChange={e => setParam({ review: e.target.value })}>
+                <option value="">All</option>
+                <option value="unreviewed">Unreviewed</option>
+                <option value="kept">Kept</option>
+              </select>
+            </label>
+          </div>
+          <label className="filter filter-sort">
+            <span>Sort</span>
+            <select className="sort-select" value={sort} onChange={e => setParam({ sort: e.target.value === "saved" ? "saved" : "" })}>
+              <option value="posted">{phone ? "Posted" : "Newest posted"}</option>
+              <option value="saved">{phone ? "Saved" : "Newest saved"}</option>
             </select>
           </label>
-        </div>
-        <label className="filter filter-sort">
-          <span>Sort</span>
-          <select className="sort-select" value={sort} onChange={e => setParam({ sort: e.target.value === "saved" ? "saved" : "" })}>
-            <option value="posted">{phone ? "Posted" : "Newest posted"}</option>
-            <option value="saved">{phone ? "Saved" : "Newest saved"}</option>
-          </select>
-        </label>
-        {anyFilter && (
-          <button type="button" className="btn-ghost filter-clear" onClick={clearFilters}>
-            <Icon name="close" size={12} /> clear filters
-          </button>
-        )}
-        <div className="page-head-spacer" />
-        {person && (
-          <Link className="btn-secondary review-link" to={personPath(person)} title="Accounts, handles and notes of this person">
-            <Icon name="users" size={14} />Person
-          </Link>
-        )}
-        {newOnly && !author && !person && (
-          <Link className="btn-secondary review-link" to="/review?new=1" title="Keep or trash the new posts, one by one">
-            <Icon name="review" size={14} />Review new posts
-          </Link>
-        )}
-        {(author || person) && (
-          <Link
-            className="btn-secondary review-link"
-            to={`/review?${new URLSearchParams({ ...(person ? { person } : { ...(platform ? { platform } : {}), author }), ...(newOnly ? { new: "1" } : {}) })}`}
-            title={`Keep or trash this ${person ? "person" : "creator"}'s unreviewed posts, one by one`}
-          >
-            <Icon name="review" size={14} />Review this {person ? "person" : "creator"}
-          </Link>
-        )}
-        {posts.length > 0 && (
-          <button
-            type="button"
-            className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
-            onClick={() => (sel.active ? sel.exit() : sel.enter())}
-            aria-pressed={sel.active}
-            title={sel.active ? "Leave select mode (Esc)" : "Select posts to tag, keep or delete"}
-          >
-            <Icon name={sel.active ? "close" : "check"} size={14} />
-            <span className="select-toggle-label">{sel.active ? "Done" : "Select"}</span>
-          </button>
-        )}
-      </div>
-
-      <DeleteErrors errors={delErrors} onDismiss={() => setDelErrors(null)} />
-
-      {error ? (
-        <div className="empty">
-          Could not load posts: {error.message}
-        </div>
-      ) : firstLoad ? (
-        <div className="empty">Loading…</div>
-      ) : showEmpty ? (
-        newOnly && !q && !platform && !kind && !author && !person && !review && !tagFilter.length && !untagged ? (
-          <div className="feed-empty">
-            <span className="feed-empty-mark"><Icon name="check" size={30} /></span>
-            <h3>Nothing new</h3>
-            <p>No post has been indexed since you last marked everything seen. A sync or a rescan that finds new posts brings them here.</p>
-            <button type="button" className="btn-secondary" onClick={() => setParam({ new: "" })}>Show all posts</button>
-          </div>
-        ) : anyFilter ? (
-          <div className="empty">
-            No posts match{q ? <> “{q}”</> : ""}.{" "}
-            <button type="button" className="btn-link" onClick={clearFilters}>Clear filters</button>
-          </div>
-        ) : (
-          <div className="feed-empty">
-            <span className="feed-empty-mark"><Icon name="feed" size={30} /></span>
-            <h3>No posts yet</h3>
-            <p>
-              FeedVault catalogs posts that a downloader already saved to disk. To fill it:
-            </p>
-            <ol>
-              <li>
-                Open <Link to="/settings" className="text-link">Settings</Link> and add the folder
-                your downloads go to as a media root.
-              </li>
-              <li>
-                Download some posts with instaloader, for example
-                <code className="cmd">instaloader --no-compress-json -- -SHORTCODE</code>
-                <span className="dim"> (plain <code>.json</code> is easiest to read by hand; compressed <code>.json.xz</code> works too).</span>
-              </li>
-              <li>Rescan, and they show up here.</li>
-            </ol>
-            <button type="button" className="btn-primary" onClick={start} disabled={running}>
-              <Icon name="refresh" size={14} className={running ? "spin" : ""} />
-              {running ? "Scanning…" : "Rescan now"}
+          {anyFilter && (
+            <button type="button" className="btn-ghost filter-clear" onClick={clearFilters}>
+              <Icon name="close" size={12} /> clear filters
             </button>
+          )}
+          <div className="page-head-spacer" />
+          {person && (
+            <Link className="btn-secondary review-link" to={personPath(person)} title="Accounts, handles and notes of this person">
+              <Icon name="users" size={14} />Person
+            </Link>
+          )}
+          {newOnly && !author && !person && (
+            <Link className="btn-secondary review-link" to="/review?new=1" title="Keep or trash the new posts, one by one">
+              <Icon name="review" size={14} />Review new posts
+            </Link>
+          )}
+          {(author || person) && (
+            <Link
+              className="btn-secondary review-link"
+              to={`/review?${new URLSearchParams({ ...(person ? { person } : { ...(platform ? { platform } : {}), author }), ...(newOnly ? { new: "1" } : {}) })}`}
+              title={`Keep or trash this ${person ? "person" : "creator"}'s unreviewed posts, one by one`}
+            >
+              <Icon name="review" size={14} />Review this {person ? "person" : "creator"}
+            </Link>
+          )}
+          {posts.length > 0 && (
+            <button
+              type="button"
+              className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
+              onClick={() => (sel.active ? sel.exit() : sel.enter())}
+              aria-pressed={sel.active}
+              title={sel.active ? "Leave select mode (Esc)" : "Select posts to tag, keep or delete"}
+            >
+              <Icon name={sel.active ? "close" : "check"} size={14} />
+              <span className="select-toggle-label">{sel.active ? "Done" : "Select"}</span>
+            </button>
+          )}
+        </div>
+
+        <DeleteErrors errors={delErrors} onDismiss={() => setDelErrors(null)} />
+
+        {error ? (
+          <div className="empty">
+            Could not load posts: {error.message}
           </div>
-        )
-      ) : (
-        <>
-          <div className={`masonry${current ? "" : " is-stale"}`} aria-busy={!current}>
-            {posts.map((p, i) => (
-              <PostCard
-                key={p.id}
-                post={p}
-                index={i}
-                selectMode={sel.active}
-                selected={sel.isSelected(p.id)}
-                onToggle={sel.toggle}
-              />
-            ))}
-          </div>
-          {hasMore && (
-            <div className="feed-more" ref={sentinel}>
-              <button type="button" className="btn-secondary" onClick={loadMore} disabled={loadingMore}>
-                {loadingMore ? "Loading…" : `Load more (${(result.total - posts.length).toLocaleString()} left)`}
+        ) : firstLoad ? (
+          <div className="empty">Loading…</div>
+        ) : showEmpty ? (
+          newOnly && !q && !platform && !kind && !author && !person && !review && !tagFilter.length && !untagged ? (
+            <div className="feed-empty">
+              <span className="feed-empty-mark"><Icon name="check" size={30} /></span>
+              <h3>Nothing new</h3>
+              <p>No post has been indexed since you last marked everything seen. A sync or a rescan that finds new posts brings them here.</p>
+              <button type="button" className="btn-secondary" onClick={() => setParam({ new: "" })}>Show all posts</button>
+            </div>
+          ) : anyFilter ? (
+            <div className="empty">
+              No posts match{q ? <> “{q}”</> : ""}.{" "}
+              <button type="button" className="btn-link" onClick={clearFilters}>Clear filters</button>
+            </div>
+          ) : (
+            <div className="feed-empty">
+              <span className="feed-empty-mark"><Icon name="feed" size={30} /></span>
+              <h3>No posts yet</h3>
+              <p>
+                FeedVault catalogs posts that a downloader already saved to disk. To fill it:
+              </p>
+              <ol>
+                <li>
+                  Open <Link to="/settings" className="text-link">Settings</Link> and add the folder
+                  your downloads go to as a media root.
+                </li>
+                <li>
+                  Download some posts with instaloader, for example
+                  <code className="cmd">instaloader --no-compress-json -- -SHORTCODE</code>
+                  <span className="dim"> (plain <code>.json</code> is easiest to read by hand; compressed <code>.json.xz</code> works too).</span>
+                </li>
+                <li>Rescan, and they show up here.</li>
+              </ol>
+              <button type="button" className="btn-primary" onClick={start} disabled={running}>
+                <Icon name="refresh" size={14} className={running ? "spin" : ""} />
+                {running ? "Scanning…" : "Rescan now"}
               </button>
             </div>
-          )}
-          {sel.active && (
-            <SelectionBar selection={sel} loaded={posts.length}>
-              {selectedCount > 0 && (
-                <span className="select-size mono" title="Media files of the selected posts">{fmtBytes(selectedBytes)}</span>
-              )}
-              <button type="button" className="btn-secondary" onClick={() => setTagging(true)} disabled={!selectedCount}>
-                <Icon name="tag" size={14} />Tag…
-              </button>
-              <button type="button" className="btn-secondary" onClick={() => setCollecting(true)} disabled={!selectedCount}>
-                <Icon name="bookmark" size={14} />Collection…
-              </button>
-              <button type="button" className="btn-keep" onClick={runKeep} disabled={!selectedCount || keeping}>
-                <Icon name="check" size={14} />{keeping ? "Keeping…" : "Keep"}
-              </button>
-              <button type="button" className="btn-danger" onClick={() => { setDlgError(null); setConfirmDel(true); }} disabled={!selectedCount}>
-                <Icon name="trash" size={14} />Delete…
-              </button>
-            </SelectionBar>
-          )}
-          {current && !hasMore && posts.length > PAGE && (
-            <div className="feed-end">end of feed · {posts.length.toLocaleString()} posts</div>
-          )}
-        </>
-      )}
+          )
+        ) : (
+          <>
+            <div className={`masonry${current ? "" : " is-stale"}`} aria-busy={!current}>
+              {posts.map((p, i) => (
+                <PostCard
+                  key={p.id}
+                  post={p}
+                  index={i}
+                  selectMode={sel.active}
+                  selected={sel.isSelected(p.id)}
+                  onToggle={sel.toggle}
+                />
+              ))}
+            </div>
+            {hasMore && (
+              <div className="feed-more" ref={sentinel}>
+                <button type="button" className="btn-secondary" onClick={loadMore} disabled={loadingMore}>
+                  {loadingMore ? "Loading…" : `Load more (${(result.total - posts.length).toLocaleString()} left)`}
+                </button>
+              </div>
+            )}
+            {sel.active && (
+              <SelectionBar selection={sel} loaded={posts.length}>
+                {selectedCount > 0 && (
+                  <span className="select-size mono" title="Media files of the selected posts">{fmtBytes(selectedBytes)}</span>
+                )}
+                <button type="button" className="btn-secondary" onClick={() => setTagging(true)} disabled={!selectedCount}>
+                  <Icon name="tag" size={14} />Tag…
+                </button>
+                <button type="button" className="btn-secondary" onClick={() => setCollecting(true)} disabled={!selectedCount}>
+                  <Icon name="bookmark" size={14} />Collection…
+                </button>
+                <button type="button" className="btn-keep" onClick={runKeep} disabled={!selectedCount || keeping}>
+                  <Icon name="check" size={14} />{keeping ? "Keeping…" : "Keep"}
+                </button>
+                <button type="button" className="btn-danger" onClick={() => { setDlgError(null); setConfirmDel(true); }} disabled={!selectedCount}>
+                  <Icon name="trash" size={14} />Delete…
+                </button>
+              </SelectionBar>
+            )}
+            {current && !hasMore && posts.length > PAGE && (
+              <div className="feed-end">end of feed · {posts.length.toLocaleString()} posts</div>
+            )}
+          </>
+        )}
 
-      {tagging && (
-        <BulkTagDialog posts={selectedPosts} tags={allTags} onApplied={onTagged} onCancel={() => setTagging(false)} />
-      )}
+        {tagging && (
+          <BulkTagDialog posts={selectedPosts} tags={allTags} onApplied={onTagged} onCancel={() => setTagging(false)} />
+        )}
 
-      {collecting && (
-        <CollectionDialog posts={selectedPosts.map(p => p.id)} onClose={() => setCollecting(false)} />
-      )}
+        {collecting && (
+          <CollectionDialog posts={selectedPosts.map(p => p.id)} onClose={() => setCollecting(false)} />
+        )}
 
-      <ConfirmDialog
-        open={confirmDel}
-        danger
-        busy={deleting}
-        error={dlgError}
-        title={`Delete ${selectedCount} post${selectedCount === 1 ? "" : "s"}?`}
-        confirmLabel={`Delete ${selectedCount} post${selectedCount === 1 ? "" : "s"}`}
-        onConfirm={runDelete}
-        onCancel={() => setConfirmDel(false)}
-      >
-        <p>
-          Move {selectedCount === 1 ? "this post" : `these ${selectedCount} posts`} and
-          all {selectedCount === 1 ? "its" : "their"} files
-          {selectedMedia > 0 && ` (${selectedMedia} media, ${fmtBytes(selectedBytes)})`} to the trash?
-          You can restore {selectedCount === 1 ? "it" : "them"} from the Trash page; the space is freed once the trash is emptied.
-        </p>
-      </ConfirmDialog>
-    </div>
+        <ConfirmDialog
+          open={confirmDel}
+          danger
+          busy={deleting}
+          error={dlgError}
+          title={`Delete ${selectedCount} post${selectedCount === 1 ? "" : "s"}?`}
+          confirmLabel={`Delete ${selectedCount} post${selectedCount === 1 ? "" : "s"}`}
+          onConfirm={runDelete}
+          onCancel={() => setConfirmDel(false)}
+        >
+          <p>
+            Move {selectedCount === 1 ? "this post" : `these ${selectedCount} posts`} and
+            all {selectedCount === 1 ? "its" : "their"} files
+            {selectedMedia > 0 && ` (${selectedMedia} media, ${fmtBytes(selectedBytes)})`} to the trash?
+            You can restore {selectedCount === 1 ? "it" : "them"} from the Trash page; the space is freed once the trash is emptied.
+          </p>
+        </ConfirmDialog>
+      </div>
+    </>
   );
 }

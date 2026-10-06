@@ -659,15 +659,40 @@ button:disabled { opacity: 0.4; cursor: default; }
 .del-btn-confirm:hover { color: var(--accent-hover); background: rgba(var(--accent-rgb), 0.16); }
 .del-confirm-label { font-size: 11px; color: var(--muted); align-self: center; padding-right: 2px; }
 
-/* Grid pages used to open on an 11px uppercase label while the stats page
-   opened on a real title. Same treatment everywhere now. */
+/* The head every page opens on (PageHeader.jsx): the title, its count and
+   the page's actions, above the page's cards and flush with the main
+   column, so the title sits at the same place on every page. The actions
+   wrap under the title when the row has no room for both. The text sits
+   4px low and gives the 4px back: a 26px title centres on the 34px buttons
+   beside it, and the head is as tall as before (49px with buttons, 41px
+   without). */
 .page-head {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin-bottom: 18px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 16px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border-soft);
+}
+.page-head-text {
+  flex: 1 1 260px;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding-top: 4px;
+  margin-bottom: -4px;
+}
+.page-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
 }
 .page-title {
   font-family: var(--display);
@@ -685,9 +710,10 @@ button:disabled { opacity: 0.4; cursor: default; }
   font-weight: 700;
   color: var(--muted);
   padding-bottom: 1px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .page-head-spacer { flex: 1; min-width: 0; }
-.page-head .sort-controls { align-self: center; }
 
 /* ── Sort ───────────────────────────────────────────────── */
 .sort-select {
@@ -737,7 +763,7 @@ button:disabled { opacity: 0.4; cursor: default; }
    border and var(--bg) fill, so a row reads as one set. A <Link> needs
    inline-flex and a fixed height to match a <button>; an icon plus a label
    needs nowrap so the icon never wraps above the text. */
-:is(.page-head, .feed-filters, .post-page-head) :is(.btn-secondary, .btn-back, .btn-danger-soft) {
+:is(.page-head, .feed-filters) :is(.btn-secondary, .btn-back, .btn-danger-soft) {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -750,11 +776,10 @@ button:disabled { opacity: 0.4; cursor: default; }
   white-space: nowrap;
   text-decoration: none;
 }
-:is(.page-head, .feed-filters, .post-page-head) :is(.btn-secondary, .btn-back) { background: var(--bg); color: var(--text); }
-:is(.page-head, .feed-filters, .post-page-head) .btn-secondary:not(.is-on):hover:not(:disabled) { background: var(--bg); border-color: var(--muted); }
-:is(.page-head, .feed-filters, .post-page-head) .select-toggle.is-on { color: var(--glow); }
+:is(.page-head, .feed-filters) :is(.btn-secondary, .btn-back) { background: var(--bg); color: var(--text); }
+:is(.page-head, .feed-filters) .btn-secondary:not(.is-on):hover:not(:disabled) { background: var(--bg); border-color: var(--muted); }
+:is(.page-head, .feed-filters) .select-toggle.is-on { color: var(--glow); }
 :is(.page-head, .feed-filters) :is(.picker-input, input[type="text"].page-filter) { height: 34px; border-radius: 9px; }
-.page-head .icon-btn { width: 34px; height: 34px; }
 
 .vp-stats {
   display: grid;
@@ -979,7 +1004,6 @@ code {
 a.chip { min-height: 24px; }
 .chip-new { color: var(--accent-text); border-color: rgba(var(--glow-rgb), 0.35); background: rgba(var(--accent-rgb), 0.12); }
 
-.page-head-bare { margin-bottom: 0; }
 .page-lede {
   font-size: 13px;
   line-height: 1.6;
@@ -987,6 +1011,8 @@ a.chip { min-height: 24px; }
   max-width: 760px;
   margin: -4px 0 16px;
 }
+/* First in its card (Jobs, Scripts, Unmatched): the card's padding is the room above. */
+.card > .page-lede:first-child { margin-top: 0; }
 input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padding: 7px 12px; align-self: center; }
 
 /* ── Sidebar scan ───────────────────────────────────────── */
@@ -1330,7 +1356,6 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 
 /* ── Post page ──────────────────────────────────────────── */
 .post-page { display: flex; flex-direction: column; gap: 18px; }
-.post-page-head { display: flex; align-items: center; gap: 12px; }
 .post-missing-note { margin-top: 0; display: flex; align-items: center; gap: 8px; }
 
 .post-layout {
@@ -2082,11 +2107,20 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   color: inherit;
   border: 1px solid color-mix(in srgb, currentColor 55%, transparent); border-radius: 4px;
 }
+/* Review fills the window under the header: its page head takes what it
+   needs, the stage and the panel the rest. */
+.review-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  height: calc(100vh - var(--header-h) - 56px);
+}
+/* A zero basis: the window sets the height, never the media's own size. */
 .review {
+  flex: 1 1 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: 16px;
-  height: calc(100vh - var(--header-h) - 56px);
   min-height: 460px;
 }
 .review:fullscreen { height: 100vh; padding: 12px; background: var(--bg); }
@@ -2179,7 +2213,8 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .review-help-box p { font-size: 12px; }
 .review-help-box .btn-secondary { align-self: flex-end; }
 @media (max-width: 1000px) {
-  .review { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .review-page { height: auto; }
+  .review { grid-template-columns: minmax(0, 1fr); }
   .review-stage { height: 62vh; }
 }
 /* The filters' toggle (Review, Feed) shows on a phone only: on a desktop
@@ -2199,7 +2234,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 @media (max-width: 640px) {
   /* pageIn moves <main>, and a transform, even a finished one held by its
      fill mode, makes <main> the bar's containing block: here it fades only. */
-  main:has(> .review) { animation-name: pageFade; }
+  main:has(> .review-page) { animation-name: pageFade; }
   /* --review-bar-h: the bar's height, measured by Review.jsx. */
   .review { padding-bottom: calc(var(--review-bar-h, 120px) + 12px); }
   .review-stage { height: var(--stage-h, 55vh); }
@@ -2238,6 +2273,14 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
+  /* No entry animation and no lift on a collection card, and no scale on
+     a drop target (card or tile). Specific enough
+     to win over the card's own rules, further down. Cards that start at
+     opacity 0 (post, creator, big file) keep their 0.01ms animation: it is
+     what shows them. */
+  .collection-grid .collection-card { animation: none; }
+  .collection-grid .collection-card:is(:hover, .is-over) { transform: none; }
+  .collection-posts .collection-tile.is-over { transform: none; }
 }
 
 /* ── Storage page ───────────────────────────────────────── */
@@ -2348,6 +2391,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .big-file-trash { width: 28px; height: 28px; flex-shrink: 0; }
 
 /* ── Trash page ─────────────────────────────────────────── */
+.trash-page > .page-head { margin-bottom: 18px; }
 .trash-page .page-lede { margin-top: -8px; }
 .big-files.is-stale { opacity: 0.45; pointer-events: none; }
 .trash-entry.is-selecting { cursor: pointer; }
@@ -2655,7 +2699,10 @@ a.btn-primary { color: var(--on-accent); }
   background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden;
   color: var(--text-dim);
   transition: border-color 0.15s, transform 0.15s;
-  animation: statRise 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  /* Backwards, not both: a fill held after the end keeps the animation's
+     transform, which outranks the hover lift and the drop target's scale
+     below (#94). The card's own opacity is 1, so it needs no end fill. */
+  animation: statRise 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
 }
 .collection-card:hover { border-color: rgba(var(--glow-rgb), 0.45); transform: translateY(-2px); color: var(--text); }
 .collection-card[draggable="true"] { cursor: grab; }
@@ -2831,7 +2878,6 @@ a.btn-primary { color: var(--on-accent); }
 .picker-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .picker-all { font-size: 12px; color: var(--text-dim); }
 .picker-empty { padding: 8px 10px; font-size: 12px; color: var(--muted); }
-.storage-person { margin-left: 8px; }
 .chip.person-chip { color: var(--accent-hover); border-color: rgba(var(--glow-rgb), 0.35); text-transform: none; }
 .chip.person-chip:hover { background: rgba(var(--accent-rgb), 0.12); }
 /* A chip's text, cut when the chip is held narrower than it (its title has it all). */
@@ -2879,7 +2925,6 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .dialog-field { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; font-size: 12px; color: var(--muted); }
 .dialog-field input[type="text"].page-filter { flex: none; align-self: stretch; }
 
-.person-page .page-head .avatar-letter { flex-shrink: 0; }
 .person-rename { display: flex; align-items: center; gap: 6px; }
 .person-delete { flex-shrink: 0; white-space: nowrap; }
 .person-delete:hover:not(:disabled) { color: #ffb3b5; }
@@ -3074,9 +3119,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   /* 34px: the height of the buttons in the same filter rows. */
   input[type="text"], input[type="date"], select { min-height: 34px; }
   /* The bigger text makes fields wider: a long choice (a collection's name)
-     or a page's head wraps instead of pushing the page sideways. */
+     wraps instead of pushing the page sideways. */
   .filter, .filter .sort-select { max-width: 100%; }
-  .page-head { flex-wrap: wrap; }
   /* Tap-sized: the small text buttons (Rename, Delete, Options, Not a
      duplicate, Tag, Collection…) and the icon buttons on rows and tiles. */
   .btn-ghost { min-height: 32px; }
@@ -3090,10 +3134,9 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   /* Two tiles a row (Trash, Storage's biggest files), not one screen-high tile. */
   .big-files { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 }
-/* A phone on its side (641-860px, the sidebar still showing): a page's head
-   wraps like it does under 640px instead of pushing the page sideways. */
+/* A phone on its side (641-860px, the sidebar still showing): the
+   Collections page's form wraps instead of pushing the page sideways. */
 @media (max-width: 860px) {
-  .page-head { flex-wrap: wrap; }
   .collection-new input[type="text"] { min-width: 0; }
   /* The field's own width (16px text on a touch screen) set the form's
      least width: at 375 it pushed the page 10px sideways. */

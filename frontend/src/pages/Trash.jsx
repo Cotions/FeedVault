@@ -10,6 +10,7 @@ import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
 import SelectionBar from "../components/SelectionBar";
+import PageHeader from "../components/PageHeader";
 
 const PAGE = 60;
 const MAX_PAGE = 500;      // the backend's limit; a reload refetches what was loaded
@@ -289,29 +290,30 @@ export default function Trash() {
 
   const trash = result?.trash;
   const head = (
-    <div className="page-head">
-      <h2 className="page-title">Trash</h2>
-      {trash && (
+    <PageHeader
+      title="Trash"
+      sub={trash && (
         <span className="page-count" title="Everything in the trash folders, whatever the filters">
           {plural(trash.entries, "entry", "entries")} · {plural(trash.files, "file")} · {fmtBytes(trash.bytes)}
         </span>
       )}
-      <div className="page-head-spacer" />
-      {trash?.entries > 0 && !sel.active && (
-        <button type="button" className="btn-secondary" onClick={checkFiles} disabled={busy}
-          title="Look at every trashed file now. The list checks the entries it shows; this finds files moved or deleted by hand anywhere in the trash">
-          <Icon name="search" size={14} />Check for missing files
-        </button>
-      )}
-      {entries.length > 0 && !sel.active && (
-        <button type="button" className="btn-secondary" onClick={sel.enter}>
-          <Icon name="check" size={14} />Select
-        </button>
-      )}
-      {sel.active && (
-        <button type="button" className="btn-secondary" onClick={sel.exit}>Done</button>
-      )}
-    </div>
+      actions={<>
+        {trash?.entries > 0 && !sel.active && (
+          <button type="button" className="btn-secondary" onClick={checkFiles} disabled={busy}
+            title="Look at every trashed file now. The list checks the entries it shows; this finds files moved or deleted by hand anywhere in the trash">
+            <Icon name="search" size={14} />Check for missing files
+          </button>
+        )}
+        {entries.length > 0 && !sel.active && (
+          <button type="button" className="btn-secondary" onClick={sel.enter}>
+            <Icon name="check" size={14} />Select
+          </button>
+        )}
+        {sel.active && (
+          <button type="button" className="btn-secondary" onClick={sel.exit}>Done</button>
+        )}
+      </>}
+    />
   );
 
   if (!result) {

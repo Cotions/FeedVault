@@ -8,6 +8,7 @@ import { cleanName } from "../lib/tags";
 import { excerpt, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import PageHeader from "../components/PageHeader";
 
 const PAGE = 60;
 
@@ -114,21 +115,34 @@ export default function CollectionView() {
     navigate("/collections");
   });
 
+  // Before the collection loads, or when it cannot: the same head, with a
+  // stand-in title, so nothing jumps when it comes.
+  const back = <Link to="/collections" className="btn-secondary btn-back"><Icon name="back" size={15} />Collections</Link>;
   if (error && (!current || !collection)) {
     return (
-      <div className="card"><div className="empty">
-        {error.status === 404 ? "No such collection." : `Could not load the collection: ${error.message}`}{" "}
-        <Link to="/collections" className="text-link">All collections</Link>
-      </div></div>
+      <>
+        <PageHeader title="Collection" back={back} />
+        <div className="card"><div className="empty">
+          {error.status === 404 ? "No such collection." : `Could not load the collection: ${error.message}`}{" "}
+          <Link to="/collections" className="text-link">All collections</Link>
+        </div></div>
+      </>
     );
   }
-  if (!current || !collection) return <div className="card"><div className="empty">Loading…</div></div>;
+  if (!current || !collection) {
+    return (
+      <>
+        <PageHeader title="Collection" back={back} />
+        <div className="card"><div className="empty">Loading…</div></div>
+      </>
+    );
+  }
 
   return (
-    <div className="card">
-      <div className="page-head">
-        <Link to="/collections" className="btn-secondary btn-back"><Icon name="back" size={15} />Collections</Link>
-        {renaming != null ? (
+    <>
+      <PageHeader
+        title={collection.name}
+        heading={renaming != null && (
           <form className="tag-rename" onSubmit={rename}>
             <input type="text" autoFocus maxLength={64} value={renaming} aria-label="Collection name"
                    onChange={e => setRenaming(e.target.value)}
@@ -136,88 +150,89 @@ export default function CollectionView() {
             <button type="submit" className="del-btn del-btn-confirm" disabled={busy} aria-label="Rename"><Icon name="check" /></button>
             <button type="button" className="del-btn" onClick={() => setRenaming(null)} aria-label="Cancel rename"><Icon name="close" /></button>
           </form>
-        ) : (
-          <h2 className="page-title">{collection.name}</h2>
         )}
-        <span className="page-count">{total.toLocaleString()}</span>
-        <div className="page-head-spacer" />
-        {renaming == null && (
-          <button type="button" className="btn-ghost" onClick={() => setRenaming(collection.name)}>Rename</button>
-        )}
-        <button type="button" className="btn-danger-soft" onClick={() => setConfirmDel(true)}>
-          <Icon name="trash" size={14} />Delete collection
-        </button>
-      </div>
-
-      {posts.length === 0 ? (
-        <div className="empty">
-          Nothing here yet. Add posts from the <Link to="/" className="text-link">Feed</Link> (Select, then
-          “Collection…”), from a post page, or with <kbd className="kbd">C</kbd> in Review.
-        </div>
-      ) : (
-        <>
-          <p className="dim collection-hint">Drag a post onto another to move it there.</p>
-          <ol className="collection-posts">
-            {posts.map((p, i) => {
-              const alt = excerpt(p.text, 100) || `Post by @${p.author?.handle || "unknown"}`;
-              const isCover = collection.cover_post === p.id || (!collection.cover_post && i === 0);
-              return (
-                <li
-                  key={p.id}
-                  className={`collection-tile${drag?.from === i ? " is-dragging" : ""}${drag && drag.over === i && drag.from !== i ? " is-over" : ""}`}
-                  draggable={!busy}
-                  onDragStart={e => { e.dataTransfer.effectAllowed = "move"; setDrag({ from: i, over: i }); }}
-                  onDragOver={e => { if (drag) { e.preventDefault(); if (drag.over !== i) setDrag({ ...drag, over: i }); } }}
-                  onDrop={e => { e.preventDefault(); if (drag) move(drag.from, i); setDrag(null); }}
-                  onDragEnd={() => setDrag(null)}
-                >
-                  <Link to={postPath(p)} className="collection-tile-media" draggable={false} title={alt}>
-                    {p.cover && p.cover.poster !== false
-                      ? <img src={p.cover.url} alt={alt} loading="lazy" decoding="async" draggable={false} />
-                      : <span className="collection-tile-text">{excerpt(p.text, 120) || "(no text)"}</span>}
-                    {isCover && <span className="collection-cover-badge">cover</span>}
-                  </Link>
-                  <div className="collection-tile-bar">
-                    <span className="collection-grip" aria-hidden="true"><Icon name="grip" size={14} /></span>
-                    <button type="button" className="del-btn" onClick={() => move(i, i - 1)} disabled={busy || i === 0}
-                            title="Move earlier" aria-label="Move earlier"><Icon name="chevLeft" size={14} /></button>
-                    <button type="button" className="del-btn" onClick={() => move(i, i + 1)} disabled={busy || i === posts.length - 1}
-                            title="Move later" aria-label="Move later"><Icon name="chevRight" size={14} /></button>
-                    <div className="page-head-spacer" />
-                    {!isCover && (
-                      <button type="button" className="del-btn" onClick={() => cover(p)} disabled={busy}
-                              title="Use as cover" aria-label="Use as cover"><Icon name="image" size={14} /></button>
-                    )}
-                    <button type="button" className="del-btn" onClick={() => remove(p)} disabled={busy}
-                            title="Remove from this collection (the post stays)" aria-label="Remove from collection">
-                      <Icon name="close" size={14} />
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-          {posts.length < total && (
-            <div className="feed-more">
-              <button type="button" className="btn-secondary" onClick={loadMore} disabled={loadingMore}>
-                {loadingMore ? "Loading…" : `Load more (${(total - posts.length).toLocaleString()} left)`}
-              </button>
-            </div>
+        sub={total.toLocaleString()}
+        back={back}
+        actions={<>
+          {renaming == null && (
+            <button type="button" className="btn-ghost" onClick={() => setRenaming(collection.name)}>Rename</button>
           )}
-        </>
-      )}
+          <button type="button" className="btn-danger-soft" onClick={() => setConfirmDel(true)}>
+            <Icon name="trash" size={14} />Delete collection
+          </button>
+        </>}
+      />
+      <div className="card">
+        {posts.length === 0 ? (
+          <div className="empty">
+            Nothing here yet. Add posts from the <Link to="/" className="text-link">Feed</Link> (Select, then
+            “Collection…”), from a post page, or with <kbd className="kbd">C</kbd> in Review.
+          </div>
+        ) : (
+          <>
+            <p className="dim collection-hint">Drag a post onto another to move it there.</p>
+            <ol className="collection-posts">
+              {posts.map((p, i) => {
+                const alt = excerpt(p.text, 100) || `Post by @${p.author?.handle || "unknown"}`;
+                const isCover = collection.cover_post === p.id || (!collection.cover_post && i === 0);
+                return (
+                  <li
+                    key={p.id}
+                    className={`collection-tile${drag?.from === i ? " is-dragging" : ""}${drag && drag.over === i && drag.from !== i ? " is-over" : ""}`}
+                    draggable={!busy}
+                    onDragStart={e => { e.dataTransfer.effectAllowed = "move"; setDrag({ from: i, over: i }); }}
+                    onDragOver={e => { if (drag) { e.preventDefault(); if (drag.over !== i) setDrag({ ...drag, over: i }); } }}
+                    onDrop={e => { e.preventDefault(); if (drag) move(drag.from, i); setDrag(null); }}
+                    onDragEnd={() => setDrag(null)}
+                  >
+                    <Link to={postPath(p)} className="collection-tile-media" draggable={false} title={alt}>
+                      {p.cover && p.cover.poster !== false
+                        ? <img src={p.cover.url} alt={alt} loading="lazy" decoding="async" draggable={false} />
+                        : <span className="collection-tile-text">{excerpt(p.text, 120) || "(no text)"}</span>}
+                      {isCover && <span className="collection-cover-badge">cover</span>}
+                    </Link>
+                    <div className="collection-tile-bar">
+                      <span className="collection-grip" aria-hidden="true"><Icon name="grip" size={14} /></span>
+                      <button type="button" className="del-btn" onClick={() => move(i, i - 1)} disabled={busy || i === 0}
+                              title="Move earlier" aria-label="Move earlier"><Icon name="chevLeft" size={14} /></button>
+                      <button type="button" className="del-btn" onClick={() => move(i, i + 1)} disabled={busy || i === posts.length - 1}
+                              title="Move later" aria-label="Move later"><Icon name="chevRight" size={14} /></button>
+                      <div className="page-head-spacer" />
+                      {!isCover && (
+                        <button type="button" className="del-btn" onClick={() => cover(p)} disabled={busy}
+                                title="Use as cover" aria-label="Use as cover"><Icon name="image" size={14} /></button>
+                      )}
+                      <button type="button" className="del-btn" onClick={() => remove(p)} disabled={busy}
+                              title="Remove from this collection (the post stays)" aria-label="Remove from collection">
+                        <Icon name="close" size={14} />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+            {posts.length < total && (
+              <div className="feed-more">
+                <button type="button" className="btn-secondary" onClick={loadMore} disabled={loadingMore}>
+                  {loadingMore ? "Loading…" : `Load more (${(total - posts.length).toLocaleString()} left)`}
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
-      <ConfirmDialog
-        open={confirmDel}
-        danger
-        busy={busy}
-        title={`Delete the collection “${collection.name}”?`}
-        confirmLabel="Delete collection"
-        onConfirm={runDelete}
-        onCancel={() => setConfirmDel(false)}
-      >
-        <p>The {total} post{total === 1 ? "" : "s"} in it stay where they are; only the collection goes.</p>
-      </ConfirmDialog>
-    </div>
+        <ConfirmDialog
+          open={confirmDel}
+          danger
+          busy={busy}
+          title={`Delete the collection “${collection.name}”?`}
+          confirmLabel="Delete collection"
+          onConfirm={runDelete}
+          onCancel={() => setConfirmDel(false)}
+        >
+          <p>The {total} post{total === 1 ? "" : "s"} in it stay where they are; only the collection goes.</p>
+        </ConfirmDialog>
+      </div>
+    </>
   );
 }
