@@ -52,7 +52,8 @@ from `client` (`backend/tests/conftest.py`).
   the like are unset.
 - Starting a program (`subprocess.Popen`, `os.exec*`, `os.spawn*`,
   `posix_spawn`, `os.system`) is refused unless its real path is inside the
-  test's tmp dir or `backend/tests/` (the fakes), or it is this Python. A
+  test's tmp dir or `backend/tests/` (the fakes), or it is this Python
+  (`/bin/sh` is let through only as the `#!` of a script a test wrote). A
   script's `#!` interpreter is checked too, and so is a script run from a
   memfd (how FeedVault runs a user's shell script).
 - `shutil.which` and `jobs.tool_path` (which includes a tool path set in
@@ -79,9 +80,9 @@ The fakes:
   the network. Tests install them as `#!<this Python>` scripts in a `bin/`
   folder in their tmp dir, put first on `PATH`.
 
-A test must never reach a real tool, a real `HOME` or the network. Do not
-add `tool_guard.allow(...)` to get around a refusal: give the test a fake
-instead.
+A test must never reach a real tool, a real `HOME` or the network. The
+guard has a `tool_guard.allow(path, why)` escape hatch (see `conftest.py`);
+do not add one to get around a refusal: give the test a fake instead.
 
 `backend/tests/test_api_doc.py` checks that [API.md](API.md) lists every
 route of the app's URL map and nothing else (see the top of API.md for the
@@ -111,7 +112,7 @@ npm run build                         # the backend serves frontend/dist
 npx playwright install chromium       # once
 npm run e2e                           # every project
 npm run e2e -- --project=themes       # one project
-npm run e2e -- $(node e2e/shards.js 3)   # one CI shard
+projects=$(node e2e/shards.js 3) && npm run e2e -- $projects   # one CI shard
 ```
 
 Playwright (`frontend/playwright.config.js`, specs in `frontend/e2e/`)
@@ -176,8 +177,10 @@ CI runs the projects in 4 shards, one job each (`frontend/e2e/shards.js`):
 | 3 | `layout-zoom`, `themes` |
 | 4 | `desktop`, `phone` |
 
-`node e2e/shards.js <n>` prints shard n's `--project=…` arguments (and
-fails for a shard that does not exist). Locally, `npm run e2e` runs every
+`node e2e/shards.js <n>` prints shard n's `--project=…` arguments, and
+fails for a shard that does not exist. Keep it a step of its own, as above
+and in CI: inside `npm run e2e -- $(…)` a failure leaves no arguments, and
+every project runs. Locally, `npm run e2e` runs every
 project in one go.
 
 To add a project:
@@ -218,8 +221,9 @@ FONTCONFIG_FILE=/tmp/fonts-ci.conf fc-match system-ui   # should say DejaVu Sans
 cd frontend && FONTCONFIG_FILE=/tmp/fonts-ci.conf npm run e2e
 ```
 
-Chromium inherits `FONTCONFIG_FILE` from the test runner; nothing else
-changes.
+`/usr/share/fonts/truetype/dejavu` is Debian's and Ubuntu's folder; on
+other systems use the one `fc-list | grep DejaVuSans.ttf` shows. Chromium
+inherits `FONTCONFIG_FILE` from the test runner; nothing else changes.
 
 ## CI
 

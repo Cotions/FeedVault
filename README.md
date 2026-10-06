@@ -11,7 +11,8 @@ FeedVault does not download anything itself. It reads what
 
 The **Review** page is for sorting: one post at a time, keep or trash it from
 the keyboard. Deleting moves files to `.feedvault-trash/` inside the media
-folder; only **Empty trash** in Settings → Library removes them for good.
+folder; only **Empty trash** in Settings → Library, and purging an entry
+on the **Trash** page, remove them for good.
 
 Status: in daily use by its author. Instagram via instaloader, X/Twitter and
 TikTok via gallery-dl, and TikTok and YouTube Shorts via yt-dlp work end to
@@ -30,6 +31,9 @@ separately: Settings shows the install command for each.
 ./run.sh --test     # backend tests
 ./run.sh --help
 ```
+
+Run from a script or an agent (no terminal, `TERM` unset), `./run.sh`
+reopens itself in a terminal window; `FEEDVAULT_NO_TERMINAL=1` stops that.
 
 On its first run `./run.sh` creates `backend/venv`, installs the Python
 dependencies (`backend/requirements-dev.txt`) into it, installs the UI's
@@ -50,7 +54,7 @@ and a built UI).
 
 ```bash
 ./testapp.sh --demo   # invented demo posts, no real data involved
-./testapp.sh          # a copy of your database, your media read-only
+./testapp.sh          # a copy of your database (media read-only with bwrap)
 ./testapp.sh --reset  # throw the copy away and take a fresh one
 ./testapp.sh --status # show what exists and where, then exit
 ```
@@ -60,10 +64,15 @@ and a built UI).
   with fake downloaders in it, and reuses it afterwards.
 - Without `--demo` it copies `feedvault.db` (SQLite's backup, safe while the
   live app runs) into `<data_directory>-test` (or `FEEDVAULT_TEST_DATA`), uses
-  `config.test.json` beside your config, and pauses all schedules. With
+  `config.test.json` in `~/.config/feedvault/` (`$XDG_CONFIG_HOME`;
+  `FEEDVAULT_CONFIG` is not read here), and pauses all schedules. With
   [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) installed
   it runs in a sandbox where your media folders, the live data directory and
   the live config are read-only; without it, it warns and runs unprotected.
+- It is not a full sandbox: it shares your `HOME`, so your scripts folder
+  and the downloaders' own logins (instaloader's session, browser cookies)
+  are the real ones. A Sync or a script run from it runs the real tool with
+  them. Use `--demo` to try anything that downloads.
 
 ## Downloading with instaloader
 
@@ -276,7 +285,8 @@ By default syncs run without a login (public profiles only). **Settings → Sync
 Instagram sync** can make instaloader use your browser's Instagram cookies
 (`--load-cookies`) or a session it saved after `instaloader --login` in a
 terminal. FeedVault only passes the browser or user name on; it never reads
-or stores cookies, passwords or session files.
+or stores cookies, passwords or session files (the one exception is
+removing the cookies yt-dlp copies into info JSONs, below).
 
 gallery-dl and yt-dlp can use a browser's cookies the same way
 (`--cookies-from-browser`, **Settings → Sync**, cards "X, Reddit, Bluesky,
@@ -352,7 +362,7 @@ userscript's included, cannot list, run or attach a script.
 | Scripts | `scripts/` beside the config; FeedVault only reads it |
 | Data | `data_directory` in the config, by default `~/.local/share/feedvault/` (`$XDG_DATA_HOME/feedvault/`): the index `feedvault.db` (rebuilt from your folders by a rescan), `userdata/*.json` (your decisions, tags, people, sources and the rest, restored from there after a rebuild), thumbnails, and the downloaders' archives and stamps |
 | Media | wherever your downloader put it; FeedVault only reads it, and trashing moves files to `.feedvault-trash/` inside that media folder |
-| Port | 3380 (`FEEDVAULT_PORT`); `./testapp.sh` uses 3389 |
+| Port | 3380 (`FEEDVAULT_PORT`; `./run.sh --dev`'s Vite proxy still goes to 3380, #100); `./testapp.sh` uses 3389 |
 
 `FEEDVAULT_NO_BROWSER=1` (or `--no-browser`) starts without opening the
 browser.
@@ -373,7 +383,8 @@ to say when an update is out. The rules each request is under:
 
 ## Development and tests
 
-Full details, including what each browser test project checks:
+The commands below use npm (bun alone is enough to run the app, not for
+these). Full details, including what each browser test project checks:
 [docs/TESTING.md](docs/TESTING.md).
 
 ```bash
@@ -384,7 +395,7 @@ npm test                                             # Node unit tests
 npm run build                                        # the UI, into frontend/dist
 npx playwright install chromium                      # once
 npm run e2e                                          # browser tests on a throwaway instance
-npm run e2e -- $(node e2e/shards.js 2)               # one CI shard (1 to 4)
+projects=$(node e2e/shards.js 2) && npm run e2e -- $projects   # one CI shard (1 to 4)
 ```
 
 - **Backend tests** run under a guard (`backend/tests/toolguard.py`): each

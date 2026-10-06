@@ -3,8 +3,8 @@
 Backend listens on `127.0.0.1:3380` (the port is `FEEDVAULT_PORT`'s when
 set). The built dashboard is served by the backend itself (same origin). The
 Vite dev server (`./run.sh --dev`) proxies `/api`, `/media`, trash
-thumbnails and `/userscript` to the backend, so dev mode also runs
-same-origin.
+thumbnails and `/userscript` to `127.0.0.1:3380`, so dev mode also runs
+same-origin; it does not follow `FEEDVAULT_PORT` (#100, open).
 
 Times are Unix seconds (UTC). Absent values are `null`, never missing keys.
 
@@ -56,7 +56,9 @@ browser from reading or changing the library; they are not a login.
   [Endpoints](#endpoints)), with `X-Content-Type-Options: nosniff`,
   `Content-Security-Policy: sandbox; default-src 'none'` and
   `Cross-Origin-Resource-Policy: same-origin`. Its type comes from its own
-  file name, from a fixed list of image, video and audio types; anything else
+  file name, from a fixed list of image, video and audio types (a poster
+  named `.image`, as yt-dlp keeps TikTok's, is typed by its first bytes, as
+  JPEG, PNG, WebP or GIF only); anything else
   is sent as an `application/octet-stream` download, so an HTML file in a
   media folder never runs on this origin.
 - **No commands from the API.** Jobs are started by kind, with parameters
@@ -999,7 +1001,7 @@ A **person**:
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/people` | `[person, …]`, by name |
-| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted; at most 500 of each; `profiles` with no media root set is a 400) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
+| POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted; at most 500 accounts and 20 profiles; `profiles` with no media root set is a 400) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
 | POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }] }`: a sync of each of the person's sources, as Sync all does for every source; 404 for an unknown id |
 | GET | `/api/people/<id>` | person, or 404 |
 | POST | `/api/people/<id>` | body `{ "name": "…" }` and/or `{ "notes": "…" }` (neither is a 400) → `{ "ok": true, "person": {…} }` |
@@ -2415,7 +2417,7 @@ put in a sealed memfd, and its `#!` interpreter (read as the kernel reads
 it: the path, then at most one argument, the rest of the line) runs
 `/dev/fd/N`. So `$0` is `/dev/fd/N`, not the file's path; `FV_SCRIPT` is
 the file's path. Its inputs are only environment variables: `FV_TARGET`,
-`FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE`. The rest of its environment is minimal:
+`FV_URL`, `FV_ROOT`, `FV_DATA_DIR` and `FV_ARCHIVE` (plus `FV_SCRIPT`, its path). The rest of its environment is minimal:
 `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `USER`, `LOGNAME`,
 `TMPDIR` and the `XDG_*_HOME` folders (`PATH` the system default when
 FeedVault has none), plus `PYTHONUNBUFFERED=1`, which every job gets. The
@@ -2525,12 +2527,13 @@ could not be read.
   (`instaloader`, `gallery-dl`, `yt-dlp` or `ffmpeg`: never beside a sync of
   that tool, its pause between them), else `scripts`, with no pause: a
   downloader named by its absolute path or run behind `env` is in
-  `scripts` (#98).
+  `scripts` today: a bug, open as #98.
 - `argv` is the command as run, or the script's path. `argv` and `params`
   are scrubbed as output is (`health.scrub`).
 - The log starts with `[feedvault]` lines: the script's path and the
   first 16 hex digits of its SHA-256 (a built-in: its id) and, for a shell
-  script, each `FV_*` value it was given, scrubbed as every log line is.
+  script, each `FV_*` value it was given (`FV_SCRIPT` too), scrubbed as
+  every log line is.
 - The `rescan` folder is indexed once it exits 0, as for any job.
 
 **On a source.** A source's `script` option (a script id, or `null`; see
