@@ -1537,7 +1537,7 @@ no person yet.
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site (see [Security rules](#security-rules)) |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
@@ -1568,6 +1568,17 @@ such source" }` for an unknown id.
   `GET /api/sources/resolve` answers `ok: false` for it, and a sync of a
   stored source whose folder is there (sources.json edited by hand) is
   refused with the same message.
+- The folder is the account's own, as its syncs write into it. A 400 that
+  names the default folder instead: for a media root itself; for a
+  platform's or a tool's folder right under a media root
+  (`<root>/instagram`, `<root>/gallery-dl`, `<root>/youtube`…, a name from
+  the routing table's platforms or a tool's), unless it is the source's
+  default folder (an instaloader target named `youtube`); and for a folder
+  that holds another account's own folder, itself included (`… holds other
+  accounts' posts (name, …)`). An account's own folder, as for
+  suggestions below: posts right in it, most of them that account's, most
+  of the posts under it that account's, and no folder under it whose posts
+  are 90% or more another account's.
 - `person` (an id) and `account` are optional. With `account`, the source
   belongs to that indexed account (unknown: 400); without, to the account of
   the folder's posts when there are some, else (a link) to the one account
@@ -1580,10 +1591,16 @@ such source" }` for an unknown id.
   takes the source id only and builds everything from the stored source.
 
 **Suggestions.** Profile folders that already hold instaloader posts but no
-source, one per folder right under a media root (never `_saved/`, whose
-posts are left out of them), for the user to confirm
+source (nor are inside a source's folder), for the user to confirm
 (`POST /api/sources` with the suggestion's `tool`, `target`, `folder` and
-`account`). FeedVault never creates a source on its own.
+`account`). FeedVault never creates a source on its own. One per account:
+its own folder (see `folder` above) wherever the tool laid it out
+(`<root>/<name>` for instaloader, `<root>/instagram/<name>` as gallery-dl
+does), the one with the most of its posts, and the topmost when they nest
+(highlights in a subfolder). A folder that holds other accounts' folders
+(a platform's folder with one per account) is never suggested, nor
+`_saved/` (its posts are left out). `count` is that account's instaloader
+posts in the folder only.
 
 ```json
 { "tool": "instaloader", "platform": "instagram", "target": "somebody",

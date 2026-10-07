@@ -575,36 +575,154 @@ def _top(path, roots):
     return None
 
 
+# A folder whose posts are this much one account's is that account's own
+# folder; a folder holding one is never another account's.
+OWN_SHARE = 0.9
+
+
+def _under_root(folder, roots):
+    """The media root ``folder`` is strictly inside, or None."""
+    for r in roots:
+        r = r.rstrip(os.sep)
+        if folder.startswith(r + os.sep):
+            return r
+    return None
+
+
+def _folder_counts(conn, rows, roots, accounts):
+    """From ``rows`` of (platform, author id, folder, posts, instaloader
+    posts), each folder's posts by account (canonical): right in it, under
+    it (itself included), and instaloader's under it. Folders inside a media
+    root only: posts right in a root are in no folder."""
+    direct, under, insta = {}, {}, {}
+
+    def add(table, folder, key, n):
+        if n:
+            f = table.setdefault(folder, {})
+            f[key] = f.get(key, 0) + n
+
+    for platform, aid, folder, n, ni in rows:
+        folder = folder.rstrip(os.sep)
+        root = _under_root(folder, roots)
+        if root is None:
+            continue
+        key = people.canonical(conn, platform, aid)
+        if key not in accounts:
+            continue
+        add(direct, folder, key, n)
+        parts = folder[len(root) + 1:].split(os.sep)
+        for i in range(1, len(parts) + 1):
+            f = os.path.join(root, *parts[:i])
+            add(under, f, key, n)
+            add(insta, f, key, ni)
+    return direct, under, insta
+
+
+def _main(counts):
+    return max(counts, key=lambda k: (counts[k], k))
+
+
+def _own_folders(direct, under):
+    """{folder: account key} of the folders that are one account's own, as
+    the tools lay them out (instaloader ``<root>/<name>``, gallery-dl and
+    yt-dlp ``<root>/<platform>/<name>``, or wherever a source was pointed):
+    posts right in it, most of them that account's, most of the posts under
+    it that account's, and no folder under it that is nearly all
+    (OWN_SHARE) another account's. A platform folder (``<root>/instagram``
+    with a folder per account) is never one: it has no posts of its own, or
+    holds other accounts' folders. Of an account's nested folders (a
+    profile's highlight subfolders) only the topmost is kept."""
+    holds = {}                                 # folder -> accounts with a folder under it
+    for f, c in under.items():
+        k = _main(c)
+        if c[k] >= OWN_SHARE * sum(c.values()):
+            p = os.path.dirname(f)
+            while p in under:
+                holds.setdefault(p, set()).add(k)
+                p = os.path.dirname(p)
+    own = {}
+    for f, c in direct.items():
+        k = _main(c)
+        if under[f][k] * 2 > sum(under[f].values()) and not holds.get(f, set()) - {k}:
+            own[f] = k
+
+    def nested(f, k):
+        p = os.path.dirname(f)
+        while p in under:
+            if own.get(p) == k:
+                return True
+            p = os.path.dirname(p)
+        return False
+    return {f: k for f, k in own.items() if not nested(f, k)}
+
+
+# Posts by account and folder (meta_path up to its last "/"), and how many
+# of them instaloader's.
+_BY_FOLDER = ("SELECT platform, author_id, rtrim(meta_path, replace(meta_path, '/', '')), COUNT(*), "
+              "SUM(tool LIKE 'instaloader%') FROM posts WHERE author_id IS NOT NULL")
+
+
+def _as_indexed(folder, roots):
+    """``folder`` with symlinks followed, as the scanner sees it under its
+    media root (posts are indexed by those paths), else as given."""
+    real = os.path.realpath(folder)
+    for r in roots:
+        rr = os.path.realpath(r)
+        if real == rr or real.startswith(rr.rstrip(os.sep) + os.sep):
+            return os.path.normpath(os.path.join(r, os.path.relpath(real, rr)))
+    return os.path.normpath(folder)
+
+
+def folder_owners(conn, folder, roots):
+    """The accounts (canonical keys) with their own folder (_own_folders) at
+    ``folder`` or under it, symlinks followed."""
+    prefix = _as_indexed(folder, roots).rstrip(os.sep) + os.sep
+    rows = conn.execute(_BY_FOLDER + " AND substr(meta_path, 1, ?) = ? GROUP BY 1, 2, 3",
+                        (len(prefix), prefix)).fetchall()
+    direct, under, _ = _folder_counts(conn, rows, roots, db.accounts(conn))
+    return set(_own_folders(direct, under).values())
+
+
+def platform_folder(folder, roots, table):
+    """Whether ``folder`` is right under a media root and named after a
+    platform or a tool (``<root>/instagram``, ``<root>/gallery-dl``): where
+    each account gets its own folder, not one account's. Symlinks followed."""
+    folder = _as_indexed(folder, roots)
+    names = {*HOST_PLATFORMS.values(), *(platform_of(h) for h in table), *TOOLS}
+    return (os.path.dirname(folder) in {os.path.normpath(r) for r in roots}
+            and os.path.basename(folder).lower() in names)
+
+
 def suggestions(conn, roots):
     """Profile folders with instaloader posts and no source yet, offered as
     sources for the user to confirm (never created on their own): one per
-    folder right under a media root (never _saved), its main account, and as target the
-    account's current handle (else the folder's name). Only metadata names a
-    handle reliably: for an account known from file names alone (its id is
-    the folder's name, not a number), the folder's name is the target, as a
-    stray file named after someone else would set its handle."""
+    account, its own folder (_own_folders: never one holding other accounts'
+    folders, never _saved) with the most of its instaloader posts, counted;
+    as target the account's current handle (else the folder's name). Only
+    metadata names a handle reliably: for an account known from file names
+    alone (its id is the folder's name, not a number), the folder's name is
+    the target, as a stray file named after someone else would set its handle."""
     def compute(conn):
         accounts = db.accounts(conn)
-        taken = {r[0] for r in conn.execute("SELECT folder FROM sources")}
+        taken = [r[0].rstrip(os.sep) for r in conn.execute("SELECT folder FROM sources")]
         taken_targets = {r[0] for r in conn.execute("SELECT target FROM sources WHERE tool = 'instaloader'")}
-        folders = {}                           # folder -> {account key: posts}
         # Posts in _saved left out, or they could stand for an account's folder.
         saved = [os.path.join(r.rstrip(os.sep), SAVED) + os.sep for r in roots]
-        for platform, aid, n, path in conn.execute(
-                "SELECT platform, author_id, COUNT(*), MIN(meta_path) FROM posts "
-                "WHERE tool LIKE 'instaloader%' AND platform = 'instagram' AND author_id IS NOT NULL "
-                + "".join(" AND substr(meta_path, 1, ?) != ?" for _ in saved) + " GROUP BY 1, 2",
-                [x for d in saved for x in (len(d), d)]):
-            top = _top(path, roots)
-            if top is None or top in taken:
+        rows = conn.execute(
+            _BY_FOLDER + "".join(" AND substr(meta_path, 1, ?) != ?" for _ in saved) + " GROUP BY 1, 2, 3",
+            [x for d in saved for x in (len(d), d)]).fetchall()
+        direct, under, insta = _folder_counts(conn, rows, roots, accounts)
+        best = {}                              # account -> (its instaloader posts there, folder)
+        for folder, key in _own_folders(direct, under).items():
+            n = insta.get(folder, {}).get(key, 0)
+            if key[0] != "instagram" or not n:
                 continue
-            key = people.canonical(conn, platform, aid)
-            if key in accounts:
-                f = folders.setdefault(top, {})
-                f[key] = f.get(key, 0) + n
+            if any(folder == t or folder.startswith(t + os.sep) for t in taken):
+                continue                       # a source has it already
+            if key not in best or (n, folder) > best[key]:
+                best[key] = (n, folder)
         out = []
-        for folder, keys in sorted(folders.items()):
-            key = max(keys, key=lambda k: (keys[k], k))
+        for key, (n, folder) in sorted(best.items(), key=lambda x: x[1][1]):
             a = accounts[key]
             name = os.path.basename(folder).lower()
             handle = (a["handle"] or "").lower() if key[1].isdigit() else ""
@@ -614,7 +732,7 @@ def suggestions(conn, roots):
                 continue
             out.append({"tool": "instaloader", "platform": "instagram", "target": target, "folder": folder,
                         "account": {"platform": key[0], "id": key[1]}, "handle": a["handle"],
-                        "count": sum(keys.values()), "person": a["person"]})
+                        "count": n, "person": a["person"]})
         return out
     return db._memo(conn, ("source-suggestions", tuple(roots)), compute)
 
@@ -648,6 +766,14 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
         raise Refused(SAVED_REFUSED.format(folder=real))
     if os.path.exists(real) and not os.path.isdir(real):
         raise Refused("the folder path is a file")
+    # A source's syncs write into its folder: one account's own, never a
+    # media root or a platform's folder holding everyone's.
+    default = os.path.normpath(default_folder(tool, platform, target, roots))
+    if any(os.path.realpath(real) == os.path.realpath(r) for r in roots):
+        raise Refused(f"{real} is a media root: pick the account's own folder inside it, such as {default}")
+    if platform_folder(real, roots, table) and os.path.realpath(real) != os.path.realpath(default):
+        raise Refused(f"{real} is a platform's folder, where each account has a folder of its own: "
+                      f"pick the account's, such as {default}")
     if existing(conn, tool, target, real) is not None:
         raise Refused(f"there is already a {tool} source for {target} or its folder")
     if account is not None:
@@ -658,6 +784,13 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
         key = _folder_account(conn, platform, real, roots)
         if key is None and tool != "instaloader":
             key = _handle_account(conn, platform, profile_handle(target))
+    others = folder_owners(conn, real, roots) - {key}
+    if others:
+        accounts = db.accounts(conn)
+        names = sorted(accounts[k]["handle"] or k[1] for k in others)
+        shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+        raise Refused(f"{real} holds other accounts' posts ({shown}): pick the account's own folder, "
+                      f"such as {default}")
     if person_id is not None and not people.exists(conn, person_id):
         raise Refused("no such person")
     with conn:

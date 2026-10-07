@@ -5,6 +5,7 @@ import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { cleanName } from "../lib/tags";
+import { useFollowFocus } from "../lib/layout";
 import Icon from "../components/Icon";
 import PageHeader from "../components/PageHeader";
 
@@ -20,6 +21,7 @@ export default function Collections() {
   const [drag, setDrag] = useState(null);               // { from, over }
   const [order, setOrder] = useState(null);             // { of, list }: the list as moved, until data reloads
   const list = (order && order.of === data ? order.list : data) || [];
+  const { listRef, follow } = useFollowFocus();
 
   async function create(e) {
     e.preventDefault();
@@ -38,17 +40,25 @@ export default function Collections() {
     }
   }
 
-  async function move(from, to) {
-    if (from === to || to < 0 || to >= list.length) return;
+  // ``arrow``: moved with its Move earlier/later button, which keeps focus
+  // on the moved tile, so Enter again moves it on (#136). The arrows are
+  // never disabled (aria-disabled, at an end and while a move is saved),
+  // so focus never falls off one.
+  async function move(from, to, arrow) {
+    if (busy || from === to || to < 0 || to >= list.length) return;
     const next = [...list];
-    next.splice(to, 0, next.splice(from, 1)[0]);
+    const moved = next.splice(from, 1)[0];
+    next.splice(to, 0, moved);
+    const refocus = () => { if (arrow) follow(moved.id, arrow); };
+    refocus();
     setOrder({ of: data, list: next });
     setBusy(true);
     try {
       const r = await reorderCollections(next.map(c => c.id));
-      if (!r?.ok) { setOrder(null); toast(r?.error || "Could not save the new order.", "err"); }
+      if (!r?.ok) { refocus(); setOrder(null); toast(r?.error || "Could not save the new order.", "err"); }
       reload();
     } catch (err) {
+      refocus();
       setOrder(null);
       toast(err.message, "err");
     } finally {
@@ -83,10 +93,11 @@ export default function Collections() {
         ) : (
           <>
             {list.length > 1 && <p className="dim collection-hint">Drag a collection onto another to move it there.</p>}
-            <ol className="collection-grid">
+            <ol className="collection-grid" ref={listRef}>
               {list.map((c, i) => (
                 <li
                   key={c.id}
+                  data-key={c.id}
                   className={`collection-card${drag?.from === i ? " is-dragging" : ""}${drag && drag.over === i && drag.from !== i ? " is-over" : ""}`}
                   style={{ animationDelay: `${Math.min(i, 30) * 25}ms` }}
                   draggable={!busy && list.length > 1}
@@ -109,9 +120,11 @@ export default function Collections() {
                   {list.length > 1 && (
                     <div className="collection-tile-bar">
                       <span className="collection-grip" aria-hidden="true"><Icon name="grip" size={14} /></span>
-                      <button type="button" className="del-btn" onClick={() => move(i, i - 1)} disabled={busy || i === 0}
+                      <button type="button" className="del-btn" onClick={() => move(i, i - 1, "earlier")}
+                              aria-disabled={busy || i === 0 || undefined} data-move="earlier"
                               title="Move earlier" aria-label={`Move ${c.name} earlier`}><Icon name="chevLeft" size={14} /></button>
-                      <button type="button" className="del-btn" onClick={() => move(i, i + 1)} disabled={busy || i === list.length - 1}
+                      <button type="button" className="del-btn" onClick={() => move(i, i + 1, "later")}
+                              aria-disabled={busy || i === list.length - 1 || undefined} data-move="later"
                               title="Move later" aria-label={`Move ${c.name} later`}><Icon name="chevRight" size={14} /></button>
                     </div>
                   )}

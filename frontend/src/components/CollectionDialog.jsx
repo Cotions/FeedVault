@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { getCollections, createCollection, addToCollection, removeFromCollection } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { cleanName } from "../lib/tags";
+import { focusLost, restoreFocus } from "../lib/layout";
 import { useToast } from "../lib/toast";
 import ConfirmDialog from "./ConfirmDialog";
 import Icon from "./Icon";
@@ -31,24 +32,30 @@ export default function CollectionDialog({ posts, member, onChanged, onClose }) 
     finally { setBusy(false); }
   }
 
-  const toggle = c => run(async () => {
-    if (single && inside.has(c.id)) {
-      const r = await removeFromCollection(c.id, posts);
-      if (!r?.ok) { setMsg(r?.error || "Could not remove."); return; }
-      setInside(s => { const x = new Set(s); x.delete(c.id); return x; });
-      toast(`Removed from “${c.name}”.`);
-    } else {
-      const r = await addToCollection(c.id, posts);
-      if (!r?.ok) { setMsg(r?.error || "Could not add."); return; }
-      setInside(s => new Set(s).add(c.id));
-      const skipped = n - (r.added?.length ?? 0);
-      toast(`${r.added?.length ?? 0} post${r.added?.length === 1 ? "" : "s"} added to “${c.name}”`
-            + (skipped ? ` (${skipped} already there)` : "") + ".");
-    }
-    reload();
-    onChanged?.();
-  });
+  // A collection the posts went into stays focusable (aria-disabled, not
+  // disabled), so focus is not dropped on <body> and Esc still closes (#136).
+  const toggle = c => {
+    if (busy || (inside.has(c.id) && !single)) return;
+    run(async () => {
+      if (single && inside.has(c.id)) {
+        const r = await removeFromCollection(c.id, posts);
+        if (!r?.ok) { setMsg(r?.error || "Could not remove."); return; }
+        setInside(s => { const x = new Set(s); x.delete(c.id); return x; });
+        toast(`Removed from “${c.name}”.`);
+      } else {
+        const r = await addToCollection(c.id, posts);
+        if (!r?.ok) { setMsg(r?.error || "Could not add."); return; }
+        setInside(s => new Set(s).add(c.id));
+        const skipped = n - (r.added?.length ?? 0);
+        toast(`${r.added?.length ?? 0} post${r.added?.length === 1 ? "" : "s"} added to “${c.name}”`
+              + (skipped ? ` (${skipped} already there)` : "") + ".");
+      }
+      reload();
+      onChanged?.();
+    });
+  };
 
+  // Create turns off once its name is used: focus goes back to the field.
   const create = () => run(async () => {
     const clean = cleanName(name);
     if (!clean) return;
@@ -61,7 +68,7 @@ export default function CollectionDialog({ posts, member, onChanged, onClose }) 
     toast(`Created “${r.collection.name}” with ${added.added.length} post${added.added.length === 1 ? "" : "s"}.`);
     reload();
     onChanged?.();
-  });
+  }).then(() => { if (focusLost()) restoreFocus(inputRef.current); });
 
   const list = data || [];
   return (
@@ -103,7 +110,7 @@ export default function CollectionDialog({ posts, member, onChanged, onClose }) 
               return (
                 <li key={c.id}>
                   <button type="button" className={`collection-pick-item${on ? " is-on" : ""}`} onClick={() => toggle(c)}
-                          disabled={busy || (on && !single)} aria-pressed={on}
+                          aria-disabled={busy || (on && !single) || undefined} aria-pressed={on}
                           title={on ? (single ? `Remove from ${c.name}` : `Added to ${c.name}`) : `Add to ${c.name}`}>
                     <span className="collection-pick-thumb" aria-hidden="true">
                       {c.cover && c.cover.poster !== false ? <img src={c.cover.url} alt="" loading="lazy" /> : <Icon name="bookmark" size={14} />}

@@ -192,6 +192,86 @@ def test_suggestions_never_create_sources(env, client):
     assert db.connect().execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0
 
 
+BOB = owner("bob.example", 222, "Bob Example")
+CAROL = owner("carol.example", 333, "Carol Example")
+
+
+def shared_platform_folder(env):
+    """gallery-dl's layout for instaloader posts (#137): a folder per account
+    under ``<root>/instagram``, with a highlight subfolder and a post of
+    someone else's (a repost) in one of them."""
+    shared = env["media"] / "instagram"
+    for i in range(3):
+        write_post(shared / "alice.example", f"A{i}", TS + i * 86400, ALICE, "image")
+    write_post(shared / "alice.example", "B9", TS + 3600, BOB, "image")
+    write_post(shared / "bob.example", "B1", TS, BOB, "image")
+    write_post(shared / "bob.example" / "Trips", "B2", TS + 86400, BOB, "image")
+    scanner.scan(env["roots"])
+    return shared
+
+
+def test_suggestions_split_a_shared_platform_folder(env, client):
+    shared = shared_platform_folder(env)
+    got = {s["folder"]: s for s in get(client, "/api/sources")["suggestions"]}
+    # One per account, its own folder, its own posts counted: never the
+    # platform folder that holds them all.
+    assert sorted(got) == [str(shared / "alice.example"), str(shared / "bob.example")]
+    alice, bob = got[str(shared / "alice.example")], got[str(shared / "bob.example")]
+    assert (alice["target"], alice["account"]["id"], alice["count"]) == ("alice.example", "111", 3)
+    assert (bob["target"], bob["account"]["id"], bob["count"]) == ("bob.example", "222", 2)
+    # Added, each folder is its account's, and the other one is still offered.
+    post(client, "/api/sources", {k: alice[k] for k in ("tool", "target", "folder", "account")})
+    assert [s["folder"] for s in get(client, "/api/sources")["suggestions"]] == [str(shared / "bob.example")]
+
+
+def test_a_folder_of_loose_posts_holding_other_accounts_folders_is_not_suggested(env, client):
+    # Alice's posts loose in a folder that also holds Bob's and Carol's folders.
+    mixed = env["media"] / "phone"
+    for i in range(6):
+        write_post(mixed, f"A{i}", TS + i * 86400, ALICE, "image")
+    write_post(mixed / "bob", "B1", TS, BOB, "image")
+    write_post(mixed / "carol", "C1", TS, CAROL, "image")
+    scanner.scan(env["roots"])
+    got = {s["folder"]: (s["target"], s["count"]) for s in get(client, "/api/sources")["suggestions"]}
+    assert got == {str(mixed / "bob"): ("bob.example", 1), str(mixed / "carol"): ("carol.example", 1)}
+
+
+def test_a_source_on_a_shared_folder_is_refused(env, client):
+    shared = shared_platform_folder(env)
+    media = env["media"]
+    alice = {"platform": "instagram", "id": "111"}
+    for folder, words in [(shared, "is a platform's folder"), (media, "is a media root"),
+                          (media / "gallery-dl", "is a platform's folder"), (media / "youtube", "platform's folder")]:
+        for body in ({"tool": "instaloader", "target": "alice.example", "folder": str(folder), "account": alice},
+                     {"tool": "instaloader", "target": "alice.example", "folder": str(folder)},
+                     {"target": "https://x.com/alice", "folder": str(folder)}):
+            r = post(client, "/api/sources", body, 400)
+            assert words in r["error"] and "pick the account's" in r["error"], (folder, r)
+    # The same folders under another name: refused for what they hold.
+    os.rename(shared, media / "archive")
+    scanner.scan(env["roots"])
+    r = post(client, "/api/sources", {"tool": "instaloader", "target": "alice.example",
+                                      "folder": str(media / "archive"), "account": alice}, 400)
+    assert r["error"] == (f"{media / 'archive'} holds other accounts' posts (bob.example): pick the account's "
+                          f"own folder, such as {media / 'alice.example'}")
+    r = post(client, "/api/sources", {"tool": "instaloader", "target": "bob.example", "account":
+                                      {"platform": "instagram", "id": "222"},
+                                      "folder": str(media / "archive" / "alice.example")}, 400)
+    assert "holds other accounts' posts (alice.example)" in r["error"]
+    os.symlink(media / "archive", media / "link")                # followed
+    r = post(client, "/api/sources", {"tool": "instaloader", "target": "alice.example",
+                                      "folder": str(media / "link"), "account": alice}, 400)
+    assert "holds other accounts' posts (bob.example)" in r["error"]
+    assert db.connect().execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0
+    # The account's own folder is taken, a repost of someone else's in it or not.
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "alice.example",
+                                      "folder": str(media / "archive" / "alice.example")})["source"]
+    assert s["account"] == alice
+    # A platform folder that is an instaloader profile's default folder is that profile's.
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "youtube"})["source"]
+    assert s["folder"] == str(media / "youtube")
+
+
 def test_create_from_a_url(env, client):
     archive(env)
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "https://www.instagram.com/New.Person/"})["source"]
