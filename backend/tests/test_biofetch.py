@@ -683,6 +683,12 @@ def test_import_end_to_end(bio, client, monkeypatch):
     assert got["instagram", "alice.example"]["person"] == {"id": bio["id"], "name": "Alice"}
     assert got["instagram", "alice.example"]["url"] == "https://instagram.com/alice.example"
     assert got["tiktok", "new.one"]["url"] == "https://tiktok.com/@new.one"         # query dropped
+    # The link the dashboard shows is FeedVault's own for the platform, or none.
+    assert {k: a["profile_url"] for k, a in got.items()} == {
+        ("instagram", "alice.example"): "https://www.instagram.com/alice.example/",
+        ("tiktok", "new.one"): "https://www.tiktok.com/@new.one", ("twitter", "example_user1"): "https://x.com/example_user1",
+        ("youtube", "alicevids"): "https://www.youtube.com/@alicevids", ("bluesky", "alice.bsky.social"): None,
+        ("youtube", "UC1234567890abcdefghij"): None}
     # shop.example, the X post, the Instagram post, the intent link, tiktok.com/new.one, the YouTube video
     assert r["other"] == 6
     assert net.connects == [PUBLIC]

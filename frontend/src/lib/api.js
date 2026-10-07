@@ -241,6 +241,9 @@ export function mergePeople(ids, { name, accounts = [] } = {}) {
 }
 // { suggestions: [{ id, score, reason, reasons: [{ reason, detail }], accounts, person }], dismissed }
 export function getSuggestions() { return get("/api/people/suggestions"); }
+// Fetches that one link-in-bio page (when Settings allows it) and lists the accounts it links to;
+// adds nothing → { ok, url, accounts: [{ platform, handle, url, profile_url, status, account, person, source }], other }
+export function bioImport(id, url) { return post(`/api/people/${id}/bio-import`, { url }); }
 export function dismissSuggestion(id) { return post("/api/people/suggestions/dismiss", { id }); }
 
 /* ── Jobs (see docs/API.md "Jobs") ───────────────────────── */

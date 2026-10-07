@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getAuthors, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson } from "../lib/api";
+import { getAuthors, getConfig, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
@@ -11,6 +11,7 @@ import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import CreatorPicker from "../components/CreatorPicker";
 import Suggestions from "../components/Suggestions";
+import BioImport from "../components/BioImport";
 import MuteButton from "../components/MuteButton";
 import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
@@ -73,6 +74,7 @@ export default function PersonPage() {
   const { data: p, error, reload } = useApi(load, refreshKey);
   const { data: authors } = useApi(getAuthors, refreshKey);
   const suggestApi = useApi(getSuggestions, refreshKey);
+  const { data: config } = useApi(getConfig, refreshKey);
   // Their new posts, again whenever the jobs poll's total moves.
   const { newCount, started } = useJobs();
   const newApi = useApi(getNew, `${refreshKey}:${newCount}`);
@@ -303,6 +305,11 @@ export default function PersonPage() {
               change({ add }, `${add.length} account${add.length === 1 ? "" : "s"} linked.`);
             }}
             onDismiss={dismiss}
+          />
+          <BioImport
+            person={p}
+            enabled={config?.bio_import === true}
+            onAdded={() => { reload(); suggestApi.reload(); sources.reload(); }}
           />
         </section>
 

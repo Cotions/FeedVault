@@ -602,8 +602,8 @@ def _account(a):
 def suggest(conn, pid, links, table, roots):
     """{accounts: [suggestion], other: n} for a person from a page's links.
 
-    A suggestion: {platform, handle, url, tool, status, account, person,
-    source}. ``status``: "linked" (theirs already, as an account or a
+    A suggestion: {platform, handle, url, tool, status, profile_url,
+    account, person, source}. ``status``: "linked" (theirs already, as an account or a
     source), "other" (``person``'s), "indexed" (an account in the index
     linked to nobody: add it to them), "source" (a source linked to nobody
     yet), "new" (nothing downloaded: add it as a source of theirs).
@@ -641,7 +641,11 @@ def suggest(conn, pid, links, table, roots):
             status = "source"
         else:
             status = "new"
+        # The one link the dashboard shows: built here from the platform's
+        # address and the handle, never the page's own link.
+        own = handle if platform != "youtube" or f"/@{handle}" in url else None
         out.append({"platform": platform, "handle": handle, "url": url, "tool": tool, "status": status,
+                    "profile_url": (account or {}).get("url") or db.profile_url(platform, own),
                     "account": _account(account) if account else None,
                     "person": {"id": owner["id"], "name": owner["name"]} if owner else None, "source": sid})
     return {"accounts": out, "other": other}

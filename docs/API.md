@@ -1107,7 +1107,7 @@ Link-in-bio import); `backend/biofetch.py`.
 
 ```json
 { "platform": "twitter", "handle": "somebody", "url": "https://x.com/somebody", "tool": "gallery-dl",
-  "status": "indexed", "account": { "platform": "twitter", "id": "641286", "handle": "somebody",
+  "status": "indexed", "profile_url": "https://x.com/somebody", "account": { "platform": "twitter", "id": "641286", "handle": "somebody",
   "name": "Some Body", "count": 12, "url": "https://x.com/somebody" }, "person": null, "source": null }
 ```
 
@@ -1128,7 +1128,11 @@ Link-in-bio import); `backend/biofetch.py`.
   the profile's own page or one of its tabs (`youtube.com/@name/videos`),
   never a post, a video, a search, an intent link or a site's home page;
   TikTok only as `tiktok.com/@name`. Two links to one profile count once.
-  `url` is the link as FeedVault normalizes it (https, no query). `other`
+  `url` is the link as FeedVault normalizes it (https, no query), what
+  `POST /api/sources` is sent. `profile_url` is the profile's address as
+  FeedVault builds it from the platform and the handle (the indexed
+  account's `url`, else Instagram, X, TikTok or YouTube `@name`), or
+  `null`: the only link the dashboard shows, never one taken from the page. `other`
   counts the distinct links that are not one (the bio site's own pages
   aside); they are not listed. At most 100 accounts, from at most 1000
   distinct links.

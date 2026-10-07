@@ -9,7 +9,7 @@
 // 24x24 px. The demo has the stress cases of make_demo.py --stress and
 // stress.js: a 60-character creator, 15 tags, long names and paths.
 import fs from "node:fs";
-import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle } from "./fixtures.js";
+import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle, fakeBioImport } from "./fixtures.js";
 
 const SIZES = [
   { label: "1024x768", width: 1024, height: 768 },
@@ -133,6 +133,19 @@ const DIALOGS = [
       }), "the last suggestion in sight is on top, not cut off").toBe(true);
     },
     scope: ".tag-suggest",
+  },
+  {
+    // Faked (fixtures.js): nothing is fetched. A long handle and a long name in the list.
+    name: "Person › Link-in-bio import results",
+    open: async page => {
+      await fakeBioImport(page);
+      await openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title"));
+      await page.getByRole("textbox", { name: "Link-in-bio page" }).fill("https://linktr.ee/somebody");
+      await page.locator(".bio-import").getByRole("button", { name: "Import" }).click();
+      await expect(page.locator(".bio-import-row").first()).toBeVisible();
+      await idle(page);
+    },
+    scope: ".bio-import",
   },
   {
     name: "Notifications panel",
