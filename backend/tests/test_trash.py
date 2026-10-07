@@ -153,6 +153,43 @@ def test_undo_trash_restores_post(env, client):
     assert scan(env)["added"] == 0
 
 
+def test_a_kept_post_trashed_and_restored_is_kept_again(env, client, monkeypatch):
+    # QA pass 4: the trash dropped the post's "keep", so a kept post trashed
+    # from the Feed or its page came back from the Trash page unreviewed.
+    import userdata
+    written = []
+    monkeypatch.setattr(userdata, "changed", written.append)
+    write_post(env["media"], "P1", 1717243200, ALICE, "carousel", slides=[False, False])
+    write_post(env["media"], "P2", 1717243300, ALICE, "image")
+    write_post(env["media"], "P3", 1717243400, ALICE, "image")
+    scan(env)
+    client.post("/api/review", json={"posts": ["instagram:P1", "instagram:P3"], "decision": "keep"}, headers=H)
+    kept_at = client.get("/api/posts/instagram/P1", headers=H).get_json()
+    assert kept_at["decision"] == "keep"
+    media = kept_at["media"]
+    # P1 item by item (its last item takes the post), P2 never decided, P3 whole
+    client.post("/api/delete", json={"media": [media[0]["id"]]}, headers=H)
+    client.post("/api/delete", json={"media": [media[1]["id"]]}, headers=H)
+    client.post("/api/delete", json={"posts": ["instagram:P2", "instagram:P3"]}, headers=H)
+    assert client.get("/api/stats", headers=H).get_json()["kept"] == 0
+    written.clear()
+    keys = [e["key"] for e in client.get("/api/trash/items", headers=H).get_json()["entries"]]
+    r = client.post("/api/trash/restore", json={"keys": keys}, headers=H).get_json()
+    assert r["errors"] == [] and "decided" not in r
+    decision = lambda pid: client.get(f"/api/posts/instagram/{pid}", headers=H).get_json()["decision"]  # noqa: E731
+    assert [decision(p) for p in ("P1", "P2", "P3")] == ["keep", None, "keep"]
+    assert len(client.get("/api/posts/instagram/P1", headers=H).get_json()["media"]) == 2
+    assert "decisions" in written                    # decisions.json follows
+    # by post id too (the Review screen's undo), and a decision made since stays
+    client.post("/api/delete", json={"posts": ["instagram:P3"]}, headers=H)
+    write_post(env["media"], "P3", 1717243400, ALICE, "image")     # a sync brought it back
+    scan(env)
+    client.post("/api/review", json={"posts": ["instagram:P3"], "decision": "keep"}, headers=H)
+    client.post("/api/delete", json={"posts": ["instagram:P3"]}, headers=H)
+    client.post("/api/trash/restore", json={"posts": ["instagram:P3"]}, headers=H)
+    assert decision("P3") == "keep"
+
+
 def test_undo_single_item(env, client):
     write_post(env["media"], "C1", 1717243200, ALICE, "carousel", slides=[False, False, False])
     scan(env)

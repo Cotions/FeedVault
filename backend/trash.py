@@ -229,6 +229,11 @@ def _delete_post(conn, post, roots, data_dir, report):
     files = _post_files(conn, post)
     items = conn.execute("SELECT COUNT(*) FROM media WHERE post_id = ?", (post["id"],)).fetchone()[0]
     info = _never_again(_post_info(post, items, False), archives.post_entries(post), data_dir)
+    # Its review decision leaves the index with it (db.remove_post); the
+    # lines keep it, so a restore brings the post back as it was.
+    decision = conn.execute("SELECT decision, at FROM decisions WHERE post_id = ?", (post["id"],)).fetchone()
+    if decision is not None:
+        info = {**info, "decision": decision[0], "decided_at": decision[1]}
     moved = report["files"]
     if not _move_all(files, roots, post["id"], info, report, data_dir):
         _not_moved(info, report["files"] == moved, data_dir)
@@ -775,6 +780,7 @@ def restore(post_ids, roots, data_dir=None, keys=None):
     wanted_keys = set(keys or ())
     touched_dirs = set()
     archived = {}                                # tool -> archive entries the restored lines added
+    decided = {}                                 # post -> (decision, at) its restored lines kept
     with db.write_lock:
         for root in roots:
             lines = _read_manifest(root)
@@ -812,6 +818,9 @@ def restore(post_ids, roots, data_dir=None, keys=None):
                         for tool, entries in e["archive"].items():
                             if isinstance(entries, list):
                                 archived.setdefault(tool, set()).update(x for x in entries if isinstance(x, str))
+                    if e.get("decision") == "keep" and isinstance(pid, str):
+                        at = e.get("decided_at")
+                        decided[pid] = ("keep", at if isinstance(at, int) and not isinstance(at, bool) else 0)
                     if pid not in report["posts"]:
                         report["posts"].append(pid)
                 except (TrashError, OSError) as err:
@@ -823,7 +832,21 @@ def restore(post_ids, roots, data_dir=None, keys=None):
             archives.take_back({t: sorted(es) for t, es in archived.items()}, data_dir)
     if touched_dirs:
         scanner.index_dirs(roots, touched_dirs)
+    report["decided"] = _decide_again(decided)
     return report
+
+
+def _decide_again(decided):
+    """Put back the decisions of restored posts that are indexed again (a
+    post decided on since, a sync's copy of it say, keeps that). Returns
+    how many were put back."""
+    if not decided:
+        return 0
+    conn = db.connect()
+    with conn:
+        return sum(conn.execute("INSERT OR IGNORE INTO decisions(post_id, decision, at) "
+                                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM posts WHERE id = ?)",
+                                (pid, d, at, pid)).rowcount for pid, (d, at) in decided.items())
 
 
 def _prune_dirs(path, root):

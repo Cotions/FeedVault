@@ -484,7 +484,10 @@ the line carries what the Trash page shows: `platform`, `author`, `kind` and
 `posted_at` of the post, `items` (its media count when it was deleted),
 `partial` (`true` when only some media items were deleted, not the post),
 `role` (`media`, `poster`, `meta` or `side`), `idx` and `media_kind` for media
-and posters, and `size` in bytes. Lines written before these fields existed
+and posters, and `size` in bytes. A post that was kept also has
+`"decision": "keep"` and `decided_at` (when it was kept) on its lines: the
+decision leaves the index with the post, and a restore puts it back (unless
+the post was decided on again since), so it comes back kept. Lines written before these fields existed
 still work: the platform comes from the post id, the media kind from the file
 extension, the size from the file on disk, and `author` is `null`.
 
