@@ -543,12 +543,15 @@ export function SyncAllBar({ count, syncAll }) {
       </div>
     );
   }
+  // Cancelled ones never synced: counted apart (#126).
+  const synced = batch ? batch.total - (batch.cancelled ?? 0) : 0;
   return (
     <div className="sync-all">
       {batch?.done && (
         <span>
-          Synced {fmtInt(batch.total)} source{batch.total === 1 ? "" : "s"}: {fmtInt(batch.added)} new post{batch.added === 1 ? "" : "s"}
-          {batch.failed > 0 && <>, <span className="is-err">{batch.failed} failed</span></>}.
+          Synced {fmtInt(synced)} source{synced === 1 ? "" : "s"}: {fmtInt(batch.added)} new post{batch.added === 1 ? "" : "s"}
+          {batch.failed > 0 && <>, <span className="is-err">{batch.failed} failed</span></>}
+          {batch.cancelled > 0 && `, ${fmtInt(batch.cancelled)} cancelled`}.
           {" "}<button type="button" className="btn-link" onClick={clear}>Hide</button>
         </span>
       )}

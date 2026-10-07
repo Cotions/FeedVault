@@ -132,6 +132,25 @@ test("a failed sync's notification lands on its source, highlighted", async ({ p
   }
 });
 
+// #126: a Sync all whose last jobs were cancelled does not count them as
+// synced, in its toast and in the summary on Creators. The batch is faked.
+test("Sync all's summary counts cancelled syncs apart", async ({ page }) => {
+  let done = false;
+  await page.route(url => url.pathname === "/api/jobs", async route => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const batch = { id: 990001, started_at: 1727500000, total: 7, ended: done ? 7 : 5, failed: 3, cancelled: done ? 2 : 0,
+                    added: 0, profiles: 0, first: null, current: null, jobs: [990001], active: [], done };
+    await route.fulfill({ response: res, json: { ...body, running: done ? body.running : 1, sync_all: batch } });
+  });
+  await openPage(page, { name: "Creators", path: "/creators" });
+  await expect(page.locator(".sync-all")).toContainText("Syncing");
+  done = true;
+  await expect(page.locator(".toast", { hasText: "failed" })).toHaveText(/3 of 5 syncs failed, 2 cancelled/);
+  await expect(page.locator(".sync-all > span")).toHaveText("Synced 5 sources: 0 new posts, 3 failed, 2 cancelled. Hide");
+  await idle(page);
+});
+
 // #126: the new counts (the sidebar's, the Feed's chip) follow a delete at
 // once, not with the next idle jobs poll 15 s later. The delete and the
 // counts are faked: the demo's posts stay as they are.

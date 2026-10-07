@@ -956,6 +956,8 @@ def test_queued_syncs_whose_source_is_gone_end_cancelled(env, client, fake, monk
     assert sync.active() == {}
     b = get(client, "/api/jobs")["sync_all"]
     assert (b["ended"], b["done"], b["active"], b["current"], b["failed"]) == (3, True, [], None, 0)
+    # #126: cancelled, not synced: counted apart.
+    assert b["cancelled"] == 2
 
 
 def test_sync_all_while_one_runs_joins_it(env, client, fake, monkeypatch):

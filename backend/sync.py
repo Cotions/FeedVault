@@ -1654,7 +1654,8 @@ def _tally(job):
 
 def batch():
     """The last "Sync all" while FeedVault has run, or None: {id, started_at,
-    total, ended, failed, added (muted sources left out of both), profiles (sources that added posts), first
+    total, ended, failed, added (muted sources left out of both), cancelled
+    (never synced), profiles (sources that added posts), first
     (the label and source of the one that added the most), current (the
     job running, else the next queued, else None), jobs (its job ids),
     active (those still queued or running), done}. Progress counts live jobs only."""
@@ -1669,6 +1670,7 @@ def batch():
     current = next((j for j in live if j["state"] == "running"), None) or (live[0] if live else None)
     return {"id": b["id"], "started_at": b["started_at"], "total": len(b["jobs"]),
             "ended": len(b["jobs"]) - len(live), "failed": sum(e["state"] == "failed" for e in ended),
+            "cancelled": sum(e["state"] == "cancelled" for e in b["ended"].values()),
             "added": sum(e["added"] for e in ended), "profiles": len(adders),
             "first": {k: adders[0][k] for k in ("label", "source")} if adders else None,
             "current": current, "jobs": b["jobs"], "active": [j["id"] for j in live], "done": not live}
