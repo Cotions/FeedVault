@@ -160,8 +160,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled; `{ "ok": false, "error": "zenity is not installed", "path": null }` without zenity |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` (the first 500 are looked up) → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
@@ -1047,7 +1047,8 @@ A **person**:
 ### Link suggestions
 
 Accounts likely to be one person, found in the index and in metadata already
-downloaded. Nothing is ever fetched.
+downloaded. Nothing is ever fetched (a link-in-bio page is, on request
+only: see [Link-in-bio import](#link-in-bio-import)).
 
 | Method | Path | Returns |
 |---|---|---|
@@ -1094,6 +1095,91 @@ downloaded. Nothing is ever fetched.
   group's accounts, so it survives rebuilding the index; a group that gains
   an account shows again.
 
+### Link-in-bio import
+
+The one web page FeedVault fetches itself, and only when asked: a person's
+link-in-bio page (linktr.ee and the like), read for the profiles it links
+to. Off until `{ "bio_import": true }` is set (Settings → Downloads →
+Link-in-bio import); `backend/biofetch.py`.
+
+| Method | Path | Returns |
+|---|---|---|
+| POST | `/api/people/<id>/bio-import` | body `{ "url": "https://linktr.ee/somebody" }` → `{ "ok": true, "url": "https://linktr.ee/somebody", "accounts": [found, …], "other": 3 }` |
+
+```json
+{ "platform": "twitter", "handle": "somebody", "url": "https://x.com/somebody", "tool": "gallery-dl",
+  "status": "indexed", "profile_url": "https://x.com/somebody", "account": { "platform": "twitter", "id": "641286", "handle": "somebody",
+  "name": "Some Body", "count": 12, "url": "https://x.com/somebody" }, "person": null, "source": null }
+```
+
+- **Nothing is added.** Each account found is a suggestion; the dashboard
+  adds the ones the user picks with the usual calls:
+  `POST /api/people/<id>/accounts` for an account in the index
+  (`status` `indexed`), `POST /api/sources` with `person` for one not
+  downloaded yet (`new`).
+- `status`: `linked` (this person's already, as an account or a source),
+  `other` (linked to `person`, someone else), `indexed` (an account in the
+  index linked to nobody), `source` (a source linked to nobody yet: link it
+  from its account or the Sources page), `new` (nothing of it here).
+  `account` is the indexed account whose handle (any it had), alias or id
+  is the link's, when exactly one is; `source` the id of a source already
+  there for it.
+- What counts as an account: a link that `POST /api/sources` would take
+  (its host in the [routing table](#link-routing)) and that names a profile:
+  the profile's own page or one of its tabs (`youtube.com/@name/videos`),
+  never a post, a video, a search, an intent link or a site's home page;
+  TikTok only as `tiktok.com/@name`. Two links to one profile count once.
+  `url` is the link as FeedVault normalizes it (https, no query), what
+  `POST /api/sources` is sent. `profile_url` is the profile's address as
+  FeedVault builds it from the platform and the handle (the indexed
+  account's `url`, else Instagram, X, TikTok or YouTube `@name`), or
+  `null`: the only link the dashboard shows, never one taken from the page. `other`
+  counts the distinct links that are not one (the bio site's own pages
+  aside); they are not listed. At most 100 accounts, from at most 1000
+  distinct links.
+- How the page is read: with Python's `html.parser`, the `href` of every
+  `<a>` and `<area>`, then every `http(s)` string in the page's JSON blocks
+  (`<script id="__NEXT_DATA__">`, `type="application/json"` or
+  `application/ld+json`), which some sites draw their links from. No script
+  runs, no other part of the page is kept, and no link in it is fetched.
+- **The fetch.** One page, the URL given, and its redirects:
+  - **Sites**: `https` on port 443, no login part, the host exactly one of
+    `linktr.ee`, `beacons.ai`, `lnk.bio`, `solo.to`, `campsite.bio`,
+    `linkin.bio`, `allmylinks.com` (a leading `www.` and a trailing dot are
+    dropped, and an IDN is compared in its ASCII form, so a look-alike name
+    matches nothing). Sites where a profile is a subdomain or the user's
+    own domain are left out: a host check cannot tell them from any site.
+    A link with spaces, control characters or `\` is refused, and the
+    pasted one must name a page, not the site's home.
+  - **Addresses**: every address the host resolves to must be public
+    (Python's `is_global`, and not multicast, IPv4-mapped or -compatible,
+    6to4, NAT64 or Teredo); one that is not refuses the whole fetch. The
+    connection goes to one of those checked addresses, never through a
+    second lookup, while TLS sends the real host name and checks the
+    certificate against it.
+  - **Nothing from the environment**: no proxy (`HTTP(S)_PROXY`,
+    `ALL_PROXY` are not read), no `.netrc`, no cookies, no `Referer`; the
+    request carries `Host`, a `User-Agent` naming FeedVault, `Accept:
+    text/html`, `Accept-Encoding: identity` and `Connection: close` only.
+  - **Limits**: at most 3 redirects (301, 302, 303, 307, 308), each checked
+    again from scratch (site, port, addresses); 10 s for the whole fetch
+    (lookups, connections, TLS and every byte, redirects included); 2 MB of
+    body, counted while reading; 32 KB of headers; `text/html` only; any
+    `Content-Encoding` but `identity` refused; any status that is not 2xx
+    (or a redirect) is an error.
+  - **One at a time**, at least 5 s apart (a link refused before any
+    request does not count).
+- Errors are `{ "ok": false, "error": "…" }`, short and specific: 400 for
+  the link (`only https links`, `not an allowed site: …`), 403 when the
+  switch is off or the request comes from another site's page (as for
+  [scripts](#security-rules)), 404 for an unknown person, 429 while another
+  import runs or within 5 s of the last, 502 for the site (`linktr.ee's
+  address is not public (10.0.0.1)`, `timed out`, `page too large`, `not a
+  web page (application/json)`, `the site answered 404`, `too many
+  redirects`, `the page redirects elsewhere: …`). The server log names the
+  URL fetched and what came of it; the page itself is never logged or
+  stored.
+
 ## Links
 
 Web addresses worth keeping that are not an account FeedVault downloads: a
@@ -1106,9 +1192,12 @@ Links are user data: table `links`, never touched by a rescan, and written to
 back; a person named there and missing from `people.json` is created again,
 and a row whose URL is not `http://` or `https://` is skipped.
 
-FeedVault never fetches a link: no title, preview or icon is looked up, and
-nothing leaves the machine. The dashboard opens one in a new tab
-(`rel="noopener noreferrer"`), and only an `http:` or `https:` one.
+FeedVault never fetches a saved link: no title, preview or icon is looked
+up, and nothing leaves the machine. (The [link-in-bio
+import](#link-in-bio-import) is separate: it fetches only the page pasted
+into it, when switched on, and adds nothing to Links.) The dashboard opens a
+link in a new tab (`rel="noopener noreferrer"`), and only an `http:` or
+`https:` one.
 
 A **link**:
 
@@ -2384,8 +2473,9 @@ tools set in Settings (or `PATH`) change, and on `POST /api/downloaders/check`.
   button and never run; else `null`.
 
 **Latest versions.** Off by default: `POST /api/config` with
-`{ "check_updates": true }` turns it on. This is the only request the
-server itself makes to the network. For instaloader, gallery-dl and yt-dlp
+`{ "check_updates": true }` turns it on. Besides a
+[link-in-bio import](#link-in-bio-import) the user asks for, this is the
+only request the server itself makes to the network. For instaloader, gallery-dl and yt-dlp
 it fetches `https://pypi.org/pypi/<name>/json` (fixed URLs, `<name>` one of
 the three, never from a request), without following redirects, within 10
 seconds and at most 8 MB, and keeps `info.version` if it looks like a

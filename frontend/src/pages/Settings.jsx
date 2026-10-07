@@ -507,6 +507,48 @@ function DownloadersCard({ saved, onSaved }) {
 
 const BROWSERS = ["firefox", "chrome", "chromium", "brave", "edge"];
 
+/* Settings → Downloads: the one page FeedVault fetches itself, off by
+   default (backend/biofetch.py, docs/API.md "Link-in-bio import"). */
+function BioImportCard({ on, onSaved }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const ref = useRef(null);
+  const location = useLocation();
+  useEffect(() => {
+    if (location.hash === "#bio-import") ref.current?.scrollIntoView({ block: "start" });
+  }, [location.hash, location.key]);
+
+  async function set(value) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await saveSettings({ bio_import: value });
+      if (r?.ok === false) setMsg(r.error || "Save failed.");
+      else onSaved();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" id="bio-import" ref={ref}>
+      <div className="card-title">Link-in-bio import</div>
+      <p className="page-lede">
+        On a person&rsquo;s page, paste their linktr.ee (or Beacons, Lnk.Bio, solo.to, Campsite, Linkin.bio,
+        AllMyLinks) link and FeedVault fetches that one page, once per click, to list the accounts it links to.
+        Nothing else is fetched, and the page is not kept.
+      </p>
+      <label className="dl-toggle">
+        <input type="checkbox" checked={on} disabled={busy} onChange={e => set(e.target.checked)} />
+        <span>Import accounts from a link-in-bio page</span>
+      </label>
+      {msg && <div className="msg err" role="alert">{msg}</div>}
+    </div>
+  );
+}
+
 /* Settings → Sync: the switch that pauses every source's schedule (a sync
    already queued goes on; Sync still works). */
 function SchedulesCard({ paused, onSaved }) {
@@ -969,7 +1011,7 @@ const TABS = [
   { id: "about",      label: "About",      icon: "info" },
 ];
 // Cards linked to from elsewhere (/settings#downloaders), and their tab.
-const ANCHORS = { downloaders: "downloads" };
+const ANCHORS = { downloaders: "downloads", "bio-import": "downloads" };
 
 function tabOf(hash) {
   const h = hash.replace(/^#/, "");
@@ -1023,6 +1065,7 @@ export default function Settings() {
               <div className="settings-group" hidden={tab !== "downloads"}>
                 <DownloadersCard saved={config.tools || {}} onSaved={reload} />
                 <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} />
+                <BioImportCard on={config.bio_import === true} onSaved={reload} />
               </div>
               <div className="settings-group" hidden={tab !== "sync"}>
                 <SchedulesCard paused={config.schedules_paused === true} onSaved={reload} />

@@ -302,8 +302,9 @@ downloads: a creator's Linktree, Patreon, personal site or Discord invite,
 an interview, an article. A link can belong to a person (it shows on their
 page too, socials first, in the order you give them) or to no one. Whether a
 link is a social profile or something else is read from its address.
-FeedVault never opens or fetches a link itself; it only stores the text and
-opens it in a new tab when you click it. See [docs/API.md](docs/API.md#links).
+FeedVault never opens or fetches a saved link itself; it only stores the
+text and opens it in a new tab when you click it. (The link-in-bio import
+on a person's page is separate, and adds nothing to Links.) See [docs/API.md](docs/API.md#links).
 
 ## Scripts
 
@@ -384,10 +385,11 @@ header and a local `Host`, and no CORS is ever granted, so other websites in
 your browser cannot read or change your library. Jobs are started by kind,
 with parameters each kind checks; the API never takes a command, and tools run
 without a shell. Your [scripts](#scripts) are the exception you write
-yourself: whoever reaches the port can run them, so never expose it. The server itself contacts the network for one thing only,
-and only if you turn it on (**Settings → Downloads → Downloaders → Check PyPI for new versions**):
-PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
-to say when an update is out. The rules each request is under:
+yourself: whoever reaches the port can run them, so never expose it. The server itself contacts the network for two things only,
+each only if you turn it on: PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
+to say when an update is out (**Settings → Downloads → Downloaders → Check PyPI for new versions**); and a
+person's link-in-bio page (linktr.ee and a few like it), one page each time you click Import on their page
+(**Settings → Downloads → Link-in-bio import**), read for the accounts it lists and never stored. The rules each request is under:
 [docs/API.md → Security rules](docs/API.md#security-rules). API reference:
 [docs/API.md](docs/API.md).
 

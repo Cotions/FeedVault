@@ -978,3 +978,46 @@ export function formatStateFindings(list) {
   return list.map(f => `  ${f.view} @ ${f.size}${f.state ? ` (${f.state})` : ""}: ${f.rule} ${f.detail}`
     + (f.a ? `\n      ${f.a.sel} "${f.a.text}" ${fmtBox(f.a.box)}` : "")).join("\n");
 }
+
+// Link-in-bio import (#11) without a fetch: GET /api/config says the switch
+// is on (the instance's own setting stays off), and the import and the two
+// Add calls are answered here, so the backend's fetcher is never reached and
+// the demo is not changed. Returns what the page sent.
+export const BIO_ACCOUNTS = [
+  { platform: "instagram", handle: "fake.linked", url: "https://instagram.com/fake.linked", tool: "instaloader",
+    status: "linked", profile_url: "https://www.instagram.com/fake.linked/", account: null, person: null, source: 7 },
+  { platform: "twitter", handle: "fake_indexed", url: "https://x.com/fake_indexed", tool: "gallery-dl", status: "indexed",
+    profile_url: "https://x.com/fake_indexed", person: null, source: null,
+    account: { platform: "twitter", id: "990001", handle: "fake_indexed", name: "Fake", count: 3, url: "https://x.com/fake_indexed" } },
+  { platform: "tiktok", handle: "fake.new", url: "https://tiktok.com/@fake.new", tool: "yt-dlp", status: "new",
+    profile_url: "https://www.tiktok.com/@fake.new", account: null, person: null, source: null },
+  // What a hostile page could put in a handle or a link: shown as text, never a link.
+  { platform: "bluesky", handle: "<img src=x onerror=alert(1)>", url: "https://bsky.app/profile/x", tool: "gallery-dl",
+    status: "new", profile_url: "javascript:alert(1)", account: null, person: null, source: null },
+  { platform: "youtube", handle: "a-very-long-handle-that-goes-on-and-on-and-on-for-the-layout-check-1234567890",
+    url: "https://youtube.com/@x", tool: "yt-dlp", status: "other", profile_url: "https://www.youtube.com/@x",
+    account: null, person: { id: 1, name: "Somebody Else With A Long Name" }, source: null },
+];
+
+export async function fakeBioImport(page) {
+  const sent = { imports: [], links: [], sources: [] };
+  await page.route("**/api/config", async route => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), bio_import: true } });
+  });
+  await page.route("**/api/people/*/bio-import", async route => {
+    sent.imports.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: true, url: "https://linktr.ee/somebody", accounts: BIO_ACCOUNTS, other: 2 } });
+  });
+  await page.route("**/api/people/*/accounts", async route => {
+    sent.links.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: true, added: 1, removed: 0, person: null } });
+  });
+  await page.route("**/api/sources", async route => {
+    if (route.request().method() !== "POST") return route.fallback();
+    sent.sources.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: true, source: { id: 9999 } } });
+  });
+  return sent;
+}
