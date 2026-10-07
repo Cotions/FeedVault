@@ -12,7 +12,7 @@ import TagInput from "../components/TagInput";
 import CollectionDialog from "../components/CollectionDialog";
 import Icon from "../components/Icon";
 import CreatorPicker from "../components/CreatorPicker";
-import { PHONE } from "../lib/layout";
+import { PHONE, useToastClearance } from "../lib/layout";
 import { useFiltersOpen } from "../lib/useFiltersOpen";
 import FiltersToggle from "../components/FiltersToggle";
 import PageHeader from "../components/PageHeader";
@@ -349,7 +349,7 @@ function ReviewSession({ scope, scopeControls }) {
   // that bar (at most 55vh), so the item and its buttons show without a
   // scroll. Measured from layout, never from the scroll position, again
   // whenever the page above or the bar changes size. The bar's height goes
-  // to --review-bar-h, for the room kept under the page and the toasts. The
+  // to --review-bar-h, for the room kept under the page. The
   // screen height is the tallest seen at this width: a keyboard or a
   // phone's toolbar showing must not shrink the stage under the post.
   useLayoutEffect(() => {
@@ -386,6 +386,9 @@ function ReviewSession({ scope, scopeControls }) {
       root.removeProperty("--review-bar-h");
     };
   }, []);
+  // Toasts ("Undone.") above the buttons, the bar's on a phone, the panel's
+  // on a desktop: never over "?" or Undo.
+  useToastClearance(barRef);
 
   /* ── Render ────────────────────────────────────────────── */
 

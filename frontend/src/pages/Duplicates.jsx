@@ -5,6 +5,7 @@ import { dismissDuplicate, getDuplicates, getDuplicatesStatus, resolveDuplicates
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
+import { restoreFocus } from "../lib/layout";
 import { fmtBytes, fmtFullDate, fmtInt, fmtShortDate, plural, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -219,7 +220,7 @@ function Compare({ g, at, keep, onMove, onKeep, onClose }) {
   useEffect(() => {
     const prev = document.activeElement;
     boxRef.current?.focus();
-    return () => { if (prev && prev.focus && document.contains(prev)) prev.focus(); };
+    return () => restoreFocus(prev);
   }, []);
 
   function onKeyDown(e) {

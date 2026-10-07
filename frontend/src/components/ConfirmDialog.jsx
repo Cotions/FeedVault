@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
-import { FOCUSABLE } from "../lib/layout";
+import { FOCUSABLE, restoreFocus } from "../lib/layout";
 
 /* Modal confirmation. Traps Tab inside the dialog, Esc or a backdrop click
    cancels, focus starts on Cancel (so a stray Enter never destroys anything)
-   and returns to whatever had it before. While `busy`, both buttons are
+   and returns to whatever had it before, without scrolling. While `busy`, both buttons are
    disabled and Esc does nothing: the request is already on its way.
 
    Props: open, title, children (body), confirmLabel, danger, busy, error,
@@ -23,7 +23,7 @@ export default function ConfirmDialog({
     if (!open) return;
     const prev = document.activeElement;
     (initialFocus?.current || cancelRef.current)?.focus();
-    return () => { if (prev && prev.focus && document.contains(prev)) prev.focus(); };
+    return () => restoreFocus(prev);
     // Once per opening; initialFocus is a ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
