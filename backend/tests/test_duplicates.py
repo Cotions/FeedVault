@@ -106,6 +106,7 @@ def test_index_dirs_promotes_a_copy(env):
 # Step 2: hashes and exact matching
 # ---------------------------------------------------------------------------
 
+import hashlib  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
@@ -141,6 +142,69 @@ def test_partial_and_full_hash(tmp_path):
         assert False, "a short read must not pass as a hash"
     except hashing.Changed:
         pass
+
+
+def test_a_file_that_grew_is_read_no_further_than_its_size(tmp_path, monkeypatch):
+    """A file stat'ed small that grew (or was replaced) before it is read:
+    a partial hash reads at most one byte past the size (not the whole file
+    into memory), a full hash too (not to its end)."""
+    import tracemalloc
+    grown = tmp_path / "grown"
+    with open(grown, "wb") as f:
+        f.truncate(64 * MIB)                    # sparse: no disk used
+    tracemalloc.start()
+    try:
+        try:
+            hashing.partial_hash(grown, 3)
+            assert False, "a file that grew must not pass as hashed"
+        except hashing.Changed:
+            pass
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 4 * MIB
+
+    hashed, sha1 = [], hashlib.sha1
+
+    class Sha1:
+        def __init__(self):
+            self.h = sha1()
+
+        def update(self, b):
+            hashed.append(len(b))
+            self.h.update(b)
+
+        def hexdigest(self):
+            return self.h.hexdigest()
+    monkeypatch.setattr(hashing.hashlib, "sha1", Sha1)
+    try:
+        hashing.full_hash(grown, 3 * MIB)
+        assert False, "a file that grew must not pass as hashed"
+    except hashing.Changed:
+        pass
+    assert sum(hashed) <= 3 * MIB + 1
+
+
+def test_a_fifo_in_a_media_files_place_does_not_stall_the_pass(env, monkeypatch):
+    """A file replaced by a FIFO after the scan: the pass passes over it.
+    Opening a FIFO for reading waits for a writer, which never comes, so
+    the worker would wait for ever and no hash would be taken again."""
+    monkeypatch.setitem(hashing._state, "errors", [])
+    _, copy_base = two_folders(env, "image")
+    run_scan(env)
+    path = copy_base + ".jpg"
+    os.remove(path)
+    os.mkfifo(path)
+    t = threading.Thread(target=lambda: hashing.run_pass(db.connect()), daemon=True)
+    t.start()
+    t.join(10)
+    stalled = t.is_alive()
+    if stalled:                                 # let it go: a writer that closes at once
+        os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+        t.join(10)
+    assert not stalled
+    assert path not in hashes()
+    assert hashing.stat(path) is not None and hashing._file_stat(path) is None
 
 
 def test_only_files_sharing_a_size_are_hashed(env):
