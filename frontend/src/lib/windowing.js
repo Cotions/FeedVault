@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 /* Windowed rendering for the long list pages (Storage, Unmatched, Links,
    Creators): only the rows near the viewport are in the DOM, with a spacer
@@ -27,6 +27,12 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 export const WINDOW_FROM = 120;
 // How far past the viewport, above and below, lines are rendered (px).
 const OVERSCAN = 800;
+// Measure passes that may follow one another before the browser paints.
+// Each one renders lines not measured yet, so a long jump takes several;
+// past this many, the next waits for a frame, so a list whose heights
+// never settle redraws once a frame instead of ending in React's "Maximum
+// update depth exceeded" (QA pass 3).
+export const SYNC_PASSES = 20;
 
 // offsets[i]: where line i starts, from the list's top; offsets[n]: the end.
 export function lineOffsets(pitches) {
@@ -103,6 +109,24 @@ export function useWindow(count, { estimate = 48, grid = false, pins = [], from 
     return lineOffsets(pitches);
   }, [lines, estimate, meas]);
   const offsetsRef = useRef(offsets);
+  // Passes since the last frame, and the frame a deferred one waits for.
+  const passes = useRef({ n: 0, reset: 0, later: 0 });
+  useEffect(() => () => {
+    cancelAnimationFrame(passes.current.reset);
+    cancelAnimationFrame(passes.current.later);
+  }, []);
+  // Runs ``apply`` (a state change) now, or on the next frame once
+  // SYNC_PASSES ran without one.
+  const pass = useCallback(apply => {
+    const p = passes.current;
+    if (p.n < SYNC_PASSES) {
+      p.n++;
+      if (!p.reset) p.reset = requestAnimationFrame(() => { p.n = 0; p.reset = 0; });
+      apply();
+    } else if (!p.later) {
+      p.later = requestAnimationFrame(() => { p.later = 0; p.n = 0; apply(); });
+    }
+  }, []);
 
   // The lines the viewport meets, plus the overscan, from where the list is now.
   const update = useCallback(() => {
@@ -126,8 +150,10 @@ export function useWindow(count, { estimate = 48, grid = false, pins = [], from 
     const style = getComputedStyle(el);
     const n = grid ? style.gridTemplateColumns.split(" ").filter(Boolean).length || 1 : 1;
     if (n !== cols) {
-      setCols(n);
-      setMeas(m => ({ gap: m.gap, pitch: new Map() }));
+      pass(() => {
+        setCols(n);
+        setMeas(m => ({ gap: m.gap, pitch: new Map() }));
+      });
       return;
     }
     const gap = parseFloat(style.rowGap) || 0;
@@ -147,7 +173,7 @@ export function useWindow(count, { estimate = 48, grid = false, pins = [], from 
         pitch.set(l, h + gap);
       }
     }
-    if (pitch) { setMeas({ gap, pitch }); return; }
+    if (pitch) { pass(() => setMeas({ gap, pitch })); return; }
     if (wanted != null) {
       const row = el.querySelector(`:scope > [data-index="${wanted}"]`);
       if (row) {

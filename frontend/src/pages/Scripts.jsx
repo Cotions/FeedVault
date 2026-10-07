@@ -72,6 +72,9 @@ function RunForm({ script, onStarted }) {
   const [busy,  setBusy]  = useState(false);
   const [error, setError] = useState(null);
   const set = patch => setForm(f => ({ ...f, ...patch }));
+  // Run… opens the form on its first field, ready to type (QA pass 3).
+  const formRef = useRef(null);
+  useEffect(() => { formRef.current?.querySelector("input")?.focus(); }, []);
 
   async function run(e) {
     e.preventDefault();
@@ -93,7 +96,7 @@ function RunForm({ script, onStarted }) {
   }
 
   return (
-    <form className="script-run" onSubmit={run}>
+    <form className="script-run" onSubmit={run} ref={formRef}>
       {script.needs === "target" && (
         <label className="script-field">
           <span>Target</span>
@@ -196,9 +199,16 @@ export default function Scripts() {
   const filesRef = useRef(null);
   const { onFocus, onBlur } = useKeepFocus(() => logRef.current || filesRef.current);
   const shownId = job?.id;
+  // A run just started from a form: its log takes focus once it shows (the
+  // form, and focus with it, went before the log came; QA pass 3).
+  const focusLog = useRef(false);
   useEffect(() => {
     if (shownId == null) return;
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (focusLog.current) {
+      focusLog.current = false;
+      logRef.current?.focus({ preventScroll: true });
+    }
     logRef.current?.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
   }, [shownId]);
   const all = data?.scripts || [];
@@ -222,6 +232,7 @@ export default function Scripts() {
   const litOf = s => target === scriptAnchor(s.id);
 
   function onStarted(j) {
+    focusLog.current = true;
     started(j);
     setJobId(j.id);
   }

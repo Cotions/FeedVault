@@ -128,3 +128,22 @@ test("Unmatched: a dismissed copy links to the Dismissed list, not to compare", 
     await cleanUp(page, g.id);
   }
 });
+
+// QA pass 3: while hashing runs, the groups listed are pending and the few
+// identical ones are further down; the summary said "Select leaves reposts
+// out" with no repost anywhere. It says what is going on instead. The
+// answer is changed in the browser only.
+test("Duplicates: while files are hashed, the summary says so, not that reposts are left out", async ({ page }) => {
+  await page.route(url => url.pathname === "/api/duplicates" && (url.searchParams.get("kind") || "copies") === "copies", async route => {
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const g of body.groups) { g.identical = null; g.pending = true; g.repost = false; }
+    await route.fulfill({ response: res, json: { ...body, identical: 4, identical_frees: 0, pending: body.groups.length, reposts: 0 } });
+  });
+  await openPage(page, { name: "Duplicates", path: "/duplicates" });
+  const summary = page.locator(".dup-summary");
+  await expect(summary).toContainText("4 identical groups would free 0 B. Load more to reach them.");
+  await expect(summary).toContainText("still being hashed: Select takes");
+  await expect(summary).not.toContainText("repost");
+  await idle(page);
+});

@@ -1682,6 +1682,17 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 /* A floor for the two text columns: without it a phone squeezes the path to a
    few letters a line; the table scrolls sideways in its .table-wrap instead. */
 .data-table .path, .data-table .reason { min-width: 200px; }
+/* Unmatched is windowed (lib/windowing.js): with the table's automatic
+   layout its columns took their widths from the rows rendered, so every
+   scroll re-laid them and moved every row's height, and a jump far down
+   the list never settled (QA pass 3). Fixed widths: a row's height depends
+   on its own text only. */
+@media (min-width: 641px) {
+  .unmatched-table { table-layout: fixed; }
+  .unmatched-table th:nth-child(1) { width: 42%; }
+  .unmatched-table th:nth-child(3) { width: 100px; }
+  .unmatched-table th:nth-child(4) { width: 160px; }
+}
 /* A phone: each row of a .card-table is a small card, its main cell (the
    creator, path or job) on the first line and the others as label / value
    pairs under it, the label from the cell's data-label. The tables carry

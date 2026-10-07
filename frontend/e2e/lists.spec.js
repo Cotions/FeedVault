@@ -75,6 +75,48 @@ test.describe("Unmatched, 3,000 files", () => {
   });
 });
 
+// QA pass 3: real unmatched files differ in length, a long unbroken path
+// here, a long reason there. The table's columns took their widths from
+// the rows rendered, so each scroll re-laid them, every row's height moved,
+// the window measured again, and a jump to the middle of the list ended in
+// React's "Maximum update depth exceeded" (a blank page). Its columns now
+// keep one width wherever the list is scrolled.
+test.describe("Unmatched, 500 files in runs of different lengths", () => {
+  // As a large vault lists them: copies with long paths and long reasons
+  // first, then loose files with short ones, then long videos.
+  const root = "/tmp/feedvault-vault-of-some-length/vault/media";
+  const file = i => i < 160 ? {
+    path: `${root}/gallery-dl/twitter/fog_meadow${i}/18000000000000${String(i).padStart(5, "0")}_1.jpg.json`,
+    reason: `duplicate of twitter:18000000000000${String(i).padStart(5, "0")} (${root}/gallery-dl/twitter/bridge_glaze${i}/18000000000000${String(i).padStart(5, "0")}.json)`,
+  } : i < 410 ? {
+    path: `${root}/loose files/IMG_${String(i).padStart(5, "0")}.png`, reason: "no metadata file for this media",
+  } : {
+    path: `${root}/youtube/willow_meadow${i}/@willow_meadow${i}-20171008-L00000${i}.webm`,
+    reason: "YouTube video longer than 3 min: left to ChannelVault",
+  };
+  test.beforeEach(async ({ page }) => {
+    await page.route(onPath("/api/unmatched"), route => route.fulfill({
+      json: Array.from({ length: 500 }, (_, i) => ({ ...file(i), size: 100 + i * 997, mtime: 1700000000 + i, dismissed: false })),
+    }));
+  });
+
+  test("a jump to the middle renders rows, and the columns hold still", async ({ page }) => {
+    await openPage(page, { name: "Unmatched", path: "/unmatched" });
+    const widths = () => page.locator(".unmatched-table thead th").evaluateAll(ths => ths.map(t => Math.round(t.getBoundingClientRect().width)));
+    const atTop = await widths();
+    for (const at of [0.5, 1, 0.25, 0.75]) {
+      await page.evaluate(f => window.scrollTo(0, (document.documentElement.scrollHeight - innerHeight) * f), at);
+      await page.waitForTimeout(300);
+      await expect(page.locator("#main-nav")).toBeVisible();     // not React's error page
+      const shown = await page.locator(".unmatched-table tbody tr:not(.win-gap)").evaluateAll(rs =>
+        rs.filter(r => { const b = r.getBoundingClientRect(); return b.bottom > 60 && b.top < innerHeight; }).length);
+      expect(shown, `rows in view at ${at}`).toBeGreaterThan(0);
+      expect(await widths(), `column widths at ${at}`).toEqual(atTop);
+    }
+    await idle(page);
+  });
+});
+
 test.describe("Storage, 2,000 creators", () => {
   const N = 2000;
   test.beforeEach(async ({ page }) => {

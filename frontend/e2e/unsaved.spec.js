@@ -449,3 +449,55 @@ test("Creators: a half-typed new source is asked about before it goes (#132)", a
     await removeSources(request, stamp);
   }
 });
+
+// QA pass 3: Settings' forms (media roots, a tool's path, the sync and
+// cookie settings, link routing) dropped their edits when the app went to
+// another page. Leaving now asks; another tab of Settings keeps them
+// without asking. Nothing is saved: the instance's config stays as it was.
+test("Settings: leaving asks before dropping unsaved edits; its tabs keep them", async ({ page, request }) => {
+  const before = await (await request.get("/api/config", { headers: H })).json();
+  await page.goto("/settings#library");
+  const dialog = page.getByRole("alertdialog");
+  const root = page.getByRole("textbox", { name: "Folder path to add" });
+  await expect(root).toBeVisible();
+  await idle(page);
+
+  // Untouched: the app goes on.
+  await nav(page, "/links");
+  await arrived(page, "Links");
+  await expect(dialog).toHaveCount(0);
+  await page.goBack();
+
+  // A folder typed, not added: leaving asks, Keep editing keeps it.
+  await root.fill("/tmp/feedvault-e2e-not-a-real-root");
+  await nav(page, "/links");
+  await expect(dialog).toContainText("Not saved: Media roots.");
+  await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeFocused();
+  await dialog.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page).toHaveURL(/\/settings#library$/);
+  await expect(root).toHaveValue("/tmp/feedvault-e2e-not-a-real-root");
+
+  // Another tab is the same page: no question, and both edits stay.
+  await page.locator(".settings-tabs").getByRole("link", { name: "Sync" }).click();
+  await expect(page).toHaveURL(/\/settings#sync$/);
+  await expect(dialog).toHaveCount(0);
+  const pause = page.getByRole("textbox", { name: "Pause in seconds", exact: true });
+  await pause.fill("61");
+  await nav(page, "/links");
+  await expect(dialog).toContainText("Not saved: Media roots, Instagram sync.");
+
+  // Discard: the app goes on; nothing was saved.
+  await dialog.getByRole("button", { name: "Discard" }).click();
+  await arrived(page, "Links");
+  const after = await (await request.get("/api/config", { headers: H })).json();
+  expect(after.media_roots).toEqual(before.media_roots);
+  expect(after.instaloader).toEqual(before.instaloader);
+
+  // Put back by hand: nothing left to ask about.
+  await page.goto("/settings#sync");
+  await pause.fill("61");
+  await pause.fill(String(before.instaloader?.pause ?? 60));
+  await nav(page, "/links");
+  await arrived(page, "Links");
+  await expect(dialog).toHaveCount(0);
+});
