@@ -6,19 +6,13 @@ import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
 import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { healthBadge, lastGood, loginText } from "../lib/health";
-import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
+import { fmtAgo, fmtFullDate, fmtIn, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import {
   FIRST_POSTS_MAX, MEDIA, SCHEDULES, firstPostsEach, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin,
   optionsOf, optionsSummary, scheduleShort, scheduleText, scriptHref, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
-
-// "in 40 s", "in 2 min"
-function fmtIn(ts) {
-  const s = Math.max(0, Math.round(ts - Date.now() / 1000));
-  return s < 60 ? `in ${s} s` : `in ${Math.ceil(s / 60)} min`;
-}
 
 /* Where a source stands: its sync now (queued, waiting out the pause,
    running), else how its last one went. */
@@ -136,10 +130,13 @@ export function SourceHealth({ source: s, job, onSaved }) {
       {rename && (
         <span className="source-rename" role="status">
           <span>Now called <b>{s.tool === "instaloader" ? `@${rename.to}` : rename.to}</b>?</span>
-          <button type="button" className="btn-link" disabled={busy || !!job}
-                  title={job ? "Wait for its sync to end" : `Sync @${rename.to} from now on; the folder and its files stay as they are`}
-                  onClick={() => answer(true)}>Accept</button>
-          <button type="button" className="btn-link" disabled={busy} onClick={() => answer(false)}>Dismiss</button>
+          {/* Together: never Dismiss alone on a line (#139). */}
+          <span className="source-rename-actions">
+            <button type="button" className="btn-link" disabled={busy || !!job}
+                    title={job ? "Wait for its sync to end" : `Sync @${rename.to} from now on; the folder and its files stay as they are`}
+                    onClick={() => answer(true)}>Accept</button>
+            <button type="button" className="btn-link" disabled={busy} onClick={() => answer(false)}>Dismiss</button>
+          </span>
         </span>
       )}
     </span>

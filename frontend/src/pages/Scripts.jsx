@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { getScript, getScripts, runScript } from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { useJobs } from "../lib/jobs";
+import { ENDED, useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { fmtAgo, fmtBytes } from "../lib/fmt";
 import { scriptAnchor } from "../lib/sourceOptions";
+import { useKeepFocus } from "../lib/layout";
 import Icon from "../components/Icon";
-import { JobLog } from "./Jobs";
+import { CancelJobDialog, JobLog } from "./Jobs";
 import PageHeader from "../components/PageHeader";
 
 // What a script is given (docs/API.md "Scripts").
@@ -133,7 +134,8 @@ function ScriptRow({ script: s, dir, onStarted, lit = false }) {
         <span className="tool-name">{s.name || s.file}</span>
         <code className="dim">{s.id}</code>
         {s.kind && <span className="chip">{s.kind}</span>}
-        {s.tool && <span className="chip">{s.tool}</span>}
+        {/* As typed: a program's path is case-sensitive (#139). */}
+        {s.tool && <span className="chip tool-chip script-tool" title={`Runs ${s.tool}`}>{s.tool}</span>}
         {s.needs && <span className="chip" title={`Needs ${NEEDS[s.needs]}`}>needs {s.needs}</span>}
         {s.builtin && <span className="chip">built-in</span>}
         {s.refused && <span className="chip job-state-failed">refused</span>}
@@ -175,6 +177,7 @@ export default function Scripts() {
   const { data, error, reload } = useApi(getScripts);
   const [jobId, setJobId] = useState(null);
   const [shellOpen, setShellOpen] = useState(false);
+  const [confirm, setConfirm] = useState(null);      // the job to cancel
 
   // Files are edited elsewhere: read them again on coming back.
   useEffect(() => {
@@ -186,6 +189,12 @@ export default function Scripts() {
   // Run is clicked far down the page, on a template; the log opens near the
   // top. Bring it into view, else the click seems to do nothing.
   const logRef = useRef(null);
+  // Cancel… goes once the job ends (or is cancelled), and the log's Close
+  // takes the log away: focus on either goes to the log's card, or to the
+  // card of files once the log is gone, never onto <body> (#139). So does
+  // a Run… form's Run, which shuts the form as the log opens.
+  const filesRef = useRef(null);
+  const { onFocus, onBlur } = useKeepFocus(() => logRef.current || filesRef.current);
   const shownId = job?.id;
   useEffect(() => {
     if (shownId == null) return;
@@ -218,13 +227,13 @@ export default function Scripts() {
   }
 
   return (
-    <div className="jobs-page">
+    <div className="jobs-page" onFocus={onFocus} onBlur={onBlur}>
       <PageHeader
         title="Scripts"
         sub={data ? `${files.length} file${files.length === 1 ? "" : "s"}` : "…"}
         actions={<button type="button" className="btn-secondary" onClick={reload}><Icon name="refresh" size={13} />Read again</button>}
       />
-      <div className="card">
+      <div className="card" ref={filesRef} tabIndex={-1} role="region" aria-label="Your scripts">
         <p className="page-lede">
           Your own download commands (<code>.json</code>) and shell scripts (<code>.sh</code>), as files in
           {" "}<code className="script-path">{data?.dir || "…"}</code>. Create and edit them in a text editor:
@@ -246,7 +255,7 @@ export default function Scripts() {
       </div>
 
       {job && (
-        <div className="card" ref={logRef}>
+        <div className="card" ref={logRef} tabIndex={-1} role="region" aria-label="Script log">
           <div className="job-log-head">
             <div className="card-title">Log</div>
             <span className="job-title"><span className="dim mono">#{job.id}</span> {job.label}</span>
@@ -254,6 +263,12 @@ export default function Scripts() {
             <div className="page-head-spacer" />
             {job.message && <span className={`job-message${job.state === "failed" ? " is-err" : ""}`}>{job.message}</span>}
             <Link to="/jobs" className="btn-ghost">Jobs</Link>
+            {/* As on a Jobs row: a long script stops from here too (#139). */}
+            {!ENDED.has(job.state) && (
+              <button type="button" className="btn-danger-soft job-cancel" onClick={() => setConfirm(job)}>
+                <Icon name="close" size={13} />Cancel…
+              </button>
+            )}
             <button type="button" className="del-btn" onClick={() => setJobId(null)} aria-label="Close the log" title="Close">
               <Icon name="close" size={14} />
             </button>
@@ -289,6 +304,8 @@ export default function Scripts() {
           {shellOpen && <TemplateFile path={`${data.dir}/my-script.sh`} content={data.shell_template} shell />}
         </div>
       )}
+
+      <CancelJobDialog job={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

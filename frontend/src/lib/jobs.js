@@ -41,3 +41,23 @@ export function jobDuration(job, now = Date.now() / 1000) {
   if (s < 3600) return `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}`;
   return `${Math.floor(s / 3600)} h${Math.floor((s % 3600) / 60) ? ` ${Math.floor((s % 3600) / 60)} min` : ""}`;
 }
+
+// The history's Exit cell: { text, title }. A cancelled job was stopped by
+// FeedVault (SIGTERM, then SIGKILL): its code is the signal (-15), not the
+// tool's answer, so it reads "—" with the raw code in the title (#139).
+// A code below 0 is a signal on any job, which the title says.
+export function jobExit(job) {
+  const code = job.exit_code;
+  if (code == null) return { text: "—", title: undefined };
+  const raw = code < 0 ? `ended by signal ${-code} (exit code ${code})` : `exit code ${code}`;
+  if (job.state === "cancelled") return { text: "—", title: `Cancelled: ${raw}` };
+  return { text: String(code), title: code < 0 ? raw : undefined };
+}
+
+// The style of an ended job's toast: "ok", "err", or "info" for one the
+// user (or a restart) stopped, neither a success nor a failure (#139).
+export function endTone(job) {
+  if (job.state === "failed") return "err";
+  if (job.state === "cancelled" || job.state === "interrupted") return "info";
+  return "ok";
+}

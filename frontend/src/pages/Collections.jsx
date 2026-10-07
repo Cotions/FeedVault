@@ -92,7 +92,7 @@ export default function Collections() {
           </div>
         ) : (
           <>
-            {list.length > 1 && <p className="dim collection-hint">Drag a collection onto another to move it there.</p>}
+            {list.length > 1 && <p className="dim collection-hint">Drag a collection onto another to move it there, or use its arrows.</p>}
             <ol className="collection-grid" ref={listRef}>
               {list.map((c, i) => (
                 <li

@@ -585,6 +585,92 @@ test.describe("focus stays off <body>", () => {
       await expect(bell, `closed with ${key}`).toBeFocused();
     }
   });
+
+  // #139: Use as cover goes once used, Remove takes its tile.
+  test("Use as cover and Remove, inside a collection", async ({ page, request }) => {
+    const { collection } = await api(request, "POST", "/api/collections", { name: `E2E focus cover ${Date.now()}` });
+    try {
+      const ids = (await api(request, "GET", "/api/posts?limit=3")).posts.map(p => p.id);
+      await api(request, "POST", `/api/collections/${collection.id}/add`, { posts: ids });
+      await atSize(page, SIZES[1]);
+      await openUrl(page, `/collections/${collection.id}`, ".collection-tile");
+      const tiles = page.locator(".collection-tile");
+      await expect(tiles).toHaveCount(3);
+      const second = tiles.nth(1);
+      const href = await second.locator(".collection-tile-media").getAttribute("href");
+      await second.getByRole("button", { name: "Use as cover" }).focus();
+      const covered = page.waitForResponse(r => r.url().endsWith(`/api/collections/${collection.id}/cover`));
+      await page.keyboard.press("Enter");
+      await covered;
+      await expect(second.locator(".collection-cover-badge")).toBeVisible();
+      await expect(second.getByRole("button", { name: "Use as cover" })).toHaveCount(0);
+      await expect(second.locator(".collection-tile-media"), "after Use as cover: on its tile's picture").toBeFocused();
+
+      // Remove the first: focus goes to the next tile's Remove; the last, to the one before.
+      const third = await tiles.nth(2).locator(".collection-tile-media").getAttribute("href");
+      await tiles.first().getByRole("button", { name: "Remove from collection" }).focus();
+      await page.keyboard.press("Enter");
+      await expect(tiles).toHaveCount(2);
+      const onTile = h => tiles.filter({ has: page.locator(`.collection-tile-media[href="${h}"]`) });
+      await expect(onTile(href).getByRole("button", { name: "Remove from collection" })).toBeFocused();
+      await onTile(third).getByRole("button", { name: "Remove from collection" }).focus();
+      await page.keyboard.press("Enter");
+      await expect(tiles).toHaveCount(1);
+      await expect(onTile(href).getByRole("button", { name: "Remove from collection" })).toBeFocused();
+      // The very last: the posts' card.
+      await page.keyboard.press("Enter");
+      await expect(tiles).toHaveCount(0);
+      await expect.poll(() => onBody(page), "focus after the last tile went").toBe(false);
+      await expect(page.getByRole("region", { name: "Posts in this collection" })).toBeFocused();
+    } finally {
+      await api(request, "POST", `/api/collections/${collection.id}/delete`);
+    }
+  });
+
+  // #139: an entry's link goes with the panel; focus lands on the page it
+  // opened. The entry is faked (a failed sync with no source: Creators).
+  test("following a Notifications entry puts focus on the new page", async ({ page }) => {
+    await page.route(url => url.pathname === "/api/notifications", route => route.fulfill({ json: {
+      entries: [{ id: 99001, kind: "failed", text: "Sync of @e2e.gone failed", at: Date.now() / 1000 - 60, read: true, scheduled: false }],
+      unread: 0,
+    } }));
+    await atSize(page, SIZES[1]);
+    await open(page, "Feed");
+    await page.locator(".side-bell > button").click();
+    const entry = page.locator(".notif-panel .notif-entry");
+    await entry.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/creators$/);
+    await expect(page.locator(".notif-panel")).toHaveCount(0);
+    await expect.poll(() => onBody(page), "focus after the entry's link went").toBe(false);
+    await expect(page.locator("main")).toBeFocused();
+    // The next Tab goes into the page, not back to the document's start.
+    await page.keyboard.press("Tab");
+    expect(await page.evaluate(() => document.querySelector("main").contains(document.activeElement))).toBe(true);
+  });
+
+  // #136, #139: in select mode, Space on a focused card's link toggles the
+  // card, as Enter does, instead of scrolling the page.
+  test("Space toggles a focused Feed card in select mode", async ({ page }) => {
+    await atSize(page, SIZES[1]);
+    await open(page, "Feed");
+    await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+    const card = page.locator("article.post-card").nth(1);
+    const check = card.locator(".select-check");
+    await expect(check).toHaveAttribute("aria-checked", "false");
+    await card.locator("a").first().focus();
+    const y = await page.evaluate(() => window.scrollY);
+    await page.keyboard.press(" ");
+    await expect(check).toHaveAttribute("aria-checked", "true");
+    expect(await page.evaluate(() => window.scrollY), "the page did not scroll").toBe(y);
+    await page.keyboard.press(" ");
+    await expect(check).toHaveAttribute("aria-checked", "false");
+    // Its checkbox, a button, toggles once per Space.
+    await check.focus();
+    await page.keyboard.press(" ");
+    await expect(check).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+  });
 });
 
 // Toasts never cover the buttons pinned at the bottom: the selection
