@@ -2807,7 +2807,8 @@ a.btn-primary { color: var(--on-accent); }
 .job-message.is-err { color: #ffb3b5; }
 .job-table tbody tr { cursor: pointer; }
 .job-table tbody tr.is-selected td { background: rgba(var(--accent-rgb), 0.08); }
-.job-table .btn-link { text-align: left; }
+/* A target of its own: 24px tall at least, as the layout checks want. */
+.job-table .btn-link { text-align: left; min-height: 24px; }
 
 /* Settings: downloaders */
 .dl-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
