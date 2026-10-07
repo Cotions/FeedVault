@@ -202,7 +202,7 @@ def test_a_root_added_while_stopped_is_not_new_whichever_scan_reads_it(env, clie
     assert new_count(client)["count"] == 0
 
 
-def test_posts_indexed_after_the_mark_are_new(env, client):
+def test_posts_indexed_after_the_mark_are_new(env, client, monkeypatch):
     archive(env)
     archive(env, 1, "dana.draws", 888)
     scanner.scan(env["roots"])
@@ -215,7 +215,12 @@ def test_posts_indexed_after_the_mark_are_new(env, client):
     write_post(folder, "NEWCAROL0002", TS + 101, owner("carol.cooks", 777))
     assert scanner.index_dirs(env["roots"], [str(folder)], new=True)["added"] == 2
     write_post(env["media"] / "dana.draws", "NEWDANA00001", TS + 102, owner("dana.draws", 888))
-    assert scanner.scan(env["roots"])["added"] == 1
+    # The full scan lands in a later second than the rescan, as it may on a
+    # slow runner: Carol's newest is not every post's newest.
+    later = int(time.time()) + 5
+    with monkeypatch.context() as m:
+        m.setattr(scanner, "time", type("Clock", (), {"time": staticmethod(lambda: later)}))
+        assert scanner.scan(env["roots"])["added"] == 1
     # Restored from the trash or moved by Duplicates: there before, not new.
     write_post(folder, "BACKCAROL001", TS + 103, owner("carol.cooks", 777))
     scanner.index_dirs(env["roots"], [str(folder)])
@@ -224,8 +229,10 @@ def test_posts_indexed_after_the_mark_are_new(env, client):
         {"platform": "instagram", "id": "777"}]}).get_json()["person"]["id"]
     r = new_count(client)
     assert r["count"] == 3 and r["since"] == seen(conn)
-    newest = conn.execute("SELECT MAX(first_seen) FROM posts").fetchone()[0]
-    assert r["by_person"] == [{"id": pid, "name": "Carol", "count": 2, "until": newest, "muted": False}]
+    # Carol's until is her own newest new post, not dana's later one.
+    until = conn.execute("SELECT MAX(first_seen) FROM posts WHERE id IN "
+                         "('instagram:NEWCAROL0001', 'instagram:NEWCAROL0002')").fetchone()[0]
+    assert r["by_person"] == [{"id": pid, "name": "Carol", "count": 2, "until": until, "muted": False}]
     assert [(a["handle"], a["count"], a["person"]) for a in r["by_account"]] == \
         [("carol.cooks", 2, pid), ("dana.draws", 1, None)]
     new = ["instagram:NEWCAROL0001", "instagram:NEWCAROL0002", "instagram:NEWDANA00001"]
