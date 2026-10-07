@@ -883,3 +883,26 @@ def test_add_a_person_by_hand_with_profile_links(env, client, monkeypatch):
         assert account(client, "twitter", "example_user1")["person"] is None
     assert len(get(client, "/api/people")) == n
     assert len(get(client, "/api/sources")["sources"]) == 4
+
+
+def test_a_person_name_taken_meanwhile_is_refused_not_a_500(env, client, monkeypatch):
+    # QA pass 4: two requests making (or renaming to) one name at once. The
+    # check passes for both; the second used to fail on the name with a 500.
+    import sqlite3
+
+    import people
+    real = people._name_free
+
+    def free(conn, name, but=()):
+        ok = real(conn, name, but)
+        if ok:                                 # the other request commits in between
+            other = sqlite3.connect(db._path)
+            with other:
+                other.execute("INSERT INTO people(name, created_at) VALUES (?, 1)", (name,))
+            other.close()
+        return ok
+    pid = create(client, "Bea")["person"]["id"]
+    monkeypatch.setattr(people, "_name_free", free)
+    assert "exists" in create(client, "Ana", status=400)["error"]
+    assert "exists" in post(client, f"/api/people/{pid}", {"name": "Cleo"}, 400)["error"]
+    assert sorted(p["name"] for p in get(client, "/api/people")) == ["Ana", "Bea", "Cleo"]

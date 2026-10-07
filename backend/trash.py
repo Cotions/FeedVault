@@ -229,6 +229,11 @@ def _delete_post(conn, post, roots, data_dir, report):
     files = _post_files(conn, post)
     items = conn.execute("SELECT COUNT(*) FROM media WHERE post_id = ?", (post["id"],)).fetchone()[0]
     info = _never_again(_post_info(post, items, False), archives.post_entries(post), data_dir)
+    # Its review decision leaves the index with it (db.remove_post); the
+    # lines keep it, so a restore brings the post back as it was.
+    decision = conn.execute("SELECT decision, at FROM decisions WHERE post_id = ?", (post["id"],)).fetchone()
+    if decision is not None:
+        info = {**info, "decision": decision[0], "decided_at": decision[1]}
     moved = report["files"]
     if not _move_all(files, roots, post["id"], info, report, data_dir):
         _not_moved(info, report["files"] == moved, data_dir)
@@ -398,6 +403,34 @@ def _parse(data):
     return lines
 
 
+_MARK = os.sep + TRASH_NAME + os.sep
+
+
+def _rebased(lines, root):
+    """``root``'s manifest lines, those written before the root moved
+    (renamed, or its disk mounted elsewhere, and the root set to its new
+    place) with their trash path, and their original path when it was under
+    the same old place, put under ``root``, where the files are now.
+    Without this nothing in that trash could be restored, and a purge only
+    dropped the lines. Restore still checks both paths, as for any line."""
+    base = root.rstrip(os.sep)
+    real = None
+    out = []
+    for line in lines:
+        to = line["to"]
+        i = to.find(_MARK)
+        if i > 0 and to[:i] != base:
+            old = to[:i]                       # the root it was written in, as resolved then
+            if real is None:
+                real = os.path.realpath(root)  # a root that is a symlink: the lines have its target
+            if old != real:
+                line = {**line, "to": base + to[i:]}
+                if line["from"].startswith(old + os.sep):
+                    line["from"] = base + line["from"][len(old):]
+        out.append(line)
+    return out
+
+
 def _load(root):
     """(lines, entries, entries by key) of one root's manifest, parsed once per
     version of the file. Shared between callers: never mutate them.
@@ -429,11 +462,11 @@ def _load(root):
     view = memoryview(data)
     h = hashlib.sha1(view[:hit[4]] if hit and hit[4] <= end else b"")
     if hit and hit[0][2] == st.st_ino and hit[4] <= end and h.digest() == hit[5]:
-        lines = hit[1] + _parse(data[hit[4]:end])
+        lines = hit[1] + _rebased(_parse(data[hit[4]:end]), root)
         entries = _group(root, lines, prior=hit[3], start=len(hit[1]))
         h.update(view[hit[4]:end])
     else:
-        lines = _parse(data[:end])
+        lines = _rebased(_parse(data[:end]), root)
         entries = _group(root, lines)
         h = hashlib.sha1(view[:end])
     digest = h.digest()
@@ -447,6 +480,21 @@ def _load(root):
 
 def _read_manifest(root):
     return _load(root)[0]
+
+
+def in_trash(roots, wanted):
+    """Those of ``wanted`` ({(post id, original path)}) that a deletion of
+    that post (not of an extra copy) moved to a trash, where the file still
+    is: the scanner drops a post whose metadata file is there
+    (scanner._mark_missing)."""
+    out = set()
+    for root in roots:
+        for line in _read_manifest(root):
+            pair = (line.get("post"), line["from"])
+            if isinstance(pair[0], str) and pair in wanted and not isinstance(line.get("copy"), str) \
+                    and os.path.lexists(line["to"]) and _inside_trash(line["to"], root):
+                out.add(pair)
+    return out
 
 
 def _write_manifest(root, lines):
@@ -775,6 +823,7 @@ def restore(post_ids, roots, data_dir=None, keys=None):
     wanted_keys = set(keys or ())
     touched_dirs = set()
     archived = {}                                # tool -> archive entries the restored lines added
+    decided = {}                                 # post -> (decision, at) its restored lines kept
     with db.write_lock:
         for root in roots:
             lines = _read_manifest(root)
@@ -812,6 +861,9 @@ def restore(post_ids, roots, data_dir=None, keys=None):
                         for tool, entries in e["archive"].items():
                             if isinstance(entries, list):
                                 archived.setdefault(tool, set()).update(x for x in entries if isinstance(x, str))
+                    if e.get("decision") == "keep" and isinstance(pid, str):
+                        at = e.get("decided_at")
+                        decided[pid] = ("keep", at if isinstance(at, int) and not isinstance(at, bool) else 0)
                     if pid not in report["posts"]:
                         report["posts"].append(pid)
                 except (TrashError, OSError) as err:
@@ -823,7 +875,21 @@ def restore(post_ids, roots, data_dir=None, keys=None):
             archives.take_back({t: sorted(es) for t, es in archived.items()}, data_dir)
     if touched_dirs:
         scanner.index_dirs(roots, touched_dirs)
+    report["decided"] = _decide_again(decided)
     return report
+
+
+def _decide_again(decided):
+    """Put back the decisions of restored posts that are indexed again (a
+    post decided on since, a sync's copy of it say, keeps that). Returns
+    how many were put back."""
+    if not decided:
+        return 0
+    conn = db.connect()
+    with conn:
+        return sum(conn.execute("INSERT OR IGNORE INTO decisions(post_id, decision, at) "
+                                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM posts WHERE id = ?)",
+                                (pid, d, at, pid)).rowcount for pid, (d, at) in decided.items())
 
 
 def _prune_dirs(path, root):
@@ -857,6 +923,10 @@ def _purge(roots, keys, data_dir):
         if not any(_line_key(root, e) in wanted for e in lines):
             continue
         keep, failed, done, posts = [], set(), set(), {}
+        # A stale line (its file put back by hand, or by a restore cut short
+        # before the manifest was rewritten) can name the same trash path as
+        # a later deletion: that file is the later entry's, never removed here.
+        claimed = {e.get("to") for e in lines if _line_key(root, e) not in wanted}
         for e in lines:
             key = _line_key(root, e)
             if key not in wanted:
@@ -865,7 +935,7 @@ def _purge(roots, keys, data_dir):
             posts[key] = e.get("post")
             path = e["to"]
             try:
-                if not os.path.lexists(path):
+                if path in claimed or not os.path.lexists(path):
                     report["dropped"] += 1
                     done.add(key)
                     continue

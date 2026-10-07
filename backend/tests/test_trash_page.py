@@ -598,3 +598,63 @@ def test_usage_and_storage_look_at_no_trashed_file(env, client, monkeypatch):
     stray.write_bytes(b"x" * 10)
     r = client.post("/api/trash/empty", headers=H).get_json()
     assert r["files"] == 50000 and not trash_root(env).exists()
+
+
+def test_a_trash_moved_with_its_media_root_still_restores_and_purges(env, client):
+    # QA pass 4: the media root renamed (or its disk mounted elsewhere) and
+    # Settings pointed at the new place. The manifest's paths were the old
+    # ones: every entry showed missing files, Restore failed on each ("not a
+    # file in this root's trash") and Purge dropped the lines, leaving the
+    # files in the trash folder for good.
+    write_post(env["media"] / "alice", "P1", 1717243200, ALICE, "carousel", slides=[False, False])
+    write_post(env["media"] / "alice", "P2", 1717243300, ALICE, "image")
+    write_post(env["media"] / "alice", "P3", 1717243400, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1", "instagram:P2"]}, headers=H)
+    moved = env["tmp"] / "moved"
+    os.rename(env["media"], moved)
+    cfg = config.load()
+    cfg["media_roots"] = [str(moved)]
+    config.save(cfg)
+    scanner.scan(cfg["media_roots"])                                  # P3, at its new place
+    listed = items(client)
+    assert listed["total"] == 2 and not any(e["missing"] for e in listed["entries"])
+    assert all(e["thumb_url"] for e in listed["entries"])
+    assert client.get(listed["entries"][0]["thumb_url"], headers=H).status_code == 200
+    by_post = {e["post"]: e["key"] for e in listed["entries"]}
+    r = client.post("/api/trash/restore", json={"keys": [by_post["instagram:P1"]]}, headers=H).get_json()
+    assert r["errors"] == [] and r["files"] == 3                      # two images and the metadata
+    post = client.get("/api/posts/instagram/P1", headers=H).get_json()
+    assert post["source"]["meta_path"].startswith(str(moved / "alice") + os.sep)
+    assert [m["missing"] for m in post["media"]] == [False, False]
+    r = client.post("/api/trash/purge", json={"keys": [by_post["instagram:P2"]]}, headers=H).get_json()
+    assert (r["entries"], r["files"], r["dropped"]) == (1, 2, 0)
+    assert items(client)["total"] == 0
+    left = [n for _, _, names in os.walk(moved / ".feedvault-trash") for n in names]
+    assert left == [".manifest.jsonl"]
+
+
+def test_purging_a_stale_entry_leaves_the_later_deletions_files(env, client):
+    # QA pass 4: a restore cut short (files back, manifest not yet rewritten)
+    # leaves lines whose trash paths are free again. Deleting the post again
+    # reused those paths, and purging the old entry removed the new one's
+    # files: the later deletion could no longer be restored.
+    write_post(env["media"] / "alice", "P1", 1717243200, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    first = manifest(env)
+    for line in first:
+        os.rename(line["to"], line["from"])                           # put back, manifest untouched
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    lines = manifest(env)
+    assert {line["to"] for line in lines} == {line["to"] for line in first}   # the same trash paths, twice
+    by_batch = {e["batch"]: e["key"] for e in items(client)["entries"]}
+    stale = by_batch.pop(first[0]["batch"])
+    [later] = by_batch.values()
+    r = client.post("/api/trash/purge", json={"keys": [stale]}, headers=H).get_json()
+    assert r["ok"] and r["entries"] == 1 and r["files"] == 0
+    assert all(os.path.lexists(line["to"]) for line in manifest(env))
+    r = client.post("/api/trash/restore", json={"keys": [later]}, headers=H).get_json()
+    assert r["errors"] == [] and r["files"] == len(first)
+    assert client.get("/api/posts/instagram/P1", headers=H).status_code == 200

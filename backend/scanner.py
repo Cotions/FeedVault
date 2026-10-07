@@ -134,8 +134,13 @@ def _scan(roots):
     report = {"started_at": started, "finished_at": None,
               "added": 0, "updated": 0, "missing": 0, "unmatched": 0, "errors": []}
     # Building the index, or a root's part of it, from nothing: what it
-    # finds is not new.
-    fresh = {root: nothing_under(conn, root) for root in roots}
+    # finds is not new. Noted in the database until the build ends, so the
+    # scan after one that was cut short (FeedVault killed, the machine off)
+    # goes on building it, instead of finding the rest new.
+    fresh = {root: nothing_under(conn, root) or _building(conn, root) for root in roots}
+    with conn:
+        conn.executemany("INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')",
+                         [(BUILDING + root,) for root in roots if fresh[root]])
     seen_meta = set()
     unmatched = []                             # (path, size, mtime, reason)
     copies = []                                # (parsed post, meta mtime), see db.save_copies
@@ -176,7 +181,7 @@ def _scan(roots):
                     unmatched.append((path, *_size_mtime(path), "no metadata file for this media"))
             conn.commit()
 
-    report["missing"] = _mark_missing(conn, seen_meta)
+    report["missing"], trashed = _mark_missing(conn, seen_meta, read)
     db.save_copies(conn, copies, started, prune=True)
     db.save_profiles(conn, profiles, prune=True)
     db.save_account_files(conn, account_files, prune=read)
@@ -184,8 +189,9 @@ def _scan(roots):
     conn.execute("DELETE FROM unmatched")
     conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
                      unmatched)
+    conn.executemany("DELETE FROM meta WHERE key = ?", [(BUILDING + root,) for root in read])
     conn.commit()
-    _changed(changed)
+    _changed(changed + ["decisions"] if trashed else changed)   # their decisions went with them
     report["unmatched"] = len(unmatched)
     report["finished_at"] = int(time.time())
     return report
@@ -196,6 +202,15 @@ def _changed(tables):
     see people.refresh_aliases), for userdata.py to write."""
     for name in tables:
         userdata.changed(name)
+
+
+BUILDING = "building:"                         # meta key prefix: a root's first scan under way
+
+
+def _building(conn, root):
+    """Whether a scan that was building ``root``'s part of the index from
+    nothing did not finish."""
+    return conn.execute("SELECT 1 FROM meta WHERE key = ?", (BUILDING + root,)).fetchone() is not None
 
 
 def nothing_under(conn, root):
@@ -255,11 +270,29 @@ def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_see
     report[outcome] += 1
 
 
-def _mark_missing(conn, seen_meta):
-    """Flag posts whose metadata was not found this scan. Returns how many are newly missing."""
-    newly = 0
-    for row in conn.execute("SELECT id, meta_path, missing FROM posts").fetchall():
-        if row["meta_path"] in seen_meta:
+def _mark_missing(conn, seen_meta, roots=()):
+    """Flag posts whose metadata was not found this scan. Returns how many
+    are newly missing, and the posts dropped as in the trash.
+
+    A post whose metadata file is in a trash folder, moved there as this
+    post's (its manifest line says so), is dropped from the index instead,
+    as the deletion would have done: FeedVault was stopped halfway through
+    one, after the files moved but before the index was told."""
+    newly, trashed = 0, []
+    unseen = [r for r in conn.execute("SELECT id, meta_path, missing FROM posts").fetchall()
+              if r["meta_path"] not in seen_meta]
+    if unseen and roots:
+        import trash                           # imports this module
+        there = trash.in_trash(roots, {(r["id"], r["meta_path"]) for r in unseen})
+        for row in unseen:
+            if (row["id"], row["meta_path"]) in there:
+                db.remove_post(conn, row["id"])
+                trashed.append(row["id"])
+        if trashed:
+            print(f"[scan] {len(trashed)} posts were in the trash but still indexed "
+                  f"(a deletion cut short): dropped from the index")
+    for row in unseen:
+        if row["id"] in trashed:
             continue
         if not row["missing"]:
             newly += 1
@@ -267,7 +300,7 @@ def _mark_missing(conn, seen_meta):
         for m in conn.execute("SELECT id, path FROM media WHERE post_id = ?", (row["id"],)).fetchall():
             gone = 0 if os.path.exists(m["path"]) else 1
             conn.execute("UPDATE media SET missing = ? WHERE id = ?", (gone, m["id"]))
-    return newly
+    return newly, trashed
 
 
 def index_dirs(roots, dirs, new=False, since=None):

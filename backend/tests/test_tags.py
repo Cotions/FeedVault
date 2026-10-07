@@ -1,6 +1,7 @@
 import json
 import shutil
 import os
+import sqlite3
 import time
 
 from conftest import H
@@ -8,6 +9,7 @@ from fakes import owner, write_post
 
 import db
 import hashing
+import organize
 import scanner
 import userdata
 from test_duplicates import listing, two_folders
@@ -392,3 +394,54 @@ def test_colors_and_unused_survive_rebuilding_the_index(env, client):
     assert colors(client) == {"red": "#aa0000", "spare": "#00aa00"}
     assert {t["name"]: t["unused"] for t in client.get("/api/tags", headers=H).get_json()} == \
         {"red": False, "spare": True}
+
+
+# --- two requests at once (QA pass 4) -----------------------------------------
+
+def other_request(sql, args):
+    """What another request thread commits in between, on its own connection."""
+    other = sqlite3.connect(db._path)
+    with other:
+        other.execute(sql, args)
+    other.close()
+
+
+def test_a_tag_made_by_another_request_meanwhile_is_used(env, client, monkeypatch):
+    # Two tabs (or a double press) tag posts with the same new name: this
+    # request finds no such tag, the other one makes it, and this one used
+    # to fail on the name with a 500.
+    three_posts(env)
+    raced = []
+
+    def trace(sql):
+        # The other request commits the tag right before this one inserts it.
+        if not raced and sql.lstrip().upper().startswith("INSERT") and "INTO tags(" in sql:
+            raced.append(sql)
+            other_request("INSERT INTO tags(name, created_at) VALUES ('fresh', 1)", ())
+    db.connect().set_trace_callback(trace)
+    try:
+        r = apply(client, ["instagram:P1"], add=["fresh"])
+    finally:
+        db.connect().set_trace_callback(None)
+    assert raced
+    assert r["added"] == 1 and r["created"] == []          # the other request made it
+    assert post_tags(client) == ["fresh"]
+    assert tags(client)["fresh"] == 1
+
+
+def test_a_collection_name_taken_meanwhile_is_refused_not_a_500(env, client, monkeypatch):
+    real = organize._name_taken
+
+    def taken(conn, name, cid=None):
+        free = not real(conn, name, cid)
+        if free:
+            other_request("INSERT INTO collections(name, created_at, position) VALUES (?, 1, 99)", (name,))
+        return not free
+    cid = client.post("/api/collections", json={"name": "Other"}, headers=H).get_json()["collection"]["id"]
+    monkeypatch.setattr(organize, "_name_taken", taken)
+    r = client.post("/api/collections", json={"name": "Trips"}, headers=H)
+    assert r.status_code == 400 and "exists" in r.get_json()["error"]
+    r = client.post(f"/api/collections/{cid}/rename", json={"name": "Hikes"}, headers=H)
+    assert r.status_code == 400 and "exists" in r.get_json()["error"]
+    assert sorted(c["name"] for c in client.get("/api/collections", headers=H).get_json()) == \
+        ["Hikes", "Other", "Trips"]

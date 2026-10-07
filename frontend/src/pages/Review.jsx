@@ -303,8 +303,9 @@ function ReviewSession({ scope, scopeControls }) {
     function onKey(e) {
       const t = e.target;
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable) return;
-      // A focused button handles its own Enter/Space.
-      if (t.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
+      // A focused button or link handles its own Enter/Space: Enter on the
+      // author's link opens it, it does not keep the post.
+      if (t.closest?.("button, a[href], summary") && (e.key === "Enter" || e.key === " ")) return;
       const k = keysRef.current;
       if (k.blocked) return;                    // a dialog has the keyboard
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;

@@ -243,7 +243,10 @@ new.
   with nothing indexed under it yet (a root just added: its part of the
   index is built from nothing), files back from the trash and files moved
   by Duplicates are not: they were there before. Files put by hand into a
-  root that never had a post count as that root's first scan too.
+  root that never had a post count as that root's first scan too. Such a
+  build is noted in the database (`meta` key `building:<root>`) until it
+  ends, so when FeedVault is stopped or killed halfway, the next scan goes
+  on building and what it finds is not new either.
 - `seen_at` is user data: table `seen_at`, one row, written to
   `<data_directory>/userdata/seen_at.json` (`{"version": 1, "rows": [{"id":
   1, "at": 1727500000}]}`) like the others and read back into a database
@@ -484,9 +487,20 @@ the line carries what the Trash page shows: `platform`, `author`, `kind` and
 `posted_at` of the post, `items` (its media count when it was deleted),
 `partial` (`true` when only some media items were deleted, not the post),
 `role` (`media`, `poster`, `meta` or `side`), `idx` and `media_kind` for media
-and posters, and `size` in bytes. Lines written before these fields existed
+and posters, and `size` in bytes. A post that was kept also has
+`"decision": "keep"` and `decided_at` (when it was kept) on its lines: the
+decision leaves the index with the post, and a restore puts it back (unless
+the post was decided on again since), so it comes back kept. Lines written before these fields existed
 still work: the platform comes from the post id, the media kind from the file
 extension, the size from the file on disk, and `author` is `null`.
+
+`from` and `to` are absolute. A media root that moved with its trash
+(renamed, or its disk mounted elsewhere, and the root set to the new place
+in Settings) keeps working: a line whose `to` is in a `.feedvault-trash`
+folder of another place than its root (nor the root's symlink target) is
+read with that place replaced by the root, in `to` and, when it starts with
+the same place, in `from`. A restore or purge writes the lines back that
+way. Restore checks both paths as for any line.
 
 `GET /api/trash/items` groups the lines by trash folder, post and batch, newest
 deletion first:
@@ -580,6 +594,13 @@ the lines removed for files that were already missing. An entry with an error
 keeps its lines.
 Delete, restore and purge never run at the same time (they share the
 manifest).
+
+A delete moves each post's files, writes their lines, then drops the posts
+from the index in one commit at the end. When FeedVault is stopped or killed
+in between, the next scan finishes the job: a post whose metadata file is
+not where the index has it, but in a trash folder on a line of that post
+(not of an extra copy), is dropped from the index (with its decision, which
+its lines keep) instead of being kept as missing.
 
 ## Review (keep or trash)
 
