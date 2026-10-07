@@ -352,6 +352,8 @@ TEST_MESSAGES = {
     "not_found": "The test item was not found: the site may have changed, an update may fix it",
     "generic": "The test failed",
 }
+# "private" when the test ran with no session (mode "none", #124).
+TEST_NO_SESSION = "The test item needs a login and none is in use: set one in Settings → Sync"
 
 
 def _scratch(cfg):
@@ -381,6 +383,10 @@ def _test_outcome(params, code, lines, index, note=None):
     error, line = sync.classify(lines, TEST_FAILURES[params["tool"]])
     line = health.scrub(line)
     message = TEST_MESSAGES[error]
+    tool = params["tool"]
+    if error == "private" and (sync.settings() if tool == "instaloader"
+                               else sync.tool_settings(tool))["session"]["mode"] == "none":
+        message = TEST_NO_SESSION
     if error == "generic" and line:
         message = f"{message}: {line[:200]}"
     return "failed", {"ok": False, "error": error, "line": line}, message

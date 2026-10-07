@@ -332,6 +332,24 @@ def test_failures_are_named(env, client, fake):
         assert os.listdir(os.path.join(data_dir(), tool, "saving")) == []
 
 
+def test_private_message_follows_the_cookies_in_use(env, client, fake):
+    """#124: no cookies set, a private post's message says where to set them."""
+    fake.put(X_PROFILE, x_account((1, 1)), fail="private")
+    fake.put(TT_PROFILE, tt_account(1), fail="private")
+    for link in (X_LINK, TT_LINK):
+        job = save_now(client, link)
+        assert job["result"]["error"] == "private", link
+        assert job["message"] == save_tools.NO_SESSION, link
+        assert "Settings → Sync" in job["message"] and "cookies in use do" not in job["message"]
+    set_config(**{t: {"pause": 0, "session": {"mode": "cookies", "browser": "firefox"}}
+                  for t in ("gallery-dl", "yt-dlp")})
+    for link in (X_LINK, TT_LINK):
+        job = save_now(client, link)
+        assert job["result"]["error"] == "private", link
+        assert job["message"] == save_tools.MESSAGES["private"] == \
+            "Private post: the cookies in use do not have access to it", link
+
+
 def test_a_failed_run_leaves_nothing(env, client, fake):
     """gallery-dl stopped after one of two files: nothing moved, indexed or
     archived, so the post is not marked saved and Save can try again."""

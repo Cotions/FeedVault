@@ -943,6 +943,14 @@ TOOL_MESSAGES = {
     "private": "Private profile: the cookies in use do not have access to it",
     "login_required": "The site wants a logged-in session for this; see Settings (browser cookies)",
 }
+# A private profile when the run used no session (mode "none", #124): no
+# session or cookies to blame, but where to set some.
+NO_SESSION = {
+    "instaloader": "Private profile and no login in use: choose one that follows it for this source, "
+                   "or set one in Settings → Sync",
+    "tools": "Private profile and no cookies in use: choose a browser's cookies with access for this source, "
+             "or set them in Settings → Sync",
+}
 
 
 def classify(lines, failures=None):
@@ -996,16 +1004,18 @@ def _owner(params):
 
 
 def _outcome(params, code, lines, index, note=None, tool="instaloader"):
-    state, result, message = _ended_as(params, code, lines, index, note, tool)
-    # The session it used, as the output tells (health.login); a source's
-    # options do not change while it syncs (app.update_source).
+    # The session it used: a source's options do not change while it syncs
+    # (app.update_source).
     src = sources.row(db.connect(), _source_id(params)) if "source" in params else None
+    session = session_of(tool, _options(src)) if src is not None else None
+    state, result, message = _ended_as(params, code, lines, index, note, tool, session)
     if src is not None:
-        result["login"] = health.login(tool, lines, session_of(tool, _options(src)), _said(state, result))
+        # As the output tells (health.login).
+        result["login"] = health.login(tool, lines, session, _said(state, result))
     return state, result, message
 
 
-def _ended_as(params, code, lines, index, note, tool):
+def _ended_as(params, code, lines, index, note, tool, session=None):
     if tool != "instaloader":
         _note_listed(params, tool, lines)
     added = index["added"] if index else 0
@@ -1040,6 +1050,8 @@ def _ended_as(params, code, lines, index, note, tool):
         result["error"], result["line"] = classify(
             lines, GALLERY_DL_FAILURES if tool == "gallery-dl" else YT_DLP_FAILURES)
         message = TOOL_MESSAGES.get(result["error"], f"{tool} failed")
+    if result["error"] == "private" and session is not None and session.get("mode", "none") == "none":
+        message = NO_SESSION["instaloader" if tool == "instaloader" else "tools"]
     # Tool output is untrusted text: no cookie, token or session path is kept (health.scrub).
     result["line"] = health.scrub(result["line"])
     if result["error"] == "generic" and result["line"]:

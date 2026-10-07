@@ -9,7 +9,8 @@ States (first match wins, in this order: a throttled client also gets login
 pages and missing profiles, so rate limiting comes first):
 
 - ``rate_limited``: the site is limiting requests (the scheduler backs off)
-- ``private``: a private profile the session does not follow
+- ``private``: a private profile the session in use does not follow, or
+  one synced with no session at all (its message then says where to set one)
 - ``login_required``: the site wants a logged-in session, or refused it
 - ``not_found``: no such profile (deleted, renamed without a trace, banned)
 - ``error``: none of the above; ``ok``: the sync worked

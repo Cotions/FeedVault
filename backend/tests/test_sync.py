@@ -742,13 +742,35 @@ def test_failure_is_stored_on_the_source(env, client, fake, fail, error):
     fake.set(carol_profile(), fail=fail)
     s = add_source(client)
     job = sync_now(client, s["id"])
-    assert (job["state"], job["result"]["error"], job["message"]) == ("failed", error, sync.MESSAGES[error]
+    # No session is set: a private profile's message says so (#124).
+    want = sync.NO_SESSION["instaloader"] if error == "private" else sync.MESSAGES.get(error)
+    assert (job["state"], job["result"]["error"], job["message"]) == ("failed", error, want
                                                                       if error != "generic" else job["message"])
     if error == "generic":
         assert job["message"].startswith("instaloader failed: ")
     s = get(client, f"/api/sources/{s['id']}")
     assert (s["last_result"]["state"], s["last_result"]["error"]) == ("failed", error)
     assert s["last_result"]["line"] and s["last_sync_at"] == job["ended_at"]
+
+
+def test_private_message_follows_the_session_in_use(env, client, fake):
+    """#124: with no session, a private profile's message does not blame one
+    that is not there: it says where to set one (Settings → Sync)."""
+    carol_archive(env)
+    fake.set(carol_profile(), fail="private")
+    s = add_source(client)
+    job = sync_now(client, s["id"])
+    assert (job["result"]["error"], job["result"]["login"]["mode"]) == ("private", "none")
+    assert job["message"] == sync.NO_SESSION["instaloader"]
+    assert "Settings → Sync" in job["message"] and "session in use" not in job["message"]
+    assert get(client, f"/api/sources/{s['id']}")["last_result"]["message"] == job["message"]
+    # The tool's setting, then the source's own session: the message the session can explain.
+    set_config(instaloader={"pause": 0, "session": {"mode": "cookies", "browser": "firefox"}})
+    job = sync_now(client, s["id"])
+    assert (job["result"]["error"], job["result"]["login"]["mode"]) == ("private", "cookies")
+    assert job["message"] == sync.MESSAGES["private"] == "Private profile: the session in use does not follow it"
+    post(client, f"/api/sources/{s['id']}", {"options": {"session": {"mode": "none"}}})
+    assert sync_now(client, s["id"])["message"] == sync.NO_SESSION["instaloader"]
 
 
 def test_unknown_profile_is_not_found(env, client, fake):
