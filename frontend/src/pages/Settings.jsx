@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders } from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -9,14 +9,24 @@ import { JobLog } from "./Jobs";
 import { fmtAgo, fmtBytes, fmtFullDate, plural } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DiscardDialog from "../components/DiscardDialog";
+import { useUnsaved } from "../lib/unsaved";
 import AppearanceSettings from "../components/AppearanceSettings";
 import PageHeader from "../components/PageHeader";
+
+/* A card tells the page whether it holds unsaved edits (``onDirty(name,
+   dirty)``), so leaving Settings asks first (QA pass 3); a card that goes
+   (saved: remounted on the new config) takes its edits with it. */
+function useReportDirty(onDirty, name, dirty) {
+  useEffect(() => { onDirty?.(name, dirty); }, [onDirty, name, dirty]);
+  useEffect(() => () => onDirty?.(name, false), [onDirty, name]);
+}
 
 function sameList(a, b) {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
-function RootsEditor({ saved, onSaved, msg, setMsg }) {
+function RootsEditor({ saved, onSaved, msg, setMsg, onDirty }) {
   const { start, running } = useScan();
   const [roots,    setRoots]    = useState(saved);
   const [typed,    setTyped]    = useState("");
@@ -24,6 +34,7 @@ function RootsEditor({ saved, onSaved, msg, setMsg }) {
   const [saving,   setSaving]   = useState(false);
 
   const dirty = !sameList(roots, saved);
+  useReportDirty(onDirty, "Media roots", dirty || !!typed.trim());
 
   function add(path) {
     const p = (path || "").trim();
@@ -309,13 +320,14 @@ function JobStatus({ job, what }) {
 /* One tool: found or not, how it is installed, its version against PyPI's,
    its login, the path to run it from, and the Test and Update jobs (read
    from the shared jobs poll, so they survive leaving the page). */
-function DownloaderRow({ info, saved, test, update, onSaved, shownLog, showLog }) {
+function DownloaderRow({ info, saved, test, update, onSaved, shownLog, showLog, onDirty }) {
   const { started } = useJobs();
   const [path,   setPath]   = useState(saved || "");
   const [saving, setSaving] = useState(false);
   const [msg,    setMsg]    = useState(null);
   const dirty = path.trim() !== (saved || "");
   const tool = info.tool;
+  useReportDirty(onDirty, `The path to ${tool}`, dirty);
   const testing  = test && !ENDED.has(test.state);
   const updating = update && !ENDED.has(update.state);
 
@@ -430,7 +442,7 @@ function DownloaderRow({ info, saved, test, update, onSaved, shownLog, showLog }
 
 /* Settings → Downloaders: what each tool is, and what to do about it. A
    failed sync links here (#downloaders). */
-function DownloadersCard({ saved, onSaved }) {
+function DownloadersCard({ saved, onSaved, onDirty }) {
   const { list } = useJobs();
   const location = useLocation();
   const { data, error, reload } = useApi(getDownloaders);
@@ -496,7 +508,7 @@ function DownloadersCard({ saved, onSaved }) {
       {!data && <div className="dim">{error ? `Could not check the tools: ${error.message}` : "Checking the tools…"}</div>}
       <ul className="dl-list">
         {(data?.tools || []).map(t => (
-          <DownloaderRow key={`${t.tool}:${saved[t.tool] || ""}`} info={t} saved={saved[t.tool]}
+          <DownloaderRow key={`${t.tool}:${saved[t.tool] || ""}`} info={t} saved={saved[t.tool]} onDirty={onDirty}
                          test={tests[t.tool]} update={updates[t.tool]} shownLog={shownLog} showLog={setShownLog}
                          onSaved={() => { onSaved(); reload(); }} />
         ))}
@@ -637,7 +649,7 @@ function DesktopCard({ on, onSaved }) {
 
 /* How instaloader reaches Instagram when FeedVault syncs a source. FeedVault
    only passes a browser's name or a user name on; instaloader does the rest. */
-function InstaloaderCard({ saved, onSaved }) {
+function InstaloaderCard({ saved, onSaved, onDirty }) {
   const [mode,    setMode]    = useState(saved.session?.mode || "none");
   const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
   const [user,    setUser]    = useState(saved.session?.user || "");
@@ -648,6 +660,7 @@ function InstaloaderCard({ saved, onSaved }) {
   const session = mode === "cookies" ? { mode, browser } : mode === "login" ? { mode, user: user.trim() } : { mode };
   const dirty = JSON.stringify(session) !== JSON.stringify(saved.session || { mode: "none" })
     || pause.trim() !== String(saved.pause ?? 60);
+  useReportDirty(onDirty, "Instagram sync", dirty);
 
   async function save(e) {
     e.preventDefault();
@@ -742,7 +755,7 @@ const PAUSE_TEXT = {
    anonymously, or with a browser's cookies, which the tool reads itself; and
    the pause between two of its syncs. yt-dlp's card also has the YouTube
    length limit. */
-function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
+function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg, onDirty }) {
   const { title, sites } = COOKIE_TOOLS[tool];
   const [mode,    setMode]    = useState(saved.session?.mode || "none");
   const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
@@ -757,6 +770,7 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg }) {
     || pause.trim() !== String(saved.pause ?? TOOL_PAUSE)
     || ignore !== !!saved.ignore_config
     || (youtube && longest.trim() !== String(maxSeconds ?? 180));
+  useReportDirty(onDirty, title, dirty);
 
   async function save(e) {
     e.preventDefault();
@@ -932,12 +946,13 @@ const ROUTE_TOOLS = ["gallery-dl", "yt-dlp", "instaloader"];
 
 /* Which tool syncs a pasted link, by its host: a host matches itself and its
    subdomains, the longest entry wins. instaloader is for instagram.com only. */
-function RoutesCard({ saved, onSaved, msg, setMsg }) {
+function RoutesCard({ saved, onSaved, msg, setMsg, onDirty }) {
   const [rows,   setRows]   = useState(() => Object.entries(saved).map(([host, tool]) => ({ host, tool })));
   const [saving, setSaving] = useState(false);
 
   const table = Object.fromEntries(rows.filter(r => r.host.trim()).map(r => [r.host.trim().toLowerCase(), r.tool]));
   const dirty = JSON.stringify(table) !== JSON.stringify(saved);
+  useReportDirty(onDirty, "Link routing", dirty);
 
   function edit(i, change) {
     setRows(list => list.map((r, j) => (j === i ? { ...r, ...change } : r)));
@@ -1028,6 +1043,12 @@ export default function Settings() {
   const [msg, setMsg] = useState(null);   // { ok, text }
   const [notes, setNotes] = useState({});  // the same, per settings card below
   const note = name => ({ msg: notes[name] || null, setMsg: m => setNotes(n => ({ ...n, [name]: m })) });
+  // The cards with unsaved edits, by name: leaving the page asks first.
+  // Another tab of Settings is the same page (its hash), and keeps them.
+  const [dirty, setDirty] = useState({});
+  const onDirty = useCallback((name, d) => setDirty(m => (!!m[name] === d ? m : { ...m, [name]: d })), []);
+  const unsavedCards = Object.keys(dirty).filter(k => dirty[k]);
+  const unsaved = useUnsaved(unsavedCards.length > 0);
 
   return (
     <div className="settings-page">
@@ -1058,22 +1079,23 @@ export default function Settings() {
                   onSaved={reload}
                   msg={msg}
                   setMsg={setMsg}
+                  onDirty={onDirty}
                 />
                 <TrashCard />
                 <LastScan />
               </div>
               <div className="settings-group" hidden={tab !== "downloads"}>
-                <DownloadersCard saved={config.tools || {}} onSaved={reload} />
-                <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} />
+                <DownloadersCard saved={config.tools || {}} onSaved={reload} onDirty={onDirty} />
+                <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} onDirty={onDirty} />
                 <BioImportCard on={config.bio_import === true} onSaved={reload} />
               </div>
               <div className="settings-group" hidden={tab !== "sync"}>
                 <SchedulesCard paused={config.schedules_paused === true} onSaved={reload} />
                 <DesktopCard on={config.desktop_notifications === true} onSaved={reload} />
-                <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} />
+                <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} onDirty={onDirty} />
                 {Object.keys(COOKIE_TOOLS).map(t => (
                   <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
-                               saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} />
+                               saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} onDirty={onDirty} />
                 ))}
               </div>
               <div className="settings-group" hidden={tab !== "about"}>
@@ -1106,6 +1128,9 @@ export default function Settings() {
           )}
         </div>
       </div>
+      <DiscardDialog open={unsaved.asking} onDiscard={unsaved.discard} onKeep={unsaved.keep}>
+        <p>Not saved: {unsavedCards.join(", ")}.</p>
+      </DiscardDialog>
     </div>
   );
 }
