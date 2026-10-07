@@ -685,9 +685,14 @@ Duplicates come in three kinds, two exact and one visual:
   are never `identical`, so they are resolved one by one, never in bulk.
 
 Hashes are computed by a background worker after every scan, at the lowest
-CPU and disk priority, and cached by path, size and mtime. Only files whose
-size another file shares, and the files of posts that have extra copies,
-are read. It pauses while a scan or a delete runs.
+CPU and disk priority, and cached by path, size and mtime: each phase reads
+only the files that are new or changed since, so a pass after a rescan that
+changed nothing reads none. Only files whose size another file shares, and
+the files of posts that have extra copies, are read. It pauses while a scan
+or a delete runs, and before each file it waits (up to a second) while a
+request is being answered. A file that changes while it is read gets no
+hash until the next pass; rows of files that are gone are dropped. Stopping
+the app mid-pass loses at most the last few seconds of work.
 
 After the content hashes, the same worker takes a perceptual hash (a 64-bit
 dHash) of every image and video in the index, for the `similar` kind: from
@@ -796,7 +801,8 @@ group at the threshold they are given, so send the one it was listed at.
 
 `phase` is `partial` or `full` (content hashes), `dhash` (perceptual
 hashes) or `probe` (video sizes from ffprobe), `null` when idle. `done` and
-`total` count files in that phase, `bytes` what was read, `hashed` the
+`total` count the files of that phase that are new or changed (those it
+reads; `0` and `0` when there is nothing to do), `bytes` what was read, `hashed` the
 files with a content hash, `fingerprinted` those with a perceptual hash,
 `finished_at` when the last complete pass ended, `errors` the last 20
 files that could not be read.
