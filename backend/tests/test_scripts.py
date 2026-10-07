@@ -259,6 +259,8 @@ class Recorder:
         self.path = self.bin / "recorder"
         self.path.write_text(RECORDER)
         self.path.chmod(0o755)
+        self.echo = self.bin / "echo"
+        self.install_as("echo")
 
     def install_as(self, tool):
         exe = self.bin / tool
@@ -278,6 +280,8 @@ def runner(env, folder, monkeypatch):
     monkeypatch.setattr(jobs, "KILL_AFTER", 0.5)
     monkeypatch.setattr(sync, "_batch", None)
     rec = Recorder(env["tmp"])
+    # Its folder stands in for /usr/bin, where an echo is one (scripts.SYSTEM_DIRS).
+    monkeypatch.setattr(scripts, "SYSTEM_DIRS", (*scripts.SYSTEM_DIRS, str(rec.bin)))
     monkeypatch.setenv("PATH", f"{rec.bin}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setenv("RECORDER_LOG", str(rec.log))
     return rec
@@ -308,8 +312,12 @@ def log_of(client, job_id):
     return [ln["text"] for ln in client.get(f"/api/jobs/{job_id}/log", headers=H).get_json()["lines"]]
 
 
+# A program FeedVault does not read the arguments of may not take a
+# placeholder (#103), so the recorder runs as one that only ever prints
+# them (scripts.DATA_ONLY): a fake echo, as the downloaders are fakes, in
+# a folder the runner fixture makes a system one.
 def command(rec, *args, needs="target", rescan=None):
-    return {"needs": needs, "rescan": rescan, "argv": [str(rec.path), *args]}
+    return {"needs": needs, "rescan": rescan, "argv": [str(rec.echo), *args]}
 
 
 def test_a_target_reaches_the_program_as_one_literal_argument(client, folder, runner, env):
@@ -762,7 +770,8 @@ def test_a_placeholder_in_a_shell_run_option_is_refused_and_never_run(client, fo
     ("yt-dlp", ["--postprocessor-args", "{root}"], "--postprocessor-args"),
     # The downloader by its path, or behind env.
     ("/usr/local/bin/yt-dlp", ["--exec", "echo {url}"], "--exec"),
-    ("/usr/bin/env", ["A=1", "-u", "B", "gallery-dl", "--exec", "echo {url}"], "--exec"),
+    ("/usr/bin/env", ["-u", "B", "A=1", "gallery-dl", "--exec", "echo {url}"], "--exec"),
+    ("/usr/bin/nice", ["-n5", "timeout", "60", "yt-dlp", "--exec", "echo {url}"], "--exec"),
 ])
 def test_each_shell_run_option_and_form_is_refused(tool, args, option):
     _, error = scripts.parse_command(json.dumps({"needs": "url", "argv": [tool, *args, "--", "{url}"]}))
@@ -800,8 +809,8 @@ def test_a_placeholder_in_a_shells_code_is_refused(argv, reason):
     ("gallery-dl", ["-D{root}o{url}"]),
     # --alias without a placeholder anywhere.
     ("yt-dlp", ["--alias", "n", "--exec {0}", "https://example.com/a"]),
-    # Not a downloader: its options are its own.
-    ("/usr/local/bin/other", ["--exec", "{url}"]),
+    # Not a downloader, no placeholder: its options are its own.
+    ("/usr/local/bin/other", ["--exec", "x"]),
     # A shell given the placeholder as an argument after its -c text, or a script's path.
     ("/bin/sh", ["-ec", "notify-send done \"$1\"", "sh", "{url}"]),
     ("/bin/bash", ["/home/me/fetch.sh", "{url}"]),
@@ -1085,7 +1094,7 @@ NAMED = [
     (["/usr/bin/env", "gallery-dl"], "gallery-dl"),
     (["/usr/bin/env", "-i", "yt-dlp"], "yt-dlp"),
     (["/usr/bin/env", "LANG=C", "instaloader"], "instaloader"),
-    (["/usr/bin/env", "-i", "PATH=/opt/bin", "-u", "HOME", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/env", "-i", "-u", "HOME", "PATH=/opt/bin", "gallery-dl"], "gallery-dl"),
     (["/usr/bin/env", "--", "yt-dlp"], "yt-dlp"),
     (["/usr/bin/env", "./yt-dlp"], "yt-dlp"),
     (["/usr/bin/python3", "-m", "yt_dlp"], "yt-dlp"),
@@ -1117,6 +1126,8 @@ NOT_DOWNLOADERS = [
     ["/usr/bin/python3", "-m", "runpy", "json.tool"],
     ["/usr/bin/python3", "/opt/src/other/__main__.py"],
     ["/usr/bin/env", "-S", "yt-dlp --version"],          # env -S: its text is not read (see API.md)
+    # env reads no option after a variable: this runs a program named "-u" (env.c).
+    ["/usr/bin/env", "-i", "PATH=/opt/bin", "-u", "HOME", "gallery-dl"],
 ]
 PAUSES = {"instaloader": 41, "gallery-dl": 42, "yt-dlp": 43}
 
@@ -1198,6 +1209,273 @@ def test_a_downloader_by_absolute_path_runs_in_its_lock_group(client, folder, ru
     assert job["group"] == "instaloader"
     assert ended(job["id"])["state"] == "done"
     assert runner.runs()[-1]["args"] == ["--", "carol.cooks"]
+
+
+# ---------------------------------------------------------------------------
+# #103: a placeholder only where FeedVault can tell it stays data. Every
+# program on the way to the one that reads the arguments is one it parses,
+# and that one a downloader, a shell or a data-only program. Parsing only:
+# nothing here is run.
+# ---------------------------------------------------------------------------
+
+def why_refused(argv):
+    used = scripts._used(argv)
+    needs = "url" if "url" in used else "target" if "target" in used else "none"
+    return scripts.parse_command(json.dumps({"needs": needs, "argv": argv}))[1]
+
+
+# A launcher (coreutils' env, nice, nohup, timeout, stdbuf; util-linux's
+# ionice, taskset) is seen through, with and without its options:
+# the downloader it runs gets its checks, its lock group and its pause.
+LAUNCHED = [
+    (["/usr/bin/nice", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/nice", "-n", "5", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/nice", "-n5", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/nice", "-10", "instaloader"], "instaloader"),
+    (["/usr/bin/nice", "--5", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/nice", "-+5", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/nice", "--adjustment=5", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/nice", "--adj", "5", "--", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/nohup", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/nohup", "--", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/timeout", "60", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/timeout", "-k", "5", "-s", "TERM", "1h", "instaloader"], "instaloader"),
+    (["/usr/bin/timeout", "-vk5", "--signal=INT", "--foreground", "--preserve-status", "60", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/timeout", "--kill", "5", "--", "60", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/stdbuf", "-oL", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/stdbuf", "-o", "L", "-e0", "--input=0", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/env", "nice", "yt-dlp"], "yt-dlp"),      # its bare name, as the job's PATH finds it
+    (["/usr/local/bin/timeout", "5", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/ionice", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/ionice", "-c3", "-t", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/ionice", "-c", "2", "-n", "7", "--", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/ionice", "--class", "idle", "instaloader"], "instaloader"),
+    (["/usr/bin/taskset", "0x3", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/taskset", "-c", "0-3", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/taskset", "--cpu-list", "--", "1", "instaloader"], "instaloader"),
+    (["/usr/bin/env", "-", "LANG=C", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/env", "--ignore-environment", "--unset=HOME", "--block-signal=INT", "yt-dlp"], "yt-dlp"),
+    # One in another, any order, any depth.
+    (["/usr/bin/nice", "timeout", "60", "env", "X=1", "yt-dlp"], "yt-dlp"),
+    (["/usr/bin/env", "-i", "nice", "-n", "19", "ionice", "-c3", "stdbuf", "-oL", "taskset", "-c", "0", "nohup",
+      "timeout", "-s", "KILL", "2h", "gallery-dl"], "gallery-dl"),
+    (["/usr/bin/timeout", "60", "/usr/bin/nice", "/usr/bin/python3", "-m", "yt_dlp"], "yt-dlp"),
+    (["/usr/bin/nice", "/opt/venv/bin/instaloader"], "instaloader"),
+]
+
+
+@pytest.mark.parametrize("argv, tool", LAUNCHED)
+def test_a_launcher_is_seen_through_to_the_downloader_it_runs(client, folder, pauses, argv, tool):
+    arg = "{target}" if tool == "instaloader" else "{url}"
+    write(folder, "launched.json", {"needs": arg[1:-1], "argv": [*argv, "--", arg]})
+    script = scripts.get("launched")
+    assert script["refused"] is None
+    assert scripts.program(script) == tool and scripts.group(script) == tool
+    assert scripts._pause({"script": "launched"}) == PAUSES[tool]
+    # The downloader's own checks apply behind it: code in its options.
+    code = "--post-filter" if tool == "instaloader" else "--exec"
+    assert why_refused([*argv, code, "x == {url}", "--", "{url}"]).startswith(f"{code}'s value can reach ")
+
+
+@pytest.mark.parametrize("argv, why", [
+    # Its options as given: one it does not have, a value missing.
+    (["/usr/bin/nice", "-x", "yt-dlp", "{url}"], "nice reads '-x' in a way FeedVault does not follow"),
+    (["/usr/bin/timeout", "--verbose=1", "60", "yt-dlp", "{url}"], "timeout reads '--verbose=1'"),
+    (["/usr/bin/nice", "-{url}", "yt-dlp"], "nice reads '-{url}'"),
+    (["/usr/bin/nohup", "--fork", "yt-dlp", "{url}"], "nohup reads '--fork'"),
+    (["/usr/bin/stdbuf", "--", "{url}"], "a placeholder may not name the program to run"),
+    (["/usr/bin/env", "--ig", "yt-dlp", "{url}"], "env reads '--ig'"),    # --ignore-environment or -signal?
+    # It runs no program: --help, --version, a pid's options.
+    (["/usr/bin/nice", "--help", "yt-dlp", "{url}"], "nice --help runs no program"),
+    (["/usr/bin/timeout", "--vers", "60", "yt-dlp", "{url}"], "timeout --vers runs no program"),
+    (["/usr/bin/ionice", "-c3", "-p", "1", "{url}"], "ionice -p runs no program"),
+    (["/usr/bin/ionice", "--pid=1", "{url}"], "ionice --pid=1 runs no program"),
+    (["/usr/bin/taskset", "-p", "0x1", "{url}"], "taskset -p runs no program"),
+    (["/usr/bin/taskset", "-V", "{url}"], "taskset -V runs no program"),
+    (["/usr/bin/env", "X={url}"], "env runs no program here"),
+    (["/usr/bin/timeout", "60"], None),                                           # nothing to refuse: no placeholder
+])
+def test_a_launcher_read_otherwise_is_refused_with_a_placeholder(argv, why):
+    error = why_refused(argv)
+    assert (error is None) if why is None else why in error
+
+
+@pytest.mark.parametrize("argv, item, launcher", [
+    (["/usr/bin/nice", "-n", "{target}", "yt-dlp", "{url}"], "{target}", "nice"),
+    (["/usr/bin/timeout", "{target}", "yt-dlp", "{url}"], "{target}", "timeout"),
+    (["/usr/bin/timeout", "-s", "{target}", "60", "yt-dlp", "{url}"], "{target}", "timeout"),
+    (["/usr/bin/timeout", "--kil={target}", "60", "yt-dlp", "{url}"], "--kil={target}", "timeout"),
+    (["/usr/bin/stdbuf", "-o{target}", "yt-dlp", "{url}"], "-o{target}", "stdbuf"),
+    (["/usr/bin/ionice", "--class={target}", "yt-dlp", "{url}"], "--class={target}", "ionice"),
+    (["/usr/bin/taskset", "{target}", "yt-dlp", "{url}"], "{target}", "taskset"),
+    (["/usr/bin/env", "-u", "{target}", "yt-dlp", "{url}"], "{target}", "env"),
+    (["/usr/bin/env", "-a", "{target}", "yt-dlp", "{url}"], "{target}", "env"),
+    # A variable can be code to the program (LD_PRELOAD, BASH_ENV, BASH_FUNC_x%%).
+    (["/usr/bin/env", "X={target}", "yt-dlp", "{url}"], "X={target}", "env"),
+    (["/usr/bin/env", "BASH_ENV={root}/x", "/bin/bash", "-c", "true"], "BASH_ENV={root}/x", "env"),
+    (["/usr/bin/nice", "env", "LD_PRELOAD={archive}", "yt-dlp"], "LD_PRELOAD={archive}", "env"),
+    # The folder it runs in decides what relative names, configs (yt-dlp.conf) and modules load.
+    (["/usr/bin/env", "-C", "{root}", "yt-dlp", "{url}"], "{root}", "env"),
+    (["/usr/bin/env", "-iC{target}", "/bin/sh", "fetch.sh"], "-iC{target}", "env"),
+    (["/usr/bin/nice", "env", "--chdir={root}/x", "gallery-dl", "{url}"], "--chdir={root}/x", "env"),
+])
+def test_a_placeholder_among_a_launchers_items_is_refused(argv, item, launcher):
+    error = why_refused([a.replace("{target}", "{url}") for a in argv])
+    item = item.replace("{target}", "{url}")
+    assert error.startswith(f"{item!r}: a placeholder may not be among {launcher}'s options or operands")
+
+
+def test_env_s_chdir_is_still_checked_as_a_path_when_filled_in(env):
+    """A command with a placeholder there is refused; command() still keeps
+    a link's .. out of it (as before #103)."""
+    script = {"kind": "command", "tool": "/usr/bin/nice", "argv": ["/usr/bin/nice", "env", "-C", "/tmp/{url}",
+                                                                   "yt-dlp", "{url}"]}
+    vals = {"target": "", "url": "https://x.com/../../etc", "root": "/m", "data_dir": "/d", "archive": "/a"}
+    with pytest.raises(jobs.BadRequest, match="-C's path"):
+        scripts.command(script, vals)
+
+
+@pytest.mark.parametrize("argv", [
+    ["/usr/bin/xargs", "yt-dlp", "{url}"],
+    ["/usr/bin/sudo", "yt-dlp", "{url}"],
+    ["/usr/bin/doas", "yt-dlp", "{url}"],
+    ["/usr/bin/su", "-c", "yt-dlp", "me", "{url}"],
+    ["/usr/sbin/runuser", "-u", "me", "--", "yt-dlp", "{url}"],
+    ["/usr/bin/ssh", "host", "yt-dlp", "{url}"],
+    ["/usr/bin/watch", "yt-dlp", "{url}"],
+    ["/usr/bin/script", "-c", "yt-dlp", "{url}"],
+    ["/usr/bin/parallel", "yt-dlp", ":::", "{url}"],
+    ["/usr/bin/find", "{root}", "-exec", "yt-dlp", "{}", ";"],
+    ["/usr/bin/chrt", "-o", "0", "yt-dlp", "{url}"],
+    ["/usr/bin/flock", "/tmp/lock", "yt-dlp", "{url}"],
+    ["/usr/bin/flock", "/tmp/lock", "-c", "yt-dlp {url}"],
+    # A job leads its process group: setsid forks and exits, the program out of the job's reach.
+    ["/usr/bin/setsid", "yt-dlp", "{url}"],
+    ["/usr/bin/setsid", "-w", "yt-dlp", "{url}"],
+    # Behind a launcher seen through, too.
+    ["/usr/bin/nice", "xargs", "yt-dlp", "{url}"],
+    ["/usr/bin/env", "-i", "sudo", "-u", "me", "yt-dlp", "{url}"],
+])
+def test_a_runner_feedvault_does_not_follow_is_refused_with_a_placeholder(argv):
+    name = next(os.path.basename(a) for a in argv if os.path.basename(a) in scripts.RUNNERS)
+    assert why_refused(argv).startswith(f"{name} runs a command FeedVault does not follow")
+    # Without a placeholder it is the user's own command, as before.
+    plain = [re.sub(r"\{(url|root)\}", "x", a) for a in argv]
+    assert why_refused(plain) is None
+
+
+@pytest.mark.parametrize("argv, name", [
+    (["/usr/bin/python3", "-c", "{url}"], "python3"),
+    (["/usr/bin/python3", "-c", "import sys; print(sys.argv[1])", "{url}"], "python3"),
+    (["/usr/bin/python3", "/home/me/fetch.py", "{url}"], "python3"),
+    (["/usr/bin/python3", "-m", "json.tool", "{url}"], "python3"),
+    (["/usr/bin/env", "python3", "-I", "-c", "x", "{url}"], "python3"),
+    (["/usr/bin/perl", "-e", "print 1", "{url}"], "perl"),
+    (["/usr/bin/perl", "{url}"], "perl"),
+    (["/usr/bin/ruby", "-e", "{url}"], "ruby"),
+    (["/usr/bin/node", "-e", "x", "{url}"], "node"),
+    (["/usr/bin/awk", "{url}"], "awk"),
+    (["/usr/bin/gawk", "-f", "/x.awk", "{url}"], "gawk"),
+    (["/usr/bin/php", "-r", "{url}"], "php"),
+    (["/usr/bin/lua", "-e", "x", "{url}"], "lua"),
+    (["/usr/bin/Rscript", "-e", "x", "{url}"], "Rscript"),
+    (["/usr/bin/fish", "-c", "echo $argv", "{url}"], "fish"),
+    (["/usr/local/bin/mytool", "--url", "{url}"], "mytool"),
+    (["/usr/bin/env", "./mytool", "{url}"], "mytool"),
+    (["/usr/bin/nice", "/home/me/bin/wrap.sh", "{url}"], "wrap.sh"),
+    (["/usr/bin/timeout", "60", "../bin/x", "{root}"], "x"),
+    # A program of the user's under a launcher's or echo's name is no launcher, nor echo.
+    (["/home/me/bin/echo", "{url}"], "echo"),
+    (["/usr/bin/env", "./printf", "%s", "{url}"], "printf"),
+    (["/home/me/bin/nice", "yt-dlp", "{url}"], "nice"),
+    (["/usr/bin/env", "/opt/bin/timeout", "60", "yt-dlp", "{url}"], "timeout"),
+])
+def test_an_interpreter_or_an_unknown_program_is_refused_with_a_placeholder(argv, name):
+    error = why_refused(argv)
+    assert error.startswith(f"{name} ") and "use a shell script instead (its inputs are FV_* variables" in error
+    assert why_refused([re.sub(r"\{(url|root)\}", "x", a) for a in argv]) is None
+
+
+@pytest.mark.parametrize("argv, item", [
+    (["/usr/bin/env", "{url}"], "{url}"),
+    (["/usr/bin/env", "-i", "X=1", "{root}/yt-dlp", "{url}"], "{root}/yt-dlp"),
+    (["/usr/bin/nice", "{root}/bin/yt-dlp", "{url}"], "{root}/bin/yt-dlp"),
+    (["/usr/bin/timeout", "60", "{target}"], "{target}"),
+    (["/usr/bin/nohup", "--", "{data_dir}/x"], "{data_dir}/x"),
+])
+def test_a_placeholder_never_names_the_program(argv, item):
+    assert why_refused(argv) == f"{item!r}: a placeholder may not name the program to run"
+
+
+def test_a_placeholder_as_argv0_is_refused():
+    for argv0 in ("{root}/yt-dlp", "{target}", "/opt/{data_dir}/yt-dlp"):
+        assert why_refused([argv0, "{url}"]).startswith("argv[0] must be one of")
+
+
+@pytest.mark.parametrize("argv", [
+    ["/usr/bin/python3", "-W", "{url}", "-m", "yt_dlp", "{url}"],
+    ["/usr/bin/python3", "-X{root}", "-m", "yt_dlp"],
+    ["/usr/bin/python3", "-m", "runpy", "{url}"],
+    ["/usr/bin/python3", "{root}/yt-dlp", "{url}"],
+])
+def test_a_placeholder_among_pythons_options_or_naming_what_it_runs_is_refused(argv):
+    error = why_refused(argv)
+    assert "a placeholder may not be among Python's options" in error or error.startswith("python3 runs Python code")
+
+
+@pytest.mark.parametrize("argv, why", [
+    (["/bin/sh", "-c", 'yt-dlp -- "$1"', "sh", "{url}"], None),
+    (["/bin/bash", "-euc", 'gallery-dl -D "$2" -- "$1"', "bash", "{url}", "{root}"], None),
+    (["/usr/bin/nice", "timeout", "1h", "/bin/sh", "-c", 'exec yt-dlp "$@"', "sh", "{url}"], None),
+    (["/bin/sh", "-s", "{url}"], None),                       # commands from stdin; the rest its arguments
+    (["/bin/bash", "/home/me/fetch.sh", "{url}"], None),
+    (["/bin/sh", "{root}/fetch.sh"], "a shell runs the file its first argument names"),
+    (["/bin/bash", "-e", "{url}"], "a shell runs the file its first argument names"),
+    (["/bin/sh", "-c", "yt-dlp {url}"], "a shell's -c text is read as code"),
+    # mksh -T takes a value: what follows it is not the script, so the item after is.
+    (["/bin/mksh", "-T", "x", "{url}"], "a shell runs the file its first argument names"),
+    (["/bin/ksh", "-R", "x", "-c", "{url}"], "a shell's -c text is read as code"),
+    (["/bin/zsh", "--emulate", "{url}", "-c", "x"], "among a shell's options"),
+    # bash's and zsh's -T is a flag (functrace): what follows is the file.
+    (["/bin/bash", "-eT", "/home/me/fetch.sh", "{url}"], None),
+    (["/bin/sh", "-T", "x", "{url}"], "a shell runs the file its first argument names"),     # sh may be mksh
+])
+def test_a_shell_keeps_its_checks_and_its_file_is_never_a_placeholder(argv, why):
+    error = why_refused(argv)
+    assert (error is None) if why is None else why in error
+
+
+@pytest.mark.parametrize("argv, why", [
+    (["/usr/bin/echo", "{url}"], None),
+    (["/bin/echo", "-n", "done:", "{url}", "{root}"], None),
+    (["/usr/bin/nice", "echo", "{target}"], None),
+    (["/usr/bin/printf", "%s\\n", "{url}"], None),
+    (["/usr/bin/printf", "--", "got %s in %s\\n", "{url}", "{root}"], None),
+    (["/usr/bin/printf", "{url}"], "printf's format may not hold"),
+    (["/usr/bin/printf", "--", "%s{url}"], "printf's format may not hold"),
+])
+def test_a_data_only_program_takes_a_placeholder_as_data(argv, why):
+    error = why_refused(argv)
+    assert (error is None) if why is None else why in error
+
+
+def test_a_shell_script_with_fv_variables_is_still_accepted(client, folder):
+    write(folder, "fetch.sh", "#!/bin/sh\n# needs: url\n# rescan: {root}\nexec yt-dlp -P \"$FV_ROOT\" -- \"$FV_URL\"\n",
+          0o755)
+    assert listed(client)["fetch"]["refused"] is None
+
+
+def test_the_rule_does_not_read_archive(monkeypatch):
+    """{archive} still follows argv[0] (#102); the rule never asks what it is."""
+    monkeypatch.setattr(scripts, "archive", lambda *a: pytest.fail("the rule read {archive}"))
+    assert why_refused(["/usr/bin/nice", "yt-dlp", "--download-archive", "{archive}", "{url}"]) is None
+    assert why_refused(["/usr/bin/perl", "{archive}"]).startswith("perl ")
+
+
+def test_every_builtin_is_accepted_by_the_rule():
+    for name, t in scripts.BUILTINS.items():
+        assert scripts._check_program(t["argv"]) is None, name
+        assert scripts.parse_command(scripts.template(name))[1] is None, name
 
 
 def test_a_builtin_runs_with_its_tools_found_as_in_settings(client, env, runner):
@@ -1533,6 +1811,52 @@ def test_the_scheduler_runs_the_script(client, runner, source):
     assert "--no-videos" in runner.runs()[-1]["args"]
 
 
+# #103: a script saved before the rule that the rule refuses now. It stays
+# listed with the reason and its path (edited or deleted there: the app
+# never writes it), its text can be read, a run is refused with the
+# reason, and a schedule that names it records a failed run and moves on.
+REFUSED_NOW = {"name": "Mine", "needs": "target", "argv": ["/usr/bin/perl", "/home/me/fetch.pl", "{target}"]}
+
+
+def test_a_saved_script_the_rule_refuses_is_listed_never_run_and_fails_its_schedule(client, folder, runner, source,
+                                                                                  monkeypatch):
+    for state in ("_notes", "_held", "_last"):         # no earlier test's spread between a platform's syncs
+        monkeypatch.setattr(scheduler, state, {})
+    attach(client, source["id"], "mine")
+    client.post(f"/api/sources/{source['id']}", json={"options": {"schedule": "hourly"}}, headers=H)
+    runner.install_as("gallery-dl")
+    other = client.post("/api/sources", json={"tool": "gallery-dl", "target": "https://x.com/carol",
+                                              "options": {"schedule": "hourly"}}, headers=H).get_json()["source"]
+    write(folder, "mine.json", REFUSED_NOW)
+    why = "perl is not a program FeedVault reads the arguments of"
+
+    item = listed(client)["mine"]
+    assert item["refused"].startswith(why) and item["path"] == str(folder / "mine.json")
+    got = client.get("/api/scripts/mine", headers=H)
+    assert got.status_code == 200 and json.loads(got.get_json()["content"]) == REFUSED_NOW
+    assert f"mine.json is refused: {why}" in run(client, "mine", status=400, target="carol.cooks")["error"]
+    assert jobs.active() == []
+
+    queued = scheduler.tick()
+    assert sorted(j["kind"] for j in queued) == ["gallery-dl-sync", "script-sync"]
+    failed = ended(next(j for j in queued if j["kind"] == "script-sync")["id"])
+    assert failed["state"] == "failed" and failed["message"].startswith("the source's script: mine.json is refused: ")
+    assert why in failed["message"]
+    assert any(why in t for t in log_of(client, failed["id"]))
+    s = client.get(f"/api/sources/{source['id']}", headers=H).get_json()
+    assert s["last_result"]["state"] == "failed" and why in s["last_result"]["message"]
+    # The other source's sync ran in the same tick, and the script never did.
+    assert ended(next(j for j in queued if j["kind"] == "gallery-dl-sync")["id"])["state"] == "done"
+    assert all(r["args"][-1] != "carol.cooks" for r in runner.runs())
+    assert client.get(f"/api/sources/{other['id']}", headers=H).get_json()["last_result"]["state"] == "done"
+
+    # Edited at its path into a form the rule takes, it is listed and runs again; deleted, it is gone.
+    write(folder, "mine.json", INSTA)
+    assert listed(client)["mine"]["refused"] is None
+    (folder / "mine.json").unlink()
+    assert "mine" not in listed(client)
+
+
 FOREIGN = [{"Origin": "https://www.instagram.com"}, {"Sec-Fetch-Site": "cross-site"}]
 
 
@@ -1764,10 +2088,24 @@ PINNED = [
      'absolute path to a program',
      None),
     (['yt-dlp', '{url}'], None, 'plain'),
-    (['/opt/bin/recorder', '--flag', '--', '{target}'], None, 'plain'),
-    (['/opt/bin/recorder', '--url={url}', '{url}'], None, 'plain'),
-    (['/opt/bin/recorder', '{root}/x', '{data_dir}', '{archive}', '{profile}', '{target}', '--',
-      '{target}{target}'],
+    (['/opt/bin/recorder', '--flag', '--', '{target}'],
+     'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
+     None),
+    (['/usr/bin/echo', '--flag', '--', '{target}'], None, 'plain'),
+    (['/opt/bin/recorder', '--url={url}', '{url}'],
+     'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
+     None),
+    (['/usr/bin/echo', '--url={url}', '{url}'], None, 'plain'),
+    (['/opt/bin/recorder', '{root}/x', '{data_dir}', '{archive}', '{profile}', '{target}', '--', '{target}{target}'],
+     'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
+     None),
+    (['/usr/bin/echo', '{root}/x', '{data_dir}', '{archive}', '{profile}', '{target}', '--', '{target}{target}'],
      None, 'plain'),
     (['instaloader', '{root}', '--', '{root}'], None, 'plain'),
     (['yt-dlp', '{root}', '--', '{root}'], None, 'plain'),
@@ -2701,13 +3039,11 @@ PINNED = [
       'env': 'plain',
       'formfeed': 'plain',
       'template': 'plain'}),
-    (['/usr/bin/env', '-C', '/tmp/{url}', 'gallery-dl', '{url}'], None,
-     {'brace_root': 'plain',
-      'dollar': 'plain',
-      'dotdot': "400: {url} puts a .. in -C's path, which would lead out of the folder written there",
-      'env': 'plain',
-      'formfeed': 'plain',
-      'template': 'plain'}),
+    (['/usr/bin/env', '-C', '/tmp/{url}', 'gallery-dl', '{url}'],
+     "'/tmp/{url}': a placeholder may not be among env's options or operands (a variable can be code to "
+     'the program, LD_PRELOAD or BASH_ENV, and -C picks the folder its relative names, configs and '
+     'modules are found in): pass it to the program it runs',
+     None),
     (['env', '-i', '-u', 'X', '-C/tmp/{url}', 'yt-dlp', '{url}'],
      'argv[0] must be one of instaloader, gallery-dl, yt-dlp, ffmpeg (found as in Settings → Downloaders), or an '
      'absolute path to a program',
@@ -2883,9 +3219,9 @@ PINNED = [
      "{url}'",
      None),
     (['/usr/bin/env', 'A=1', '-u', 'B', 'gallery-dl', '--exec', 'echo {url}', '--', '{url}'],
-     "--exec's value can reach a shell, so it may not hold a FeedVault placeholder: use gallery-dl's own fields "
-     '({_path}, {_directory}), -D {root}, --download-archive {archive}, or a shell script (its inputs are FV_* '
-     "variables); found {url} in 'echo {url}'",
+     '-u is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
      None),
     (['/bin/sh', '-c', 'notify-send {url}'],
      "a shell's -c text is read as code, so it may not hold a FeedVault placeholder: pass it after the text (sh -c "
@@ -2925,7 +3261,11 @@ PINNED = [
       'formfeed': 'plain',
       'template': 'plain'}),
     (['yt-dlp', '--alias', 'n', '--exec {0}', 'https://example.com/a'], None, 'plain'),
-    (['/usr/local/bin/other', '--exec', '{url}'], None, 'plain'),
+    (['/usr/local/bin/other', '--exec', '{url}'],
+     'other is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
+     None),
     (['/bin/sh', '-ec', 'notify-send done "$1"', 'sh', '{url}'], None, 'plain'),
     (['/bin/bash', '/home/me/fetch.sh', '{url}'], None, 'plain'),
     (['yt-dlp', '--alias', 'n', '--exec "echo {0}"', '--n', '{url}'],
@@ -3163,12 +3503,33 @@ PINNED = [
       'template': 'plain'}),
     (['gallery-dl', '-D', '{root}', '--', '{url}'], None, 'plain'),
     (['instaloader', '--', '{target}'], None, 'plain'),
-    (['/opt/bin/recorder', '{target}'], None, 'plain'),
-    (['/opt/bin/recorder', '{url}'], None, 'plain'),
+    (['/opt/bin/recorder', '{target}'],
+     'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
+     None),
+    (['/usr/bin/echo', '{target}'], None, 'plain'),
+    (['/opt/bin/recorder', '{url}'],
+     'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
+     None),
+    (['/usr/bin/echo', '{url}'], None, 'plain'),
     (['yt-dlp', '--', '{target}'], None, 'plain'),
-    (['/opt/bin/recorder', '--evil', '{target}'], None, 'plain'),
-    (['/opt/bin/recorder', '--post', '{root}/carol.cooks'], None, 'plain'),
+    (['/opt/bin/recorder', '--evil', '{target}'],
+     'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
+     None),
+    (['/usr/bin/echo', '--evil', '{target}'], None, 'plain'),
+    (['/opt/bin/recorder', '--post', '{root}/carol.cooks'],
+     'recorder is not a program FeedVault reads the arguments of (a downloader, a shell, Python running a '
+     'downloader, echo, printf), so it may read a FeedVault placeholder as code: use a shell script '
+     'instead (its inputs are FV_* variables, never pasted into code)',
+     None),
+    (['/usr/bin/echo', '--post', '{root}/carol.cooks'], None, 'plain'),
     (['/opt/bin/recorder'], None, 'plain'),
+    (['/usr/bin/echo'], None, 'plain'),
     (['instaloader', '--hold'], None, 'plain'),
     (['instaloader', '--no-videos', '--latest-stamps', '{archive}', '--dirname-pattern', '{root}', '--', '{target}',
       '--extra'],

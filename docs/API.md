@@ -2402,7 +2402,7 @@ be run as they are, or copied into a file.
   last `/` (the file name gallery-dl formats); its folder is left as it is.
   A run is refused (400) when a value puts a `$` in that folder (gallery-dl
   expands `$NAME` there) or `\f` in the file name. This holds for a
-  gallery-dl named by its path, run behind `env` or by Python too (as
+  gallery-dl named by its path, run behind a launcher (`env`, `nice` …) or by Python too (as
   for the lock group, below).
   So is a `{url}` or `{target}` putting a `..` or leading `~` in that folder, or a `..` in a path option (`-D`, `-o`, env's `-C`…), or a leading `~` or a `$` in one where the tool expands them (gallery-dl, yt-dlp).
 - `needs`: `target`, `url` or `none`. A script that uses `{target}` or
@@ -2447,9 +2447,10 @@ header keys are `name`,
   or control characters.
 - `target`, by the program run:
   - instaloader: a profile name or a post's shortcode;
-  - gallery-dl and yt-dlp (by name, path, behind `env` or run by Python): a link, as for `url`;
-  - a shell script or a program by absolute path: any text of 1 to 200
-    characters, without control characters.
+  - gallery-dl and yt-dlp (by name, path, behind a launcher or run by Python): a link, as for `url`;
+  - a shell script, or a command that runs a shell or `echo` / `printf`
+    (the only other programs a placeholder may reach, see Refused below):
+    any text of 1 to 200 characters, without control characters.
 
   It never starts with `-`. It reaches the program as one literal
   argument or env value.
@@ -2490,7 +2491,7 @@ logs it. It never changes a folder above them.
   (Python); of yt-dlp also `--external-downloader-args` and `--ppa`; of
   instaloader `--post-filter`, `--only-if` and `--storyitem-filter` (Python
   it evaluates). The
-  downloader may be named by its path, run through `env` or by Python
+  downloader may be named by its path, run behind a launcher (`env`, `nice`, `timeout` …) or by Python
   (`python3 -m yt_dlp`; see the lock group below for every form read); joined
   (`--exec=…`, `-o…`) and abbreviated forms count; after `--` nothing is
   an option (yt-dlp's optparse and gallery-dl's and instaloader's
@@ -2499,12 +2500,52 @@ logs it. It never changes a folder above them.
   (`-iS` and other clusters, `--split-string=…` too). Use
   the tool's own fields (`%(webpage_url)q`, `{_path}`), or a shell script
   and its `FV_*` variables;
+- a command with a placeholder that a program FeedVault does not read
+  could get (#103). Every program on the way to the one that reads the
+  arguments must be one FeedVault parses, and that one a downloader (its
+  options checked as above), a shell (its `-c` text checked as above) or
+  `echo` / `printf`:
+  - launchers are read with their options as coreutils 9.4 and
+    util-linux 2.39.3 parse them, one inside another: `env`, `nice`,
+    `nohup`, `timeout`, `stdbuf`, `ionice`, `taskset`, by their bare name
+    or a path in `/bin`, `/usr/bin`, `/usr/local/bin`, `/sbin` or
+    `/usr/sbin` (a program of yours under one of these names is not one).
+    A placeholder may not be in their own items: options, `timeout`'s
+    duration, `taskset`'s mask, `env`'s `NAME=value` (a program can read
+    a variable as code: `LD_PRELOAD`, `BASH_ENV`) and `env -C` (the folder
+    relative names, configs such as yt-dlp's `yt-dlp.conf` and Python's
+    modules are found in). One run so that it runs no program (`--help`,
+    `ionice -p`, `taskset -p`), with an option it does not have, or `env
+    -S`: refused with a placeholder anywhere;
+  - a placeholder never names the program to run (`argv[0]`, the item a
+    launcher runs, a shell's script file when it has no `-c` or `-s`,
+    what Python runs), nor is among Python's options (`-W` imports a
+    module);
+  - any other program is refused with a placeholder anywhere in `argv`,
+    and the reason names it: an interpreter (`python3 -c`, `python3
+    script.py`, `perl`, `ruby`, `node`, `awk`, `php`, `lua`, `Rscript`,
+    `fish`), a program that runs another one FeedVault does not follow
+    (`xargs`, `sudo`, `doas`, `su`, `runuser`, `ssh`, `watch`, `script`,
+    `parallel`, `find -exec`, `chrt`, `flock`, `setsid`: a job leads its
+    own process group, so `setsid` forks and exits at once, its program out
+    of the job's reach), or any other program, by its path or behind a
+    launcher. `echo` and `printf` count by their bare name or a path in
+    those folders, as launchers; `printf` takes one after its format,
+    never in it. Use a shell script and its `FV_*` variables, or pass the
+    value to a shell after its `-c` text (`sh -c 'perl x.pl "$1"' sh
+    {url}`);
 - a gallery-dl format string starting with `\f` (Python, a template file)
   that holds a placeholder: `-f` / `--filename`, `--rename`, `--rename-to`,
   and `-N` / `--print`, `--Print`, `--print-to-file`, `--Print-to-file`
   (the FORMAT after `EVENT:`, and FILE's name). Plain format strings stay;
 - a shell script that is not executable, has no absolute `#!` or has no
   `needs`.
+
+A script saved before a check that refuses it now (a new FeedVault) is
+shown the same way: listed with its reason and its path, where it is
+edited or deleted (the app never writes it), its text still readable
+(`GET /api/scripts/<id>`); a run of it is refused with that reason, and a
+source's sync of it, scheduled too, fails with it (see On a source).
 
 A file is opened without following symlinks and checked on what was
 opened. Its SHA-256 is kept when its job is queued, and the file is read
@@ -2546,10 +2587,12 @@ could not be read.
   folder or its `__main__.py`), or an absolute path that is a symlink to
   one of them under another name (`~/bin/ytdl`; links are followed one at
   a time, so the first known name along them counts, whenever the command
-  is read). Not read: `env -S` (its text is split by env's own
-  rules), a name looked up on `PATH` that is a symlink, and other
-  launchers (`nice`, `timeout`, a wrapper script): those run in
-  `scripts`.
+  is read), behind the launchers the checks read (`nice`, `timeout 60`,
+  `ionice -c3`, `stdbuf -oL`, `nohup`, `taskset`, `env`, one in another:
+  `nice timeout 60 env X=1 yt-dlp`). Not read: `env -S` (its
+  text is split by env's own rules), a name looked up on `PATH` that is a
+  symlink, and other programs (`setsid`, `chrt`, `flock`, `sudo`, a wrapper script):
+  those run in `scripts`.
 - `argv` is the command as run, or the script's path. `argv` and `params`
   are scrubbed as output is (`health.scrub`).
 - The log starts with `[feedvault]` lines: the script's path and the
