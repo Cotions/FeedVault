@@ -22,16 +22,25 @@ for the suggested keeper.
 The worker is one background thread at the lowest CPU and I/O priority. It
 starts after every scan, steps aside while anything holds db.write_lock (a
 scan, a delete, a restore), and commits in small batches so requests never
-wait on it.
+wait on it. Each phase first stats its files and keeps those that are new
+or changed: a pass after a rescan that changed nothing reads no file, and
+its progress counts only what is left to do.
+
+The worker also gives way to the dashboard: before each file it waits
+while a request is being answered (app.py counts them, see
+request_started), up to YIELD_MAX. Python runs one thread at a time, so a
+request answered while the worker decoded pictures took several times as
+long (a feed page: 3 ms idle, 17 ms during a pass, docs/TESTING.md); now
+the files wait for the request instead.
 """
 import hashlib
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 import config
 import db
@@ -48,8 +57,14 @@ ERRORS_KEPT = 20
 # the disk, on ffmpeg for a video frame (20k videos without a poster on the
 # reference archive), or in Pillow's decoder, which releases the GIL.
 PICTURE_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
+# Seconds a file waits for the requests being answered to finish. Past
+# that it is read anyway, so a dashboard that never stops asking (a feed
+# loading thumbnails) slows the pass down without stopping it.
+YIELD_MAX = 1.0
 
 _wake = threading.Event()
+_requests = 0                                    # being answered now, see request_started
+_idle = threading.Condition()
 _lock = threading.Lock()
 _thread = None
 _state = {"running": False, "paused": False, "phase": None, "done": 0, "total": 0,
@@ -86,6 +101,30 @@ def _loop():
         except Exception as e:                   # keep the thread alive; show it in the status
             _note_error("", f"hashing pass failed: {type(e).__name__}: {e}")
             _set(running=False, paused=False, phase=None)
+
+
+def request_started():
+    """A request is being answered (app.py, before_request): the worker
+    waits before its next file. Every call is matched by one
+    request_finished."""
+    global _requests
+    with _idle:
+        _requests += 1
+
+
+def request_finished():
+    global _requests
+    with _idle:
+        _requests = max(0, _requests - 1)
+        if _requests == 0:
+            _idle.notify_all()
+
+
+def _wait_idle(limit=None):
+    """Until no request is being answered, at most ``limit`` seconds
+    (YIELD_MAX)."""
+    with _idle:
+        _idle.wait_for(lambda: _requests == 0, YIELD_MAX if limit is None else limit)
 
 
 def _lower_priority():
@@ -294,17 +333,20 @@ def run_pass(conn, restart=None, data_dir=None):
          started_at=int(time.time()), finished_at=None)
     data_dir = data_dir or config.load()["data_directory"]
     try:
+        _wait_idle()                              # each step between phases reads the index whole
         paths = candidates(conn)
         known = _known(conn)
         if not _hash_all(conn, paths, "partial", restart, _fresh(known, 2), _partial_row):
             return False
         # Rows for files that are gone, or neither have a twin nor are pictures.
+        _wait_idle()
         keep = set(paths) | set(pictures(conn))
         conn.executemany("DELETE FROM media_hash WHERE path = ?", [(p,) for p in known if p not in keep])
         conn.commit()
         known = _known(conn)
         if not _hash_all(conn, _full_needed(conn), "full", restart, _fresh(known, 3), _full_row):
             return False
+        _wait_idle()
         pics = pictures(conn)
         known = _known(conn)
         if not _hash_all(conn, list(pics), "dhash", restart, _fresh(known, 4),
@@ -313,7 +355,8 @@ def run_pass(conn, restart=None, data_dir=None):
         ffprobe = thumbs.ffprobe_path()           # looked up once for the pass
         if ffprobe:
             import duplicates                     # it imports this module
-            if not _hash_all(conn, duplicates.videos_to_measure(conn), "probe", restart,
+            _wait_idle()
+            if not _hash_all(conn, duplicates.videos_to_measure(conn, _wait_idle), "probe", restart,
                              lambda path, st: False, lambda path, st: _probe_row(path, st, ffprobe),
                              PICTURE_WORKERS):
                 return False
@@ -335,8 +378,11 @@ def _fresh(known, field):
 
 def _partial_row(path, st):
     digest = partial_hash(path, st[0])
+    size = dimensions(path)
+    if stat(path) != st:                         # rewritten in place at the same size: not this hash
+        raise Changed("modified while reading")
     full = digest if st[0] <= 2 * CHUNK else None
-    return (path, *st, digest, full, *dimensions(path), int(time.time())), min(st[0], 2 * CHUNK)
+    return (path, *st, digest, full, *size, int(time.time())), min(st[0], 2 * CHUNK)
 
 
 def _full_row(path, st):
@@ -379,17 +425,99 @@ def _probe_row(path, st, ffprobe):
     return (*size, path, *st), 0
 
 
+def _stale(paths, fresh):
+    """The paths whose file is there and not ``fresh``: what a phase has to
+    read. A stat each, no file opened."""
+    out = []
+    for path in paths:
+        st = stat(path)
+        if st is not None and not fresh(path, st):
+            out.append(path)
+    return out
+
+
+def _turn(restart):
+    """Wait until the next file may be read: not while anything holds
+    db.write_lock (a scan, a delete), nor while a request is being answered
+    (up to YIELD_MAX). False when the pass is to stop."""
+    if db.write_lock.locked():
+        _set(paused=True)
+        while db.write_lock.locked():
+            if restart is not None and restart.is_set():
+                return False
+            time.sleep(0.5)
+        _set(paused=False)
+    _wait_idle()
+    return restart is None or not restart.is_set()
+
+
+_DONE = object()
+
+
+def _results(paths, one, workers, restart):
+    """``one(path)`` for each path, in the order they finish, from
+    ``workers`` threads (this one when 1). Each thread takes the next file
+    as soon as it is free, so one slow file (a video frame from ffmpeg)
+    holds up only its own thread. The threads are daemons: shutting the
+    app down never waits for a file, and what was not written is read
+    again next pass."""
+    if workers <= 1:
+        for path in paths:
+            if not _turn(restart):
+                return
+            yield one(path)
+        return
+    out = queue.Queue()
+    todo = iter(paths)
+    take = threading.Lock()
+    stop = threading.Event()
+
+    def worker():
+        _lower_priority()
+        try:
+            while not stop.is_set():
+                with take:
+                    path = next(todo, None)
+                if path is None or not _turn(restart):
+                    return
+                out.put(one(path))
+        except BaseException as e:               # handed to the pass, which reports it
+            out.put(e)
+        finally:
+            out.put(_DONE)
+
+    threads = [threading.Thread(target=worker, daemon=True, name=f"hashing-{n}") for n in range(workers)]
+    for t in threads:
+        t.start()
+    running = len(threads)
+    try:
+        while running:
+            item = out.get()
+            if item is _DONE:
+                running -= 1
+            elif isinstance(item, BaseException):
+                raise item
+            else:
+                yield item
+    finally:
+        stop.set()
+
+
 def _hash_all(conn, paths, phase, restart, fresh, work, workers=1):
     """Run ``work(path, (size, mtime_ns))`` -> (row or None, bytes read) on
     every path that is not ``fresh``, writing the rows in batches. With
-    ``workers``, that many threads (at the same low priority) take one file
-    each between checks for a restart or a lock."""
+    ``workers``, that many threads (at the same low priority) each take the
+    next file when free. Returns False when stopped by ``restart`` before
+    every file was read."""
+    if restart is not None and restart.is_set():
+        return False
+    paths = _stale(paths, fresh)
     _set(phase=phase, done=0, total=len(paths), bytes=0)
     pending = []                                 # rows to write, see COMMIT_EVERY
     last_write = time.monotonic()
 
     def one(path):
-        st = stat(path)
+        st = stat(path)                          # again: it may have changed since _stale
         if st is None or fresh(path, st):
             return None, 0
         try:
@@ -398,36 +526,24 @@ def _hash_all(conn, paths, phase, restart, fresh, work, workers=1):
             _note_error(path, str(getattr(e, "strerror", None) or e))
             return None, 0
 
-    pool = ThreadPoolExecutor(workers, initializer=_lower_priority) if workers > 1 else None
-    step = workers if pool else 1                # one file per thread between checks
-    try:
-        for start in range(0, len(paths), step):
-            if restart is not None and restart.is_set():
-                _write(conn, phase, pending)
-                return False
-            if db.write_lock.locked():           # a scan or a delete: step aside
-                _write(conn, phase, pending)
-                _set(paused=True)
-                while db.write_lock.locked():
-                    if restart is not None and restart.is_set():
-                        return False
-                    time.sleep(0.5)
-                _set(paused=False)
-            batch = paths[start:start + step]
-            for row, read in (pool.map(one, batch) if pool else map(one, batch)):
-                if row is not None:
-                    pending.append(row)
-                with _lock:
-                    _state["bytes"] += read
-            _set(done=start + len(batch))
-            if time.monotonic() - last_write >= COMMIT_EVERY:
-                _write(conn, phase, pending)
-                last_write = time.monotonic()
-    finally:
-        if pool:
-            pool.shutdown()
-    _write(conn, phase, pending)
-    return True
+    done = 0
+    for row, read in _results(paths, one, workers, restart):
+        done += 1
+        if row is not None:
+            pending.append(row)
+        with _lock:
+            _state["bytes"] += read
+            _state["done"] = done
+        # Not while a scan or a delete holds the index: the rows wait.
+        if time.monotonic() - last_write >= COMMIT_EVERY and not db.write_lock.locked():
+            _write(conn, phase, pending)
+            last_write = time.monotonic()
+    finished = done == len(paths)
+    # Rows of files read before a stop are good too, unless a scan holds the
+    # index: then they are read again next pass rather than wait for it.
+    if finished or not db.write_lock.locked():
+        _write(conn, phase, pending)
+    return finished
 
 
 # A row keeps what another phase stored only while it still describes the

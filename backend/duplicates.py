@@ -374,26 +374,32 @@ _near = {}
 _near_lock = threading.Lock()
 
 
-def near_pairs(values, threshold):
-    """near_pairs_uncached(values, threshold), the last answer for that
-    threshold again when the values are the same. Do not modify it."""
+def near_pairs(values, threshold, pause=None):
+    """near_pairs_uncached(values, threshold, pause), the last answer for
+    that threshold again when the values are the same. Do not modify it."""
     values = tuple(values)
     with _near_lock:
         hit = _near.get(threshold)
     if hit is not None and hit[0] == values:
         return hit[1]
-    pairs = frozenset(near_pairs_uncached(values, threshold))
+    pairs = frozenset(near_pairs_uncached(values, threshold, pause))
     with _near_lock:
         _near[threshold] = (values, pairs)
     return pairs
 
 
-def near_pairs_uncached(values, threshold):
+# Buckets compared between two calls of near_pairs_uncached's ``pause``.
+PAUSE_EVERY = 256
+
+
+def near_pairs_uncached(values, threshold, pause=None):
     """Index pairs (i, j), i < j, of 64-bit values at most ``threshold`` bits
     apart. Multi-index hashing: split into four 16-bit bands, two values
     within t bits agree within t // 4 bits on at least one band, so only
     buckets whose band value is that close are compared. On ~86k hashes,
-    about a second up to 7 bits, five at 10."""
+    about a second up to 7 bits, five at 10. ``pause()`` is called every
+    PAUSE_EVERY buckets: the hashing worker waits there while a request is
+    answered, rather than hold Python's lock for seconds."""
     r = threshold // 4
     masks = _masks(r)
     out = set()
@@ -402,7 +408,9 @@ def near_pairs_uncached(values, threshold):
         for n, v in enumerate(values):
             buckets.setdefault((v >> shift) & 0xFFFF, []).append(n)
         get = buckets.get
-        for band, mine in buckets.items():
+        for n, (band, mine) in enumerate(buckets.items()):
+            if pause is not None and n % PAUSE_EVERY == 0:
+                pause()
             for m in masks:
                 other_band = band ^ m
                 if other_band < band:
@@ -432,14 +440,14 @@ def _pictures(conn, hashes=None):
     return out
 
 
-def _near_links(conn, hashes, threshold):
+def _near_links(conn, hashes, threshold, pause=None):
     """[(picture a, picture b, bits apart)] between different posts that are
     not already one content group, leaving out pictures near more than
-    MAX_SHARED other posts."""
+    MAX_SHARED other posts. ``pause``: see near_pairs_uncached."""
     pics = _pictures(conn, hashes)
     content = {p: n for n, ids in enumerate(_content_components(conn, hashes)) for p in ids}
     links, near = [], {}
-    for i, j in near_pairs([p[2] for p in pics], threshold):
+    for i, j in near_pairs([p[2] for p in pics], threshold, pause):
         a, b = pics[i], pics[j]
         if a[0] == b[0] or content.get(a[0], -1) == content.get(b[0], -2):
             continue
@@ -500,16 +508,18 @@ def _similar_groups(conn, hashes, threshold):
     return out
 
 
-def videos_to_measure(conn):
+def videos_to_measure(conn, pause=None):
     """Videos of posts in a content group or near another post at the
     loosest threshold, whose size is not known yet: hashing.py measures them
-    with ffprobe, for the keeper rule."""
+    with ffprobe, for the keeper rule. Videos in no group stay unmeasured,
+    so after a scan that brought new pictures this compares them all again
+    (seconds on a large archive): ``pause``, see near_pairs_uncached."""
     if not conn.execute("SELECT 1 FROM media m JOIN media_hash h ON h.path = m.path AND h.size = m.size "
                         "WHERE m.missing = 0 AND m.kind = 'video' AND h.width IS NULL LIMIT 1").fetchone():
         return []                                 # the usual case after the first pass: skip the grouping
     hashes = _hashes(conn)
     posts = {p for ids in _content_components(conn, hashes) for p in ids}
-    posts |= {p[0] for link in _near_links(conn, hashes, SIMILAR_MAX) for p in link[:2]}
+    posts |= {p[0] for link in _near_links(conn, hashes, SIMILAR_MAX, pause) for p in link[:2]}
     return sorted(path for post_id, path in conn.execute(
         "SELECT m.post_id, m.path FROM media m JOIN media_hash h ON h.path = m.path AND h.size = m.size "
         "WHERE m.missing = 0 AND m.kind = 'video' AND h.width IS NULL") if post_id in posts)
