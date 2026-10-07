@@ -10,6 +10,7 @@ import { platformLabel, platformShort, authorFeedPath, fmtBytes, fmtInt, plural 
 import { accountKey, accountRef, accountText, matchedFormer, matches, personPath, personText, suggestName } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DiscardDialog from "../components/DiscardDialog";
 import SelectionBar from "../components/SelectionBar";
 import Suggestions from "../components/Suggestions";
 import MuteButton from "../components/MuteButton";
@@ -20,6 +21,7 @@ import { sourceName, useSources, useSyncAll } from "../lib/sources";
 import { optionsSummary } from "../lib/sourceOptions";
 import { warnings } from "../lib/health";
 import PageHeader from "../components/PageHeader";
+import { useUnsaved } from "../lib/unsaved";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -343,6 +345,10 @@ export default function Creators() {
   const [removing, setRemoving] = useState(null);           // the source to remove
   const [editing,  setEditing]  = useState(null);           // the source whose options are open
   const [addAll,   setAddAll]   = useState(null);           // { error } while that dialog is open
+  const [newSource, setNewSource] = useState(false);         // the new source's field has something typed
+  // A typed source is asked about before the app leaves the page; the
+  // address changing on this page (?source= cleared) leaves it be.
+  const unsaved = useUnsaved(newSource, (from, to) => from.pathname === to.pathname);
 
   const data = authorsApi.data;
   const peopleAll = useMemo(() => peopleApi.data || [], [peopleApi.data]);
@@ -559,20 +565,19 @@ export default function Creators() {
         </>}
       />
       <div className="card">
-        {!sel.active && !filter && (
-          <section className="sources-panel" aria-label="Sources">
-            <AddSource onAdded={sources.reload} />
-            <SyncAllBar count={sourceList.length} syncAll={syncAll} />
-            {loose.length > 0 && (
-              <ul className="source-list">
-                {loose.map(src => (
-                  <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
-                             onSaved={sources.reload} flash={flashKey === `source:${src.id}`} />
-                ))}
-              </ul>
-            )}
-          </section>
-        )}
+        {/* Hidden, not gone, while filtering or selecting: a source being typed stays. */}
+        <section className="sources-panel" aria-label="Sources" hidden={sel.active || !!filter}>
+          <AddSource onAdded={sources.reload} onDirty={setNewSource} />
+          <SyncAllBar count={sourceList.length} syncAll={syncAll} />
+          {loose.length > 0 && (
+            <ul className="source-list">
+              {loose.map(src => (
+                <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
+                           onSaved={sources.reload} flash={flashKey === `source:${src.id}`} />
+              ))}
+            </ul>
+          )}
+        </section>
 
         {!sel.active && !filter && (
           <SourceSuggestions
@@ -744,6 +749,10 @@ export default function Creators() {
             />
           </label>
         </ConfirmDialog>
+
+        <DiscardDialog open={unsaved.asking} onDiscard={unsaved.discard} onKeep={unsaved.keep}>
+          <p>The new source is not added yet.</p>
+        </DiscardDialog>
       </div>
     </>
   );

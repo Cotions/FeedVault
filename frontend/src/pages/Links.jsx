@@ -34,10 +34,12 @@ export default function Links() {
   const [busy,     setBusy]     = useState(false);
   const [dlgError, setDlgError] = useState(null);
   const edit = useOneEdit();                          // the link being edited, and whether it has changes
+  const [adding, setAdding] = useState(false);        // the new link's form has something typed
   // A filter change may hide the link being edited, so with unsaved edits it
   // asks first, as leaving the page does. Clearing every filter cannot hide
-  // it: that goes through.
-  const unsaved = useUnsaved(edit.dirty, (from, to) => from.pathname === to.pathname && !to.search);
+  // it: that goes through. No filter touches the new link's form.
+  const unsaved = useUnsaved(edit.dirty || adding,
+    (from, to) => from.pathname === to.pathname && (!to.search || !edit.dirty));
 
   // The filters in the address, replacing the entry: Back leaves the page.
   const setFilters = useCallback(changes => setParams(prev => {
@@ -171,7 +173,7 @@ export default function Links() {
           A creator's Linktree, Patreon, site or Discord invite, an interview, an article: anything with an
           address. FeedVault keeps the text only; it never opens the link itself.
         </p>
-        <LinkForm people={people || []} busy={busy} onSubmit={add} idPrefix="links-add" />
+        <LinkForm people={people || []} busy={busy} onSubmit={add} idPrefix="links-add" onDirty={setAdding} />
       </div>
       <div className="card">
         <div className="feed-filters links-filters" role="group" aria-label="Filters">
@@ -251,7 +253,11 @@ export default function Links() {
         <DiscardDialog open={edit.asking || unsaved.asking}
                        onDiscard={edit.asking ? edit.discard : unsaved.discard}
                        onKeep={edit.asking ? edit.keep : keepEditing}>
-          <p>The changes to the link you are editing are not saved.</p>
+          <p>
+            {edit.asking || !adding ? "The changes to the link you are editing are not saved."
+              : edit.dirty ? "The new link and the changes to the link you are editing are not saved."
+              : "The new link is not saved."}
+          </p>
         </DiscardDialog>
       </div>
     </>

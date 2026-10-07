@@ -3077,6 +3077,7 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 
 /* ── Sources ────────────────────────────────────────────── */
 .sources-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; }
+.sources-panel[hidden] { display: none; }
 .sources-panel > .source-add { flex: 1 1 420px; }
 .sources-panel > .source-list { flex-basis: 100%; }
 .sync-all { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; flex: 1 1 auto; font-size: 13px; color: var(--text-dim); }

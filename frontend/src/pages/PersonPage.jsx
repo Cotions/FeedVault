@@ -72,8 +72,9 @@ function AccountRow({ account: a, busy, onUnlink }) {
 /* A person's saved links: socials first, then the others, each group in
    the person's order (up and down move a link within its group). Add one
    with the person preset; edit and delete in place. onDirty(bool): whether
-   the link being edited has unsaved changes. */
-function PersonLinks({ person: p, onChanged, onDirty }) {
+   the link being edited has unsaved changes; onAddDirty(bool): whether the
+   new link's form has something typed. */
+function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
   const toast = useToast();
   const [busy,     setBusy]     = useState(false);
   const edit = useOneEdit();                          // the link being edited, and whether it has changes
@@ -141,7 +142,7 @@ function PersonLinks({ person: p, onChanged, onDirty }) {
       ))}
       <div className="person-link-add">
         <h4 className="link-group-title">Add a link</h4>
-        <LinkForm busy={busy} idPrefix="person-link-add"
+        <LinkForm busy={busy} idPrefix="person-link-add" onDirty={onAddDirty}
                   onSubmit={async body => {
                     const problem = await call(() => createLink({ ...body, person: p.id }), "Could not add the link.");
                     if (!problem) toast("Link added.");
@@ -187,12 +188,14 @@ export default function PersonPage() {
   const [dlgError, setDlgError] = useState(null);
   const [removing, setRemoving] = useState(null);     // the source to remove
   const [linkEdits, setLinkEdits] = useState(false);  // a link being edited has changes
+  const [newLink,   setNewLink]   = useState(false);  // the new link's form has something typed
+  const [newSource, setNewSource] = useState(false);  // the new source's field has something typed
   const sources = useSources();
 
   // What was typed and not saved, asked about before the app leaves the page.
   const notesDirty  = !!p && notes != null && notes !== p.notes;
   const renameDirty = !!p && editName != null && editName !== p.name;
-  const unsaved = useUnsaved(notesDirty || renameDirty || linkEdits);
+  const unsaved = useUnsaved(notesDirty || renameDirty || linkEdits || newLink || newSource);
 
   const linked = useMemo(() => new Set((p?.accounts || []).map(accountKey)), [p]);
 
@@ -446,10 +449,10 @@ export default function PersonPage() {
               ))}
             </ul>
           )}
-          <AddSource person={p.id} onAdded={sources.reload} />
+          <AddSource person={p.id} onAdded={sources.reload} onDirty={setNewSource} />
         </section>
 
-        <PersonLinks person={p} onChanged={reload} onDirty={setLinkEdits} />
+        <PersonLinks person={p} onChanged={reload} onDirty={setLinkEdits} onAddDirty={setNewLink} />
 
         <section className="person-section">
           <h3 className="card-title">Notes</h3>
@@ -473,7 +476,8 @@ export default function PersonPage() {
         <DiscardDialog open={unsaved.asking} onDiscard={unsaved.discard} onKeep={unsaved.keep}>
           <p>
             Not saved for {p.name}:{" "}
-            {[notesDirty && "the notes", renameDirty && "the new name", linkEdits && "the changes to a link"].filter(Boolean).join(", ")}.
+            {[notesDirty && "the notes", renameDirty && "the new name", linkEdits && "the changes to a link",
+              newLink && "the new link", newSource && "the new source"].filter(Boolean).join(", ")}.
           </p>
         </DiscardDialog>
 
