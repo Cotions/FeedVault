@@ -254,18 +254,24 @@ test("renaming a collection keeps the page still", async ({ page, request }) => 
       grid: document.querySelector(".collection-posts").getBoundingClientRect().top,
     }));
     const before = await where();
+    // Within a pixel: fonts differ on CI by a fraction of one (main moved it 10 px).
+    const still = async when => {
+      const now = await where();
+      expect(Math.abs(now.head - before.head), `head height ${when}`).toBeLessThan(1);
+      expect(Math.abs(now.grid - before.grid), `grid top ${when}`).toBeLessThan(1);
+    };
     const rename = page.getByRole("button", { name: "Rename", exact: true });
     await rename.click();
     const field = page.getByRole("textbox", { name: "Collection name" });
     await expect(field).toBeFocused();
-    expect(await where()).toEqual(before);
+    await still("with the rename form open");
     // The form sits inside the head, above its bottom line.
     const box = await page.locator(".page-head .tag-rename").boundingBox();
     const head = await page.locator(".page-head").boundingBox();
     expect(box.y + box.height).toBeLessThanOrEqual(head.y + head.height);
     await page.keyboard.press("Escape");
     await expect(rename).toBeFocused();
-    expect(await where()).toEqual(before);
+    await still("after Esc");
 
     await page.goto("/collections");
     await expect(page.locator(".collection-hint")).toHaveText("Drag a collection onto another to move it there, or use its arrows.");
