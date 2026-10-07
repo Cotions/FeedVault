@@ -5,6 +5,7 @@ import { fmtAgo, fmtFullDate, fmtStamp } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import PageHeader from "../components/PageHeader";
+import { focusLost, restoreFocus } from "../lib/layout";
 
 const LOG_POLL_MS = 1000;
 const LOG_KEPT    = 5000;          // lines kept on screen, as many as the backend keeps
@@ -105,6 +106,21 @@ export default function Jobs() {
   const [confirm,  setConfirm]  = useState(null);   // job to cancel
   const [busy,     setBusy]     = useState(false);
   const [dlgErr,   setDlgErr]   = useState(null);
+  const listRef   = useRef(null);
+  const lastFocus = useRef(null);                   // what last had focus on the page
+
+  // A job that ends (or is cancelled) takes its row away, with its Cancel…
+  // and Show log; Show log and the log's Close go once clicked. Focus that
+  // was on one would fall onto <body> (#136): it goes to the list of jobs
+  // instead. After every render, and after the cancel dialog gave focus
+  // back (its effect's cleanup runs before this).
+  useEffect(() => {
+    const el = lastFocus.current;
+    if (el && !document.contains(el) && focusLost()) restoreFocus(listRef.current);
+  });
+  const onFocus = e => { lastFocus.current = e.target; };
+  // Into the cancel dialog it is still the page's: the dialog gives it back.
+  const onBlur = e => { if (e.relatedTarget && !e.relatedTarget.closest(".modal-overlay")) lastFocus.current = null; };
 
   const jobs    = list?.jobs || [];
   const running = jobs.filter(j => j.state === "running");
@@ -157,9 +173,9 @@ export default function Jobs() {
   }
 
   return (
-    <div className="jobs-page">
+    <div className="jobs-page" onFocus={onFocus} onBlur={onBlur}>
       <PageHeader title="Jobs" sub={list ? `${list.running} running · ${list.queued} queued` : "…"} />
-      <div className="card">
+      <div className="card" ref={listRef} tabIndex={-1} role="region" aria-label="Running and queued jobs">
         <p className="page-lede">
           Downloads and other command-line tools FeedVault runs for you, one at a time per tool.
           When a download ends, its folder is indexed right away. Check your tools in Settings.

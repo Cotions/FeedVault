@@ -7,6 +7,7 @@ import { useToast } from "../lib/toast";
 import { cleanName } from "../lib/tags";
 import { useUnsaved } from "../lib/unsaved";
 import { excerpt, postPath } from "../lib/fmt";
+import { useFollowFocus } from "../lib/layout";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
@@ -27,6 +28,7 @@ export default function CollectionView() {
   const [confirmDel, setConfirmDel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(null);               // { from, over }
+  const { listRef, follow } = useFollowFocus();
 
   const load = useCallback((offset, limit) => getCollection(id, { offset, limit }), [id]);
 
@@ -66,15 +68,23 @@ export default function CollectionView() {
     finally { setBusy(false); }
   }
 
-  const move = (from, to) => {
-    if (from === to || to < 0 || to >= posts.length) return;
+  // ``arrow``: moved with its Move earlier/later button, which keeps focus
+  // on the moved tile, so Enter again moves it on (#136). The arrows are
+  // never disabled (aria-disabled, at an end and while a move is saved),
+  // so focus never falls off one.
+  const move = (from, to, arrow) => {
+    if (busy || from === to || to < 0 || to >= posts.length) return;
     const before = posts;
     const next = [...posts];
-    next.splice(to, 0, next.splice(from, 1)[0]);
+    const moved = next.splice(from, 1)[0];
+    next.splice(to, 0, moved);
+    const refocus = () => { if (arrow) follow(moved.id, arrow); };
+    refocus();
     setState(s => ({ ...s, posts: next }));
     act(async () => {
       const r = await orderCollection(id, next.map(p => p.id));
       if (!r?.ok) {
+        refocus();
         setState(s => ({ ...s, posts: before }));
         toast(r?.error || "Could not save the new order.", "err");
       }
@@ -175,13 +185,14 @@ export default function CollectionView() {
         ) : (
           <>
             <p className="dim collection-hint">Drag a post onto another to move it there.</p>
-            <ol className="collection-posts">
+            <ol className="collection-posts" ref={listRef}>
               {posts.map((p, i) => {
                 const alt = excerpt(p.text, 100) || `Post by @${p.author?.handle || "unknown"}`;
                 const isCover = collection.cover_post === p.id || (!collection.cover_post && i === 0);
                 return (
                   <li
                     key={p.id}
+                    data-key={p.id}
                     className={`collection-tile${drag?.from === i ? " is-dragging" : ""}${drag && drag.over === i && drag.from !== i ? " is-over" : ""}`}
                     draggable={!busy}
                     onDragStart={e => { e.dataTransfer.effectAllowed = "move"; setDrag({ from: i, over: i }); }}
@@ -197,9 +208,11 @@ export default function CollectionView() {
                     </Link>
                     <div className="collection-tile-bar">
                       <span className="collection-grip" aria-hidden="true"><Icon name="grip" size={14} /></span>
-                      <button type="button" className="del-btn" onClick={() => move(i, i - 1)} disabled={busy || i === 0}
+                      <button type="button" className="del-btn" onClick={() => move(i, i - 1, "earlier")}
+                              aria-disabled={busy || i === 0 || undefined} data-move="earlier"
                               title="Move earlier" aria-label="Move earlier"><Icon name="chevLeft" size={14} /></button>
-                      <button type="button" className="del-btn" onClick={() => move(i, i + 1)} disabled={busy || i === posts.length - 1}
+                      <button type="button" className="del-btn" onClick={() => move(i, i + 1, "later")}
+                              aria-disabled={busy || i === posts.length - 1 || undefined} data-move="later"
                               title="Move later" aria-label="Move later"><Icon name="chevRight" size={14} /></button>
                       <div className="page-head-spacer" />
                       {!isCover && (

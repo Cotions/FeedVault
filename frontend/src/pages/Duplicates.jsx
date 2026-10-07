@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { dismissDuplicate, getDismissedDuplicates, getDuplicates, getDuplicatesStatus, resolveDuplicates, undismissDuplicate } from "../lib/api";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
-import { restoreFocus } from "../lib/layout";
+import { focusLost, restoreFocus } from "../lib/layout";
 import { distinctTail, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, plural, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -278,6 +278,18 @@ function Compare({ g, at, keep, onMove, onKeep, onClose }) {
     const prev = document.activeElement;
     boxRef.current?.focus();
     return () => restoreFocus(prev);
+  }, []);
+
+  // Keep this one goes once clicked, and focus with it, onto <body>
+  // (#136): back to the box, where the keys below are heard. Should it
+  // get there some other way, they are heard on the document too.
+  useLayoutEffect(() => { if (focusLost()) boxRef.current?.focus({ preventScroll: true }); });
+  const keysRef = useRef(null);
+  useEffect(() => { keysRef.current = onKeyDown; });
+  useEffect(() => {
+    const onKey = e => { if (focusLost()) keysRef.current?.(e); };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
   }, []);
 
   function onKeyDown(e) {

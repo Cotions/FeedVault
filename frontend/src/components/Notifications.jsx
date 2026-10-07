@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { getNotifications, readNotifications } from "../lib/api";
 import { fmtAgo, fmtInt } from "../lib/fmt";
 import { notificationPath } from "../lib/notify";
+import { focusLost, restoreFocus } from "../lib/layout";
 import Icon from "./Icon";
 
 /* The sidebar's bell: the unread count, and the list of syncs that brought
@@ -14,6 +15,16 @@ export default function Notifications({ unread, latest, onRead }) {
   const [list, setList] = useState(null);
   const [error, setError] = useState(null);
   const root = useRef(null);
+  const button = useRef(null);
+
+  // Shut, with focus in the panel (its Close, Esc there): it goes back to
+  // the bell, not onto <body> with the panel (#136). A click outside
+  // leaves it where the click put it.
+  const close = useCallback(() => {
+    const a = document.activeElement;
+    if (focusLost() || (root.current?.contains(a) && a !== button.current)) restoreFocus(button.current);
+    setOpen(false);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -30,7 +41,7 @@ export default function Notifications({ unread, latest, onRead }) {
 
   useEffect(() => {
     if (!open) return;
-    function onKey(e) { if (e.key === "Escape") setOpen(false); }
+    function onKey(e) { if (e.key === "Escape") close(); }
     function onDown(e) { if (root.current && !root.current.contains(e.target)) setOpen(false); }
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
@@ -38,11 +49,12 @@ export default function Notifications({ unread, latest, onRead }) {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("mousedown", onDown);
     };
-  }, [open]);
+  }, [open, close]);
 
   return (
     <div className="side-row side-bell" ref={root}>
       <button
+        ref={button}
         type="button"
         className={`side-link${open ? " active" : ""}`}
         aria-expanded={open}
@@ -57,7 +69,7 @@ export default function Notifications({ unread, latest, onRead }) {
         <div className="notif-panel" role="dialog" aria-label="Notifications">
           <div className="notif-head">
             <span className="card-title">Notifications</span>
-            <button type="button" className="btn-ghost notif-close" onClick={() => setOpen(false)} aria-label="Close">
+            <button type="button" className="btn-ghost notif-close" onClick={close} aria-label="Close">
               <Icon name="close" size={13} />
             </button>
           </div>

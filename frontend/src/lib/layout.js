@@ -1,4 +1,4 @@
-import { useLayoutEffect } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 
 // The phone breakpoint, the same as the CSS's max-width: 640px rules.
 export const PHONE = "(max-width: 640px)";
@@ -13,6 +13,34 @@ export const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]),
 // close moved the page down by that room (#119).
 export function restoreFocus(el) {
   if (el && el.focus && document.contains(el)) el.focus({ preventScroll: true });
+}
+
+// Focus that went nowhere: on <body> (or none), as when the element that
+// had it was disabled or removed (#136).
+export function focusLost() {
+  const a = document.activeElement;
+  return !a || a === document.body || a === document.documentElement;
+}
+
+// Keeps focus on a reorder arrow after its item moved (#136): React moves
+// a keyed item's node to its new place, and a node taken out of the page
+// loses focus. Put ``data-key`` on each item and ``data-move`` on its
+// arrows, ``listRef`` on the list, and call follow(key, move) when an
+// arrow moves its item: after the next render, focus goes back to that
+// arrow, unless it went somewhere else meanwhile.
+export function useFollowFocus() {
+  const listRef = useRef(null);
+  const pending = useRef(null);
+  useLayoutEffect(() => {
+    const p = pending.current;
+    const list = listRef.current;
+    if (!p || !list) return;
+    pending.current = null;
+    if (!focusLost() && !list.contains(document.activeElement)) return;
+    restoreFocus(list.querySelector(`[data-key="${CSS.escape(String(p.key))}"] [data-move="${p.move}"]`));
+  });
+  const follow = useCallback((key, move) => { pending.current = { key, move }; }, []);
+  return { listRef, follow };
 }
 
 // Keeps the toasts above the controls of ``ref`` (the selection bar,
