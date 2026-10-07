@@ -65,6 +65,12 @@ function within(p, dir) {
 export function checkSafe({ port, configPath, root }, env = process.env, home = os.homedir()) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`e2e: bad port ${port}`);
   if (RESERVED_PORTS.has(port)) throw new Error(`e2e: refusing port ${port} (3380 is the live app, 3389 testapp.sh's)`);
+  // The live app or testapp.sh moved: their ports are refused too, running or not.
+  for (const name of ["FEEDVAULT_PORT", "FEEDVAULT_TEST_PORT"]) {
+    if (/^[0-9]{1,5}$/.test(env[name] || "") && Number(env[name]) === port) {
+      throw new Error(`e2e: refusing port ${port} (${name}, the live app's or testapp.sh's)`);
+    }
+  }
   for (const p of [configPath, root].filter(Boolean)) {
     for (const dir of protectedDirs(env, home)) {
       if (within(p, dir) || within(dir, p)) throw new Error(`e2e: refusing ${p}: it touches ${dir}`);
@@ -86,7 +92,7 @@ export function portBusy(port) {
 export async function pickPort(env = process.env) {
   if (env.FEEDVAULT_E2E_PORT === undefined || env.FEEDVAULT_E2E_PORT === "") return freePort();
   const port = /^\d+$/.test(env.FEEDVAULT_E2E_PORT) ? Number(env.FEEDVAULT_E2E_PORT) : NaN;
-  checkSafe({ port });
+  checkSafe({ port }, env);
   return port;
 }
 

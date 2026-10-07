@@ -17,6 +17,13 @@ test("ports 3380 and 3389 are refused", () => {
   }
 });
 
+test("the live app's and testapp.sh's moved ports are refused too", () => {
+  const env = { FEEDVAULT_PORT: "4100", FEEDVAULT_TEST_PORT: "04200" };
+  assert.throws(() => checkSafe({ ...ok, port: 4100 }, env, HOME), /refusing port 4100 \(FEEDVAULT_PORT/);
+  assert.throws(() => checkSafe({ ...ok, port: 4200 }, env, HOME), /refusing port 4200 \(FEEDVAULT_TEST_PORT/);
+  checkSafe({ ...ok, port: 4300 }, env, HOME);
+});
+
 test("a bad port is refused", () => {
   for (const port of [0, -1, 70000, 1.5, NaN, undefined]) {
     assert.throws(() => checkSafe({ ...ok, port }, ENV, HOME), /bad port/);
