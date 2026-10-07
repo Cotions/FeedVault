@@ -1588,7 +1588,7 @@ def start_job():
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or not isinstance(body.get("kind"), str):
         return jsonify({"ok": False, "error": "send { kind, params }"}), 400
-    if body.get("kind") in save.KINDS:        # their checks are POST /api/save's
+    if body.get("kind") in save.KINDS:         # their checks are POST /api/save's
         return jsonify({"ok": False, "error": "start it with POST /api/save"}), 400
     if body.get("kind") in scripts.JOB_KINDS:  # the origin check is theirs
         return jsonify({"ok": False, "error": "start it with POST /api/scripts/<id>/run, or a source's Sync"}), 400
