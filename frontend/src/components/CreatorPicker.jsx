@@ -122,8 +122,11 @@ export default function CreatorPicker({
         onChange={e => { setQuery(e.target.value); setActive(0); setOpen(true); }}
         onKeyDown={onKeyDown}
       />
+      {/* tabIndex -1: Chromium puts a scrolling box in the Tab order, and
+          this one goes the moment the field loses focus: Tab out of the
+          field would leave focus on <body>, with no ring anywhere. */}
       {open && (
-        <ul ref={listRef} className="picker-list" id={listId} role="listbox" aria-label={label}>
+        <ul ref={listRef} className="picker-list" id={listId} role="listbox" aria-label={label} tabIndex={-1}>
           {!query && value && (
             <li role="option" aria-selected={false} className="picker-option picker-all"
                 onMouseDown={e => { e.preventDefault(); pick(null); }}>

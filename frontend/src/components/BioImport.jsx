@@ -61,7 +61,7 @@ export default function BioImport({ person, enabled, onAdded }) {
 
   return (
     <div className="bio-import">
-      <h4 className="bio-import-title">Import from a link-in-bio page</h4>
+      <h4 className="bio-import-title">Import accounts from a link-in-bio page</h4>
       {!enabled && (
         <p className="creator-sub bio-import-off">
           Off: FeedVault fetches no page unless you allow it.{" "}

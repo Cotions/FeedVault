@@ -102,7 +102,7 @@ export function LinkRow({ link: l, showPerson = true, busy = false, onEdit, onDe
       </span>
       {showPerson && l.person && (
         <Link to={personPath(l.person.id)} className="chip person-chip link-person" title={`Person: ${l.person.name}`}>
-          {l.person.name}
+          <Icon name="users" size={11} /><span className="chip-text">{l.person.name}</span>
         </Link>
       )}
       <span className="link-row-actions">
