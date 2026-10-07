@@ -2945,6 +2945,15 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-account-stats { flex-shrink: 0; }
 .person-add { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .person-add .creator-sub { white-space: normal; }
+.bio-import { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.bio-import-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+.bio-import-off { white-space: normal; margin: 0 0 8px; }
+.bio-import-form { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.bio-import-form .page-filter { flex: 1; min-width: 220px; max-width: 360px; }
+.bio-import .msg { margin-top: 8px; }
+.bio-import-result > .creator-sub { display: block; margin: 10px 0 6px; white-space: normal; }
+.bio-import-row .creator-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bio-import-row > .btn-primary { flex-shrink: 0; }
 .person-notes {
   width: 100%; resize: vertical; padding: 9px 12px;
   font: inherit; font-size: 13px; color: var(--text);

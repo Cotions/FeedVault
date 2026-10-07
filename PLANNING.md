@@ -29,7 +29,8 @@ Those tools run either from my own shell or cron job, or launched by FeedVault
 when I click a save button. Either way FeedVault reads what they write and
 indexes it. FeedVault never scrapes a platform itself: if a tool breaks when a
 platform changes, that is the tool's upstream problem, and the fix is updating
-the tool.
+the tool. (One opt-in exception, not a platform: a person's link-in-bio page,
+fetched on request; see Outbound network below.)
 
 Long-form YouTube videos stay in ChannelVault.
 
@@ -60,7 +61,7 @@ each now says what was built.
 | Post identity | `platform:post_id` (e.g. `instagram:C8xYz…`, `twitter:1834…`) |
 | Parsers | **Built** (`backend/parsers/`: instaloader, gallery-dl #23, yt-dlp #28). One parser per tool, not per platform. Each turns a tool's metadata file plus its media files into a normalized post. Unknown files are listed as unmatched, never guessed at |
 | Ports | **Built.** Live on 3380 (`FEEDVAULT_PORT`), test instance on 3389 (`FEEDVAULT_TEST_PORT`). The browser tests use a free port of their own (ChannelVault uses 3360 and 3399, RecipeVault 3370 and 3399 for its demo vault) |
-| Outbound network | **Settled.** The server makes one kind of request itself: PyPI's JSON page of instaloader, gallery-dl and yt-dlp (`https://pypi.org/pypi/<name>/json`), to say when an update is out. Off until turned on in Settings → Downloads → Downloaders, at most once a day per package, fixed URLs, no redirects, a timeout and a size cap. Everything else that reaches the network is a downloader (or pip / pipx updating one) started as a job |
+| Outbound network | **Settled.** The server makes two kinds of request itself. PyPI's JSON page of instaloader, gallery-dl and yt-dlp (`https://pypi.org/pypi/<name>/json`), to say when an update is out: off until turned on in Settings → Downloads → Downloaders, at most once a day per package, fixed URLs, no redirects, a timeout and a size cap. And the one exception to "FeedVault never fetches a page" (#11): a person's link-in-bio page, when the user pastes it and clicks Import (`backend/biofetch.py`). Off until turned on in Settings → Downloads → Link-in-bio import; one page per click, never a link found in it; https on port 443 to a short list of hosts (linktr.ee, beacons.ai, lnk.bio, solo.to, campsite.bio, linkin.bio, allmylinks.com), public addresses only, connected to the address checked; no proxy, cookies or credentials; at most 3 redirects checked again, 10 s in all, 2 MB, uncompressed HTML only; one at a time, 5 s apart. The page is parsed (never run) for profile links the routing table knows, each offered for the user to add; nothing is stored. Everything else that reaches the network is a downloader (or pip / pipx updating one) started as a job |
 | Security | **Built**, and hardened since (#72, #74, #76): no CORS, a required `X-FeedVault` header on every API call, a Host allowlist, no framing, media refused to other sites and never served as a page. The rules are listed in [docs/API.md → Security rules](docs/API.md#security-rules) |
 
 ### Recommended downloader settings
@@ -112,9 +113,10 @@ once the rescan picks the post up. Profile pages get a "Sync profile" button.
   already in the downloaded metadata). Accounts are linked by the platform's
   own account id where the metadata has one, so a renamed account stays one
   account; every handle it had is kept and searchable. The link lives only in
-  the database: files stay where each tool wrote them. Not built: importing a
-  link-in-bio page (linktr.ee and the like), which would be FeedVault fetching
-  a web page itself
+  the database: files stay where each tool wrote them. A person's link-in-bio
+  page (linktr.ee and the like) can be imported, opt-in: FeedVault fetches
+  that one page on request and suggests the accounts it lists (see Outbound
+  network above for its limits)
 - **Search**: full text over captions and tweets
 - **Tags**: on posts, as in ChannelVault
 - **Stats**: posts per platform and kind (Stats), storage used per creator,

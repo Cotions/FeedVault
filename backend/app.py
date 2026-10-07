@@ -19,6 +19,7 @@ from werkzeug.security import safe_join
 from zlib import adler32
 
 import archives
+import biofetch
 import config
 import db
 import downloaders
@@ -959,6 +960,40 @@ def person_accounts(pid):
     return jsonify({"ok": True, **r})
 
 
+BIO_OFF = "link-in-bio import is off: turn it on in Settings → Downloads"
+
+
+@app.post("/api/people/<int:pid>/bio-import")
+def bio_import(pid):
+    """The accounts a person's link-in-bio page lists (biofetch.py): the one
+    page fetched, nothing added. The dashboard adds each one the user picks
+    through /api/people/<id>/accounts or /api/sources."""
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": "a link-in-bio page can only be imported from FeedVault's own "
+                                              "dashboard"}), 403
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) != {"url"} or not isinstance(body["url"], str):
+        return jsonify({"ok": False, "error": "send { url: a link-in-bio page's link }"}), 400
+    cfg = config.load()
+    if not biofetch.enabled(cfg):
+        return jsonify({"ok": False, "error": BIO_OFF}), 403
+    try:
+        page = biofetch.fetch(body["url"])
+    except biofetch.Refused as e:
+        try:
+            shown = biofetch.check_url(body["url"])[2]
+        except biofetch.Refused:
+            shown = "a refused link"           # not logged as sent: it may hold anything
+        print(f"[people] link-in-bio import of {shown}: {e}")
+        return jsonify({"ok": False, "error": str(e)}), e.status
+    found = biofetch.suggest(conn, pid, biofetch.page_links(page.text), sources.routes(cfg), cfg["media_roots"])
+    print(f"[people] link-in-bio import of {page.url}: {len(found['accounts'])} accounts, {found['other']} other links")
+    return jsonify({"ok": True, "url": page.url, **found})
+
+
 # ---------------------------------------------------------------------------
 # Sources (sources.py: where a person's posts are downloaded from)
 # ---------------------------------------------------------------------------
@@ -1225,7 +1260,8 @@ def _public_config(cfg):
             "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg),
             "check_updates": cfg.get("check_updates") is True,
             "schedules_paused": cfg.get("schedules_paused") is True,
-            "desktop_notifications": notify.enabled(cfg)}
+            "desktop_notifications": notify.enabled(cfg),
+            "bio_import": biofetch.enabled(cfg)}
 
 
 @app.get("/api/config")
@@ -1271,6 +1307,10 @@ def _set_config(body):
         if not isinstance(body["desktop_notifications"], bool):
             return jsonify({"ok": False, "error": "desktop_notifications must be true or false"})
         changes["desktop_notifications"] = body["desktop_notifications"]
+    if "bio_import" in body:
+        if not isinstance(body["bio_import"], bool):
+            return jsonify({"ok": False, "error": "bio_import must be true or false"})
+        changes["bio_import"] = body["bio_import"]
     sessions = {t: sync.session_of(t, {"session": None}, cfg) for t in sync.KINDS if t in body}
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
