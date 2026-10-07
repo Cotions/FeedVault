@@ -454,6 +454,21 @@ def _read_manifest(root):
     return _load(root)[0]
 
 
+def in_trash(roots, wanted):
+    """Those of ``wanted`` ({(post id, original path)}) that a deletion of
+    that post (not of an extra copy) moved to a trash, where the file still
+    is: the scanner drops a post whose metadata file is there
+    (scanner._mark_missing)."""
+    out = set()
+    for root in roots:
+        for line in _read_manifest(root):
+            pair = (line.get("post"), line["from"])
+            if isinstance(pair[0], str) and pair in wanted and not isinstance(line.get("copy"), str) \
+                    and os.path.lexists(line["to"]) and _inside_trash(line["to"], root):
+                out.add(pair)
+    return out
+
+
 def _write_manifest(root, lines):
     """config.write_private: a temp file of a unique name, never through a
     symlink left in the trash folder, fsynced, renamed over the manifest

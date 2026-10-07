@@ -190,6 +190,50 @@ def test_a_kept_post_trashed_and_restored_is_kept_again(env, client, monkeypatch
     assert decision("P3") == "keep"
 
 
+def test_a_deletion_cut_short_is_finished_by_the_next_scan(env, client, monkeypatch):
+    # QA pass 4: FeedVault killed during a big Delete: the files of the posts
+    # done so far were in the trash, but the index (one commit at the end)
+    # still had every post, and the next scans kept them as missing posts.
+    import db
+    import thumbs
+    for i in (1, 2, 3):
+        write_post(env["media"] / "alice", f"P{i}", 1717243200 + i, ALICE, "image")
+    write_post(env["media"] / "alice", "P4", 1717243300, ALICE, "image")
+    scan(env)
+    client.post("/api/review", json={"posts": ["instagram:P1"], "decision": "keep"}, headers=H)
+    real, moved = thumbs.forget, []
+
+    def killed(data_dir, path):
+        if path.endswith("_UTC.json"):            # the metadata, not a side file
+            moved.append(path)
+            if len(moved) == 2:
+                raise SystemExit("killed")      # the second post's files are in the trash
+        return real(data_dir, path)
+    monkeypatch.setattr(thumbs, "forget", killed)
+    try:
+        client.post("/api/delete", json={"posts": ["instagram:P1", "instagram:P2", "instagram:P3"]}, headers=H)
+    except SystemExit:
+        pass
+    db.connect().rollback()                     # what was not committed is lost
+    monkeypatch.setattr(thumbs, "forget", real)
+    assert client.get("/api/stats", headers=H).get_json()["posts"] == 4
+    r = scan(env)
+    assert r["missing"] == 0
+    s = client.get("/api/stats", headers=H).get_json()
+    assert (s["posts"], s["missing"], s["kept"]) == (2, 0, 0)
+    assert sorted(p["post_id"] for p in client.get("/api/posts", headers=H).get_json()["posts"]) == ["P3", "P4"]
+    entries = client.get("/api/trash/items", headers=H).get_json()["entries"]
+    assert sorted(e["post"] for e in entries) == ["instagram:P1", "instagram:P2"]
+    client.post("/api/trash/restore", json={"keys": [e["key"] for e in entries]}, headers=H)
+    s = client.get("/api/stats", headers=H).get_json()
+    assert (s["posts"], s["missing"], s["kept"]) == (4, 0, 1)
+    # A post merely gone from its folder is still kept as missing.
+    for name in os.listdir(env["media"] / "alice"):
+        if name.startswith("2024-06-01_12-01-40"):
+            os.remove(env["media"] / "alice" / name)
+    assert scan(env)["missing"] == 1
+
+
 def test_undo_single_item(env, client):
     write_post(env["media"], "C1", 1717243200, ALICE, "carousel", slides=[False, False, False])
     scan(env)

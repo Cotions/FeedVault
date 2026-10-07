@@ -587,6 +587,13 @@ keeps its lines.
 Delete, restore and purge never run at the same time (they share the
 manifest).
 
+A delete moves each post's files, writes their lines, then drops the posts
+from the index in one commit at the end. When FeedVault is stopped or killed
+in between, the next scan finishes the job: a post whose metadata file is
+not where the index has it, but in a trash folder on a line of that post
+(not of an extra copy), is dropped from the index (with its decision, which
+its lines keep) instead of being kept as missing.
+
 ## Review (keep or trash)
 
 A post can be marked **kept**. Deciding to trash it is just `/api/delete`.
