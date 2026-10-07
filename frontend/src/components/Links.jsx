@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { safeUrl } from "../lib/fmt";
 import { personPath } from "../lib/people";
-import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL } from "../lib/links";
+import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, withScheme } from "../lib/links";
 import Icon from "./Icon";
 import CreatorPicker from "./CreatorPicker";
 
@@ -32,7 +32,10 @@ export function LinkForm({
     e.preventDefault();
     if (!url.trim()) return;
     setError(null);
-    const body = { url: url.trim(), title, notes, ...(people ? { person } : {}) };
+    // "example.org/x" goes as https://example.org/x, and the field shows what went.
+    const sent = withScheme(url);
+    if (sent !== url) setUrl(sent);
+    const body = { url: sent, title, notes, ...(people ? { person } : {}) };
     const problem = await onSubmit(body);
     if (problem) { setError(problem); return; }
     if (!link) { setUrl(""); setTitle(""); setNotes(""); setPerson(null); }
