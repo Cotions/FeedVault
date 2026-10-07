@@ -2959,7 +2959,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-add .creator-sub { white-space: normal; }
 /* A box of its own under the accounts, as "Add a link" is under the links. */
 .bio-import, .person-link-add { margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 10px; }
-.bio-import-off { white-space: normal; margin: 0 0 8px; }
+.bio-import-off { white-space: normal; overflow: visible; margin: 0 0 8px; }
 .bio-import-form { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .bio-import-form .page-filter { flex: 1; min-width: 220px; max-width: 360px; }
 .bio-import .msg { margin-top: 8px; }
@@ -2972,7 +2972,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   font: inherit; font-size: 13px; color: var(--text);
   background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
 }
-.person-notes:focus { outline: none; border-color: rgba(var(--glow-rgb), 0.5); }
+/* As a text field's (input[type="text"]:focus): a ring, not only a border. */
+.person-notes:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .person-notes-actions { display: flex; gap: 8px; margin-top: 8px; }
 
 /* ── Links (the Links page, and a person's Links section) ── */
@@ -2980,17 +2981,15 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .link-form .filter { min-width: 0; }
 .link-form input[type="text"] { flex: none; width: 100%; min-width: 0; padding: 7px 11px; height: 34px; }
 .link-form .link-input-text { font-family: var(--body); }
-.link-form .picker, .link-form .picker-input { width: 100%; min-width: 0; height: 34px; }
+.link-form .picker, .link-form .picker-input { width: 100%; min-width: 0; max-width: none; height: 34px; }
 .link-form-notes { grid-column: 1 / -2; }
 /* As tall as its text (an edit opens with the whole note in view), up to
-   about eight lines; then it scrolls. Where field-sizing is unknown, the
+   about twelve lines; then it scrolls. Where field-sizing is unknown, the
    field stays one line and can be dragged taller. */
 .link-form-notes .person-notes {
   min-height: 34px; padding: 6px 11px; display: block;
-  field-sizing: content; max-height: 168px; overflow-y: auto;
+  field-sizing: content; max-height: 240px; overflow-y: auto;
 }
-/* As the fields beside it (input[type="text"]:focus): a ring, not only a border. */
-.link-form-notes .person-notes:focus { border-color: var(--accent); box-shadow: var(--ring); }
 .link-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; align-self: end; }
 .link-form-actions .btn-primary { height: 34px; padding: 0 14px; white-space: nowrap; }
 .link-form-msg { grid-column: 1 / -1; }
