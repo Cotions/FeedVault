@@ -253,6 +253,106 @@ cd frontend && FONTCONFIG_FILE=/tmp/fonts-ci.conf npm run e2e
 other systems use the one `fc-list | grep DejaVuSans.ttf` shows. Chromium
 inherits `FONTCONFIG_FILE` from the test runner; nothing else changes.
 
+## Performance
+
+### A large vault
+
+`scripts/make_demo.py --large N` adds N invented posts to the demo vault:
+about 300 accounts over Instagram, Twitter/X, TikTok and YouTube, 50
+people, 40 tags, 15 collections, 300 links, copies in typo'd folders,
+reposts (some resized), stray files and 300 posts in the trash. Every
+picture is a small PNG of random noise, every name made up. It keeps the
+demo's safety: the root must be empty or already carry the demo's marker,
+and nothing is downloaded or run (the downloaders are the fakes).
+
+```bash
+backend/venv/bin/python scripts/make_demo.py --large 20000 /tmp/fv-large
+```
+
+Use a tmp dir of your own, never `~/.cache/feedvault-demo`, and delete it
+afterwards (20,000 posts take about 450 MB with the index).
+
+### Measuring
+
+```bash
+cd frontend && npm run build
+FEEDVAULT_E2E_PYTHON=../backend/venv/bin/python npm run perf -- --posts 20000 [--runs 5] [--json out.json]
+```
+
+`e2e/perf.js` starts the browser tests' throwaway instance (the same tmp
+dir, test guard and free port as `npm run e2e`) on `make_demo.py --large N`
+and prints Markdown tables:
+
+- the index: built from nothing (cold) and rescanned with nothing changed
+  (warm, `POST /api/scan`);
+- about 40 API calls the pages make: *uncached* right after a write, which
+  drops the backend's memo caches as a sync or review does, and *cached*,
+  the same call again; the median of `--runs`;
+- 15 pages in Chromium: navigation to the last API response and the last
+  DOM change after it (interactive), the median of 3.
+
+It stops the backend by its PID and deletes the tmp dir however it ends.
+
+### Numbers
+
+20,000 invented posts (19.5k indexed, 35.9k media files, 1.06k unmatched,
+309 accounts, 50 people), on a desktop with an SSD. Before is `main` at
+79b3691, after is the large-vault performance pass.
+
+| Measure | before | after |
+|---|---:|---:|
+| Index, cold | 10.77 s | 6.40 s |
+| Index, warm rescan | 6.84 s | 2.17 s |
+| `/api/duplicates?kind=similar`, uncached | 670 ms | 83 ms |
+| `/api/duplicates?kind=content`, uncached | 174 ms | 41 ms |
+| `/api/duplicates?kind=copies`, uncached | 90 ms | 21 ms |
+| `/api/storage`, uncached | 92 ms | 84 ms |
+| `/api/sources`, uncached | 84 ms | 72 ms |
+| `/api/stats?person=…` | 58 ms | 48 ms |
+| `/api/new`, uncached | 44 ms | 38 ms |
+| `/api/people`, `/api/authors`, uncached | 38, 40 ms | 34, 34 ms |
+| `/api/posts?limit=60&offset=15000` | 32 ms | 25 ms |
+| `/api/posts?…&q=moss` | 16 ms | 13 ms |
+| Every other call, uncached | ≤ 18 ms | ≤ 15 ms |
+| Every call, cached (except stats) | ≤ 29 ms | ≤ 24 ms |
+
+| Page, interactive | before | after |
+|---|---:|---:|
+| Feed | 193 ms | 192 ms |
+| Feed, search | 331 ms | 317 ms |
+| Review | 159 ms | 139 ms |
+| Creators | 285 ms | 276 ms |
+| Person | 199 ms | 188 ms |
+| Storage | 277 ms | 212 ms |
+| Stats | 106 ms | 114 ms |
+| Duplicates | 204 ms | 129 ms |
+| Trash | 127 ms | 149 ms |
+| Tags | 100 ms | 94 ms |
+| Collections | 104 ms | 94 ms |
+| Collection | 111 ms | 105 ms |
+| Links | 141 ms | 131 ms |
+| Unmatched | 165 ms | 160 ms |
+| Jobs | 110 ms | 94 ms |
+
+The first `similar` after the pictures change still compares them all
+(about 370 ms here); later ones reuse the pairs. Hashing new pictures runs
+in the background after a scan (about 13 s for 36k files).
+
+### Regression tests
+
+`backend/tests/test_perf.py` runs in the backend suite without timing
+anything:
+
+- the hot requests run the same number of SQL statements on an archive
+  four times as large, and a feed page of 10 posts the same as one of 200;
+- a page of post summaries read in batch equals what one post at a time
+  gave;
+- the content-duplicate query's plan uses its index (migration 22) and does
+  not scan `media_hash`;
+- similar pairs are computed once for the same pictures;
+- instaloader's parser goes over a folder's names a fixed number of times,
+  and its name index matches what its old pattern matched.
+
 ## CI
 
 `.github/workflows/ci.yml`, on every push to `main` and every pull request
