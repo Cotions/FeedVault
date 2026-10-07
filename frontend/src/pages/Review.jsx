@@ -4,6 +4,7 @@ import { getPosts, getPost, getAuthors, getPeople, getTags, getCollections, appl
 import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
+import { useJobs } from "../lib/jobs";
 import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, platformShort, authorFeedPath } from "../lib/fmt";
 import { sameTag, tagsMatch, withTags } from "../lib/tags";
 import RichText from "../components/RichText";
@@ -69,6 +70,7 @@ function Kbd({ children }) {
 
 function ReviewSession({ scope, scopeControls }) {
   const toast = useToast();
+  const { started } = useJobs();
   const [state, dispatch] = useReducer(reducer, initial);
   const { queue, status, pos, left, exhausted } = state;
   const [full, setFull] = useState({});           // id -> full post | { error }
@@ -196,6 +198,7 @@ function ReviewSession({ scope, scopeControls }) {
   const trashPost = () => cur && run(async () => {
     const r = await deleteItems({ posts: [cur.id] });
     if (!r?.posts?.includes(cur.id)) { toast(errorText(r, "The post could not be trashed."), "err"); return; }
+    started();   // the new counts (jobs poll) follow now
     if (r.errors?.length) toast(errorText(r, ""), "err");
     setUndo(u => [...u, { type: "trash", post: cur, index: pos }]);
     setSession(s => ({ ...s, trashed: s.trashed + 1 }));

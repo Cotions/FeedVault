@@ -5,6 +5,7 @@ import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
+import { useJobs } from "../lib/jobs";
 import { albumLabel, excerpt, fmt, fmtBytes, fmtFullDate, fmtIso, platformLabel, plural, safeUrl, authorFeedPath } from "../lib/fmt";
 import MediaCarousel from "../components/MediaCarousel";
 import RichText from "../components/RichText";
@@ -77,6 +78,7 @@ export default function PostPage() {
   const load = useCallback(() => getPost(platform, postId), [platform, postId]);
   const { data: post, error, loading, reload } = useApi(load, refreshKey);
   const toast = useToast();
+  const { started } = useJobs();
 
   // Pending deletion: null, { type: "post" }, or { type: "item", item, index }.
   const [confirm,   setConfirm]   = useState(null);
@@ -102,6 +104,7 @@ export default function PostPage() {
         const r = await deleteItems({ posts: [post.id] });
         if (!r?.ok && !r?.posts?.length) { setDlgError(r?.error || "Nothing could be deleted."); return; }
         if (r.posts?.includes(post.id)) {
+          started();   // the new counts (jobs poll) follow now
           setConfirm(null);
           toast(`Post moved to the trash (${plural(r.files ?? 0, "file")} including metadata, ${fmtBytes(r.bytes ?? 0)}).`);
           back();

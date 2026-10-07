@@ -45,7 +45,9 @@ export function SourceStatus({ source: s, job, compact = false }) {
       {!compact && r.state === "done" && <span className="source-note">{r.message}</span>}
       {!compact && failed && <span className="source-message">{r.message}</span>}
       {!compact && failed && (SETUP_ERRORS.has(r.error) || r.outdated) && (
-        <Link to="/settings#downloaders" className="text-link source-setup">Settings → Downloaders</Link>
+        r.error === "login_required" && !r.outdated
+          ? <Link to="/settings#sync" className="text-link source-setup">Settings → Sync</Link>
+          : <Link to="/settings#downloaders" className="text-link source-setup">Settings → Downloaders</Link>
       )}
       {s.last_sync_at && <span className="dim">{compact ? "synced " : " · "}{fmtAgo(s.last_sync_at)}</span>}
     </span>
@@ -541,12 +543,15 @@ export function SyncAllBar({ count, syncAll }) {
       </div>
     );
   }
+  // Cancelled ones never synced: counted apart (#126).
+  const synced = batch ? batch.total - (batch.cancelled ?? 0) : 0;
   return (
     <div className="sync-all">
       {batch?.done && (
         <span>
-          Synced {fmtInt(batch.total)} source{batch.total === 1 ? "" : "s"}: {fmtInt(batch.added)} new post{batch.added === 1 ? "" : "s"}
-          {batch.failed > 0 && <>, <span className="is-err">{batch.failed} failed</span></>}.
+          Synced {fmtInt(synced)} source{synced === 1 ? "" : "s"}: {fmtInt(batch.added)} new post{batch.added === 1 ? "" : "s"}
+          {batch.failed > 0 && <>, <span className="is-err">{batch.failed} failed</span></>}
+          {batch.cancelled > 0 && `, ${fmtInt(batch.cancelled)} cancelled`}.
           {" "}<button type="button" className="btn-link" onClick={clear}>Hide</button>
         </span>
       )}

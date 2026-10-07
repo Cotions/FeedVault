@@ -605,7 +605,7 @@ function saveToast(toast, j) {
   if (j.state === "done" && j.result?.post) {
     toast(`Saved post ${code}`, "ok", { to: `/p/${encodeURIComponent(platform)}/${encodeURIComponent(code)}`, label: "Show" });
   } else if (j.state === "failed" && SETUP_ERRORS.has(j.result?.error)) {
-    toast(`Saving ${code} failed: ${j.message}`, "err", { to: "/settings#downloaders", label: "Settings" });
+    toast(`Saving ${code} failed: ${j.message}`, "err", { to: j.result.error === "login_required" ? "/settings#sync" : "/settings#downloaders", label: "Settings" });
   } else {
     toast(`${j.label}: ${j.message}`, j.state === "failed" ? "err" : undefined);
   }
@@ -627,11 +627,15 @@ function showDesktop(after, go) {
 
 // "Sync all" is one toast when it is over (and one more if any failed).
 function batchToast(toast, b) {
+  // Cancelled syncs never ran (or not to the end): not counted as synced (#126).
+  const cancelled = b.cancelled ?? 0;
+  const synced = b.total - cancelled;
+  const also = cancelled ? `, ${fmtInt(cancelled)} cancelled` : "";
   if (b.added > 0) {
     const from = b.profiles === 1 && b.first ? syncName(b.first.label) : plural(b.profiles, "profile");
     toast(`${plural(b.added, "new post")} from ${from}`, "ok", { to: "/?new=1", label: "Show" });
   } else if (!b.failed) {
-    toast(`Synced ${plural(b.total, "source")}: no new posts`);
+    toast(`Synced ${plural(synced, "source")}: no new posts${also}`);
   }
-  if (b.failed) toast(`${fmtInt(b.failed)} of ${plural(b.total, "sync")} failed`, "err", { to: "/creators", label: "Sources" });
+  if (b.failed) toast(`${fmtInt(b.failed)} of ${plural(synced, "sync")} failed${also}`, "err", { to: "/creators", label: "Sources" });
 }

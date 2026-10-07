@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getLinks, getPeople, createLink, updateLink, deleteLink } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
@@ -16,26 +17,62 @@ import { useOneEdit, useUnsaved } from "../lib/unsaved";
    article, tied to a person or to no one. Add at the top; filter by kind
    (social or other, read from the address), site and person, or search the
    address, title and notes. Nothing is fetched: a link is its text, opened
-   in a new tab when followed. */
+   in a new tab when followed. The filters live in the address (?kind=,
+   ?site=, ?person= an id or "none", ?q=), so a reload or Back keeps them. */
 export default function Links() {
   const { refreshKey } = useScan();
   const toast = useToast();
-  const [kind,     setKind]     = useState("");
-  const [site,     setSite]     = useState("");
-  const [person,   setPerson]   = useState(null);     // a person id, "none", or null for anyone
-  const [query,    setQuery]    = useState("");
-  const [q,        setQ]        = useState("");       // the query, once typing pauses
+  const [params, setParams] = useSearchParams();
+  const kind   = ["social", "other"].includes(params.get("kind")) ? params.get("kind") : "";
+  const site   = params.get("site") || "";
+  const rawPerson = params.get("person") || "";
+  const person = rawPerson === "none" ? "none" : /^\d+$/.test(rawPerson) ? Number(rawPerson) : null;   // null: anyone
+  const q      = (params.get("q") || "").trim();      // the search, once typing pauses
+  const [query,    setQuery]    = useState(q);        // the search box, as typed
   const [removing, setRemoving] = useState(null);     // the link to delete
   const [flash,    setFlash]    = useState(null);     // the id of a link to point at (a URL saved already)
   const [busy,     setBusy]     = useState(false);
   const [dlgError, setDlgError] = useState(null);
   const edit = useOneEdit();                          // the link being edited, and whether it has changes
-  const unsaved = useUnsaved(edit.dirty);
+  // A filter change may hide the link being edited, so with unsaved edits it
+  // asks first, as leaving the page does. Clearing every filter cannot hide
+  // it: that goes through.
+  const unsaved = useUnsaved(edit.dirty, (from, to) => from.pathname === to.pathname && !to.search);
 
+  // The filters in the address, replacing the entry: Back leaves the page.
+  const setFilters = useCallback(changes => setParams(prev => {
+    const next = new URLSearchParams(prev);
+    for (const [k, v] of Object.entries(changes)) {
+      if (v == null || v === "") next.delete(k); else next.set(k, String(v));
+    }
+    return next;
+  }, { replace: true }), [setParams]);
+
+  // The box follows the address when that changes otherwise (Back, Clear);
+  // ``written`` is the last search it sent, so its own does not echo back.
+  const written = useRef(q);
   useEffect(() => {
-    const t = setTimeout(() => setQ(query.trim()), 250);
+    if (q !== written.current) { written.current = q; setQuery(q); }
+  }, [q]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (query.trim() === written.current) return;
+      written.current = query.trim();
+      setFilters({ q: query.trim() });
+    }, 250);
     return () => clearTimeout(t);
-  }, [query]);
+  }, [query, setFilters]);
+  function clearFilters() {
+    written.current = "";
+    setQuery("");
+    setParams(new URLSearchParams(), { replace: true });
+  }
+  // Kept editing instead of searching: the box shows the search in force.
+  function keepEditing() {
+    unsaved.keep();
+    written.current = q;
+    setQuery(q);
+  }
 
   const load = useCallback(() => getLinks({ kind, site, person, q }), [kind, site, person, q]);
   const { data, error, loading, reload } = useApi(load, refreshKey);
@@ -49,8 +86,9 @@ export default function Links() {
     return () => clearTimeout(t);
   }, [flash, data]);
 
+  // Every filter off, so the link is listed, lit and scrolled to.
   function showTaken(id) {
-    setKind(""); setSite(""); setPerson(null); setQuery(""); setQ("");
+    if (params.toString()) clearFilters();
     setFlash(id);
   }
 
@@ -78,7 +116,7 @@ export default function Links() {
       const r = await updateLink(id, body);
       if (!r?.ok) {
         // The form stays open, with the edits and this message in view.
-        if (r?.id != null) return "That address is saved already, as another link.";
+        if (r?.id != null) { showTaken(r.id); return "That address is saved already, as another link: it is lit in the list."; }
         return r?.error || "Could not save the link.";
       }
       edit.close();
@@ -115,7 +153,7 @@ export default function Links() {
     <>
       <PageHeader
         title="Links"
-        sub={data ? fmtInt(total) : "…"}
+        sub={!data ? "…" : filtered ? `${fmtInt(links.length)} of ${fmtInt(total)}` : fmtInt(total)}
         actions={
           <input
             type="text"
@@ -139,7 +177,7 @@ export default function Links() {
         <div className="feed-filters links-filters" role="group" aria-label="Filters">
           <label className="filter">
             <span>Kind</span>
-            <select className="sort-select" value={kind} onChange={e => setKind(e.target.value)}>
+            <select className="sort-select" value={kind} onChange={e => setFilters({ kind: e.target.value })}>
               <option value="">All</option>
               <option value="social">{KIND_LABEL.social}</option>
               <option value="other">{KIND_LABEL.other}</option>
@@ -147,7 +185,7 @@ export default function Links() {
           </label>
           <label className="filter">
             <span>Site</span>
-            <select className="sort-select" value={site} onChange={e => setSite(e.target.value)}>
+            <select className="sort-select" value={site} onChange={e => setFilters({ site: e.target.value })}>
               <option value="">All sites</option>
               {site && !sites.some(s => s.site === site) && <option value={site}>{site}</option>}
               {sites.map(s => <option key={s.site} value={s.site}>{s.site} ({s.count})</option>)}
@@ -162,17 +200,17 @@ export default function Links() {
               label="Person"
               allLabel={person === "none" ? "No person" : "Anyone"}
               placeholder="Search people…"
-              onChange={v => setPerson(v?.person ? v.person.id : null)}
+              onChange={v => setFilters({ person: v?.person ? v.person.id : null })}
             />
           </div>
           <button type="button" className={`btn-secondary links-none${person === "none" ? " is-on" : ""}`}
-                  aria-pressed={person === "none"} onClick={() => setPerson(person === "none" ? null : "none")}
+                  aria-pressed={person === "none"} onClick={() => setFilters({ person: person === "none" ? null : "none" })}
                   title="Only the links tied to no one">
             No person
           </button>
           {filtered && (
             <button type="button" className="btn-ghost filter-clear"
-                    onClick={() => { setKind(""); setSite(""); setPerson(null); setQuery(""); setQ(""); }}>
+                    onClick={clearFilters}>
               Clear filters
             </button>
           )}
@@ -212,7 +250,7 @@ export default function Links() {
         </ConfirmDialog>
         <DiscardDialog open={edit.asking || unsaved.asking}
                        onDiscard={edit.asking ? edit.discard : unsaved.discard}
-                       onKeep={edit.asking ? edit.keep : unsaved.keep}>
+                       onKeep={edit.asking ? edit.keep : keepEditing}>
           <p>The changes to the link you are editing are not saved.</p>
         </DiscardDialog>
       </div>

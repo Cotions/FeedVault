@@ -6,7 +6,7 @@ import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
 import { restoreFocus } from "../lib/layout";
-import { fmtBytes, fmtFullDate, fmtInt, fmtShortDate, plural, postPath } from "../lib/fmt";
+import { distinctTail, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, plural, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
@@ -101,7 +101,7 @@ function Member({ m, group, chosen, onChoose, onView, disabled }) {
         <span className="big-file-size mono">{fmtBytes(m.bytes)}</span>
       </span>
       <span className="dup-member-foot">
-        <span className="dup-folder" title={m.meta_path}>{lastPart(m.folder)}/</span>
+        <span className="dup-folder" title={m.meta_path}>{distinctTail(m.folder, group.members.map(x => x.folder))}/</span>
         <span className="dup-member-sub" title={[m.post && who, when, files].filter(Boolean).join(" · ")}>
           {m.post && who && <><Link to={postPath(m.post)} className="text-link" onClick={e => e.stopPropagation()}>{who}</Link> · </>}
           <span title={posts ? `Posted ${fmtFullDate(m.posted_at)} · saved ${fmtFullDate(m.saved_at)}` : `Saved ${fmtFullDate(m.saved_at)}`}>{when}</span>
@@ -335,7 +335,7 @@ function Compare({ g, at, keep, onMove, onKeep, onClose }) {
           </button>
         </div>
         <div className="dup-compare-foot">
-          <span className="dup-folder" title={m.meta_path}>{lastPart(m.folder)}/</span>
+          <span className="dup-folder" title={m.meta_path}>{distinctTail(m.folder, g.members.map(x => x.folder))}/</span>
           {m.post && <Link to={postPath(m.post)} className="text-link">Open post</Link>}
           <span className="dup-member-sub">← → to switch · Esc to close</span>
           <div className="page-head-spacer" />

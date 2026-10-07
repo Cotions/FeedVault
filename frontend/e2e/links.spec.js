@@ -126,3 +126,152 @@ test("Tab goes on from a person's Add an account picker", async ({ page }) => {
   await expect(page.locator(".bio-import").getByRole("link", { name: "Turn it on in Settings" })).toBeFocused();
   await idle(page);
 });
+
+async function makeLinks(request, urls) {
+  const ids = [];
+  for (const url of urls) {
+    const r = await request.post("/api/links", { headers: H, data: { url, title: url.replace(/^https:\/\//, "") } });
+    ids.push((await r.json()).link.id);
+  }
+  return ids;
+}
+
+// #126: with filters on, the count is "shown of all"; the filters are in
+// the address, so a reload and Back keep them.
+test("Links: the count follows the filters, which a reload and Back keep", async ({ page, request }) => {
+  const host = `e2e-filters-${Date.now()}.example`;
+  const ids = await makeLinks(request, [`https://${host}/a`, `https://${host}/b`]);
+  try {
+    await openPage(page, { name: "Links", path: "/links" });
+    const count = page.locator(".page-head .page-count");
+    await expect(count).toHaveText(/^[\d,]+$/);
+    const total = await count.textContent();
+    const filters = page.locator(".links-filters");
+    const rows = page.locator(".link-list > li");
+
+    await filters.getByLabel("Site").selectOption(host);
+    await expect(page).toHaveURL(`/links?site=${host}`);
+    await expect(rows).toHaveCount(2);
+    await expect(count).toHaveText(`2 of ${total}`);
+
+    await page.reload();
+    await expect(filters.getByLabel("Site")).toHaveValue(host);
+    await expect(rows).toHaveCount(2);
+    await expect(count).toHaveText(`2 of ${total}`);
+
+    const search = page.getByRole("textbox", { name: "Search links" });
+    await search.fill(`${host}/b`);
+    await expect(page).toHaveURL(`/links?site=${host}&q=${encodeURIComponent(`${host}/b`)}`);
+    await expect(count).toHaveText(`1 of ${total}`);
+
+    await page.locator('#main-nav a.side-link[href="/tags"]').click();
+    await expect(page).toHaveURL(/\/tags$/);
+    await page.goBack();
+    await expect(search).toHaveValue(`${host}/b`);
+    await expect(filters.getByLabel("Site")).toHaveValue(host);
+    await expect(rows).toHaveCount(1);
+    await expect(count).toHaveText(`1 of ${total}`);
+
+    await filters.getByRole("button", { name: "Clear filters" }).click();
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(search).toHaveValue("");
+    await expect(count).toHaveText(total);
+    await idle(page);
+  } finally {
+    for (const id of ids) await request.delete(`/api/links/${id}`, { headers: H });
+  }
+});
+
+// A filter change while a link has unsaved edits asks first (it may hide
+// the link); Clear filters hides none, and goes on.
+test("Links: a filter change asks before dropping a link's unsaved edits", async ({ page, request }) => {
+  const host = `e2e-guard-${Date.now()}.example`;
+  const ids = await makeLinks(request, [`https://${host}/a`]);
+  try {
+    await page.goto(`/links?q=${host}`);
+    const rows = page.locator(".link-list > li");
+    await expect(rows).toHaveCount(1);
+    await idle(page);
+    const dialog = page.getByRole("alertdialog");
+    const kind = page.locator(".links-filters").getByLabel("Kind");
+    const search = page.getByRole("textbox", { name: "Search links" });
+    await page.getByRole("button", { name: `Edit ${host}/a` }).click();
+    const editing = page.locator(".link-row.is-editing");
+    await editing.getByLabel("Title").fill("typed, not saved");
+
+    await kind.selectOption("social");
+    await expect(dialog).toContainText("not saved");
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(`/links?q=${host}`);
+    await expect(kind).toHaveValue("");
+    await expect(editing.getByLabel("Title")).toHaveValue("typed, not saved");
+
+    await search.fill(`${host}/zzz`);
+    await expect(dialog).toContainText("not saved");
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(search).toHaveValue(host);
+    await expect(page).toHaveURL(`/links?q=${host}`);
+    await expect(editing.getByLabel("Title")).toHaveValue("typed, not saved");
+
+    await page.locator(".links-filters").getByRole("button", { name: "Clear filters" }).click();
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(dialog).toHaveCount(0);
+    await expect(editing.getByLabel("Title")).toHaveValue("typed, not saved");
+
+    await kind.selectOption("social");
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(page).toHaveURL("/links?kind=social");
+    await expect(page.locator(".link-row", { hasText: host })).toHaveCount(0);
+    await idle(page);
+  } finally {
+    for (const id of ids) await request.delete(`/api/links/${id}`, { headers: H });
+  }
+});
+
+// #126: an edit to an address saved already points at that link, as Add
+// does: every filter off, the link lit and in view, the edit still open.
+test("Links: an edit to a saved address lights the link that has it", async ({ page, request, pageErrors }) => {
+  const host = `e2e-taken-${Date.now()}.example`;
+  const [a, b] = await makeLinks(request, [`https://${host}/a`, `https://${host}/b`]);
+  // The server's answer to the taken address: a 409, which the test is about.
+  pageErrors.allow(new RegExp(`^api: POST \\S+/api/links/${b} → 409$`));
+  pageErrors.allow(new RegExp(`^console: .*status of 409 .*/api/links/${b}\\)$`));
+  try {
+    await page.goto(`/links?q=${encodeURIComponent(`${host}/b`)}`);
+    await expect(page.locator(".link-list > li")).toHaveCount(1);
+    await idle(page);
+    await page.getByRole("button", { name: `Edit ${host}/b` }).click();
+    const editing = page.locator(".link-row.is-editing");
+    await editing.getByLabel("Address").fill(`https://${host}/a`);
+    await editing.getByRole("button", { name: "Save" }).click();
+    await expect(editing.getByRole("alert")).toContainText("saved already");
+    await expect(page).toHaveURL(/\/links$/);
+    const lit = page.locator(`.link-row.is-flash[data-link-id="${a}"]`);
+    await expect(lit).toHaveCount(1);
+    await expect(lit).toBeInViewport();
+    await expect(editing.getByLabel("Address")).toHaveValue(`https://${host}/a`);
+    await idle(page);
+  } finally {
+    const { links } = await (await request.get(`/api/links?q=${host}`, { headers: H })).json();
+    for (const l of links) await request.delete(`/api/links/${l.id}`, { headers: H });
+  }
+});
+
+// #126: an address typed with no scheme is saved as https://, not refused.
+test("Links: an address with no scheme is added as https://", async ({ page, request }) => {
+  const host = `e2e-scheme-${Date.now()}.example`;
+  try {
+    await openPage(page, { name: "Links", path: "/links" });
+    const form = page.locator(".links-add .link-form");
+    await form.getByLabel("Address").fill(`${host}/x`);
+    await form.getByRole("button", { name: "Add link" }).click();
+    const row = page.locator(".link-row", { has: page.locator(`a[href="https://${host}/x"]`) });
+    await expect(row).toHaveCount(1);
+    await expect(form.getByRole("alert")).toHaveCount(0);
+    await expect(form.getByLabel("Address")).toHaveValue("");
+    await idle(page);
+  } finally {
+    const { links } = await (await request.get(`/api/links?q=${host}`, { headers: H })).json();
+    for (const l of links) await request.delete(`/api/links/${l.id}`, { headers: H });
+  }
+});

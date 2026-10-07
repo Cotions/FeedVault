@@ -131,3 +131,74 @@ test("a failed sync's notification lands on its source, highlighted", async ({ p
     await idle(page);
   }
 });
+
+// #126: Enter in New person's Name creates the person, as Create does.
+test("New person: Enter in Name creates them", async ({ page, request }) => {
+  const name = `E2E enter ${Date.now()}`;
+  let pid = null;
+  try {
+    await openPage(page, { name: "Creators", path: "/creators" });
+    await page.getByRole("button", { name: "New person" }).click();
+    const dialog = page.getByRole("alertdialog");
+    const field = dialog.getByRole("textbox", { name: "Name" });
+    await expect(field).toBeFocused();
+    await field.fill(name);
+    await field.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await expect(page).toHaveURL(/\/people\/\d+$/);
+    pid = page.url().match(/\/people\/(\d+)$/)[1];
+    await expect(page.locator("h2.page-title")).toHaveText(name);
+    await idle(page);
+  } finally {
+    if (pid) await request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});
+
+// #126: a Sync all whose last jobs were cancelled does not count them as
+// synced, in its toast and in the summary on Creators. The batch is faked.
+test("Sync all's summary counts cancelled syncs apart", async ({ page }) => {
+  let done = false;
+  await page.route(url => url.pathname === "/api/jobs", async route => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const batch = { id: 990001, started_at: 1727500000, total: 7, ended: done ? 7 : 5, failed: 3, cancelled: done ? 2 : 0,
+                    added: 0, profiles: 0, first: null, current: null, jobs: [990001], active: [], done };
+    await route.fulfill({ response: res, json: { ...body, running: done ? body.running : 1, sync_all: batch } });
+  });
+  await openPage(page, { name: "Creators", path: "/creators" });
+  await expect(page.locator(".sync-all")).toContainText("Syncing");
+  done = true;
+  await expect(page.locator(".toast", { hasText: "failed" })).toHaveText(/3 of 5 syncs failed, 2 cancelled/);
+  await expect(page.locator(".sync-all > span")).toHaveText("Synced 5 sources: 0 new posts, 3 failed, 2 cancelled. Hide");
+  await idle(page);
+});
+
+// #126: the new counts (the sidebar's, the Feed's chip) follow a delete at
+// once, not with the next idle jobs poll 15 s later. The delete and the
+// counts are faked: the demo's posts stay as they are.
+test("deleting posts from the Feed updates the new counts at once", async ({ page }) => {
+  let deleted = false;
+  await page.route(url => url.pathname === "/api/jobs", async route => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), new: deleted ? 4 : 5 } });
+  });
+  await page.route(url => url.pathname === "/api/delete", async route => {
+    const ids = route.request().postDataJSON().posts;
+    deleted = true;
+    await route.fulfill({ json: { ok: true, posts: ids, files: 1, bytes: 1024, errors: [] } });
+  });
+  await openPage(page, PAGES[0]);
+  const sidebar = page.locator("#main-nav .side-new");
+  const chip = page.getByRole("button", { name: /^New since last visit/ });
+  await expect(sidebar).toHaveText("5 new");
+  await expect(chip).toHaveText("New since last visit (5)");
+
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await page.locator("article.post-card .select-check").first().click();
+  await page.getByRole("button", { name: "Delete…" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete 1 post" }).click();
+  await expect(page.getByRole("alertdialog")).toBeHidden();
+  await expect(sidebar).toHaveText("4 new", { timeout: 3_000 });
+  await expect(chip).toHaveText("New since last visit (4)", { timeout: 3_000 });
+  await idle(page);
+});

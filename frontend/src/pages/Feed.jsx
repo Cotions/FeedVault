@@ -218,7 +218,8 @@ export default function Feed() {
         total: Math.max(0, prev.total - gone.size),
       }));
       sel.drop(gone);
-      if (gone.size) setSummaryTick(t => t + 1);
+      // The sidebar's and the chip's new counts come with the jobs poll: now, not in 15 s.
+      if (gone.size) { setSummaryTick(t => t + 1); started(); }
       setConfirmDel(false);
       setDelErrors(r.errors?.length ? r.errors : null);
       if (gone.size) {

@@ -290,7 +290,7 @@ MESSAGES = {
     "rate_limited": "{name} is limiting requests: wait a while before saving again",
     "not_found": "Post not found: removed, or only visible when logged in",
     "private": "Private post: the cookies in use do not have access to it",
-    "login_required": "{name} wants a logged-in session for this post; see Settings → Downloaders (browser cookies)",
+    "login_required": "{name} wants a logged-in session for this post; see Settings → Sync (browser cookies)",
     "generic": "{tool} failed",
 }
 # A private post when the save used no cookies (mode "none", #124).

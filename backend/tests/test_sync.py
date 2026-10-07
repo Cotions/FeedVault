@@ -873,6 +873,31 @@ def test_pause_does_not_hold_other_kinds(env, client, fake):
     assert get(client, f"/api/sources/{s['id']}")["last_result"]["state"] == "done"
 
 
+def test_only_the_next_queued_sync_says_when_it_starts(env, client, fake):
+    """#126: the syncs behind the next one start after it, not when the pause ends."""
+    names = ("aa.one", "bb.two", "cc.three")
+    srcs = [add_source(client, n) for n in names]
+    fake.set({n: {"id": i + 1, "posts": []} for i, n in enumerate(names)})
+    set_config(instaloader={"pause": 30})
+    sync_now(client, srcs[0]["id"])
+    queued = [post(client, f"/api/sources/{s['id']}/sync")["job"] for s in srcs[1:]]
+    try:
+        assert queued[0]["waits_until"] > time.time() + 20
+        assert queued[1]["state"] == "queued" and queued[1]["waits_until"] is None
+        listed = {j["id"]: j for j in get(client, "/api/jobs")["jobs"]}
+        assert listed[queued[0]["id"]]["waits_until"] == queued[0]["waits_until"]
+        assert listed[queued[1]["id"]]["waits_until"] is None
+        by_source = {s["id"]: s["job"] for s in get(client, "/api/sources")["sources"]}
+        assert by_source[srcs[2]["id"]]["waits_until"] is None
+        # The first one gone, the next in line takes its time.
+        post(client, f"/api/jobs/{queued[0]['id']}/cancel")
+        assert jobs.get(queued[1]["id"])["waits_until"] == queued[0]["waits_until"]
+    finally:
+        for j in queued:
+            client.post(f"/api/jobs/{j['id']}/cancel", headers=H)
+            ended(j["id"])
+
+
 def test_interrupted_sync_is_recorded_on_restart(env, client, fake):
     s = add_source(client, "aa.one")
     conn = db.connect()
@@ -931,6 +956,8 @@ def test_queued_syncs_whose_source_is_gone_end_cancelled(env, client, fake, monk
     assert sync.active() == {}
     b = get(client, "/api/jobs")["sync_all"]
     assert (b["ended"], b["done"], b["active"], b["current"], b["failed"]) == (3, True, [], None, 0)
+    # #126: cancelled, not synced: counted apart.
+    assert b["cancelled"] == 2
 
 
 def test_sync_all_while_one_runs_joins_it(env, client, fake, monkeypatch):

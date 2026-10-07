@@ -1449,8 +1449,8 @@ no person yet.
     error lines the same way (gallery-dl's `AuthRequired`, `NotFoundError`,
     "Tweets are protected"; yt-dlp's "Sign in to confirm", "Private video",
     "Video unavailable"). `missing`: the tool was not found (no output);
-    the dashboard links `missing` and `login_required` to Settings →
-    Downloaders
+    the dashboard links `missing` to Settings → Downloaders and
+    `login_required` to Settings → Sync, where logins and cookies are set
   - `message`: one line for people; `line`: the tool's last line of output
     behind it, or `null`. When the latest-version check is on (see
     [Downloaders](#downloaders)) and the tool is older than PyPI's latest
@@ -2330,6 +2330,8 @@ A **job**:
   set its path in Settings"`, `"cancelled"`, `"FeedVault stopped while it ran"`.
 - `waits_until`: for a queued job held by its kind's pause (see
   [How a sync runs](#how-a-sync-runs)), when it may start; else `null`.
+  Only the next job of its group has one: those queued behind it start
+  after it, at a time not known yet, and have `null`.
 
 | Method | Path | Returns |
 |---|---|---|
@@ -2369,14 +2371,16 @@ anything since FeedVault started, or `null`. Muted sources count in
 last is still running adds its jobs to it (one batch, one summary):
 
 ```json
-{ "id": 51, "started_at": 1727500000, "total": 6, "ended": 2, "failed": 0,
+{ "id": 51, "started_at": 1727500000, "total": 6, "ended": 2, "failed": 0, "cancelled": 0,
   "added": 31, "profiles": 2, "first": { "label": "Sync @somebody", "source": 4 },
   "current": job, "jobs": [51, 52, 53, 54, 55, 56], "active": [53, 54, 55, 56], "done": false }
 ```
 
 - `id`: its first job's id; with `started_at`, what tells two batches apart.
 - `ended`: its jobs that are no longer queued or running, whatever their
-  state; `failed` those that failed; `added` the new posts they indexed;
+  state; `failed` those that failed; `cancelled` those cancelled (Stop,
+  a job's Cancel, a source gone), which never synced, muted ones too;
+  `added` the new posts they indexed;
   `profiles` how many of them added at least one, and `first` (label and
   source id) the one that added the most, or `null`.
 - `current`: the job running, else the next queued one, else `null`;

@@ -327,7 +327,7 @@ def test_failures_are_named(env, client, fake):
     assert job["result"]["error"] == "rate_limited" and job["message"].startswith("X is limiting")
     fake.put(TT_PROFILE, tt_account(1), fail="login")
     job = save_now(client, TT_LINK)
-    assert job["result"]["error"] == "login_required" and "Settings" in job["message"]
+    assert job["result"]["error"] == "login_required" and "Settings → Sync (browser cookies)" in job["message"]
     for tool in ("gallery-dl", "yt-dlp"):
         assert os.listdir(os.path.join(data_dir(), tool, "saving")) == []
 

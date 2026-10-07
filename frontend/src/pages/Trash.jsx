@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { checkTrash, getPeople, getTrashItems, purgeTrash, restoreEntries } from "../lib/api";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
+import { useJobs } from "../lib/jobs";
 import { useSelection } from "../lib/useSelection";
 import { useApi } from "../lib/useApi";
 import { fmtAgo, fmtBytes, fmtFullDate, fmtInt, platformLabel, postPath } from "../lib/fmt";
@@ -130,6 +131,7 @@ function TrashEntry({ entry: e, index, selectMode, selected, onToggle, onRestore
 export default function Trash() {
   const { refreshKey } = useScan();
   const toast = useToast();
+  const { started } = useJobs();
   const { data: peopleData } = useApi(getPeople, 0);
   const [params, setParams] = useSearchParams();
   const author = params.get("author") || "";
@@ -233,6 +235,7 @@ export default function Trash() {
         drop(list.map(e => e.key));
       }
       if (r.files) {
+        started();   // the new counts (jobs poll) follow now
         toast(`Restored ${plural(r.posts?.length ?? 0, "post")} (${plural(r.files, "file")}). ${
           (r.posts?.length ?? 0) === 1 ? "It is" : "They are"} back in the feed.`);
       }
