@@ -289,8 +289,16 @@ and prints Markdown tables:
   drops the backend's memo caches as a sync or review does, and *cached*,
   the same call again; the median of `--runs`;
 - 15 pages in Chromium: navigation to the last API response and the last
-  DOM change after it (interactive), the median of 3.
+  DOM change after it (interactive), the median of 3;
+- the long list pages (Storage, Unmatched, Links, Creators): the rows in
+  the DOM of those the page lists, the DOM's elements, interactive, and one
+  thing a user does there (sort, or type in the search box): the slowest
+  input's event handlers (React's render included) and its time to the
+  next paint (Event Timing, as INP reads it; headless Chromium adds some
+  40-60 ms to any input, whatever the page), then the time until the page
+  is quiet again; the median of 3.
 
+`--lists-only` measures the list pages alone (no API table, no other page).
 It stops the backend by its PID and deletes the tmp dir however it ends.
 
 ### Numbers
@@ -338,6 +346,56 @@ The first `similar` after the pictures change still compares them all
 (about 370 ms here); later ones reuse the pairs. Hashing new pictures runs
 in the background after a scan (about 13 s for 36k files).
 
+### The long list pages
+
+Storage's creator table, Unmatched, Links and Creators' grids rendered
+every row at once. They now render the rows near the viewport
+(`frontend/src/lib/windowing.js`, about 200 lines, no dependency: the
+page still scrolls as a whole, so a list library built around a box of
+its own would not fit, and the grids need a column count read from the
+CSS). A list shorter than 120 rows renders whole, as before. Same vault;
+before is `main` at 4f5a549:
+
+| List page | rows in the DOM | DOM elements | interactive | interaction | handlers | input to paint |
+|---|---:|---:|---:|---|---:|---:|
+| Storage, before | 309 of 309 | 12,120 | 225 ms | sort by posts, twice | 34 ms | 216 ms |
+| Storage, after | 22 of 309 | 2,303 | 195 ms | the same | 13 ms | 112 ms |
+| Unmatched, before | 1,064 of 1,064 | 5,673 | 172 ms | no search box | | |
+| Unmatched, after | 18 of 1,064 | 268 | 130 ms | type "img_001" in its search | 33 ms | 144 ms |
+| Links, before | 305 of 305 | 5,768 | 113 ms | type "link 1" in its search | 9 ms | 72 ms |
+| Links, after | 18 of 305 | 805 | 118 ms | the same | 2 ms | 64 ms |
+| Creators, before | 262 of 262 | 5,044 | 328 ms | type "ma" in its filter, clear it | 39 ms | 104 ms |
+| Creators, after | 53 of 262 | 1,206 | 294 ms | the same | 22 ms | 80 ms |
+
+Storage's sort was the slow one: 34 ms of React, then some 180 ms of
+style, layout and paint over 12k elements. Links was fine already (its
+search goes to the backend), and is windowed for the vaults whose links
+run to thousands. Creators' interactive is its five API calls, not its
+cards. The APIs return every row still: `/api/unmatched` is 5 ms and
+242 KiB for 1,064 files, `/api/links` 4 ms, so paging them would add
+round trips for nothing; the search boxes filter what is loaded
+(Storage, Unmatched, Creators) or ask the backend (Links).
+
+What a windowed list keeps:
+
+- **Search instead of Ctrl+F.** The browser's find bar sees the rendered
+  rows only. Every windowed page has a search box over all its rows:
+  Storage's creator table and Unmatched got one (path and reason), Links
+  and Creators had theirs.
+- **Keyboard focus.** The line holding focus is always rendered, so focus
+  never falls to `<body>` when its row scrolls away; Tab and Shift+Tab go
+  row to row past the viewport (the lines just beyond it are rendered,
+  and the browser scrolls each focused one into view). Leaving for a
+  dialog keeps the row: the dialog gives focus back (`restoreFocus`).
+- **Unsaved edits.** The link being edited on Links is always rendered:
+  its form holds the edits `lib/unsaved.js` guards.
+- **Links to one row.** Links' "saved already" and Creators' `?source=`
+  (a failed sync's notification) scroll to their row with
+  `scrollTo(index)`: straight to about where it is, then centred once it
+  is rendered and measured.
+- **Entry animations** play on the first rows only: rows mounted while
+  scrolling come in as they are.
+
 ### Regression tests
 
 `backend/tests/test_perf.py` runs in the backend suite without timing
@@ -352,6 +410,17 @@ anything:
 - similar pairs are computed once for the same pictures;
 - instaloader's parser goes over a folder's names a fixed number of times,
   and its name index matches what its old pattern matched.
+
+`frontend/e2e/lists.spec.js` (desktop project) gives each list page
+thousands of invented rows (the real answer plus `page.route`, nothing
+written) and counts what is in the DOM: fewer than 120 rows, while the
+last row is reached by scrolling, the search finds any row, sorting covers
+them all, Tab walks past the first viewport, focus stays on a row scrolled
+away, an edit in progress survives scrolling, and a 409 or `?source=`
+brings a row that was never rendered into view, lit. On `main` each test
+fails at its first count. `frontend/scripts/windowing.test.js` (`npm
+test`) checks the window's arithmetic: which lines render for a scroll
+position, and that the spacers add up to the rows they stand for.
 
 ## CI
 
