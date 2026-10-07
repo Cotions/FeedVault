@@ -385,7 +385,7 @@ class Fetcher:
             charset = m.group(1)
         try:
             text = body.decode(charset, "replace")
-        except LookupError:
+        except (LookupError, UnicodeError, ValueError, TypeError):   # unknown, or not a text codec (idna, undefined)
             text = body.decode("utf-8", "replace")
         return "page", text
 
@@ -422,7 +422,7 @@ class Fetcher:
             return self._chunked(r)
         length = headers.get("content-length")
         if length is not None:
-            if not length.isdigit():
+            if not re.fullmatch(r"[0-9]{1,15}", length):   # isdigit() takes "²", which int() refuses
                 raise Refused("the site's answer is malformed", 502)
             if int(length) > self.max_bytes:
                 raise Refused("page too large", 502)
@@ -555,6 +555,9 @@ def page_links(text):
     return out
 
 
+_BEFORE_HANDLE = {"user", "users", "u", "profile", "channel", "c", "en", "ja", "member", "creator"}
+
+
 def profile(link, table):
     """(platform, handle, url, tool, target) of a link to a profile the
     routing table knows, else None: a post, a video, a search or a site's
@@ -569,11 +572,13 @@ def profile(link, table):
         target = sources.parse_target("instaloader", url)
         return (platform, target, url, tool, target) if target else None
     parts = [p for p in urlsplit(url).path.split("/") if p]
-    i = next((i for i, p in enumerate(parts) if p.lstrip("@").lower() not in sources._PAGE_WORDS), None)
+    # Only words that come before a profile's name are skipped (/user/name,
+    # /channel/id, /en/users/id); /shorts/<id> or /artworks/<id> is a post.
+    i = next((i for i, p in enumerate(parts) if p.lower() not in _BEFORE_HANDLE), None)
     if i is None:
         return None
     handle = parts[i].lstrip("@")
-    if not handle or handle.lower() in people._NOT_HANDLES:
+    if not handle or handle.lower() in people._NOT_HANDLES or handle.lower() in sources._PAGE_WORDS:
         return None
     # A profile's own tab (/@name/videos) is still the profile; /name/status/1 is a post.
     if any(p.lower() not in sources._PAGE_WORDS for p in parts[i + 1:]):
@@ -615,7 +620,11 @@ def suggest(conn, pid, links, table, roots):
     for link in links:
         found = profile(link, table)
         if found is None:
-            if _host(urlsplit(link).hostname) not in SITES:
+            try:
+                own = _host(urlsplit(link).hostname) in SITES
+            except ValueError:                 # https://[oops: not a link at all
+                own = False
+            if not own:
                 other += 1
             continue
         platform, handle, url, tool, target = found
@@ -629,15 +638,15 @@ def suggest(conn, pid, links, table, roots):
         account = accounts[next(iter(keys))] if len(keys) == 1 else None
         folder = sources.default_folder(tool, platform, target, roots) if roots else None
         sid = sources.existing(conn, tool, target, folder)
-        source = sources.get(conn, sid) if sid is not None else None
-        owner = (account or {}).get("person") or (source or {}).get("person")
+        source_owner = sources._owner(conn, sources.row(conn, sid), accounts)[1] if sid is not None else None
+        owner = (account or {}).get("person") or source_owner
         if owner and owner["id"] == pid:
             status = "linked"
         elif owner:
             status = "other"
         elif account:
             status = "indexed"
-        elif source:
+        elif sid is not None:
             status = "source"
         else:
             status = "new"

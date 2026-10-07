@@ -368,6 +368,7 @@ def test_a_redirect_with_nowhere_to_go():
     (b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n", "closed the connection early"),
     (b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 50\r\n\r\nshort", "cut short"),
     (b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: -1\r\n\r\n", "malformed"),
+    (b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \xb2\r\n\r\nab", "malformed"),
     (b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\nContent-Type: text/html\r\n\r\nab",
      "malformed"),
     (b"HTTP/1.1 200 OK\r\n bad: fold\r\n\r\n", "malformed"),
@@ -773,3 +774,32 @@ def test_busy_is_a_429(bio, client, monkeypatch):
     monkeypatch.setattr(biofetch, "FETCHER", Untouchable())
     with biofetch._busy:
         assert "another" in bio_import(client, bio["id"], status=429)["error"]
+
+
+@pytest.mark.parametrize("charset", ["idna", "undefined", "rot13", "hex", "base64"])
+def test_a_charset_that_is_not_a_text_codec_falls_back_to_utf8(charset):
+    net = Net(pages={("linktr.ee", "/a"): html_answer(b"<p>ok</p>", headers={
+        "Content-Type": f"text/html; charset={charset}"})})
+    assert net.get("https://linktr.ee/a").text == "<p>ok</p>"
+
+
+@pytest.mark.parametrize("link", [
+    "https://www.youtube.com/shorts/AbC123xyz", "https://www.youtube.com/shorts", "https://www.pixiv.net/en/artworks/12345",
+    "https://www.youtube.com/@name/shorts/AbC", "https://www.tiktok.com/@name/video/1",
+])
+def test_posts_and_videos_are_not_profiles(link):
+    table = {**ROUTES, "pixiv.net": "gallery-dl"}
+    assert biofetch.profile(link, table) is None
+
+
+def test_profile_prefixes_still_work():
+    table = {**ROUTES, "pixiv.net": "gallery-dl"}
+    assert biofetch.profile("https://www.pixiv.net/en/users/12345", table)[1] == "12345"
+    assert biofetch.profile("https://www.youtube.com/@name/shorts", ROUTES)[1] == "name"
+
+
+def test_a_broken_link_in_the_page_is_counted_not_a_crash(bio, client, monkeypatch):
+    page = '<a href="https://[oops">x</a><a href="https://x.com/example_user1">x</a>'
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(page).fetcher())
+    r = bio_import(client, bio["id"])
+    assert len(r["accounts"]) == 1 and r["other"] == 1

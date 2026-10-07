@@ -307,6 +307,7 @@ export default function PersonPage() {
             onDismiss={dismiss}
           />
           <BioImport
+            key={p.id}
             person={p}
             enabled={config?.bio_import === true}
             onAdded={() => { reload(); suggestApi.reload(); sources.reload(); }}
