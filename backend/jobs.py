@@ -255,7 +255,10 @@ class Job:
     def public(self, live=False):
         if self.shown is not None and not live:
             return self.shown
-        waits = _cool.get(self.group) if self.state == "queued" and _pauses(self.kind) else None
+        # Only the group's next job waits on the pause's end: those behind it
+        # start after it, at a time not known yet (#126).
+        waits = _cool.get(self.group) if self.state == "queued" and _pauses(self.kind) \
+            and not _queued_ahead(self) else None
         return {"id": self.id, "kind": self.kind, "label": _label(self.kind, self.shown_params, self.argv),
                 "params": self.shown_params, "argv": self.argv, "cwd": self.cwd, "group": self.group,
                 "state": self.state, "created_at": self.created_at, "started_at": self.started_at,
@@ -269,6 +272,16 @@ def _label(kind_name, params, argv):
     if kind is None:
         return kind_name
     return kind.describe(params, argv) if kind.describe else kind.label
+
+
+def _queued_ahead(job):
+    """Whether a job of ``job``'s group is queued before it. Under _lock."""
+    for j in _active.values():
+        if j is job:
+            return False
+        if j.state == "queued" and j.group == job.group:
+            return True
+    return False
 
 
 def _pauses(kind_name):
@@ -327,7 +340,8 @@ def submit(kind_name, params):
         _save(job, [])
         raise BadRequest("FeedVault is stopping")
     _pump()
-    return job.public()
+    with _lock:
+        return job.public()
 
 
 def _pump():

@@ -2330,6 +2330,8 @@ A **job**:
   set its path in Settings"`, `"cancelled"`, `"FeedVault stopped while it ran"`.
 - `waits_until`: for a queued job held by its kind's pause (see
   [How a sync runs](#how-a-sync-runs)), when it may start; else `null`.
+  Only the next job of its group has one: those queued behind it start
+  after it, at a time not known yet, and have `null`.
 
 | Method | Path | Returns |
 |---|---|---|
