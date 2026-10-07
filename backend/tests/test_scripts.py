@@ -1483,9 +1483,13 @@ def test_a_shell_or_python_outside_the_system_folders_is_refused_with_a_placehol
     assert why_refused([re.sub(r"\{(url|root)\}", "x", a) for a in argv]) is None
 
 
-def test_a_dotdot_path_is_no_launcher_nor_echo():
-    for argv in (["/home/x/link/../../../usr/bin/env", "yt-dlp", "{url}"], ["/home/x/l/../../../bin/echo", "{url}"]):
+def test_a_dotdot_path_is_no_launcher_nor_echo(client, folder):
+    for argv in (["/home/x/link/../../../usr/bin/env", "yt-dlp", "{url}"], ["/home/x/l/../../../bin/echo", "{url}"],
+                 ["/usr/bin/../bin/nice", "yt-dlp", "{url}"]):
         assert " is not a program FeedVault reads the arguments of" in why_refused(argv)
+    # With no placeholder it is accepted, and its lock group still the downloader's.
+    write(folder, "dl.json", {"needs": "none", "argv": ["/usr/bin/../bin/env", "yt-dlp", "--version"]})
+    assert scripts.group(scripts.get("dl")) == "yt-dlp"
 
 
 @pytest.fixture
@@ -1495,7 +1499,7 @@ def system(env, monkeypatch):
     sysdir, home = env["tmp"] / "sys", env["tmp"] / "home-bin"
     for d in (sysdir, home):
         d.mkdir()
-        for name in ("perl", "dash", "bash", "zsh", "python3.12", "busybox", "yt-dlp"):
+        for name in ("perl", "dash", "bash", "zsh", "ksh93", "python3.12", "python3.13t", "busybox", "yt-dlp"):
             (d / name).write_text("")
     monkeypatch.setattr(scripts, "SYSTEM_DIRS", (*scripts.SYSTEM_DIRS, str(sysdir)))
     return collections.namedtuple("System", "sys home")(sysdir, home)
@@ -1521,11 +1525,15 @@ def test_a_fake_shell_or_python_of_the_users_is_refused(system):
 @pytest.mark.parametrize("link, to, argv, refused", [
     ("sh", "perl", ["-c", 'x "$1"', "sh", "{url}"], True),
     ("sh", "../home-bin/perl", ["-s", "{url}"], True),
-    ("sh", "busybox", ["-s", "{url}"], True),              # not a shell by its name: bare sh still works
+    ("mksh", "busybox", ["-s", "{url}"], True),            # busybox picks its applet by argv[0]: mksh is none
+    ("ksh", "perl", ["-s", "{url}"], True),
     ("python3", "perl", ["-m", "yt_dlp", "{url}"], True),
     ("sh", "dash", ["-c", 'x "$1"', "sh", "{url}"], False),
     ("sh", "../home-bin/bash", ["-s", "{url}"], False),   # a system folder's link is root's choice
     ("python3", "python3.12", ["-m", "yt_dlp", "{url}"], False),
+    ("python3", "python3.13t", ["-m", "yt_dlp", "{url}"], False),  # free-threaded
+    ("ksh", "ksh93", ["-c", 'x "$1"', "ksh", "{url}"], False),       # Debian's alternatives
+    ("sh", "busybox", ["-s", "{url}"], False),             # Alpine: busybox runs as ash for argv[0] sh
 ])
 def test_a_system_shell_or_python_is_followed_through_its_symlinks(system, link, to, argv, refused):
     (system.sys / link).symlink_to(to)
@@ -1536,16 +1544,11 @@ def test_a_system_shell_or_python_is_followed_through_its_symlinks(system, link,
 def test_a_system_shell_linked_to_another_is_read_with_both_grammars(system):
     """bash -O takes the next item; dash's -O is a flag: a dash linked to
     bash reads `-O x {url}` as bash does, running {url} as its file."""
-    (system.sys / "dash-real").write_text("")
-    plain = [str(system.sys / "dash-real"), "-O", "x", "{url}"]
+    argv = [str(system.sys / "dash"), "-O", "x", "{url}"]
+    assert why_refused(argv) is None                       # dash alone: -O a flag, x its file
     (system.sys / "dash").unlink()
     (system.sys / "dash").symlink_to("bash")
-    assert why_refused([str(system.sys / "dash"), "-O", "x", "{url}"]).startswith(
-        "'{url}': a shell runs the file its first argument names")
-    assert why_refused(plain) is not None                  # dash-real: an unknown name
-    (system.sys / "dash").unlink()
-    (system.sys / "dash").write_text("")
-    assert why_refused([str(system.sys / "dash"), "-O", "x", "{url}"]) is None
+    assert why_refused(argv).startswith("'{url}': a shell runs the file its first argument names")
 
 
 def test_a_downloader_symlink_is_not_checked_as_a_shell(system, folder):

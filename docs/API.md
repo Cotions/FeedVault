@@ -2510,7 +2510,8 @@ logs it. It never changes a folder above them.
     `nohup`, `timeout`, `stdbuf`, `ionice`, `taskset`, by their bare name
     or a path in `/bin`, `/usr/bin`, `/usr/local/bin`, `/sbin` or
     `/usr/sbin` (a program of yours under one of these names is not one;
-    nor is a path through `..`, which the kernel reads past a symlink).
+    with a placeholder, nor is a path through `..`, which the kernel reads
+    past a symlink).
     A placeholder may not be in their own items: options, `timeout`'s
     duration, `taskset`'s mask, `env`'s `NAME=value` (a program can read
     a variable as code: `LD_PRELOAD`, `BASH_ENV`) and `env -C` (the folder
@@ -2526,11 +2527,12 @@ logs it. It never changes a folder above them.
     the path (run the venv's `yt-dlp` itself instead: a downloader counts
     by any path). Such a path is also followed through its symlinks, even
     though its own name is known, and must end at a program of the same
-    kind: `/bin/sh` → `dash` and `/usr/bin/python3` → `python3.12` count,
-    a `sh` linked to `perl` or `busybox` does not (a bare `sh` still
-    does: the job's `PATH` decides). A shell linked to another is read
-    with the options of both (a `dash` linked to `bash` takes `-O`'s
-    value);
+    kind: `/bin/sh` → `dash`, `/bin/ksh` → `ksh93`, `/usr/bin/python3` →
+    `python3.12` or `python3.13t` count, and so does a `sh` or `ash`
+    linked to `busybox` (it runs as `ash` by that name); a `sh` linked to
+    `perl` does not. A bare name is not followed: the job's `PATH` decides.
+    A shell linked to another is read with the options of both (a `dash`
+    linked to `bash` takes `-O`'s value);
   - a placeholder never names the program to run (`argv[0]`, the item a
     launcher runs, a shell's script file when it has no `-c` or `-s`,
     what Python runs), nor is among Python's options (`-W` imports a
