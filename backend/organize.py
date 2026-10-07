@@ -6,6 +6,8 @@ row, so a post moved to the trash and restored (or replaced by a duplicate
 copy of itself) comes back with them. Rows of a post are dropped when its
 trash entries are deleted for good and it is not indexed (forget_gone).
 """
+import sqlite3
+
 import db
 
 MAX_POSTS = 5000                # posts per bulk call
@@ -94,10 +96,11 @@ def apply(conn, post_ids, add, remove, now):
         return out                      # no tag made for no post
     with conn:
         for name in dict.fromkeys(add):
-            tid = _tag_id(conn, name)
-            if tid is None:
-                tid = conn.execute("INSERT INTO tags(name, created_at) VALUES (?, ?)", (name, now)).lastrowid
+            # OR IGNORE: another request may have made it since (two tabs, a
+            # double press): theirs is used, and it is not "created" here.
+            if conn.execute("INSERT OR IGNORE INTO tags(name, created_at) VALUES (?, ?)", (name, now)).rowcount:
                 out["created"].append(name)
+            tid = _tag_id(conn, name)
             before = conn.total_changes
             conn.executemany("INSERT OR IGNORE INTO post_tags(post_id, tag_id, at) VALUES (?, ?, ?)",
                              [(i, tid, now) for i in ids])
@@ -184,10 +187,13 @@ def create_collection(conn, name, now):
     """The new collection, or None when the name is taken."""
     if _name_taken(conn, name):
         return None
-    with conn:
-        cid = conn.execute(
-            "INSERT INTO collections(name, created_at, position) "
-            "VALUES (?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM collections))", (name, now)).lastrowid
+    try:
+        with conn:
+            cid = conn.execute(
+                "INSERT INTO collections(name, created_at, position) "
+                "VALUES (?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM collections))", (name, now)).lastrowid
+    except sqlite3.IntegrityError:              # made by another request since the check
+        return None
     return collection(conn, cid)
 
 
@@ -195,8 +201,11 @@ def rename_collection(conn, cid, name):
     """False when another collection has that name."""
     if _name_taken(conn, name, cid):
         return False
-    with conn:
-        conn.execute("UPDATE collections SET name = ? WHERE id = ?", (name, cid))
+    try:
+        with conn:
+            conn.execute("UPDATE collections SET name = ? WHERE id = ?", (name, cid))
+    except sqlite3.IntegrityError:              # taken by another request since the check
+        return False
     return True
 
 

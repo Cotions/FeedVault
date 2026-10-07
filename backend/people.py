@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import unicodedata
 
 import db
@@ -299,20 +300,26 @@ def create(conn, name, accounts, now):
     if not _name_free(conn, name):
         raise Refused("a person with that name exists")
     accounts = _check_accounts(conn, accounts)
-    with conn:
-        pid = conn.execute("INSERT INTO people(name, created_at) VALUES (?, ?)", (name, now)).lastrowid
-        _attach(conn, pid, accounts, now)
+    try:
+        with conn:
+            pid = conn.execute("INSERT INTO people(name, created_at) VALUES (?, ?)", (name, now)).lastrowid
+            _attach(conn, pid, accounts, now)
+    except sqlite3.IntegrityError:              # the name, taken by another request since the check
+        raise Refused("a person with that name exists")
     return person(conn, pid)
 
 
 def update(conn, pid, name=None, notes=None):
     if name is not None and not _name_free(conn, name, but=(pid,)):
         raise Refused("a person with that name exists")
-    with conn:
-        if name is not None:
-            conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, pid))
-        if notes is not None:
-            conn.execute("UPDATE people SET notes = ? WHERE id = ?", (notes, pid))
+    try:
+        with conn:
+            if name is not None:
+                conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, pid))
+            if notes is not None:
+                conn.execute("UPDATE people SET notes = ? WHERE id = ?", (notes, pid))
+    except sqlite3.IntegrityError:              # the name, taken by another request since the check
+        raise Refused("a person with that name exists")
     return person(conn, pid)
 
 
