@@ -799,6 +799,11 @@ def _cover(conn, post_id):
     """
     m = conn.execute("SELECT id, kind, poster_path FROM media WHERE post_id = ? "
                      "ORDER BY idx LIMIT 1", (post_id,)).fetchone()
+    return _cover_of(m)
+
+
+def _cover_of(m):
+    """_cover() of the first media row (id, kind, poster_path), or None."""
     if m is None:
         return None
     if m["kind"] == "video":
@@ -808,10 +813,16 @@ def _cover(conn, post_id):
     return {"kind": "image", "url": f"/media/{m['id']}/thumb"}
 
 
-def summary(conn, row, tags=None):
-    count, size = conn.execute(
-        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN missing = 0 THEN size END), 0) FROM media "
-        "WHERE post_id = ?", (row["id"],)).fetchone()
+_MEDIA_COUNT = ("SELECT COUNT(*), COALESCE(SUM(CASE WHEN missing = 0 THEN size END), 0) FROM media "
+          "WHERE post_id = ?")
+
+
+def summary(conn, row, tags=None, media=None):
+    """A post as the grids show it. ``media``: ((count, bytes), first media
+    row or None), read for many posts at once (summaries); else read here."""
+    if media is None:
+        media = conn.execute(_MEDIA_COUNT, (row["id"],)).fetchone(), _FIRST
+    (count, size), first = media
     return {
         "id": row["id"],
         "platform": row["platform"],
@@ -825,23 +836,41 @@ def summary(conn, row, tags=None):
         "stats": {"likes": row["likes"], "comments": row["comments"], "views": row["views"]},
         "media_count": count,
         "bytes": size,
-        "cover": _cover(conn, row["id"]),
+        "cover": _cover(conn, row["id"]) if first is _FIRST else _cover_of(first),
         "missing": bool(row["missing"]),
         "decision": row["decision"] if "decision" in row.keys() else None,
         "tags": post_tags(conn, row["id"]) if tags is None else tags,
     }
 
 
+_FIRST = object()                              # summary(): the cover is not read yet
+
+
 def summaries(conn, rows):
-    """summary() of each row, the tags of all of them read in one query."""
-    tags = {}
+    """summary() of each row, in a fixed number of queries whatever the
+    page size: the tags, the media counts and sizes and the covers of all
+    of them read at once (one query per post each was most of a page's
+    queries)."""
+    tags, counts, firsts = {}, {}, {}
     ids = [r["id"] for r in rows]
     if ids:
+        marks = ", ".join("?" for _ in ids)
         for pid, name in conn.execute(
                 "SELECT pt.post_id, t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
-                f"WHERE pt.post_id IN ({', '.join('?' for _ in ids)}) ORDER BY t.name COLLATE NOCASE", ids):
+                f"WHERE pt.post_id IN ({marks}) ORDER BY t.name COLLATE NOCASE", ids):
             tags.setdefault(pid, []).append(name)
-    return [summary(conn, r, tags.get(r["id"], [])) for r in rows]
+        for pid, count, size in conn.execute(
+                "SELECT post_id, COUNT(*), COALESCE(SUM(CASE WHEN missing = 0 THEN size END), 0) FROM media "
+                f"WHERE post_id IN ({marks}) GROUP BY post_id", ids):
+            counts[pid] = (count, size)
+        # The first item as _cover() picks it: by idx, ties in media_post_size's order.
+        for m in conn.execute(
+                "SELECT post_id, id, kind, poster_path FROM (SELECT post_id, id, kind, poster_path, "
+                "ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY idx, missing, size, id) AS n "
+                f"FROM media WHERE post_id IN ({marks})) WHERE n = 1", ids):
+            firsts[m["post_id"]] = m
+    return [summary(conn, r, tags.get(r["id"], []), (counts.get(r["id"], (0, 0)), firsts.get(r["id"])))
+            for r in rows]
 
 
 def post_tags(conn, post_id):
