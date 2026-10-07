@@ -57,7 +57,7 @@ export default defineConfig({
     },
     {
       name: "phone",
-      testMatch: /(phone|safe-area)\.spec\.js$/,
+      testMatch: /(phone|safe-area|touch)\.spec\.js$/,
       // 375x812 with touch (the iPhone X profile), in Chromium: the only browser installed.
       use: { ...devices["iPhone X"], browserName: "chromium" },
     },

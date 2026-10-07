@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Icon from "./Icon";
 import { fmtBytes } from "../lib/fmt";
+import { PHONE } from "../lib/layout";
+import { useSwipe } from "../lib/swipe";
 
 function MissingMedia({ item, label = "File missing on disk" }) {
   return (
@@ -41,15 +43,43 @@ function Slide({ item, alt, active }) {
   return <img className="media-el" src={item.url} alt={alt} onError={() => setFailed(true)} />;
 }
 
-/* Media carousel for the post page: arrows, dots, and the Left/Right keys
-   (ignored while typing). The keys page even when a <video> has focus: a
-   clicked video keeps focus, and arrows that silently stopped paging after
-   pressing play felt broken. Leaving a slide pauses its video anyway.
-   Every slide stays mounted so video position survives paging back. */
+/* Media carousel for the post page: arrows, dots, a swipe on a touch
+   screen, and the Left/Right keys (ignored while typing). The keys page
+   even when a <video> has focus: a clicked video keeps focus, and arrows
+   that silently stopped paging after pressing play felt broken. Leaving a
+   slide pauses its video anyway. Every slide stays mounted so video
+   position survives paging back. */
 export default function MediaCarousel({ media, alt, onDeleteItem }) {
   const [idx, setIdx] = useState(0);
   const n = media.length;
   const safe = Math.min(idx, n - 1);
+  const stageRef = useRef(null);
+  const swipe = useSwipe(step => { if (n > 1) setIdx(i => (Math.min(i, n - 1) + step + n) % n); });
+
+  // On a phone the stage ends above the screen's bottom (#159): a video's
+  // controls show without a scroll. index.css sizes it from --stage-top,
+  // where it starts on the page, measured from layout (not the scroll
+  // position), again whenever the page above it changes size.
+  useLayoutEffect(() => {
+    const phone = window.matchMedia(PHONE);
+    function fit() {
+      const stage = stageRef.current;
+      if (!stage) return;
+      if (!phone.matches) { stage.style.removeProperty("--stage-top"); return; }
+      const top = `${Math.round(stage.getBoundingClientRect().top + window.scrollY)}px`;
+      if (stage.style.getPropertyValue("--stage-top") !== top) stage.style.setProperty("--stage-top", top);
+    }
+    fit();
+    const seen = new ResizeObserver(fit);
+    seen.observe(document.body);
+    window.addEventListener("resize", fit);
+    phone.addEventListener("change", fit);
+    return () => {
+      seen.disconnect();
+      window.removeEventListener("resize", fit);
+      phone.removeEventListener("change", fit);
+    };
+  }, []);
 
   useEffect(() => {
     if (n < 2) return;
@@ -68,7 +98,7 @@ export default function MediaCarousel({ media, alt, onDeleteItem }) {
 
   return (
     <section className="carousel" aria-roledescription="carousel" aria-label="Post media">
-      <div className="carousel-stage">
+      <div className="carousel-stage" ref={stageRef} {...swipe}>
         {media.map((m, i) => (
           <div
             key={m.id ?? i}

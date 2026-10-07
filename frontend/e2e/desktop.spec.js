@@ -84,6 +84,74 @@ test("Review: Enter on a focused link follows it and decides nothing", async ({ 
   expect(decisions).toEqual([]);
 });
 
+// #159: the shortcuts dialog keeps Tab inside it, and gives focus back to
+// its button when it closes, from the keyboard or the mouse.
+test("Review: the shortcuts dialog holds focus and gives it back", async ({ page }) => {
+  await openPage(page, { name: "Review", path: "/review" });
+  const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  const button = page.locator(".review-actions").getByRole("button", { name: "Keyboard shortcuts" });
+  const inDialog = () => page.evaluate(() => !!document.activeElement?.closest(".review-help"));
+
+  await page.keyboard.press("?");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
+  for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab"]) {
+    await page.keyboard.press(key);
+    expect(await inDialog(), `after ${key}`).toBe(true);
+  }
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(button).toBeFocused();
+
+  // Focus on <body> (a click elsewhere) when it opens: Tab still lands in it.
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press("?");
+  await expect(dialog).toBeVisible();
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press("Tab");
+  expect(await inDialog()).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(button).toBeFocused();
+
+  await button.click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(button).toBeFocused();
+  await expect(page.locator(".review-session")).toHaveText("0 kept · 0 trashed");
+});
+
+// #159's touch sizes are for a touch screen: with a mouse at 1440x900 the
+// header, the Post page's carousel and Review's buttons keep their sizes,
+// the sidebar shows, a Fullscreen button too, and the stage is as tall.
+test("a mouse keeps the desktop's sizes", async ({ page, request }) => {
+  await openPage(page, PAGES[0]);
+  expect(await page.evaluate(() => matchMedia("(pointer: fine)").matches)).toBe(true);
+  await expect(page.locator(".sidebar")).toBeVisible();
+  await expect(page.locator("header .nav-menu-btn")).toBeHidden();
+  expect((await page.locator("header").boundingBox()).height).toBeCloseTo(57, 0);
+  expect((await page.locator("input.header-search").boundingBox()).height).toBeCloseTo(36, 0);
+
+  const r = await request.get("/api/posts?kind=carousel&limit=1", { headers: H });
+  const p = (await r.json()).posts[0];
+  await page.goto(`/p/${p.platform}/${encodeURIComponent(p.post_id)}`);
+  await expect(page.locator(".carousel-stage")).toBeVisible();
+  await idle(page);
+  expect((await page.locator(".post-page-head .btn-back").boundingBox()).height).toBeCloseTo(34, 0);
+  expect((await page.locator(".carousel-stage").boundingBox()).height).toBeCloseTo(Math.min(900 * 0.78, 820), 0);
+  const arrow = await page.locator(".carousel-arrow.next").boundingBox();
+  expect([arrow.width, arrow.height].map(Math.round)).toEqual([40, 40]);
+  const dot = await page.locator(".carousel-dot").first().boundingBox();
+  expect([dot.width, dot.height].map(Math.round)).toEqual([22, 22]);
+
+  await openPage(page, { name: "Review", path: "/review" });
+  await expect(page.locator(".review-actions").getByRole("button", { name: "Fullscreen" })).toBeVisible();
+  for (const b of await page.locator(".review-actions-row button").all()) {
+    expect((await b.boundingBox()).height).toBeLessThan(40);
+  }
+  expect(await page.locator(".review-actions").evaluate(el => getComputedStyle(el).position)).not.toBe("fixed");
+});
+
 async function openPerson(page) {
   await page.goto(`/people/${stressData().person}`);
   await expect(page.locator("h2.page-title")).toBeVisible();
