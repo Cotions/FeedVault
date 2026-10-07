@@ -17,6 +17,21 @@ reads those rows and fails when a route of the app is missing from this file,
 or a row names a route the app does not have. Keep that format for new
 routes.
 
+Bodies and ids, for every route (`backend/tests/test_bad_requests.py` checks
+each route of the app):
+
+- A request body is JSON. A JSON body that is not an object (a list, a
+  string, a number, `true`) is a 400 `{ "ok": false, "error": "the body must
+  be a JSON object" }`, or the route's own 400 for its shape, before an id
+  in its path is looked up (the security rules below still come first).
+  No body, or one that is not JSON, reads as `{}`: a route whose
+  fields are all optional takes it, any other answers 400 for what is
+  missing.
+- An id in a path (`<id>`) is a whole number up to 2^63 − 1, SQLite's
+  largest; a larger one is a 404, whatever the method.
+- An id list in a body (`media`, `ids`) takes whole numbers from 0 below
+  2^53; anything else in it is a 400.
+
 ## Security rules
 
 The rules every request is under (`backend/app.py`, `_origin_guard`,
@@ -1256,9 +1271,8 @@ A **link**:
 - Deleting a person keeps their links, tied to no one. Merging people moves
   the others' links to the one kept, after its own.
 - A bad body is a 400 `{ "ok": false, "error": "…" }`, a JSON body that is
-  not an object (a list, a string) too (`the body must be a JSON object`);
-  an unknown link or person id in the path a 404, an unknown `person` in a
-  body a 400.
+  not an object too (see the top of this file); an unknown link
+  or person id in the path a 404, an unknown `person` in a body a 400.
 
 ## Sources
 
@@ -2267,7 +2281,7 @@ A **job**:
 |---|---|---|
 | GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "notifications": { "unread": 1, "latest": 42, "desktop": false } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
-| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object and for a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync) |
+| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object, a `kind` that is not text, and a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync) |
 | GET | `/api/jobs/<id>` | job, or 404 |
 | GET | `/api/jobs/<id>/log?after=<n>` | output lines numbered above `n` (default 0), see below; 404 if unknown |
 | POST | `/api/jobs/<id>/cancel` | → `{ "ok": true, "job": {…} }`; 404 if unknown, 409 if it has already ended, or if its process has exited and it is indexing what it downloaded |

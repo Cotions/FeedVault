@@ -15,7 +15,9 @@ import threading
 import time
 import webbrowser
 
-from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory
+from werkzeug.exceptions import NotFound
+from werkzeug.routing import IntegerConverter
 from werkzeug.security import safe_join
 from zlib import adler32
 
@@ -45,7 +47,22 @@ import trash
 import userdata
 from parsers import yt_dlp
 
+MAX_ID = 2**63 - 1                             # SQLite's largest integer
+
+
+class IdConverter(IntegerConverter):
+    """``<int:...>`` in every route: an id SQLite can hold, else a 404 (no
+    such item) whatever the method, rather than an OverflowError."""
+
+    def to_python(self, value):
+        if len(value) > len(str(MAX_ID)) or int(value) > MAX_ID:
+            raise NotFound()
+        return super().to_python(value)
+
+
 app = Flask(__name__, static_folder=None)
+# Before any route is added: each rule takes its converter when it is.
+app.url_map.converters["int"] = IdConverter
 
 # ---------------------------------------------------------------------------
 # Origin lockdown (same design as ChannelVault)
@@ -105,6 +122,28 @@ def _no_frames(resp):
 
 def _roots():
     return config.load()["media_roots"]
+
+
+NOT_OBJECT = "the body must be a JSON object"
+
+
+def _body():
+    """The JSON body as a dict: {} when there is none (or it is not JSON),
+    as a route that takes nothing gets. JSON of another shape (a list, a
+    string, a number) is answered 400 here, before the route reads it."""
+    body = request.get_json(silent=True)
+    if body is None:
+        return {}
+    if not isinstance(body, dict):
+        abort(make_response(jsonify({"ok": False, "error": NOT_OBJECT}), 400))
+    return body
+
+
+def _ids(value):
+    """Whether ``value`` is a list of ids: whole numbers from 0 below 2**53,
+    so none is out of SQLite's range."""
+    return isinstance(value, list) and all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i < 2**53
+                                           for i in value)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +321,7 @@ def list_unmatched():
 
 @app.post("/api/saved")
 def saved():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     ids = body.get("ids")
     if not isinstance(ids, list):
         return jsonify({"ok": False, "error": "ids must be a list"}), 400
@@ -330,11 +369,11 @@ def save_post():
 
 @app.post("/api/delete")
 def delete_items():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     posts = body.get("posts") or []
     media = body.get("media") or []
     if not isinstance(posts, list) or not all(isinstance(p, str) for p in posts) \
-            or not isinstance(media, list) or not all(isinstance(m, int) and not isinstance(m, bool) for m in media):
+            or not _ids(media):
         return jsonify({"ok": False, "error": "posts must be a list of ids, media a list of numbers"}), 400
     if not posts and not media:
         return jsonify({"ok": False, "error": "nothing to delete"}), 400
@@ -354,7 +393,7 @@ def _str_list(value):
 
 @app.post("/api/trash/restore")
 def trash_restore():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     posts, keys = body.get("posts"), body.get("keys")
     if posts is not None and not _str_list(posts) or keys is not None and not _str_list(keys) \
             or posts is None and keys is None:
@@ -417,7 +456,7 @@ def _forgotten(result):
 
 @app.post("/api/trash/purge")
 def trash_purge():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     keys, match = body.get("keys"), body.get("filter")
     if match is not None:
         match = _purge_filter(match)
@@ -480,7 +519,7 @@ def _choice(c):
 
 @app.post("/api/duplicates/resolve")
 def duplicates_resolve():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     choices = body.get("groups") if "groups" in body else [body]
     if not isinstance(choices, list) or not choices or len(choices) > 500 or not all(map(_choice, choices)):
         return jsonify({"ok": False, "error": "send { group, keep } or groups: [{ group, keep }] (at most 500)"}), 400
@@ -502,7 +541,7 @@ def duplicates_resolve():
 
 @app.post("/api/duplicates/dismiss")
 def duplicates_dismiss():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     if not isinstance(body.get("group"), str):
         return jsonify({"ok": False, "error": "group must be a group id"}), 400
     threshold = _threshold(body.get("threshold"))
@@ -520,7 +559,7 @@ def duplicates_dismiss():
 
 @app.post("/api/review")
 def review():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     posts = body.get("posts")
     decision = body.get("decision")
     if not isinstance(posts, list) or not all(isinstance(p, str) for p in posts):
@@ -573,7 +612,7 @@ def list_tags():
 
 @app.post("/api/tags/apply")
 def tags_apply():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     posts, add, remove = _post_ids(body), _names(body.get("add")), _names(body.get("remove"))
     if posts is None:
         return jsonify({"ok": False, "error": f"posts must be a list of 1 to {organize.MAX_POSTS} ids"}), 400
@@ -590,7 +629,7 @@ def tags_apply():
 
 @app.post("/api/tags/rename")
 def tags_rename():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     old, new = organize.clean_name(body.get("from")), organize.clean_name(body.get("to"))
     if old is None or new is None:
         return jsonify({"ok": False, "error": "from and to must be tag names "
@@ -605,7 +644,7 @@ def tags_rename():
 
 @app.post("/api/tags/delete")
 def tags_delete():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     name = organize.clean_name(body.get("name"))
     n = organize.delete(db.connect(), name) if name else None
     if n is None:
@@ -617,7 +656,7 @@ def tags_delete():
 
 @app.post("/api/tags/color")
 def tags_color():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     name = organize.clean_name(body.get("name"))
     try:
         color = organize.clean_color(body.get("color"))
@@ -633,7 +672,7 @@ def tags_color():
 
 @app.post("/api/tags/delete-unused")
 def tags_delete_unused():
-    names = (request.get_json(silent=True) or {}).get("names")
+    names = _body().get("names")
     if not _str_list(names) or len(names) > 5000:
         return jsonify({"ok": False, "error": "names must be a list of 1 to 5000 tag names"}), 400
     gone = organize.delete_unused(db.connect(), names)
@@ -656,7 +695,7 @@ def list_collections():
 
 @app.post("/api/collections")
 def create_collection():
-    name = organize.clean_name((request.get_json(silent=True) or {}).get("name"))
+    name = organize.clean_name(_body().get("name"))
     if name is None:
         return jsonify({"ok": False, "error": _BAD_NAME}), 400
     c = organize.create_collection(db.connect(), name, int(time.time()))
@@ -668,9 +707,8 @@ def create_collection():
 
 @app.post("/api/collections/reorder")
 def reorder_collections():
-    ids = (request.get_json(silent=True) or {}).get("ids")
-    if not isinstance(ids, list) or not ids or len(ids) > 5000 \
-            or any(not isinstance(i, int) or isinstance(i, bool) for i in ids):
+    ids = _body().get("ids")
+    if not _ids(ids) or not ids or len(ids) > 5000:
         return jsonify({"ok": False, "error": "ids must be a list of 1 to 5000 collection ids"}), 400
     conn = db.connect()
     organize.reorder_collections(conn, ids)
@@ -691,12 +729,12 @@ def get_collection(cid):
 
 @app.post("/api/collections/<int:cid>/<action>")
 def change_collection(cid, action):
+    body = _body()
     conn = db.connect()
     if action not in ("rename", "delete", "add", "remove", "order", "cover"):
         abort(404)
     if conn.execute("SELECT 1 FROM collections WHERE id = ?", (cid,)).fetchone() is None:
         return jsonify({"ok": False, "error": "no such collection"}), 404
-    body = request.get_json(silent=True) or {}
     if action == "rename":
         name = organize.clean_name(body.get("name"))
         if name is None:
@@ -794,7 +832,7 @@ def _profiles(value, conn, cfg):
 def create_person():
     """A person, with accounts already indexed and/or profile links: each
     link becomes a source of theirs (nothing is downloaded until a sync)."""
-    body = request.get_json(silent=True) or {}
+    body = _body()
     name, accounts = people.clean_name(body.get("name")), people.clean_accounts(body.get("accounts"))
     if name is None:
         return jsonify({"ok": False, "error": _BAD_PERSON_NAME}), 400
@@ -844,11 +882,10 @@ def create_person():
 
 @app.post("/api/people/merge")
 def merge_people():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     ids, accounts = body.get("ids"), people.clean_accounts(body.get("accounts"))
     name = None if body.get("name") is None else people.clean_name(body.get("name"))
-    if not isinstance(ids, list) or not ids or len(ids) > people.MAX_ACCOUNTS \
-            or not all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i < 2**53 for i in ids):
+    if not _ids(ids) or not ids or len(ids) > people.MAX_ACCOUNTS:
         return jsonify({"ok": False, "error": "ids must be a list of person ids"}), 400
     ids = list(dict.fromkeys(ids))
     if body.get("name") is not None and name is None:
@@ -880,7 +917,7 @@ def people_suggestions():
 
 @app.post("/api/people/suggestions/dismiss")
 def dismiss_suggestion():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     if not isinstance(body.get("id"), str):
         return jsonify({"ok": False, "error": "id must be a suggestion id"}), 400
     if not people.dismiss(db.connect(), body["id"], int(time.time())):
@@ -913,10 +950,10 @@ def get_person(pid):
 
 @app.post("/api/people/<int:pid>")
 def update_person(pid):
+    body = _body()
     conn = db.connect()
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
-    body = request.get_json(silent=True) or {}
     name = None if body.get("name") is None else people.clean_name(body["name"])
     notes = body.get("notes")
     if body.get("name") is not None and name is None:
@@ -947,10 +984,10 @@ def delete_person(pid):
 
 @app.post("/api/people/<int:pid>/accounts")
 def person_accounts(pid):
+    body = _body()
     conn = db.connect()
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
-    body = request.get_json(silent=True) or {}
     add, remove = people.clean_accounts(body.get("add")), people.clean_accounts(body.get("remove"))
     if add is None or remove is None or not (add or remove):
         return jsonify({"ok": False, "error": "add or remove must be a list of { platform, id }"}), 400
@@ -974,12 +1011,12 @@ def bio_import(pid):
     if _foreign_origin():
         return jsonify({"ok": False, "error": "a link-in-bio page can only be imported from FeedVault's own "
                                               "dashboard"}), 403
-    conn = db.connect()
-    if not people.exists(conn, pid):
-        return jsonify({"ok": False, "error": "no such person"}), 404
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or set(body) != {"url"} or not isinstance(body["url"], str):
         return jsonify({"ok": False, "error": "send { url: a link-in-bio page's link }"}), 400
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
     cfg = config.load()
     if not biofetch.enabled(cfg):
         return jsonify({"ok": False, "error": BIO_OFF}), 403
@@ -1026,18 +1063,6 @@ def _link_text(body):
     return title, notes, None
 
 
-def _json_object():
-    """The JSON body as a dict ({} when there is none, or it is not JSON), or
-    None when it is JSON of another shape (a list, a string, a number)."""
-    body = request.get_json(silent=True)
-    if body is None:
-        return {}
-    return body if isinstance(body, dict) else None
-
-
-_NOT_OBJECT = "the body must be a JSON object"
-
-
 def _taken(lid):
     return jsonify({"ok": False, "error": "that link is saved already", "id": lid}), 409
 
@@ -1056,9 +1081,7 @@ def list_links():
 
 @app.post("/api/links")
 def create_link():
-    body = _json_object()
-    if body is None:
-        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
+    body = _body()
     url = links.clean_url(body.get("url"))
     if url is None:
         return jsonify({"ok": False, "error": _BAD_URL}), 400
@@ -1080,12 +1103,10 @@ def create_link():
 
 @app.post("/api/links/<int:lid>")
 def update_link(lid):
+    body = _body()
     conn = db.connect()
     if links.get(conn, lid) is None:
         return jsonify({"ok": False, "error": "no such link"}), 404
-    body = _json_object()
-    if body is None:
-        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
     url = None if "url" not in body else links.clean_url(body["url"])
     if "url" in body and url is None:
         return jsonify({"ok": False, "error": _BAD_URL}), 400
@@ -1118,15 +1139,12 @@ def delete_link(lid):
 
 @app.post("/api/people/<int:pid>/links/order")
 def order_person_links(pid):
+    body = _body()
     conn = db.connect()
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
-    body = _json_object()
-    if body is None:
-        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
     ids = body.get("ids")
-    if not isinstance(ids, list) or not ids or len(ids) > links.MAX_IDS \
-            or any(not isinstance(i, int) or isinstance(i, bool) for i in ids):
+    if not _ids(ids) or not ids or len(ids) > links.MAX_IDS:
         return jsonify({"ok": False, "error": f"ids must be a list of 1 to {links.MAX_IDS} link ids"}), 400
     links.reorder(conn, pid, ids)
     userdata.changed("links")
@@ -1205,7 +1223,7 @@ def _script_refused(options):
 
 @app.post("/api/sources")
 def create_source():
-    body = request.get_json(silent=True) or {}
+    body = _body()
     refused = _script_refused(body.get("options"))
     if refused:
         return jsonify({"ok": False, "error": refused[0]}), refused[1]
@@ -1272,11 +1290,11 @@ def _script_source_foreign(s):
 
 @app.post("/api/sources/<int:sid>")
 def update_source(sid):
+    body = _body()
     conn = db.connect()
     s = sources.get(conn, sid)
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
-    body = request.get_json(silent=True) or {}
     if not isinstance(body.get("options"), dict):
         return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
     refused = _script_source_foreign(s)
@@ -1314,6 +1332,7 @@ def update_source(sid):
 def accept_rename(sid):
     """Accept the new handle the tool reported: the target changes, never
     the folder or its files."""
+    body = _body()
     conn = db.connect()
     s = sources.get(conn, sid)
     if s is None:
@@ -1322,7 +1341,6 @@ def accept_rename(sid):
     if refused:
         return refused
     suggestion = s["health"]["rename"]
-    body = request.get_json(silent=True) or {}
     if suggestion is None or suggestion["from"] != s["target"].lower():
         return jsonify({"ok": False, "error": "this source has no rename to accept"}), 400
     if body.get("to") != suggestion["to"]:
@@ -1438,7 +1456,7 @@ def set_config():
     # dashboard's alone. The userscript (instagram.com) never writes them.
     if _foreign_origin():
         return jsonify({"ok": False, "error": "settings can only be changed from FeedVault's own dashboard"}), 403
-    body = request.get_json(silent=True) or {}
+    body = _body()
     # One read-modify-write at a time: two saves at once each keep the other's change.
     with config.editing:
         return _set_config(body)
@@ -1528,7 +1546,7 @@ def check_downloaders():
 def clean_info_json_cookies():
     """Take the cookies out of every yt-dlp info JSON under the media roots
     (info_cookies.py); ``apply`` false (the default) only counts them."""
-    body = request.get_json(silent=True) or {}
+    body = _body()
     apply = body.get("apply", False)
     if not isinstance(apply, bool):
         return jsonify({"ok": False, "error": "apply must be true or false"}), 400
@@ -1568,7 +1586,7 @@ def job_kinds():
 @app.post("/api/jobs")
 def start_job():
     body = request.get_json(silent=True)
-    if not isinstance(body, dict):
+    if not isinstance(body, dict) or not isinstance(body.get("kind"), str):
         return jsonify({"ok": False, "error": "send { kind, params }"}), 400
     if body.get("kind") in save.KINDS:         # their checks are POST /api/save's
         return jsonify({"ok": False, "error": "start it with POST /api/save"}), 400
