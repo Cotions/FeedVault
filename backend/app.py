@@ -352,7 +352,9 @@ def get_storage():
 
 @app.get("/api/unmatched")
 def list_unmatched():
-    return jsonify(db.unmatched(db.connect()))
+    conn = db.connect()
+    hidden = duplicates.dismissed_copies(conn)
+    return jsonify([r | {"dismissed": r["path"] in hidden} for r in db.unmatched(conn)])
 
 
 @app.post("/api/saved")
@@ -587,6 +589,25 @@ def duplicates_dismiss():
         return jsonify({"ok": False, "error": "no such group; reload"}), 404
     userdata.changed("dismissed_duplicates")
     return jsonify({"ok": True})
+
+
+@app.delete("/api/duplicates/dismiss")
+def duplicates_undismiss():
+    body = _body()
+    if not isinstance(body.get("group"), str):
+        return jsonify({"ok": False, "error": "group must be a dismissed group's id"}), 400
+    if not duplicates.undismiss(db.connect(), body["group"]):
+        return jsonify({"ok": False, "error": "no such dismissal; reload"}), 404
+    userdata.changed("dismissed_duplicates")
+    return jsonify({"ok": True})
+
+
+@app.get("/api/duplicates/dismissed")
+def duplicates_dismissed():
+    kind = request.args.get("kind")
+    if kind is not None and kind not in duplicates.KINDS:
+        return jsonify({"ok": False, "error": "kind must be copies, content or similar"}), 400
+    return jsonify({"dismissed": duplicates.dismissed(db.connect(), kind)})
 
 
 # ---------------------------------------------------------------------------

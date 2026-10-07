@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test scripts/fmt.test.js scripts/theme.test.js scripts/sourceOptions.test.js scripts/health.test.js scripts/userscript.test.js scripts/viteServer.test.js scripts/e2eHarness.test.js scripts/e2eShards.test.js scripts/reviewQueue.test.js scripts/launchScripts.test.js scripts/api.test.js",
+    "test": "node --test scripts/fmt.test.js scripts/theme.test.js scripts/sourceOptions.test.js scripts/health.test.js scripts/userscript.test.js scripts/viteServer.test.js scripts/e2eHarness.test.js scripts/e2eShards.test.js scripts/reviewQueue.test.js scripts/launchScripts.test.js scripts/api.test.js scripts/notify.test.js",
     "e2e": "playwright test",
     "preview": "vite preview"
   },

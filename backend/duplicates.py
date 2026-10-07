@@ -526,6 +526,72 @@ def dismiss(conn, gid, threshold=SIMILAR_DEFAULT):
     return True
 
 
+def _dismissed_member(conn, entry):
+    """One entry of a dismissal's key, as the Dismissed list shows it: a post
+    (by id) or an extra copy (by metadata path), null fields once gone."""
+    row = conn.execute(f"{db._SELECT} WHERE p.id = ?", (entry,)).fetchone()
+    if row is not None:
+        summary = db.summary(conn, row)
+        cover = summary["cover"]
+        return {"type": "post", "id": entry, "post": summary, "path": row["meta_path"],
+                "thumb_url": cover["url"] if cover and cover.get("poster", True) else None}
+    copy = conn.execute("SELECT * FROM copies WHERE meta_path = ?", (entry,)).fetchone()
+    if copy is not None:
+        media = sorted(json.loads(copy["media"]), key=lambda m: m["idx"])
+        first = media[0] if media else None
+        thumb = first and (first["kind"] == "image" or first.get("poster_path") or thumbs.have_ffmpeg())
+        return {"type": "copy", "id": f"copy:{copy['id']}", "post": None, "path": entry,
+                "thumb_url": f"/media/copy/{copy['id']}/thumb" if thumb else None}
+    is_copy = os.path.isabs(entry)                # gone since: a copy's key is its absolute path
+    return {"type": "copy" if is_copy else "post", "id": None if is_copy else entry, "post": None,
+            "path": entry if is_copy else None, "thumb_url": None}
+
+
+def dismissed(conn, kind=None):
+    """Every dismissal (of one kind, or all), newest first. ``id`` is the
+    group's id when it was dismissed, what undismiss() takes."""
+    sql = "SELECT key, kind, at FROM dismissed_duplicates"
+    rows = conn.execute(sql + " WHERE kind = ?" if kind else sql, (kind,) if kind else ()).fetchall()
+    out = []
+    for key, k, at in rows:
+        try:
+            entries = json.loads(key)
+        except (ValueError, TypeError):
+            entries = None
+        if not isinstance(entries, list):
+            continue
+        out.append({"id": group_id(k, key), "kind": k, "at": at,
+                    "members": [_dismissed_member(conn, e) for e in entries if isinstance(e, str)]})
+    out.sort(key=lambda d: (-(d["at"] or 0), d["id"]))
+    return out
+
+
+def undismiss(conn, gid):
+    """Forget a dismissal by its id: the group shows again. False if none."""
+    for key, kind in conn.execute("SELECT key, kind FROM dismissed_duplicates").fetchall():
+        if group_id(kind, key) == gid:
+            conn.execute("DELETE FROM dismissed_duplicates WHERE key = ?", (key,))
+            conn.commit()
+            return True
+    return False
+
+
+def dismissed_copies(conn):
+    """Metadata paths of extra copies whose copies group is dismissed (the
+    Unmatched page has nothing to compare them with in Duplicates)."""
+    dis = _dismissed(conn, "copies")
+    if not dis:
+        return set()
+    by_post = {}
+    for post_id, meta_path in conn.execute("SELECT post_id, meta_path FROM copies"):
+        by_post.setdefault(post_id, []).append(meta_path)
+    out = set()
+    for post_id, paths in by_post.items():
+        if is_dismissed(json.dumps(sorted([post_id, *paths])), dis):
+            out.update(paths)
+    return out
+
+
 def _check(g, keep, keepers, hashes):
     """Why this group cannot be resolved keeping ``keep`` right now, or None."""
     if g is None:

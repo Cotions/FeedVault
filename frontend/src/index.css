@@ -57,7 +57,13 @@ html {
 }
 /* In select mode, clear of the selection bar too: its height (set by
    SelectionBar.jsx), the 16px under it and 8px above. */
-html:has(.select-bar) { scroll-padding-bottom: calc(var(--select-bar-h, 60px) + 24px + env(safe-area-inset-bottom)); }
+:root { --select-bar-room: calc(var(--select-bar-h, 60px) + 24px + env(safe-area-inset-bottom)); }
+html:has(.select-bar) { scroll-padding-bottom: var(--select-bar-room); }
+/* Except for the bar's own controls: pinned inside that room, no scroll can
+   ever bring them out of it, and Tab onto one scrolled the page down by
+   the room every time (#119). Their scroll target is their box moved up by
+   the room (a margin out at the top, in at the bottom): already in view. */
+.select-bar * { scroll-margin-block: var(--select-bar-room) calc(-1 * var(--select-bar-room)); }
 
 body {
   color: var(--text);
@@ -1965,10 +1971,13 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
 /* ── Toasts ─────────────────────────────────────────────── */
+/* Above what a page pins at the bottom (the selection bar, Review's
+   buttons): --toast-clear, set by lib/layout's useToastClearance, is how far
+   up its top is. Never over the buttons a user is working through (#121). */
 .toasts {
   position: fixed; z-index: 120;
   right: calc(20px + env(safe-area-inset-right));
-  bottom: calc(20px + env(safe-area-inset-bottom));
+  bottom: max(calc(20px + env(safe-area-inset-bottom)), calc(var(--toast-clear, 0px) + 12px));
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
   pointer-events: none;
 }
@@ -1997,6 +2006,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   padding: 3px 8px; border-radius: 6px;
   border: 1px solid rgba(var(--glow-rgb), 0.35);
 }
+button.toast-link { background: none; font: inherit; font-weight: 600; cursor: pointer; }
 .toast-link:hover { background: rgba(var(--accent-rgb), 0.16); }
 .toast-err .toast-link { color: #ffb3b5; border-color: rgba(229, 72, 77, 0.45); }
 .toast-err .toast-link:hover { background: rgba(229, 72, 77, 0.14); }
@@ -2265,8 +2275,6 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   /* No keyboard on a phone: no key hints. */
   .review-side .kbd { display: none; }
   .review-wide { display: none; }
-  /* Toasts ("Kept", "Undone") above the bar, not over its buttons. */
-  body:has(.review-actions) .toasts { bottom: calc(var(--review-bar-h, 120px) + 12px); }
 }
 
 /* ── Scrollbar ──────────────────────────────────────────── */
@@ -2443,6 +2451,23 @@ a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .dup-group.is-selecting { cursor: pointer; }
+.dup-dismissed { margin-top: 18px; padding: 12px 14px; scroll-margin-top: 80px; }
+.dup-dismissed > summary { cursor: pointer; font-weight: 700; color: var(--text); }
+.dup-dismissed > .dim { margin-top: 10px; }
+.dup-dismissed-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dup-dismissed-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.dup-dismissed-thumbs { display: flex; gap: 4px; flex-shrink: 0; }
+.dup-dismissed-thumb {
+  position: relative; width: 36px; height: 36px; border-radius: 6px; overflow: hidden;
+  background: var(--bg-soft); border: 1px solid var(--border);
+}
+.dup-dismissed-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dup-dismissed-who {
+  flex: 1; min-width: 0; font-size: 13px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dup-dismissed-row > .dup-member-sub { flex-shrink: 0; margin: 0; }
+.dup-dismissed-row > button { flex-shrink: 0; }
 .dup-group.is-selected {
   border-color: var(--glow);
   box-shadow: 0 0 0 2px rgba(var(--glow-rgb), 0.55), 0 0 26px -6px rgba(var(--glow-rgb), 0.6);
@@ -2807,7 +2832,8 @@ a.btn-primary { color: var(--on-accent); }
 .job-message.is-err { color: #ffb3b5; }
 .job-table tbody tr { cursor: pointer; }
 .job-table tbody tr.is-selected td { background: rgba(var(--accent-rgb), 0.08); }
-.job-table .btn-link { text-align: left; }
+/* A target of its own: 24px tall at least, as the layout checks want. */
+.job-table .btn-link { text-align: left; min-height: 24px; }
 
 /* Settings: downloaders */
 .dl-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -3092,6 +3118,12 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-row {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  transition: border-color 0.18s, box-shadow 0.3s;
+}
+/* The source a notification pointed at (Creators ?source=), lit for a moment
+   as Links lights a link saved already. */
+.source-row.is-flash, .creator-card.is-flash, .creator-card.is-flash:hover {
+  border-color: rgba(var(--glow-rgb), 0.7); box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.18);
 }
 /* One width for TT, IG and X, so the names after them line up. */
 .source-row > .platform-chip { min-width: 28px; justify-content: center; }

@@ -585,3 +585,77 @@ def test_dismiss(env, client):
     [row] = saved["rows"]
     assert row["kind"] == "copies" and json.loads(row["key"]) == sorted(
         ["instagram:P1", g["members"][1]["meta_path"]])
+
+
+def saved_dismissals(env):
+    userdata.flush()
+    return json.load(open(userdata.path(str(env["tmp"] / "data"), "dismissed_duplicates")))["rows"]
+
+
+def test_dismissed_list_and_undismiss_round_trip(env, client):
+    hashed_copies(env, kind="image")
+    g = listing(client)["groups"][0]
+    copy = g["members"][1]
+    assert client.get("/api/duplicates/dismissed", headers=H).get_json() == {"dismissed": []}
+    client.post("/api/duplicates/dismiss", json={"group": g["id"]}, headers=H)
+    [d] = client.get("/api/duplicates/dismissed?kind=copies", headers=H).get_json()["dismissed"]
+    # the dismissal is named by the id the group had: what Undo sends back
+    assert (d["id"], d["kind"]) == (g["id"], "copies") and d["at"] > 0
+    c, post = d["members"]                                      # the key's order: sorted, a path first
+    assert post["type"] == "post" and post["id"] == "instagram:P1" and post["post"]["id"] == "instagram:P1"
+    assert post["thumb_url"] and post["path"] == g["members"][0]["meta_path"]
+    assert (c["type"], c["id"], c["path"], c["post"]) == ("copy", copy["id"], copy["meta_path"], None)
+    assert c["thumb_url"] == copy["thumb_url"]
+    assert client.get("/api/duplicates/dismissed?kind=content", headers=H).get_json() == {"dismissed": []}
+    assert client.get("/api/duplicates/dismissed?kind=nope", headers=H).status_code == 400
+    # the Unmatched line knows its group is dismissed
+    [u] = client.get("/api/unmatched", headers=H).get_json()
+    assert u["path"] == copy["meta_path"] and u["dismissed"] is True
+
+    r = client.delete("/api/duplicates/dismiss", json={"group": g["id"]}, headers=H)
+    assert r.status_code == 200 and r.get_json() == {"ok": True}
+    r = listing(client)
+    assert (r["total"], r["dismissed"]) == (1, 0) and r["groups"][0]["id"] == g["id"]
+    assert client.get("/api/duplicates/dismissed", headers=H).get_json() == {"dismissed": []}
+    assert client.get("/api/unmatched", headers=H).get_json()[0]["dismissed"] is False
+    assert saved_dismissals(env) == []                          # the userdata file forgets it too
+    # dismissed again, then restored after a rebuilt index: the file brings it back, by the same id
+    client.post("/api/duplicates/dismiss", json={"group": g["id"]}, headers=H)
+    assert len(saved_dismissals(env)) == 1
+    conn = db.connect()
+    conn.execute("DELETE FROM dismissed_duplicates")
+    conn.commit()
+    assert userdata.load(conn, "dismissed_duplicates", str(env["tmp"] / "data")) == 1
+    assert client.delete("/api/duplicates/dismiss", json={"group": g["id"]}, headers=H).get_json() == {"ok": True}
+    assert listing(client)["total"] == 1 and saved_dismissals(env) == []
+
+
+def test_undismiss_refuses_unknown_and_foreign(env, client):
+    hashed_copies(env, kind="image")
+    g = listing(client)["groups"][0]
+    # an id that is listed but not dismissed is not a dismissal
+    r = client.delete("/api/duplicates/dismiss", json={"group": g["id"]}, headers=H)
+    assert r.status_code == 404 and r.get_json()["ok"] is False
+    assert client.delete("/api/duplicates/dismiss", json={"group": "nope"}, headers=H).status_code == 404
+    for body in ({}, {"group": 5}, {"group": None}):
+        r = client.delete("/api/duplicates/dismiss", json=body, headers=H)
+        assert r.status_code == 400 and r.get_json()["ok"] is False
+    assert client.delete("/api/duplicates/dismiss", json=[g["id"]], headers=H).status_code == 400
+    # dashboard-only, like dismiss
+    assert client.delete("/api/duplicates/dismiss", json={"group": g["id"]}).status_code == 403
+    assert client.get("/api/duplicates/dismissed").status_code == 403
+
+
+def test_dismissed_list_outlives_its_members(env, client):
+    """A member gone since (trashed, deleted) still shows in the list, as
+    what the key names, and the dismissal can still be restored."""
+    _, copy_base = hashed_copies(env, kind="image")
+    g = listing(client)["groups"][0]
+    client.post("/api/duplicates/dismiss", json={"group": g["id"]}, headers=H)
+    for f in os.listdir(env["media"] / "alicee"):
+        os.remove(env["media"] / "alicee" / f)
+    run_scan(env)
+    [d] = client.get("/api/duplicates/dismissed", headers=H).get_json()["dismissed"]
+    assert d["members"][0] == {"type": "copy", "id": None, "post": None, "path": copy_base + ".json",
+                               "thumb_url": None}
+    assert client.delete("/api/duplicates/dismiss", json={"group": d["id"]}, headers=H).get_json() == {"ok": True}

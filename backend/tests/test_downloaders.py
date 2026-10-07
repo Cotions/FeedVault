@@ -423,6 +423,23 @@ def test_test_job_classification(layout, client, tool, output, error):
     assert job["message"] == expected
 
 
+def test_test_job_private_message_follows_the_session(layout, client):
+    """#124: with no session, "private" says none is in use and where to set one."""
+    import downloaders
+    # No pause: the second test would otherwise wait out the first's.
+    assert client.post("/api/config", json={"yt-dlp": {"pause": 0}}, headers=H).status_code == 200
+    output = "ERROR: [youtube] jNQXAC9IVRw: Private video. Sign in if you've been granted access to this video"
+    with open(os.path.realpath(layout["bin"] / "yt-dlp") + ".fail", "w") as f:
+        f.write(output)
+    job = ended(jobs.submit("tool-test", {"tool": "yt-dlp"})["id"])
+    assert (job["result"]["error"], job["message"]) == ("private", downloaders.TEST_NO_SESSION)
+    assert "Settings → Sync" in job["message"]
+    assert client.post("/api/config", json={"yt-dlp": {"session": {"mode": "cookies", "browser": "firefox"}}},
+                       headers=H).status_code == 200
+    job = ended(jobs.submit("tool-test", {"tool": "yt-dlp"})["id"])
+    assert (job["result"]["error"], job["message"]) == ("private", downloaders.TEST_MESSAGES["private"])
+
+
 def test_test_job_of_a_missing_tool(layout):
     job = ended(jobs.submit("tool-test", {"tool": "instaloader"})["id"])
     assert job["state"] == "failed" and job["message"] == "instaloader not found; set its path in Settings"

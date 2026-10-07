@@ -476,7 +476,8 @@ def seed_sources(data, media):
           "rename": {"from": "quiet_kiln", "to": "quiet.kiln.studio", "at": now - 3 * day}}),
         ("yt-dlp", "https://tiktok.com/@demo.hidden", "tiktok", None, "tiktok/demo.hidden", "off", now - 5 * day,
          failed("private", "ERROR: [tiktok:user] demo.hidden: This user's account is private. Log into an account "
-                "that has access", 1, now - 5 * day, "Private profile: the session in use does not follow it")),
+                "that has access", 1, now - 5 * day, "Private profile and no cookies in use: choose a browser's "
+                "cookies with access for this source, or set them in Settings → Sync")),
         ("gallery-dl", "https://x.com/demo_oops", "twitter", None, "twitter/demo_oops", "off", now - 6 * day,
          failed("error", "[twitter][error] HttpError: '500 Internal Server Error' for 'https://api.x.com/graphql'",
                 3, now - 6 * day, "gallery-dl failed")),

@@ -204,6 +204,19 @@ def test_failures(env, client, fake, fail, error):
         assert "Settings → Downloaders" in job["message"]
 
 
+def test_private_message_follows_the_session_in_use(env, client, fake):
+    """#124: no login set, a private post's message says where to set one."""
+    fake.set(profile(), fail="private")
+    job = save_now(client)
+    assert (job["result"]["error"], job["message"]) == ("private", save.NO_SESSION)
+    assert "Settings → Sync" in job["message"] and "session in use" not in job["message"]
+    set_config(instaloader={"pause": 0, "session": {"mode": "cookies", "browser": "firefox"}})
+    job = save_now(client)
+    assert (job["result"]["error"], job["message"]) == (
+        "private", "Private post: the session in use does not follow its account")
+    assert job["message"] == save.MESSAGES["private"]
+
+
 def test_post_not_found(env, client, fake):
     fake.set(profile())
     job = save_now(client, "CNOSUCHPOST")

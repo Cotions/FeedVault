@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
+import { useToastClearance } from "../lib/layout";
 
 /* The bar pinned under a list in select mode: count, select all, clear, and
    the page's own bulk actions as children. Pair with lib/useSelection. */
@@ -15,6 +16,8 @@ export default function SelectionBar({ selection, loaded, children }) {
     ro.observe(ref.current);
     return () => { ro.disconnect(); root.removeProperty("--select-bar-h"); };
   }, []);
+  // Toasts after a bulk action land above the bar, not on its buttons.
+  useToastClearance(ref);
   return (
     <div className="select-bar" role="toolbar" aria-label="Selection" ref={ref}>
       <span className="select-count"><b>{count}</b> selected</span>

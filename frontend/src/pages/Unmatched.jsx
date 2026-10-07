@@ -46,9 +46,13 @@ export default function Unmatched() {
                     <td role="cell" className="path cell-main" data-label="Path" title={r.path}>{r.path}</td>
                     <td role="cell" className="reason" data-label="Reason">
                       {r.reason || "—"}
-                      {r.reason?.startsWith("duplicate of ") && (
+                      {/* A dismissed group is not listed in Duplicates: point at its Dismissed list instead. */}
+                      {r.reason?.startsWith("duplicate of ") && (r.dismissed ? (
+                        <> · marked not a duplicate{" "}
+                          <Link to="/duplicates#dismissed" className="text-link" title="List this group again in Duplicates">restore in Duplicates</Link></>
+                      ) : (
                         <> <Link to="/duplicates" className="text-link" title="Compare the copies and keep one">compare in Duplicates</Link></>
-                      )}
+                      ))}
                     </td>
                     <td role="cell" className="num" data-label="Size">{fmtBytes(r.size)}</td>
                     <td role="cell" className="num" data-label="Modified" title={fmtFullDate(r.mtime)}>{fmtStamp(r.mtime)}</td>

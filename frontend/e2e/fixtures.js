@@ -125,6 +125,48 @@ export async function reviewLeft(page) {
   return Number((await left.textContent()).replace(/,/g, ""));
 }
 
+/* ── Toasts (#121) ──────────────────────────────────────────── */
+
+// Keep and its undo (POST /api/review) answer ok and change nothing.
+export async function fakeDecisions(page) {
+  await page.route("**/api/review", route => {
+    const { posts } = route.request().postDataJSON();
+    return route.fulfill({ json: { ok: true, posts } });
+  });
+}
+
+// The buttons matching ``sel`` that a toast's box meets, or whose centre
+// a click would not reach, once the toasts and the buttons have risen
+// into place (and two frames on, for what measures them).
+export async function underToasts(page, sel) {
+  return page.evaluate(async q => {
+    const moving = [...document.querySelectorAll(".toast"), ...document.querySelectorAll(q)]
+      .flatMap(el => el.getAnimations().concat(el.parentElement?.getAnimations() || []))
+      .filter(a => a.effect?.getComputedTiming().iterations !== Infinity);
+    await Promise.all(moving.map(a => a.finished.catch(() => {})));
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const toasts = [...document.querySelectorAll(".toast")].map(t => t.getBoundingClientRect());
+    const out = [];
+    for (const b of document.querySelectorAll(q)) {
+      const r = b.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const hit = toasts.some(t => t.left < r.right && r.left < t.right && t.top < r.bottom && r.top < t.bottom);
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (hit || !b.contains(top)) out.push((b.getAttribute("aria-label") || b.textContent).trim());
+    }
+    return out;
+  }, sel);
+}
+
+// Closes them all (each one's ×, or its time running out).
+export async function dismissToasts(page) {
+  const close = page.locator(".toast [aria-label=Dismiss]");
+  await expect(async () => {
+    if (await close.count()) await close.first().click({ timeout: 1000 });
+    await expect(close).toHaveCount(0, { timeout: 100 });
+  }).toPass();
+}
+
 // Review: keep, trash, undo, by the actions given (keys or taps), checked by
 // the session's counts, the count left and which post is current.
 export async function keepTrashUndo(page, { keep, trash, undo }) {

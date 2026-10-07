@@ -24,7 +24,7 @@ export default defineConfig({
   projects: [
     {
       name: "desktop",
-      testMatch: /(desktop|links|unsaved)\.spec\.js$/,
+      testMatch: /(desktop|links|duplicates|unsaved)\.spec\.js$/,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
     {

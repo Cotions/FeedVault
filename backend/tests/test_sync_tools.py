@@ -403,6 +403,28 @@ def test_failures_per_tool(env, fake, client):
     assert run_sync(client, y["id"])["state"] == "done"
 
 
+def test_private_message_follows_the_cookies_in_use(env, fake, client):
+    """#124: with no cookies, a private profile's message says where to set
+    them (Settings → Sync), not that the cookies in use lack access."""
+    g = add(client, X)
+    y = add(client, TT)
+    fake.put(X, x_account((1, 1)), fail="private")
+    fake.put(TT, tt_account(1), fail="private")
+    for s in (g, y):
+        job = run_sync(client, s["id"])
+        assert (job["result"]["error"], job["result"]["login"]["mode"]) == ("private", "none"), s["tool"]
+        assert job["message"] == sync.NO_SESSION["tools"], s["tool"]
+        assert "Settings → Sync" in job["message"] and "cookies in use do" not in job["message"]
+    # The tool's cookies, then the source's own: the message the cookies can explain.
+    set_config(**{"gallery-dl": {"pause": 0, "session": {"mode": "cookies", "browser": "firefox"}}})
+    post(client, f"/api/sources/{y['id']}", {"options": {"session": {"mode": "cookies", "browser": "firefox"}}})
+    for s in (g, y):
+        job = run_sync(client, s["id"])
+        assert (job["result"]["error"], job["result"]["login"]["mode"]) == ("private", "cookies"), s["tool"]
+        assert job["message"] == sync.TOOL_MESSAGES["private"] == \
+            "Private profile: the cookies in use do not have access to it", s["tool"]
+
+
 def test_one_item_failing_is_not_the_profile_failing():
     index = {"added": 3, "updated": 0}
     for tool, lines in [

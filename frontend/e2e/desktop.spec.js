@@ -83,3 +83,51 @@ test("Person: link-in-bio import lists the accounts and Add uses the usual calls
   expect(sent.sources).toEqual([{ target: "https://tiktok.com/@fake.new", person: stressData().person }]);
   expect(sent.imports).toHaveLength(1);                // one fetch per click, none after
 });
+
+// #123, #124: a failed sync's notification, for a source with no person,
+// opens Creators on that source, scrolled into view and lit for a moment.
+// The demo's fake tools fail them: mossy.trails is rate limited (an
+// account card), demo.hidden is a private TikTok synced with no cookies
+// (a row of its own, whose message points to Settings → Sync).
+const H = { "X-FeedVault": "1" };
+
+async function failedSync(page, target) {
+  const { sources } = await (await page.request.get("/api/sources", { headers: H })).json();
+  const src = sources.find(s => s.target === target);
+  expect(src, target).toBeTruthy();
+  const r = await (await page.request.post(`/api/sources/${src.id}/sync`, { headers: H, data: {} })).json();
+  expect(r.ok, JSON.stringify(r)).toBe(true);
+  await expect.poll(async () => (await (await page.request.get(`/api/jobs/${r.job.id}`, { headers: H })).json()).state,
+                    { timeout: 20_000 }).toBe("failed");
+  return src.id;
+}
+
+test("a failed sync's notification lands on its source, highlighted", async ({ page }) => {
+  // No pause between syncs of a tool: a retry runs at once too.
+  const cfg = await page.request.post("/api/config", { headers: H, data: { instaloader: { pause: 0 }, "yt-dlp": { pause: 0 } } });
+  expect(cfg.ok()).toBe(true);
+  const cases = [
+    { target: "mossy.trails", lit: ".creator-card.is-flash", name: "@mossy.trails" },
+    { target: "https://tiktok.com/@demo.hidden", lit: ".source-row.is-flash", name: "demo.hidden",
+      message: /^Private profile and no cookies in use: .*Settings → Sync$/ },
+  ];
+  for (const c of cases) c.id = await failedSync(page, c.target);
+
+  for (const c of cases) {
+    await openPage(page, PAGES[0]);
+    await page.locator(".side-bell > button").click();
+    const entry = page.locator(`.notif-panel .notif-entry[href="/creators?source=${c.id}"]`).first();
+    await expect(entry).toBeVisible();
+    await entry.click();
+    await expect(page).toHaveURL(new RegExp(`/creators\\?source=${c.id}$`));
+    const lit = page.locator(c.lit);
+    await expect(lit).toHaveCount(1);
+    await expect(lit).toContainText(c.name);
+    await expect(lit).toBeInViewport();
+    if (c.message) await expect(lit.locator(".source-message")).toHaveText(c.message);
+    // Lit for a moment, then ?source= goes: the same entry can point at it again.
+    await expect(page.locator(".is-flash")).toHaveCount(0, { timeout: 6_000 });
+    await expect(page).toHaveURL(/\/creators$/);
+    await idle(page);
+  }
+});

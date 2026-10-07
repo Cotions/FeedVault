@@ -194,7 +194,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/authors` | `[account, …]`, most posts first, see [People](#people) |
 | GET | `/api/storage?person=` | disk use by creator, kind and year, and the largest files, see [Storage](#storage) |
 | GET | `/api/stats` | `{ "posts", "media", "authors", "bytes", "missing", "unmatched", "by_platform": { "instagram": 12 }, "by_kind": { "image": 5 } }`; `bytes` leaves out media marked missing. `?person=<id>`: counts over that person's posts only, as `/api/posts?person=` (`unmatched` stays the whole archive's: those files belong to nobody) |
-| GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason" }]` |
+| GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
 | GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false }` |
@@ -700,7 +700,9 @@ A picture that cannot be decoded is tried again only when its file changes.
 | GET | `/api/duplicates?kind=&offset=&limit=&threshold=` | groups of one kind, see below |
 | GET | `/api/duplicates/status` | the hashing worker's progress, see below |
 | POST | `/api/duplicates/resolve` | body `{ "group": "…", "keep": "…" }`, or `{ "groups": [{ "group": "…", "keep": "…" }, …] }` (at most 500), plus `"threshold"` for a similar group: trashes every other member, see below |
-| POST | `/api/duplicates/dismiss` | body `{ "group": "…" }`, plus `"threshold"` for a similar group → `{ "ok": true }`: "not a duplicate", for good |
+| POST | `/api/duplicates/dismiss` | body `{ "group": "…" }`, plus `"threshold"` for a similar group → `{ "ok": true }`: "not a duplicate", until restored |
+| DELETE | `/api/duplicates/dismiss` | body `{ "group": "…" }` (a dismissal's `id`) → `{ "ok": true }`: forgets the dismissal, the group shows again (the dashboard's **Undo** and **Restore**); 404 when there is no such dismissal |
+| GET | `/api/duplicates/dismissed?kind=` | `{ "dismissed": [dismissal, …] }`, newest first, of one kind or (no `kind`) all; see below |
 
 `GET /api/duplicates`: `kind` is `copies` (default), `content` or
 `similar` (anything else is a 400), `offset` (default 0), `limit` (default
@@ -835,6 +837,37 @@ like decisions, and keyed by the members' post ids and copy metadata paths,
 so it survives rebuilding the index. It also covers the
 same group after a member leaves; a group that gains a member shows again.
 Unknown group: 404 `{ "ok": false, "error": "…" }`.
+
+`GET /api/duplicates/dismissed` lists the dismissals (`kind` is `copies`,
+`content` or `similar`, anything else is a 400; left out, every kind):
+
+```json
+{ "dismissed": [{
+  "id": "4c1d9e0b7a2f3e5d6c8b", "kind": "copies", "at": 1727500000,
+  "members": [
+    { "type": "copy", "id": "copy:3", "post": null, "path": "/abs/somebody/….json", "thumb_url": "/media/copy/3/thumb" },
+    { "type": "post", "id": "instagram:C8x…", "post": { "…": "post summary" }, "path": "/abs/cherrieskyl/….json",
+      "thumb_url": "/media/17/thumb" }
+  ]
+}] }
+```
+
+- `id` is the id the group had when it was dismissed (the same members
+  give the same id), so the dashboard's Undo sends back the id it just
+  dismissed. `at` is when it was dismissed.
+- `members` are what the dismissal names, in its key's order: post ids and
+  copies' metadata paths. A member that is no longer indexed (trashed,
+  deleted) is still listed, with `post` and `thumb_url` `null` (and `id`
+  `null` for a copy).
+
+`DELETE /api/duplicates/dismiss` takes a dismissal's `id` and removes it,
+from the index and from `dismissed_duplicates.json`; the group is listed
+again at the next `GET /api/duplicates` if its members still match. Not a
+string: 400; no such dismissal: 404 `{ "ok": false, "error": "…" }`.
+
+`GET /api/unmatched` marks an extra copy whose `copies` group is dismissed
+with `"dismissed": true` (every other row has `false`): Duplicates does not
+list it, so the dashboard points to its Dismissed list instead.
 
 ## Tags
 
@@ -1405,7 +1438,9 @@ no person yet.
   - `state`: the job's (`done`, `failed`, `cancelled`, `interrupted`)
   - `error`: `null` when it worked, else what the output says went wrong:
     `login_required` (the site wants a logged-in session),
-    `private` (a private profile the session does not follow),
+    `private` (a private profile the session in use does not follow; when
+    the sync used no session or cookies, `message` says so and points to
+    Settings → Sync instead: "Private profile and no login in use: …"),
     `not_found` (no such profile: renamed or deleted),
     `rate_limited` (HTTP 429, "Please wait a few minutes"), or `generic`.
     An HTTP 403 counts as `login_required`: it is how Instagram turns away

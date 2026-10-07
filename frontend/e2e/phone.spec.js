@@ -1,6 +1,6 @@
 // Phone, 375x812 with touch: no page scrolls sideways, the menu drawer,
 // Review's bar, the Feed's folded filters, and Storage's cards.
-import { test, expect, PAGES, openPage, keepTrashUndo } from "./fixtures.js";
+import { test, expect, PAGES, openPage, keepTrashUndo, fakeDecisions, underToasts } from "./fixtures.js";
 
 test.describe("no page scrolls sideways", () => {
   for (const p of PAGES) {
@@ -56,6 +56,18 @@ test("Review: Keep is on screen without a scroll; keep, trash and undo by tap", 
     trash: () => bar.getByRole("button", { name: /^Trash post/ }).tap(),
     undo: () => bar.getByRole("button", { name: /^Undo/ }).tap(),
   });
+});
+
+// #121: a toast after a bulk action shows above the selection bar.
+test("Feed: a toast after Keep leaves the selection bar's buttons free", async ({ page }) => {
+  await fakeDecisions(page);
+  await openPage(page, PAGES[0]);
+  await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().tap();
+  await page.locator("article.post-card").first().tap();
+  await page.locator(".select-bar").getByRole("button", { name: "Keep", exact: true }).tap();
+  await expect(page.locator(".toast")).toBeVisible();
+  expect(await underToasts(page, ".select-bar button")).toEqual([]);
+  await expect(page.locator(".toast")).toBeVisible();   // checked while it showed
 });
 
 test("the Feed's filters fold behind their toggle, and count what is set", async ({ page }) => {
