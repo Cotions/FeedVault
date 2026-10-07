@@ -202,3 +202,90 @@ test("deleting posts from the Feed updates the new counts at once", async ({ pag
   await expect(chip).toHaveText("New since last visit (4)", { timeout: 3_000 });
   await idle(page);
 });
+
+// #139: jobs that only wait (queued, pausing between downloads) show a
+// still icon, not a spinner, and the pause reads "starts in 13 s" as on
+// Creators. The waiting jobs are faked into GET /api/jobs: nothing runs.
+test("jobs that only wait: a still icon, and the pause in seconds", async ({ page }) => {
+  let running = false;
+  await page.route(url => url.pathname === "/api/jobs", async route => {
+    const res = await route.fetch();
+    const real = await res.json();
+    const now = Date.now() / 1000;
+    const fake = (id, state, extra) => ({
+      id, kind: "instaloader-profile", label: `Sync @e2e.wait${id}`, state, argv: ["instaloader", `e2e.wait${id}`],
+      params: {}, created_at: now - 5, started_at: state === "running" ? now - 2 : null, ended_at: null,
+      exit_code: null, message: null, result: null, ...extra,
+    });
+    const jobs = [fake(90002, "queued", { waits_until: now + 13 }), fake(90001, running ? "running" : "queued", {})];
+    await route.fulfill({ response: res, json: { ...real, running: running ? 1 : 0, queued: running ? 1 : 2, jobs: [...jobs, ...real.jobs] } });
+  });
+  await openPage(page, PAGES.find(p => p.name === "Jobs"));
+  const badge = page.locator('#main-nav a[href="/jobs"] .side-badge');
+  await expect(badge).toHaveText("2");
+  await expect(badge.locator(".spin")).toHaveCount(0);
+  await expect(page.locator("header .nav-jobs-live .spin")).toHaveCount(0);
+  const waiting = page.locator(".job-row", { hasText: "e2e.wait90002" }).locator(".job-when");
+  await expect(waiting).toHaveText(/^pausing between downloads, starts in 1[0-3] s$/);
+  await expect(waiting).toHaveAttribute("title", /^Starts at /);
+
+  // One running: the spinner is back (on the Feed: Jobs would read the fake's log).
+  running = true;
+  await openPage(page, PAGES[0]);
+  await expect(badge.locator(".spin")).toHaveCount(1);
+  await expect(page.locator("header .nav-jobs-live .spin")).toHaveCount(1);
+  await idle(page);
+});
+
+// #139: renaming a collection keeps its head's height, so the posts stay
+// where they are; Esc gives focus back to Rename. The hints name the arrows.
+test("renaming a collection keeps the page still", async ({ page, request }) => {
+  const H = { "X-FeedVault": "1" };
+  const { collection } = await (await request.post("/api/collections", { headers: H, data: { name: `E2E rename ${Date.now()}` } })).json();
+  try {
+    const ids = (await (await request.get("/api/posts?limit=2", { headers: H })).json()).posts.map(p => p.id);
+    await request.post(`/api/collections/${collection.id}/add`, { headers: H, data: { posts: ids } });
+    await page.goto(`/collections/${collection.id}`);
+    await expect(page.locator(".collection-tile")).toHaveCount(2);
+    await expect(page.locator(".collection-hint")).toHaveText("Drag a post onto another to move it there, or use its arrows.");
+    await idle(page);
+    const where = () => page.evaluate(() => ({
+      head: document.querySelector(".page-head").getBoundingClientRect().height,
+      grid: document.querySelector(".collection-posts").getBoundingClientRect().top,
+    }));
+    const before = await where();
+    const rename = page.getByRole("button", { name: "Rename", exact: true });
+    await rename.click();
+    const field = page.getByRole("textbox", { name: "Collection name" });
+    await expect(field).toBeFocused();
+    expect(await where()).toEqual(before);
+    // The form sits inside the head, above its bottom line.
+    const box = await page.locator(".page-head .tag-rename").boundingBox();
+    const head = await page.locator(".page-head").boundingBox();
+    expect(box.y + box.height).toBeLessThanOrEqual(head.y + head.height);
+    await page.keyboard.press("Escape");
+    await expect(rename).toBeFocused();
+    expect(await where()).toEqual(before);
+
+    await page.goto("/collections");
+    await expect(page.locator(".collection-hint")).toHaveText("Drag a collection onto another to move it there, or use its arrows.");
+    await idle(page);
+  } finally {
+    await request.post(`/api/collections/${collection.id}/delete`, { headers: H });
+  }
+});
+
+// #139: a source's rename suggestion keeps Accept and Dismiss together
+// (the demo's quiet_kiln, now quiet.kiln.studio).
+test("a rename suggestion's Accept and Dismiss stay on one line", async ({ page }) => {
+  await page.goto("/creators");
+  const box = page.locator(".source-rename", { hasText: "quiet.kiln.studio" }).first();
+  await expect(box).toBeVisible();
+  const accept = await box.getByRole("button", { name: "Accept" }).boundingBox();
+  const dismiss = await box.getByRole("button", { name: "Dismiss" }).boundingBox();
+  expect(Math.abs(accept.y - dismiss.y), "Dismiss on Accept's line").toBeLessThan(2);
+  expect(dismiss.x).toBeGreaterThan(accept.x);
+  const outer = await box.boundingBox();
+  expect(dismiss.x + dismiss.width).toBeLessThanOrEqual(outer.x + outer.width + 0.5);
+  await idle(page);
+});

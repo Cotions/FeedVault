@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test, expect, idle } from "./fixtures.js";
-import { protectedDirs } from "./harness.js";
+import { findPython, protectedDirs } from "./harness.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -121,6 +121,108 @@ test("the script picker groups scripts by what they run and hides other tools' (
     const dialog = await page.getByRole("alertdialog").boundingBox();
     expect(box.x + box.width).toBeLessThanOrEqual(dialog.x + dialog.width);
     await page.keyboard.press("Escape");
+    await idle(page);
+  });
+});
+
+// #139: a command's program path keeps its case, and a long script started
+// on Scripts can be cancelled from its log, with focus kept off <body>, a
+// neutral toast and no raw -15 in Jobs' history. ticker.sh prints a line a
+// second until it is cancelled, in the throwaway instance; its #! is the
+// e2e Python, the only interpreter the test guard lets a script use.
+const TICKER = `#!${findPython()}\n# name: Ticker\n# needs: none\nimport time\nwhile True:\n    print("tick", flush=True)\n    time.sleep(1)\n`;
+const onBody = page => page.evaluate(() => !document.activeElement || document.activeElement === document.body);
+const getJob = async (request, id) => (await request.get(`/api/jobs/${id}`, { headers: H })).json();
+
+async function withTicker(request, run) {
+  const dir = await scriptsDir(request);
+  const file = path.join(dir, "ticker.sh");
+  fs.writeFileSync(file, TICKER, { mode: 0o755 });
+  fs.chmodSync(file, 0o755);
+  const jobs = [];
+  try {
+    await run({ jobs });
+  } finally {
+    for (const id of jobs) {
+      if (!["done", "failed", "cancelled", "interrupted"].includes((await getJob(request, id)).state)) {
+        await request.post(`/api/jobs/${id}/cancel`, { headers: H });
+      }
+    }
+    fs.rmSync(file, { force: true });
+  }
+}
+
+test("a command's program path shows as typed, not lowercased (#139)", async ({ page, request }) => {
+  const dir = await scriptsDir(request);
+  const tool = path.join(dir, "QA2Tools", "Hello.sh");
+  const file = path.join(dir, "mixedcase.json");
+  fs.writeFileSync(file, JSON.stringify({ name: "Mixed case", needs: "none", argv: [tool] }), { mode: 0o644 });
+  fs.chmodSync(file, 0o644);
+  try {
+    await page.goto("/scripts");
+    const chip = page.locator("#script-mixedcase .script-tool");
+    await expect(chip).toHaveText(tool, { useInnerText: true });
+    expect(await chip.evaluate(el => getComputedStyle(el).textTransform)).toBe("none");
+    // It wraps in its row's head rather than running out of it.
+    const row = await page.locator("#script-mixedcase").boundingBox();
+    const box = await chip.boundingBox();
+    expect(box.x + box.width).toBeLessThanOrEqual(row.x + row.width + 0.5);
+    await idle(page);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});
+
+test("Scripts: Cancel… on the log stops a long script (#139)", async ({ page, request }) => {
+  await withTicker(request, async ({ jobs }) => {
+    await page.goto("/scripts");
+    const entry = page.locator("#script-ticker");
+    await entry.getByRole("button", { name: "Run…" }).click();
+    const started = page.waitForResponse(r => r.url().endsWith("/api/scripts/ticker/run"));
+    await entry.getByRole("button", { name: "Run", exact: true }).click();
+    const { job } = await (await started).json();
+    jobs.push(job.id);
+    const log = page.getByRole("region", { name: "Script log" });
+    await expect(log.locator(".job-state")).toHaveText("running", { timeout: 20_000 });
+    await expect(log.locator(".job-log")).toContainText("tick");
+    const cancel = log.getByRole("button", { name: "Cancel…" });
+    await cancel.focus();
+    await page.keyboard.press("Enter");
+    const dialog = page.locator(".modal-overlay .modal");
+    await expect(dialog).toContainText(`Script ticker (#${job.id}) is stopped`);
+    await dialog.getByRole("button", { name: "Cancel job" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await expect(log.locator(".job-state")).toHaveText("cancelled", { timeout: 20_000 });
+    await expect(cancel).toHaveCount(0);
+    await expect.poll(() => onBody(page), "focus after Cancel… went").toBe(false);
+    await expect(log).toBeFocused();
+    // Cancelled is not a success: the neutral toast, not the green check.
+    await expect(page.locator(".toast", { hasText: "cancelled" })).toHaveClass(/toast-info/);
+    expect((await getJob(request, job.id)).exit_code).toBe(-15);
+
+    // Jobs' history: no raw signal in the Exit column; the title has it.
+    await page.goto("/jobs");
+    const exit = page.locator(".job-table tbody tr", { hasText: `#${job.id}` }).locator('td[data-label="Exit"]');
+    await expect(exit).toHaveText("—");
+    await expect(exit).toHaveAttribute("title", "Cancelled: ended by signal 15 (exit code -15)");
+    await idle(page);
+  });
+});
+
+test("an open Jobs page shows a job started elsewhere within seconds (#139)", async ({ page, request }) => {
+  await withTicker(request, async ({ jobs }) => {
+    await page.goto("/jobs");
+    await expect(page.getByRole("region", { name: "Running and queued jobs" }).locator(".job-list, .empty")).toBeVisible();
+    await idle(page, 500);
+    // Started from another client: the page hears of it only by polling.
+    const r = await (await request.post("/api/scripts/ticker/run", { headers: H, data: {} })).json();
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    jobs.push(r.job.id);
+    const row = page.locator(".job-row", { hasText: `#${r.job.id}` });
+    await expect(row).toBeVisible({ timeout: 6_000 });
+    await request.post(`/api/jobs/${r.job.id}/cancel`, { headers: H });
+    await expect(row).toHaveCount(0, { timeout: 20_000 });
     await idle(page);
   });
 });
