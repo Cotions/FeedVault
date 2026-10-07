@@ -523,7 +523,12 @@ export default function App() {
           <div key={t.id} className={`toast toast-${t.kind}`}>
             <Icon name={t.kind === "err" ? "warn" : "check"} size={15} />
             <span>{t.text}</span>
-            {t.link && (
+            {t.link?.onClick ? (
+              <button type="button" className="toast-link"
+                onClick={() => { setToasts(list => list.filter(x => x.id !== t.id)); t.link.onClick(); }}>
+                {t.link.label}
+              </button>
+            ) : t.link && (
               <Link to={t.link.to} className="toast-link" onClick={() => setToasts(list => list.filter(x => x.id !== t.id))}>
                 {t.link.label}
               </Link>
