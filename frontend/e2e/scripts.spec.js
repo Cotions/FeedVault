@@ -178,11 +178,15 @@ test("Scripts: Cancel… on the log stops a long script (#139)", async ({ page, 
     await page.goto("/scripts");
     const entry = page.locator("#script-ticker");
     await entry.getByRole("button", { name: "Run…" }).click();
+    // QA pass 3: the form opens on its first field, and the log, once it
+    // shows, has focus (not the list of files the form was in).
+    await expect(entry.getByRole("textbox", { name: "Folder (optional)" })).toBeFocused();
     const started = page.waitForResponse(r => r.url().endsWith("/api/scripts/ticker/run"));
     await entry.getByRole("button", { name: "Run", exact: true }).click();
     const { job } = await (await started).json();
     jobs.push(job.id);
     const log = page.getByRole("region", { name: "Script log" });
+    await expect(log).toBeFocused();
     await expect(log.locator(".job-state")).toHaveText("running", { timeout: 20_000 });
     await expect(log.locator(".job-log")).toContainText("tick");
     const cancel = log.getByRole("button", { name: "Cancel…" });
