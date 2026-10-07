@@ -8,6 +8,7 @@ import stat
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -27,6 +28,7 @@ import duplicates
 import hashing
 import info_cookies
 import jobs
+import links
 import news
 import notify
 import organize
@@ -744,11 +746,12 @@ _BAD_ACCOUNTS = f"accounts must be a list of at most {people.MAX_ACCOUNTS} {{ pl
 
 def _people_changed(names=False):
     """Links changed (and, with ``names``, the people themselves: links,
-    sources and mutes are exported by person name)."""
+    sources, mutes and saved web links are exported by person name)."""
     if names:
         userdata.changed("people")
         userdata.changed("sources")
         userdata.changed("muted_people")
+        userdata.changed("links")
     userdata.changed("person_accounts")
 
 
@@ -905,7 +908,7 @@ def get_person(pid):
     p = people.person(conn, pid) if people.exists(conn, pid) else None
     if p is None:
         return jsonify({"ok": False, "error": "no such person"}), 404
-    return jsonify(p)
+    return jsonify({**p, "links": links.of_person(conn, pid)})
 
 
 @app.post("/api/people/<int:pid>")
@@ -992,6 +995,142 @@ def bio_import(pid):
     found = biofetch.suggest(conn, pid, biofetch.page_links(page.text), sources.routes(cfg), cfg["media_roots"])
     print(f"[people] link-in-bio import of {page.url}: {len(found['accounts'])} accounts, {found['other']} other links")
     return jsonify({"ok": True, "url": page.url, **found})
+
+
+# ---------------------------------------------------------------------------
+# Links (links.py: any web address, tied to a person or to no one; never fetched)
+# ---------------------------------------------------------------------------
+
+_BAD_URL = f"url must be an http or https address of at most {links.MAX_URL} characters, with no user name in it"
+
+
+def _link_person(body):
+    """(person id or None, error): the body's ``person``, which must be a
+    person's id or null."""
+    pid = body.get("person")
+    if pid is None:
+        return None, None
+    if not isinstance(pid, int) or isinstance(pid, bool) or not people.exists(db.connect(), pid):
+        return None, "person must be the id of a person, or null"
+    return pid, None
+
+
+def _link_text(body):
+    """(title, notes, error), each None when absent from the body."""
+    title = None if "title" not in body else links.clean_title(body["title"])
+    notes = None if "notes" not in body else links.clean_notes(body["notes"])
+    if "title" in body and title is None:
+        return None, None, f"title must be text of at most {links.MAX_TITLE} characters"
+    if "notes" in body and notes is None:
+        return None, None, f"notes must be text of at most {links.MAX_NOTES} characters"
+    return title, notes, None
+
+
+def _json_object():
+    """The JSON body as a dict ({} when there is none, or it is not JSON), or
+    None when it is JSON of another shape (a list, a string, a number)."""
+    body = request.get_json(silent=True)
+    if body is None:
+        return {}
+    return body if isinstance(body, dict) else None
+
+
+_NOT_OBJECT = "the body must be a JSON object"
+
+
+def _taken(lid):
+    return jsonify({"ok": False, "error": "that link is saved already", "id": lid}), 409
+
+
+@app.get("/api/links")
+def list_links():
+    v = request.args.get("person")
+    kind, q = request.args.get("kind") or None, (request.args.get("q") or "").strip()
+    if kind not in (None, "social", "other"):
+        return jsonify({"ok": False, "error": "kind must be social or other"}), 400
+    if len(q) > links.MAX_QUERY:
+        return jsonify({"ok": False, "error": f"q must be at most {links.MAX_QUERY} characters"}), 400
+    return jsonify(links.listing(db.connect(), person=None if v == "none" else _person_arg(), no_person=v == "none",
+                                 kind_=kind, site_=request.args.get("site") or None, q=q or None))
+
+
+@app.post("/api/links")
+def create_link():
+    body = _json_object()
+    if body is None:
+        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
+    url = links.clean_url(body.get("url"))
+    if url is None:
+        return jsonify({"ok": False, "error": _BAD_URL}), 400
+    title, notes, error = _link_text(body)
+    pid, error = (None, error) if error else _link_person(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    taken = links.find(conn, url)
+    if taken is not None:
+        return _taken(taken)
+    try:
+        link = links.create(conn, url, title or "", notes or "", pid, int(time.time()))
+    except sqlite3.IntegrityError:             # saved by another request in between
+        return _taken(links.find(conn, url))
+    userdata.changed("links")
+    return jsonify({"ok": True, "link": link})
+
+
+@app.post("/api/links/<int:lid>")
+def update_link(lid):
+    conn = db.connect()
+    if links.get(conn, lid) is None:
+        return jsonify({"ok": False, "error": "no such link"}), 404
+    body = _json_object()
+    if body is None:
+        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
+    url = None if "url" not in body else links.clean_url(body["url"])
+    if "url" in body and url is None:
+        return jsonify({"ok": False, "error": _BAD_URL}), 400
+    title, notes, error = _link_text(body)
+    pid, error = (None, error) if error else _link_person(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    if not {"url", "title", "notes", "person"} & set(body):
+        return jsonify({"ok": False, "error": "send url, title, notes or person"}), 400
+    other = links.find(conn, url) if url is not None else None
+    if other is not None and other != lid:
+        return _taken(other)
+    kw = {"pid": pid} if "person" in body else {}
+    try:
+        link = links.update(conn, lid, url=url, title=title, notes=notes, **kw)
+    except sqlite3.IntegrityError:
+        return _taken(links.find(conn, url))
+    userdata.changed("links")
+    return jsonify({"ok": True, "link": link})
+
+
+@app.delete("/api/links/<int:lid>")
+def delete_link(lid):
+    conn = db.connect()
+    if links.get(conn, lid) is None or not links.delete(conn, lid):
+        return jsonify({"ok": False, "error": "no such link"}), 404
+    userdata.changed("links")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/people/<int:pid>/links/order")
+def order_person_links(pid):
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    body = _json_object()
+    if body is None:
+        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids or len(ids) > links.MAX_IDS \
+            or any(not isinstance(i, int) or isinstance(i, bool) for i in ids):
+        return jsonify({"ok": False, "error": f"ids must be a list of 1 to {links.MAX_IDS} link ids"}), 400
+    links.reorder(conn, pid, ids)
+    userdata.changed("links")
+    return jsonify({"ok": True, "links": links.of_person(conn, pid)})
 
 
 # ---------------------------------------------------------------------------

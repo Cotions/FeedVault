@@ -295,6 +295,17 @@ yt-dlp copies the cookies it used into each video's `.info.json`; FeedVault
 rewrites the files of each sync without them, and **Settings → Sync → YouTube
 and TikTok sync** can do the same for info JSONs written before.
 
+## Links
+
+The **Links** page keeps web addresses that are not a profile FeedVault
+downloads: a creator's Linktree, Patreon, personal site or Discord invite,
+an interview, an article. A link can belong to a person (it shows on their
+page too, socials first, in the order you give them) or to no one. Whether a
+link is a social profile or something else is read from its address.
+FeedVault never opens or fetches a saved link itself; it only stores the
+text and opens it in a new tab when you click it. (The link-in-bio import
+on a person's page is separate, and adds nothing to Links.) See [docs/API.md](docs/API.md#links).
+
 ## Scripts
 
 When the built-in commands are not what you want, write your own as files in
@@ -360,7 +371,7 @@ userscript's included, cannot list, run or attach a script.
 |---|---|
 | Config | `~/.config/feedvault/config.json` (`$XDG_CONFIG_HOME/feedvault/`; override with `FEEDVAULT_CONFIG`) |
 | Scripts | `scripts/` beside the config; FeedVault only reads it |
-| Data | `data_directory` in the config, by default `~/.local/share/feedvault/` (`$XDG_DATA_HOME/feedvault/`): the index `feedvault.db` (rebuilt from your folders by a rescan), `userdata/*.json` (your decisions, tags, people, sources and the rest, restored from there after a rebuild), thumbnails, and the downloaders' archives and stamps |
+| Data | `data_directory` in the config, by default `~/.local/share/feedvault/` (`$XDG_DATA_HOME/feedvault/`): the index `feedvault.db` (rebuilt from your folders by a rescan), `userdata/*.json` (your decisions, tags, people, links, sources and the rest, restored from there after a rebuild), thumbnails, and the downloaders' archives and stamps |
 | Media | wherever your downloader put it; FeedVault only reads it, and trashing moves files to `.feedvault-trash/` inside that media folder |
 | Port | 3380 (`FEEDVAULT_PORT`, 1 to 65535; `./run.sh --dev`'s Vite proxy follows it); `./testapp.sh` uses 3389 |
 

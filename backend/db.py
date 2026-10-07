@@ -2,7 +2,7 @@
 
 Everything here is derived from the media folders and can be rebuilt by a
 rescan, except the user's own tables (review decisions, tags,
-collections, people, sources). Those are mirrored to JSON files by
+collections, people, sources, links). Those are mirrored to JSON files by
 userdata.py so a rebuild can restore them.
 """
 import glob
@@ -489,12 +489,31 @@ def _migrate_20(conn):
         ) WITHOUT ROWID""")
 
 
+def _migrate_21(conn):
+    """Links (links.py): any web address, tied to a person or to no one. User
+    data, mirrored by userdata.py by URL, the person by name; the URL is
+    stored cleaned (links.clean_url) and saved once. ``position`` orders a
+    person's links (NULL for a link of no one). Its kind (social or other)
+    is read from the host, never stored."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS links (
+            id         INTEGER PRIMARY KEY,
+            url        TEXT NOT NULL UNIQUE,
+            title      TEXT NOT NULL DEFAULT '',
+            notes      TEXT NOT NULL DEFAULT '',
+            person_id  INTEGER REFERENCES people(id) ON DELETE SET NULL,
+            position   INTEGER,
+            created_at INTEGER NOT NULL
+        )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS links_person ON links(person_id)")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
-              _migrate_19, _migrate_20]
+              _migrate_19, _migrate_20, _migrate_21]
 
 BACKUPS_KEPT = 3
 

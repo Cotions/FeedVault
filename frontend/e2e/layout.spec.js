@@ -224,3 +224,34 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
   }
   expect(problems, problems.join("\n")).toEqual([]);
 });
+
+// The sidebar fits short desktop windows: at 1280x800 and 1366x768 every
+// entry shows without scrolling it, the last (Quit) whole and clear of the
+// sidebar's bottom edge by its focus ring, and each entry stays a 24px target.
+const SIDEBAR_SIZES = [SIZES[1], { label: "1366x768", width: 1366, height: 768 }];
+
+test("the sidebar fits without scrolling", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "layout-zoom", "measured at the two short desktop sizes only");
+  await openPage(page, PAGES[0]);
+  const problems = [];
+  for (const s of SIDEBAR_SIZES) {
+    await page.setViewportSize({ width: s.width, height: s.height });
+    await settle(page);
+    const m = await page.evaluate(() => {
+      const nav = document.querySelector("#main-nav");
+      const box = nav.getBoundingClientRect();
+      const items = [...nav.children].filter(e => e.getBoundingClientRect().height > 0);
+      const last = items.at(-1).getBoundingClientRect();
+      const small = [...nav.querySelectorAll(".side-link")].filter(e => e.getBoundingClientRect().height < 24)
+        .map(e => e.textContent.trim());
+      return { scroll: nav.scrollHeight, client: nav.clientHeight, lastBottom: last.bottom, navBottom: box.bottom, small,
+               lastText: items.at(-1).textContent.trim() };
+    });
+    const at = `sidebar at ${s.label}`;
+    if (m.scroll > m.client) problems.push(`${at}: content ${m.scroll}px in ${m.client}px (overflows by ${m.scroll - m.client})`);
+    // 3px: room for the focus ring (box-shadow var(--ring)) below the last entry.
+    if (m.lastBottom > m.navBottom - 3) problems.push(`${at}: "${m.lastText}" ends at ${m.lastBottom}, the sidebar at ${m.navBottom}`);
+    if (m.small.length) problems.push(`${at}: entries under 24px: ${m.small.join(", ")}`);
+  }
+  expect(problems, problems.join("\n")).toEqual([]);
+});

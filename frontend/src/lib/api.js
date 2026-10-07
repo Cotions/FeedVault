@@ -246,6 +246,18 @@ export function getSuggestions() { return get("/api/people/suggestions"); }
 export function bioImport(id, url) { return post(`/api/people/${id}/bio-import`, { url }); }
 export function dismissSuggestion(id) { return post("/api/people/suggestions/dismiss", { id }); }
 
+/* ── Links (any web address, optionally a person's; never fetched) ── */
+
+// { links: [link], sites: [{ site, count }] }. params: person (an id, or
+// "none"), kind ("social" | "other"), site, q.
+export function getLinks(params = {}, opts) { return get(`/api/links${qs(params)}`, opts); }
+// body { url, title, notes, person } → { ok, link }; a saved URL is { ok: false, error, id } (409).
+export function createLink(body) { return post("/api/links", body); }
+export function updateLink(id, changes) { return post(`/api/links/${id}`, changes); }
+export function deleteLink(id) { return del(`/api/links/${id}`); }
+// The ids take the places they held among the person's links → { ok, links }.
+export function orderPersonLinks(personId, ids) { return post(`/api/people/${personId}/links/order`, { ids }); }
+
 /* ── Jobs (see docs/API.md "Jobs") ───────────────────────── */
 
 // { running, queued, jobs: [job] }, newest first

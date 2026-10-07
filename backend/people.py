@@ -18,6 +18,7 @@ import re
 import unicodedata
 
 import db
+import links as web_links           # saved web links; "links" below are person_accounts rows
 import organize
 
 MAX_NOTES = 5000
@@ -316,9 +317,12 @@ def update(conn, pid, name=None, notes=None):
 
 
 def delete(conn, pid):
-    """Drop a person and its links. Posts are never touched. Returns the accounts unlinked."""
+    """Drop a person and its links. Posts are never touched, nor their saved
+    web links (links.py), which stay, tied to no one. Returns the accounts
+    unlinked."""
     with conn:
         n = conn.execute("DELETE FROM person_accounts WHERE person_id = ?", (pid,)).rowcount
+        conn.execute("UPDATE links SET person_id = NULL, position = NULL WHERE person_id = ?", (pid,))
         conn.execute("DELETE FROM people WHERE id = ?", (pid,))
     return n
 
@@ -341,8 +345,8 @@ def link(conn, pid, add, remove, now):
 
 def merge(conn, ids, name, accounts, now):
     """Fold several people (and accounts) into the first id: its links,
-    notes and name stay, the others' accounts and sources move to it and
-    they are gone."""
+    notes and name stay, the others' accounts, sources and saved web links
+    move to it and they are gone."""
     keep = ids[0]
     if name is not None and not _name_free(conn, name, but=ids):
         raise Refused("a person with that name exists")
@@ -351,6 +355,7 @@ def merge(conn, ids, name, accounts, now):
         f"SELECT * FROM people WHERE id IN ({', '.join('?' for _ in ids)})", ids)}
     with conn:
         notes = [rows[i]["notes"].strip() for i in ids if rows[i]["notes"].strip()]
+        web_links.merge_into(conn, keep, ids[1:])
         for other in ids[1:]:
             conn.execute("UPDATE person_accounts SET person_id = ? WHERE person_id = ?", (keep, other))
             conn.execute("UPDATE sources SET person_id = ? WHERE person_id = ?", (keep, other))

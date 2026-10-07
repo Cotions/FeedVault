@@ -1013,9 +1013,9 @@ A **person**:
 | GET | `/api/people` | `[person, …]`, by name |
 | POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted; at most 500 accounts and 20 profiles; `profiles` with no media root set is a 400) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
 | POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }] }`: a sync of each of the person's sources, as Sync all does for every source; 404 for an unknown id |
-| GET | `/api/people/<id>` | person, or 404 |
+| GET | `/api/people/<id>` | person, with its `links` (see [Links](#links)), or 404 |
 | POST | `/api/people/<id>` | body `{ "name": "…" }` and/or `{ "notes": "…" }` (neither is a 400) → `{ "ok": true, "person": {…} }` |
-| DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post |
+| DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, tied to no one |
 | POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted; at most 500 each) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
 | POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }] }` → `{ "ok": true, "person": {…} }`, see below |
 
@@ -1038,7 +1038,8 @@ A **person**:
   running counted in `skipped`, a refused one in `errors`.
 - Merge keeps the first id: its name (or `name`, when given), and the
   others' notes appended to its own. Every account of the others, and
-  `accounts`, move to it; the others are gone. `ids` must all exist (404
+  `accounts`, move to it, and so do the others' [links](#links), after its
+  own; the others are gone. `ids` must all exist (404
   otherwise); with one id, `accounts` must not be empty.
 - A bad name, a name taken by another person, bad notes or a malformed
   account list is a 400 `{ "ok": false, "error": "…" }`; an unknown id a 404.
@@ -1178,6 +1179,83 @@ Link-in-bio import); `backend/biofetch.py`.
   redirects`, `the page redirects elsewhere: …`). The server log names the
   URL fetched and what came of it; the page itself is never logged or
   stored.
+
+## Links
+
+Web addresses worth keeping that are not an account FeedVault downloads: a
+creator's Linktree, Patreon, personal site or Discord invite, an interview,
+an article. A link may be tied to one person, or to no one.
+
+Links are user data: table `links`, never touched by a rescan, and written to
+`<data_directory>/userdata/links.json` (by URL, the person by name, as
+`person_accounts`) 2 s after the last change, so a rebuilt index gets them
+back; a person named there and missing from `people.json` is created again,
+and a row whose URL is not `http://` or `https://` is skipped.
+
+FeedVault never fetches a saved link: no title, preview or icon is looked
+up, and nothing leaves the machine. (The [link-in-bio
+import](#link-in-bio-import) is separate: it fetches only the page pasted
+into it, when switched on, and adds nothing to Links.) The dashboard opens a
+link in a new tab (`rel="noopener noreferrer"`), and only an `http:` or
+`https:` one.
+
+A **link**:
+
+```json
+{ "id": 12, "url": "https://www.patreon.com/somebody", "title": "Patreon", "notes": "",
+  "site": "patreon.com", "kind": "social", "person": { "id": 3, "name": "Some Body" },
+  "position": 2, "created_at": 1727500000 }
+```
+
+- `url`: stored cleaned, and saved once. Only `http` and `https`, with a
+  host; no user name or password, backslash, whitespace or control
+  character inside; at most 2048 characters. Spaces around it are dropped,
+  the scheme and host lowercased, a default port dropped, and so is the
+  `/` of a bare host (`HTTPS://Example.com/` is `https://example.com`).
+  Anything else is a 400.
+- `site`: the host without `www.`, `m.` or `mobile.`, cut to its registrable
+  part (`someone.substack.com` is `substack.com`, `www.bbc.co.uk` is
+  `bbc.co.uk`). `kind`: `social` when `site` is a social or creator
+  platform (`instagram.com`, `x.com`, `tiktok.com`, `youtube.com`,
+  `patreon.com`, `linktr.ee`, `discord.gg` and the like; the list is
+  `links.SOCIAL_HOSTS`), else `other`. Both are read from the URL on every
+  request, never stored.
+- `title`: at most 300 characters, its whitespace collapsed; `""` for none.
+  `notes`: at most 5000 characters.
+- `person`: `{ id, name }` or `null`. `position`: the link's place among its
+  person's links, `null` for a link of no one.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/links?person=&kind=&site=&q=` | `{ "links": [link, …], "sites": [{ "site": "patreon.com", "count": 4 }, …] }`, see below |
+| POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` (all but `url` may be omitted; `person` `null` for no one) → `{ "ok": true, "link": {…} }` |
+| POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person` (`null` unties it; none is a 400) → `{ "ok": true, "link": {…} }` |
+| DELETE | `/api/links/<id>` | → `{ "ok": true }` |
+| POST | `/api/people/<id>/links/order` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "links": [link, …] }`, the person's links in their new order |
+
+- `GET /api/links`: newest first; with `person`, in that person's order.
+  `person` is a person id (one that is not an id matches nothing) or `none`
+  for links of no one; `kind` is `social` or `other` (anything else is a
+  400); `site` matches `site` exactly; `q` (at most 200 characters) matches
+  any part of the URL, title or notes, without regard to (ASCII) case.
+  `sites` counts every link by site, whatever the filters, for a site
+  picker, most links first.
+- A URL saved already (once cleaned) is a 409
+  `{ "ok": false, "error": "that link is saved already", "id": 12 }` with
+  the saved link's id, on create and on edit.
+- A person's links (`GET /api/people/<id>`, `/links/order`) come socials
+  first, then the others, each in the person's order. A new link, or one
+  given to another person, goes last in its person's order; one untied
+  from its person loses its place.
+- `/links/order` puts the ids given in the places they held between them,
+  in the order given; the person's other links do not move, and ids not
+  among their links are ignored (as `/api/collections/<id>/order`).
+- Deleting a person keeps their links, tied to no one. Merging people moves
+  the others' links to the one kept, after its own.
+- A bad body is a 400 `{ "ok": false, "error": "…" }`, a JSON body that is
+  not an object (a list, a string) too (`the body must be a JSON object`);
+  an unknown link or person id in the path a 404, an unknown `person` in a
+  body a 400.
 
 ## Sources
 

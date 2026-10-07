@@ -80,6 +80,7 @@ export const PAGES = [
   { name: "Review", path: "/review" },
   { name: "Creators", path: "/creators" },
   { name: "Tags", path: "/tags" },
+  { name: "Links", path: "/links" },
   { name: "Collections", path: "/collections" },
   { name: "Stats", path: "/stats" },
   { name: "Storage", path: "/storage" },

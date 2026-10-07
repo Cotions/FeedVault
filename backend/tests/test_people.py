@@ -353,7 +353,7 @@ def test_create_link_unlink(env, client):
     assert p["newest"] == max(alice["newest"], x["newest"])
     assert account(client, "instagram", "alice.example")["person"] == {"id": p["id"], "name": "Alice E"}
     assert get(client, "/api/people") == [p]
-    assert get(client, f"/api/people/{p['id']}") == p
+    assert get(client, f"/api/people/{p['id']}") == {**p, "links": []}        # and its saved links (links.py)
 
     r = post(client, f"/api/people/{p['id']}/accounts", {"add": [ref(tt)], "remove": [ref(x)]})
     assert (r["added"], r["removed"]) == (1, 1)

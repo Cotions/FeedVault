@@ -306,6 +306,26 @@ def seed_tags(data, tagged):
         json.dump({"version": 1, "rows": [{"post_id": p, "tag": t, "at": 1_700_000_000} for p, t in tagged]}, f)
 
 
+def seed_links(data):
+    """A few saved links (the Links page), tied to no one: the demo links no
+    person yet. Invented addresses; FeedVault never opens them."""
+    out = os.path.join(data, "userdata", "links.json")
+    if os.path.exists(out):
+        return
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    rows = [
+        ("https://linktr.ee/juniper.makes", "Juniper Vale's Linktree", ""),
+        ("https://www.patreon.com/junipervale", "Patreon", "Monthly glaze recipes for supporters."),
+        ("https://discord.gg/demo-kiln", "Kiln club Discord", ""),
+        ("https://ceramics-weekly.example/interviews/juniper-vale", "Interview: slow pots, fast plants",
+         "Talks about the rename from @juni.studio."),
+        ("https://quiet-kiln.example", "", ""),
+    ]
+    with open(out, "w") as f:
+        json.dump({"version": 1, "rows": [{"url": u, "title": t, "notes": n, "person": None, "position": None,
+                                           "created_at": 1_700_000_000 + i} for i, (u, t, n) in enumerate(rows)]}, f)
+
+
 TESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend", "tests")
 
 
@@ -636,6 +656,7 @@ def main():
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     seed_tags(os.path.join(root, "data"), tagged)
     seed_sources(os.path.join(root, "data"), media)
+    seed_links(os.path.join(root, "data"))
     tools = add_fake_tools(root, ts)
     with open(os.path.join(root, "config.json"), "w") as f:
         json.dump({"data_directory": os.path.join(root, "data"), "media_roots": [media], "tools": tools}, f, indent=2)
