@@ -16,6 +16,8 @@ import time
 import webbrowser
 
 from flask import Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory
+from werkzeug.exceptions import NotFound
+from werkzeug.routing import IntegerConverter
 from werkzeug.security import safe_join
 from zlib import adler32
 
@@ -45,7 +47,22 @@ import trash
 import userdata
 from parsers import yt_dlp
 
+MAX_ID = 2**63 - 1                             # SQLite's largest integer
+
+
+class IdConverter(IntegerConverter):
+    """``<int:...>`` in every route: an id SQLite can hold, else a 404 (no
+    such item) whatever the method, rather than an OverflowError."""
+
+    def to_python(self, value):
+        if len(value) > len(str(MAX_ID)) or int(value) > MAX_ID:
+            raise NotFound()
+        return super().to_python(value)
+
+
 app = Flask(__name__, static_folder=None)
+# Before any route is added: each rule takes its converter when it is.
+app.url_map.converters["int"] = IdConverter
 
 # ---------------------------------------------------------------------------
 # Origin lockdown (same design as ChannelVault)
@@ -120,6 +137,13 @@ def _body():
     if not isinstance(body, dict):
         abort(make_response(jsonify({"ok": False, "error": NOT_OBJECT}), 400))
     return body
+
+
+def _ids(value):
+    """Whether ``value`` is a list of ids: whole numbers from 0 below 2**53,
+    so none is out of SQLite's range."""
+    return isinstance(value, list) and all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i < 2**53
+                                           for i in value)
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +373,7 @@ def delete_items():
     posts = body.get("posts") or []
     media = body.get("media") or []
     if not isinstance(posts, list) or not all(isinstance(p, str) for p in posts) \
-            or not isinstance(media, list) or not all(isinstance(m, int) and not isinstance(m, bool) for m in media):
+            or not _ids(media):
         return jsonify({"ok": False, "error": "posts must be a list of ids, media a list of numbers"}), 400
     if not posts and not media:
         return jsonify({"ok": False, "error": "nothing to delete"}), 400
@@ -684,8 +708,7 @@ def create_collection():
 @app.post("/api/collections/reorder")
 def reorder_collections():
     ids = _body().get("ids")
-    if not isinstance(ids, list) or not ids or len(ids) > 5000 \
-            or any(not isinstance(i, int) or isinstance(i, bool) for i in ids):
+    if not _ids(ids) or not ids or len(ids) > 5000:
         return jsonify({"ok": False, "error": "ids must be a list of 1 to 5000 collection ids"}), 400
     conn = db.connect()
     organize.reorder_collections(conn, ids)
@@ -862,8 +885,7 @@ def merge_people():
     body = _body()
     ids, accounts = body.get("ids"), people.clean_accounts(body.get("accounts"))
     name = None if body.get("name") is None else people.clean_name(body.get("name"))
-    if not isinstance(ids, list) or not ids or len(ids) > people.MAX_ACCOUNTS \
-            or not all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i < 2**53 for i in ids):
+    if not _ids(ids) or not ids or len(ids) > people.MAX_ACCOUNTS:
         return jsonify({"ok": False, "error": "ids must be a list of person ids"}), 400
     ids = list(dict.fromkeys(ids))
     if body.get("name") is not None and name is None:
@@ -1122,8 +1144,7 @@ def order_person_links(pid):
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
     ids = body.get("ids")
-    if not isinstance(ids, list) or not ids or len(ids) > links.MAX_IDS \
-            or any(not isinstance(i, int) or isinstance(i, bool) for i in ids):
+    if not _ids(ids) or not ids or len(ids) > links.MAX_IDS:
         return jsonify({"ok": False, "error": f"ids must be a list of 1 to {links.MAX_IDS} link ids"}), 400
     links.reorder(conn, pid, ids)
     userdata.changed("links")
