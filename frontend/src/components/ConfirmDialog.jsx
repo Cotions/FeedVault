@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
-import { FOCUSABLE, restoreFocus } from "../lib/layout";
+import { FOCUSABLE, focusLost, restoreFocus } from "../lib/layout";
 
 /* Modal confirmation. Traps Tab inside the dialog, Esc or a backdrop click
    cancels, focus starts on Cancel (so a stray Enter never destroys anything)
    and returns to whatever had it before, without scrolling. While `busy`, both buttons are
-   disabled and Esc does nothing: the request is already on its way.
+   off and Esc does nothing: the request is already on its way. They stay
+   focusable (aria-disabled), so focus is not dropped on <body>; and should
+   it get there anyway (a control in the body turned off or went away), Esc
+   and Tab still work: they are heard on the document too (#136).
 
    Props: open, title, children (body), confirmLabel, danger, busy, error,
           onConfirm, onCancel, initialFocus (a ref to focus instead of Cancel,
@@ -16,6 +19,7 @@ export default function ConfirmDialog({
 }) {
   const boxRef    = useRef(null);
   const cancelRef = useRef(null);
+  const keysRef   = useRef(null);
   const titleId   = useId();
   const bodyId    = useId();
 
@@ -28,8 +32,6 @@ export default function ConfirmDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  if (!open) return null;
-
   function onKeyDown(e) {
     if (e.key === "Escape") {
       e.stopPropagation();
@@ -41,12 +43,29 @@ export default function ConfirmDialog({
     const items = [...boxRef.current.querySelectorAll(FOCUSABLE)];
     if (items.length === 0) { e.preventDefault(); return; }
     const first = items[0], last = items[items.length - 1];
-    if (e.shiftKey && (document.activeElement === first || !boxRef.current.contains(document.activeElement))) {
+    if (!boxRef.current.contains(document.activeElement)) {
+      e.preventDefault(); (e.shiftKey ? last : first).focus();
+    } else if (e.shiftKey && document.activeElement === first) {
       e.preventDefault(); last.focus();
     } else if (!e.shiftKey && document.activeElement === last) {
       e.preventDefault(); first.focus();
     }
   }
+  useEffect(() => { keysRef.current = onKeyDown; });
+
+  // Focus on <body> never reaches the overlay's onKeyDown: Esc and Tab are
+  // heard on the document then, first (capture), so a page's own Esc
+  // (select mode's) does not act on the same key.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e) {
+      if ((e.key === "Escape" || e.key === "Tab") && focusLost() && boxRef.current) keysRef.current?.(e);
+    }
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  if (!open) return null;
 
   return createPortal(
     <div
@@ -67,10 +86,12 @@ export default function ConfirmDialog({
         <div id={bodyId} className="confirm-body">{children}</div>
         {error && <div className="msg err" role="alert">{error}</div>}
         <div className="modal-actions">
-          <button ref={cancelRef} type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>
+          <button ref={cancelRef} type="button" className="btn-secondary" aria-disabled={busy || undefined}
+                  onClick={() => { if (!busy) onCancel(); }}>
             {cancelLabel}
           </button>
-          <button type="button" className={danger ? "btn-danger" : "btn-primary"} onClick={onConfirm} disabled={busy || confirmDisabled}>
+          <button type="button" className={danger ? "btn-danger" : "btn-primary"} aria-disabled={busy || undefined}
+                  onClick={() => { if (!busy) onConfirm(); }} disabled={confirmDisabled}>
             {busy ? "Working…" : confirmLabel}
           </button>
         </div>

@@ -19,6 +19,7 @@
 // The probes run in the page (fixtures.js, installProbes); STATE_ALLOW
 // lists what they let through, with a reason each.
 import fs from "node:fs";
+import path from "node:path";
 import {
   test, expect, PAGES, stressData, settle, frame, quiet, addProbes, STATE_ALLOW, formatStateFindings,
   fakeDecisions, underToasts, dismissToasts,
@@ -422,6 +423,168 @@ test.describe("closing a selection bar dialog leaves the Feed where it was", () 
       await expect(button).toBeFocused();
     });
   }
+});
+
+// Focus never falls onto <body> (#136): when the control that has it turns
+// off (a busy flag) or goes away, it stays on it or moves somewhere that
+// makes sense, so the next key still does something. Each test makes what
+// it changes (collections, a job) and removes it after.
+const H = { "X-FeedVault": "1" };
+const onBody = page => page.evaluate(() => !document.activeElement || document.activeElement === document.body);
+
+async function api(request, method, url, data) {
+  const r = await request.fetch(url, { method, headers: H, ...(data ? { data } : {}) });
+  expect(r.ok(), `${method} ${url}: ${r.status()}`).toBe(true);
+  return r.json();
+}
+
+test.describe("focus stays off <body>", () => {
+  test("the Feed's Collection… dialog: a picked collection keeps it, and Esc closes", async ({ page, request }) => {
+    const name = `E2E focus pick ${Date.now()}`;
+    const { collection } = await api(request, "POST", "/api/collections", { name });
+    try {
+      await atSize(page, SIZES[1]);
+      await open(page, "Feed");
+      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      for (const n of [0, 1, 2]) await page.locator("article.post-card").nth(n).click();
+      const button = page.locator(".select-bar").getByRole("button", { name: "Collection…", exact: true });
+      const dialog = page.locator(".modal-overlay .modal");
+      await button.click();
+      const item = dialog.locator(".collection-pick-item", { hasText: name });
+      await item.focus();
+      await page.keyboard.press("Enter");
+      await expect(page.locator(".toast", { hasText: `added to “${name}”` })).toBeVisible();
+      await expect(item).toHaveAttribute("aria-pressed", "true");
+      await expect(item, "the picked collection keeps focus").toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(dialog, "Esc closes the dialog after a pick").toHaveCount(0);
+      await expect(button).toBeFocused();
+
+      // Should focus get onto <body> some other way, Esc still closes it.
+      await button.click();
+      await expect(dialog).toBeVisible();
+      await page.evaluate(() => document.activeElement?.blur());
+      expect(await onBody(page)).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect(dialog, "Esc with focus on <body> closes the dialog").toHaveCount(0);
+      await expect(page.locator(".select-bar"), "and only the dialog: select mode stays").toBeVisible();
+    } finally {
+      await api(request, "POST", `/api/collections/${collection.id}/delete`);
+    }
+  });
+
+  test("Move later twice in a row, inside a collection", async ({ page, request }) => {
+    const { collection } = await api(request, "POST", "/api/collections", { name: `E2E focus order ${Date.now()}` });
+    try {
+      const ids = (await api(request, "GET", "/api/posts?limit=3")).posts.map(p => p.id);
+      await api(request, "POST", `/api/collections/${collection.id}/add`, { posts: ids });
+      await atSize(page, SIZES[1]);
+      await openUrl(page, `/collections/${collection.id}`, ".collection-tile");
+      const tiles = page.locator(".collection-tile");
+      await expect(tiles).toHaveCount(3);
+      const href = await tiles.first().locator(".collection-tile-media").getAttribute("href");
+      const moved = tiles.filter({ has: page.locator(`.collection-tile-media[href="${href}"]`) });
+      const later = moved.getByRole("button", { name: "Move later" });
+      await later.focus();
+      for (const at of [1, 2]) {
+        const saved = page.waitForResponse(r => r.url().endsWith(`/api/collections/${collection.id}/order`));
+        await page.keyboard.press("Enter");
+        await saved;
+        await expect(tiles.nth(at).locator(".collection-tile-media"), `moved to ${at}`).toHaveAttribute("href", href);
+        await expect(later, `after move ${at}: on the moved post's Move later`).toBeFocused();
+      }
+      const { posts } = await api(request, "GET", `/api/collections/${collection.id}`);
+      expect(posts.map(p => p.id)).toEqual([ids[1], ids[2], ids[0]]);
+    } finally {
+      await api(request, "POST", `/api/collections/${collection.id}/delete`);
+    }
+  });
+
+  test("Move later twice in a row, on Collections", async ({ page, request }) => {
+    const stamp = Date.now();
+    const made = [];
+    try {
+      for (const n of ["A", "B", "C"]) made.push((await api(request, "POST", "/api/collections", { name: `E2E focus ${n} ${stamp}` })).collection);
+      const order = async () => (await api(request, "GET", "/api/collections")).map(c => c.id);
+      const before = await order();
+      // The first of them, with the other two after it.
+      const c = made.slice().sort((a, b) => before.indexOf(a.id) - before.indexOf(b.id))[0];
+      const from = before.indexOf(c.id);
+      expect(from + 2).toBeLessThan(before.length);
+      await atSize(page, SIZES[1]);
+      await open(page, "Collections");
+      const later = page.getByRole("button", { name: `Move ${c.name} later`, exact: true });
+      await later.focus();
+      for (const step of [1, 2]) {
+        const saved = page.waitForResponse(r => r.url().endsWith("/api/collections/reorder"));
+        await page.keyboard.press("Enter");
+        await saved;
+        await expect.poll(async () => (await order()).indexOf(c.id), `move ${step}`).toBe(from + step);
+        await expect(later, `after move ${step}: on its Move later`).toBeFocused();
+      }
+    } finally {
+      for (const c of made) await api(request, "POST", `/api/collections/${c.id}/delete`);
+    }
+  });
+
+  // A sync of the demo's night.tram, held at its start by the fake
+  // instaloader's gate (it waits until that file exists, and it never
+  // does) until it is cancelled: nothing is written.
+  test("cancelling a running job", async ({ page, request }) => {
+    const { data_directory } = await api(request, "GET", "/api/config");
+    const vault = path.dirname(data_directory);
+    const fake = path.join(vault, "fake_instaloader.json");
+    const kept = fs.readFileSync(fake, "utf8");
+    let jobId = null;
+    try {
+      fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(kept), gate: path.join(vault, "e2e-gate-never-made") }));
+      await api(request, "POST", "/api/config", { instaloader: { pause: 0 } });
+      const { sources } = await api(request, "GET", "/api/sources");
+      const src = sources.find(s => s.target === "night.tram");
+      expect(src, "the demo's night.tram source").toBeTruthy();
+      const r = await api(request, "POST", `/api/sources/${src.id}/sync`, {});
+      jobId = r.job.id;
+      await expect.poll(async () => (await api(request, "GET", `/api/jobs/${jobId}`)).state, { timeout: 20_000 }).toBe("running");
+
+      await atSize(page, SIZES[1]);
+      await open(page, "Jobs");
+      const row = page.locator(".job-row", { hasText: "night.tram" });
+      await expect(row).toHaveCount(1);
+      await row.getByRole("button", { name: "Cancel…" }).focus();
+      await page.keyboard.press("Enter");
+      const dialog = page.locator(".modal-overlay .modal");
+      await dialog.getByRole("button", { name: "Cancel job" }).focus();
+      await page.keyboard.press("Enter");
+      await expect(dialog).toHaveCount(0);
+      await expect(row).toHaveCount(0, { timeout: 20_000 });
+      expect((await api(request, "GET", `/api/jobs/${jobId}`)).state).toBe("cancelled");
+      await expect.poll(() => onBody(page), "focus after the cancelled job's row went").toBe(false);
+      await expect(page.getByRole("region", { name: "Running and queued jobs" })).toBeFocused();
+    } finally {
+      fs.writeFileSync(fake, kept);
+      if (jobId != null) {
+        const j = await (await request.get(`/api/jobs/${jobId}`, { headers: H })).json();
+        if (!["done", "failed", "cancelled", "interrupted"].includes(j.state)) {
+          await request.post(`/api/jobs/${jobId}/cancel`, { headers: H });
+        }
+      }
+    }
+  });
+
+  test("closing Notifications gives focus back to its button", async ({ page }) => {
+    await atSize(page, SIZES[1]);
+    await open(page, "Feed");
+    const bell = page.locator(".side-bell > button");
+    const panel = page.locator(".notif-panel");
+    for (const key of ["Enter", "Escape"]) {
+      await bell.click();
+      await expect(panel).toBeVisible();
+      await panel.getByRole("button", { name: "Close" }).focus();
+      await page.keyboard.press(key);       // Enter on its Close, or Esc
+      await expect(panel).toHaveCount(0);
+      await expect(bell, `closed with ${key}`).toBeFocused();
+    }
+  });
 });
 
 // Toasts never cover the buttons pinned at the bottom: the selection
