@@ -16,7 +16,12 @@
 //   decision does) and "cached" (the same call again), the median of
 //   --runs;
 // - the heavy pages in Chromium: from navigation to the last API response
-//   and the last DOM change after it (interactive), the median of 3.
+//   and the last DOM change after it (interactive), the median of 3;
+// - the long list pages (Storage, Unmatched, Links, Creators): the rows in
+//   the DOM of those listed, the DOM's size, interactive, and one thing a
+//   user does there (the slowest input's event handlers, its time to the next
+//   paint, and the time until the page is quiet again), the median of 3.
+//   --lists-only measures those alone.
 //
 // Prints a Markdown table; stops the backend by its PID and deletes the
 // tmp dir however it ends. Nothing here contacts another server.
@@ -32,6 +37,9 @@ const opt = (name, dflt) => {
 const POSTS = Number(opt("--posts", "20000"));
 const RUNS = Number(opt("--runs", "5"));
 const JSON_OUT = opt("--json", null);
+// Only the long list pages (Storage, Unmatched, Links, Creators): no API
+// table and no other page, for a quicker look at those.
+const LISTS_ONLY = args.includes("--lists-only");
 const PAGE_RUNS = 3;
 
 const median = xs => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
@@ -58,6 +66,83 @@ async function until(fn, what, limitMs = 30 * 60_000) {
     await new Promise(r => setTimeout(r, 50));
   }
   throw new Error(`perf: ${what} did not finish`);
+}
+
+// Waits until no /api/ response and no DOM change came for 1 s; returns
+// the page time of the last of them.
+async function quiet(page) {
+  await page.waitForFunction(() => {
+    const p = window.__perf, now = performance.now();
+    return p.api > 0 && now - Math.max(p.api, p.mutation) > 1000;
+  }, null, { timeout: 120_000, polling: 100 });
+  return page.evaluate(() => Math.max(window.__perf.api, window.__perf.mutation));
+}
+
+// The long list pages: how many of the page's rows are in the DOM, the
+// DOM's size, the time to interactive, and one thing a user does there:
+// the slowest input's handlers (React's render included) and its time to the
+// next paint (Event Timing, what INP reads; headless Chromium adds 40-60 ms
+// to any input), and the time until the page is quiet again. ``total(api)``
+// is how many rows the page lists, from the API.
+const LISTS = [
+  {
+    name: "Storage", url: "/storage", rows: ".storage-table tbody tr:not(.win-gap)",
+    total: api => api.storage.by_author.length,
+    action: ["sort by posts, twice", async page => {
+      const b = page.getByRole("button", { name: "Posts", exact: true });
+      await b.click();
+      await b.click();
+    }],
+  },
+  {
+    name: "Unmatched", url: "/unmatched", rows: ".data-table tbody tr:not(.win-gap)",
+    total: api => api.unmatched.length,
+    action: ["type \"img_001\" in its search", async page => {
+      const box = page.getByLabel("Search unmatched files");
+      if (!(await box.count())) return false;   // the page had none before the list pass
+      await box.pressSequentially("img_001");
+      return true;
+    }],
+  },
+  {
+    name: "Links", url: "/links", rows: ".link-list > li:not(.win-gap)",
+    total: api => api.links.links.length,
+    action: ["type \"link 1\" in its search", async page => { await page.getByLabel("Search links").pressSequentially("link 1"); }],
+  },
+  {
+    name: "Creators", url: "/creators", rows: ".creator-card",
+    total: api => api.people.length + api.authors.filter(a => !a.person).length,
+    action: ["type \"ma\" in its filter, then clear it", async page => {
+      const box = page.getByLabel("Filter creators");
+      await box.pressSequentially("ma");
+      await box.press("Backspace");
+      await box.press("Backspace");
+    }],
+  },
+];
+
+async function measureList(page, base, list, touch) {
+  await page.goto("about:blank");
+  await touch();
+  await page.goto(base + list.url, { waitUntil: "load" });
+  const interactive = await quiet(page);
+  const counted = await page.evaluate(sel => ({
+    rows: document.querySelectorAll(sel).length,
+    nodes: document.getElementsByTagName("*").length,
+  }), list.rows);
+  const [label, act] = list.action;
+  await page.evaluate(() => { window.__perf.events = []; window.__perf.t0 = performance.now(); });
+  if ((await act(page)) === false) return { interactive, ...counted, action: null, input: null, handlers: null, settle: null };
+  // Some interactions fetch, some only render: either way, quiet again.
+  await page.waitForTimeout(300);
+  await page.waitForFunction(() => performance.now() - Math.max(window.__perf.mutation, window.__perf.api) > 1000,
+                             null, { timeout: 120_000, polling: 100 });
+  const after = await page.evaluate(() => ({
+    input: Math.max(0, ...window.__perf.events.map(e => e.d)),
+    handlers: Math.max(0, ...window.__perf.events.map(e => e.p)),
+    settle: Math.max(window.__perf.mutation, window.__perf.api) - window.__perf.t0,
+  }));
+  return { interactive, ...counted, action: label, ...after };
 }
 
 // Calls a page makes, timed one after another while the hashing worker runs
@@ -91,7 +176,7 @@ async function hashingPass(base) {
 }
 
 async function main() {
-  const out = { posts: POSTS, index: {}, api: [], pages: [] };
+  const out = { posts: POSTS, index: {}, api: [], pages: [], lists: [] };
   const lines = [];
   const inst = await startInstance({
     large: POSTS, readyMs: 30 * 60_000,
@@ -173,7 +258,7 @@ async function main() {
     // the post's decision set to what it is.
     const kept = (await call(base, "GET", `/api/posts?limit=1&review=kept`)).json.posts[0];
     const touch = () => call(base, "POST", "/api/review", { posts: [kept.id], decision: "keep" });
-    for (const url of urls) {
+    for (const url of LISTS_ONLY ? [] : urls) {
       const cold = [], warm = [];
       let bytes = 0;
       for (let i = 0; i < RUNS; i++) {
@@ -211,7 +296,12 @@ async function main() {
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       // The last DOM change and the last /api/ response, page time.
       await context.addInitScript(() => {
-        window.__perf = { mutation: 0, api: 0, nodes: 0 };
+        window.__perf = { mutation: 0, api: 0, nodes: 0, events: [] };
+        // Event Timing: each input's time to the next paint.
+        try {
+          new PerformanceObserver(l => { for (const e of l.getEntries()) window.__perf.events.push({ d: e.duration, p: e.processingEnd - e.processingStart }); })
+            .observe({ type: "event", durationThreshold: 16, buffered: true });
+        } catch { /* not supported: no input numbers */ }
         new MutationObserver(() => { window.__perf.mutation = performance.now(); })
           .observe(document, { childList: true, subtree: true, characterData: true, attributes: true });
         const f = window.fetch;
@@ -223,7 +313,7 @@ async function main() {
         });
       });
       const page = await context.newPage();
-      for (const [url, name] of pages) {
+      for (const [url, name] of LISTS_ONLY ? [] : pages) {
         const times = [];
         let nodes = 0;
         for (let i = 0; i < PAGE_RUNS; i++) {
@@ -242,6 +332,24 @@ async function main() {
         const row = { url, name, interactive_ms: median(times), dom_nodes: nodes };
         out.pages.push(row);
         console.log(`${ms(row.interactive_ms).padStart(6)} ms ${String(nodes).padStart(6)} nodes  ${name} ${url}`);
+      }
+      const api = {
+        storage: (await call(base, "GET", "/api/storage")).json,
+        unmatched: (await call(base, "GET", "/api/unmatched")).json,
+        links: (await call(base, "GET", "/api/links")).json,
+        people, authors,
+      };
+      for (const list of LISTS) {
+        const runs = [];
+        for (let i = 0; i < PAGE_RUNS; i++) runs.push(await measureList(page, base, list, touch));
+        const pick = k => (runs[0][k] == null ? null : median(runs.map(r => r[k])));
+        const row = {
+          name: list.name, url: list.url, rows: runs[0].rows, total: list.total(api), dom_nodes: runs[0].nodes,
+          interactive_ms: pick("interactive"), action: runs[0].action, input_ms: pick("input"), handlers_ms: pick("handlers"), settled_ms: pick("settle"),
+        };
+        out.lists.push(row);
+        console.log(`${ms(row.interactive_ms).padStart(6)} ms ${String(row.dom_nodes).padStart(6)} nodes `
+                    + `${String(row.rows).padStart(5)} rows  ${row.name}: ${row.action || "-"} ${ms(row.handlers_ms)} / ${ms(row.input_ms)} / ${ms(row.settled_ms)} ms`);
       }
     } finally {
       await browser.close();
@@ -263,6 +371,14 @@ async function main() {
   console.log("");
   console.log("| API call | uncached ms | cached ms | KiB |\n|---|---:|---:|---:|");
   for (const r of out.api) console.log(`| \`${r.url}\` | ${ms(r.uncached_ms)} | ${ms(r.cached_ms)} | ${Math.round(r.bytes / 1024)} |`);
+  if (out.lists.length) {
+    console.log("\n| List page | rows in the DOM | DOM nodes | interactive ms | interaction | slowest handlers ms | slowest input ms | settled ms |"
+                + "\n|---|---:|---:|---:|---|---:|---:|---:|");
+    for (const r of out.lists) {
+      console.log(`| ${r.name} | ${r.rows} of ${r.total} | ${r.dom_nodes} | ${ms(r.interactive_ms)} | ${r.action || "none"} `
+                  + `| ${ms(r.handlers_ms)} | ${ms(r.input_ms)} | ${ms(r.settled_ms)} |`);
+    }
+  }
   console.log("\n| Page | interactive ms | DOM nodes |\n|---|---:|---:|");
   for (const r of out.pages) console.log(`| ${r.name} \`${r.url}\` | ${ms(r.interactive_ms)} | ${r.dom_nodes} |`);
   if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(out, null, 2));

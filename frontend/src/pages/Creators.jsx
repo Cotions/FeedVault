@@ -22,6 +22,8 @@ import { optionsSummary } from "../lib/sourceOptions";
 import { warnings } from "../lib/health";
 import PageHeader from "../components/PageHeader";
 import { useUnsaved } from "../lib/unsaved";
+import { useWindow } from "../lib/windowing";
+import { Gap } from "../components/WinGap";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -101,7 +103,7 @@ function WarnBadge({ sync }) {
   );
 }
 
-function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted, flash }) {
+function PersonCard({ person: p, index, settled, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted, flash }) {
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
@@ -128,7 +130,8 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
   return (
     <div
       className={`creator-card person-card${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
-      style={{ animationDelay: `${Math.min(index, 30) * 25}ms` }}
+      data-index={index}
+      style={settled ? undefined : { animationDelay: `${Math.min(index, 30) * 25}ms` }}
     >
       {selectMode ? (
         <button type="button" className="creator-main" aria-pressed={selected} onClick={e => onToggle(e.shiftKey)}>
@@ -194,7 +197,7 @@ function CardOptionsButton({ sync, onEdit }) {
   );
 }
 
-function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted, flash }) {
+function AccountCard({ account: a, index, settled, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted, flash }) {
   const former = matchedFormer(a, query);
   const sub = `${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}${former ? ` · was @${former}` : ""}`;
   const body = (
@@ -216,7 +219,8 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
   return (
     <div
       className={`creator-card${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
-      style={{ animationDelay: `${Math.min(index, 30) * 25}ms` }}
+      data-index={index}
+      style={settled ? undefined : { animationDelay: `${Math.min(index, 30) * 25}ms` }}
     >
       {selectable ? (
         <button type="button" className="creator-main" aria-pressed={selected} onClick={e => onToggle(e.shiftKey)}>
@@ -360,6 +364,11 @@ export default function Creators() {
     return filter ? list.filter(a => matches(accountText(a), filter)) : list;
   }, [data, filter]);
   const total = (data || []).reduce((s, a) => s + (a.count || 0), 0);
+  // Each grid renders the lines of cards near the viewport once it has many
+  // (lib/windowing.js). The browser's find bar sees those only: the filter
+  // box searches every name and handle.
+  const winPeople = useWindow(people.length, { estimate: 66, grid: true });
+  const winAccounts = useWindow(unlinked.length, { estimate: 66, grid: true });
 
   // One selection over both grids, in the order shown.
   const items = useMemo(() => [
@@ -514,17 +523,22 @@ export default function Creators() {
   // Once the sources and the cards are in: scroll to it, light it, then
   // drop ?source= so the same notification can point at it again.
   const ready = !!sources.data && !loading;
+  const flashPerson = flashKey ? people.findIndex(p => `person:${p.id}` === flashKey) : -1;
+  const flashAccount = flashKey ? unlinked.findIndex(a => a.id != null && `account:${accountKey(a)}` === flashKey) : -1;
+  const scrollPeople = winPeople.scrollTo, scrollAccounts = winAccounts.scrollTo;
   useEffect(() => {
     if (flash == null || !ready) return undefined;
-    const el = flashKey && document.querySelector(".source-row.is-flash, .creator-card.is-flash");
-    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    // A card may not be rendered yet (a windowed grid): its grid brings it.
+    if (flashPerson >= 0) scrollPeople(flashPerson);
+    else if (flashAccount >= 0) scrollAccounts(flashAccount);
+    else if (flashKey) document.querySelector(".source-row.is-flash")?.scrollIntoView({ block: "center", behavior: "smooth" });
     if (!flashKey) toast("That source is not there any more.", "err");
     const t = setTimeout(() => {
       setFlash(null);
       setParams(p => { const next = new URLSearchParams(p); next.delete("source"); return next; }, { replace: true });
     }, flashKey ? 2400 : 0);
     return () => clearTimeout(t);
-  }, [flash, flashKey, ready, setParams, toast]);
+  }, [flash, flashKey, flashPerson, flashAccount, scrollPeople, scrollAccounts, ready, setParams, toast]);
 
   return (
     <>
@@ -603,12 +617,13 @@ export default function Creators() {
             {people.length > 0 && (
               <>
                 <h3 className="card-title creators-section">People <span className="page-count">{fmtInt(people.length)}</span></h3>
-                <div className="creator-grid">
-                  {people.map((p, i) => (
+                <div className={`creator-grid${winPeople.settled ? " is-settled" : ""}`} ref={winPeople.listRef} {...winPeople.focusProps}>
+                  {winPeople.render(i => { const p = people[i]; return (
                     <PersonCard
                       key={p.id}
                       person={p}
                       index={i}
+                      settled={winPeople.settled}
                       selectMode={sel.active}
                       selected={sel.isSelected(`person:${p.id}`)}
                       onToggle={shift => sel.toggle(index(`person:${p.id}`), shift)}
@@ -620,7 +635,7 @@ export default function Creators() {
                       onMuted={onMuted}
                       flash={flashKey === `person:${p.id}`}
                     />
-                  ))}
+                  ); }, (height, key) => <Gap key={key} height={height} />)}
                 </div>
               </>
             )}
@@ -629,12 +644,13 @@ export default function Creators() {
                 {people.length > 0 && (
                   <h3 className="card-title creators-section">Accounts <span className="page-count">{fmtInt(unlinked.length)} not linked</span></h3>
                 )}
-                <div className="creator-grid">
-                  {unlinked.map((a, i) => (
+                <div className={`creator-grid${winAccounts.settled ? " is-settled" : ""}`} ref={winAccounts.listRef} {...winAccounts.focusProps}>
+                  {winAccounts.render(i => { const a = unlinked[i]; return (
                     <AccountCard
                       key={`${a.platform}:${a.id ?? a.handle}`}
                       account={a}
                       index={i}
+                      settled={winAccounts.settled}
                       query={filter}
                       selectMode={sel.active}
                       selected={sel.isSelected(`account:${accountKey(a)}`)}
@@ -649,7 +665,7 @@ export default function Creators() {
                       onMuted={onMuted}
                       flash={a.id != null && flashKey === `account:${accountKey(a)}`}
                     />
-                  ))}
+                  ); }, (height, key) => <Gap key={key} height={height} />)}
                 </div>
               </>
             )}

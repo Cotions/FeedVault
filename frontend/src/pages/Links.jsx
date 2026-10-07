@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { getLinks, getPeople, createLink, updateLink, deleteLink } from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -12,6 +12,8 @@ import PageHeader from "../components/PageHeader";
 import { LinkForm, LinkRow } from "../components/Links";
 import { KIND_LABEL } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
+import { useWindow } from "../lib/windowing";
+import { Gap } from "../components/WinGap";
 
 /* Every saved link: a creator's Linktree, Patreon or site, an interview, an
    article, tied to a person or to no one. Add at the top; filter by kind
@@ -80,13 +82,22 @@ export default function Links() {
   const { data, error, loading, reload } = useApi(load, refreshKey);
   const { data: people } = useApi(getPeople, refreshKey);
 
+  const links = useMemo(() => data?.links || [], [data]);
+  // Only the rows near the viewport are rendered once there are many
+  // (lib/windowing.js); the one being edited always is: its form holds the
+  // unsaved edits. The browser's find bar sees the rendered rows only: the
+  // search box searches them all.
+  const editingAt = edit.editing == null ? -1 : links.findIndex(l => l.id === edit.editing);
+  const { listRef, focusProps, render, scrollTo } = useWindow(links.length, { estimate: 66, pins: [editingAt] });
+
   // The link a 409 named: in view, and lit for a moment.
   useEffect(() => {
     if (flash == null || !data) return undefined;
-    document.querySelector(`[data-link-id="${flash}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const at = links.findIndex(l => l.id === flash);
+    if (at >= 0) scrollTo(at);
     const t = setTimeout(() => setFlash(null), 2400);
     return () => clearTimeout(t);
-  }, [flash, data]);
+  }, [flash, data, links, scrollTo]);
 
   // Every filter off, so the link is listed, lit and scrolled to.
   function showTaken(id) {
@@ -147,7 +158,6 @@ export default function Links() {
     }
   }
 
-  const links = data?.links || [];
   const sites = data?.sites || [];
   const total = sites.reduce((n, s) => n + s.count, 0);
   const filtered = !!(kind || site || person != null || q);
@@ -224,17 +234,20 @@ export default function Links() {
         ) : links.length === 0 ? (
           <div className="empty">{filtered ? "No link matches." : "No links yet. Add one above."}</div>
         ) : (
-          <ul className="link-list">
-            {links.map(l => edit.editing === l.id ? (
-              <li key={l.id} className="link-row is-editing">
-                <LinkForm link={l} people={people || []} busy={busy} submitLabel="Save"
-                          idPrefix={`link-${l.id}`} onSubmit={body => save(l.id, body)} onCancel={edit.close}
-                          onDirty={edit.onDirty} />
-              </li>
-            ) : (
-              <LinkRow key={l.id} link={l} busy={busy} flash={flash === l.id}
-                       onEdit={x => edit.open(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
-            ))}
+          <ul className="link-list" ref={listRef} {...focusProps}>
+            {render(i => {
+              const l = links[i];
+              return edit.editing === l.id ? (
+                <li key={l.id} className="link-row is-editing" data-index={i}>
+                  <LinkForm link={l} people={people || []} busy={busy} submitLabel="Save"
+                            idPrefix={`link-${l.id}`} onSubmit={body => save(l.id, body)} onCancel={edit.close}
+                            onDirty={edit.onDirty} />
+                </li>
+              ) : (
+                <LinkRow key={l.id} index={i} link={l} busy={busy} flash={flash === l.id}
+                         onEdit={x => edit.open(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
+              );
+            }, (height, key) => <Gap key={key} as="li" height={height} />)}
           </ul>
         )}
 

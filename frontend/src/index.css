@@ -1663,6 +1663,19 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .data-table tbody tr { opacity: 0; animation: statRise 0.35s ease forwards; }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover td { background: rgba(255, 255, 255, 0.025); }
+/* A windowed list (lib/windowing.js): its spacers stand for the rows not
+   rendered, and take nothing but their height. Rows mounted once the list
+   scrolled come in as they are: an entry animation (and its delay) would
+   blink them in while scrolling. */
+.win-gap, .data-table tbody tr.win-gap {
+  animation: none; opacity: 1; padding: 0; margin: 0; border: 0; background: none; pointer-events: none;
+}
+.data-table tbody tr.win-gap > td, .data-table.card-table tbody tr.win-gap > td { padding: 0; border: 0; }
+.card-table tr.win-gap > td::before { content: none; }
+.creator-grid > .win-gap { grid-column: 1 / -1; }
+.data-table tbody.is-settled tr, .creator-grid.is-settled > .creator-card, .is-settled .channel-bar-fill {
+  animation: none; opacity: 1;
+}
 .data-table .num { text-align: right; font-family: var(--mono); white-space: nowrap; }
 .data-table .path { font-family: var(--mono); font-size: 12px; color: var(--text); overflow-wrap: anywhere; user-select: all; }
 .data-table .reason { color: #ffd59a; }
@@ -2314,6 +2327,8 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .storage-bars .channel-bar-row { grid-template-columns: 80px 1fr 72px; }
 .storage-bars .channel-bar-count { text-align: right; white-space: nowrap; }
 
+.storage-creators-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.storage-creators-head .card-title { margin-bottom: 0; flex: 1; }
 .storage-table td { vertical-align: middle; }
 .storage-table th:has(.th-sort) { padding: 0; }
 .th-sort {
