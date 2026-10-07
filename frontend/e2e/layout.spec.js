@@ -10,6 +10,7 @@
 // stress.js: a 60-character creator, 15 tags, long names and paths.
 import fs from "node:fs";
 import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle, fakeBioImport } from "./fixtures.js";
+import { STRESS_PERSON } from "./stress.js";
 
 const SIZES = [
   { label: "1024x768", width: 1024, height: 768 },
@@ -220,6 +221,93 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
       // Review fits the window with its head: the media never sets its height.
       if (v.name.startsWith("Review") && m.tall > 1) problems.push(`${at}: Review is ${m.tall}px taller than the window`);
       if (m.card != null && m.card < m.bottom - 0.5) problems.push(`${at}: the head (bottom ${m.bottom}) overlaps the first card (top ${m.card})`);
+    }
+  }
+  expect(problems, problems.join("\n")).toEqual([]);
+});
+
+// The person page and the Links page line up, with the stress person (no
+// source, two links with a long title, address, notes and name), at
+// 1280x800, 1440x900 and 1920x1080:
+//  - Mute is on the line of Feed … Trash, at the right edge of the sections.
+//  - Every section after the first is set apart by a rule, below the one
+//    before it; the empty Sources says so in a line, not a 48px gap.
+//  - The link-in-bio import is a box inside Accounts, as wide as the Add a
+//    link box, and both have the same sub-heading style.
+//  - Add a link's title field and its button end at the same x (a person's
+//    page); on the Links page the button ends where the Person field does.
+//  - A long person name on the Links page ends in an ellipsis inside its chip.
+const LINE_SIZES = [SIZES[1], SIZES[2], SIZES[3]];
+
+test("the person page and the Links page line up", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "layout-zoom", "measured at three desktop sizes");
+  const problems = [];
+  const near = (a, b, px = 1) => Math.abs(a - b) <= px;
+  await openUrl(page, `/people/${S.person}`, pg => pg.locator(".person-new button"));
+  await stillPage(page);
+  for (const s of LINE_SIZES) {
+    await page.setViewportSize({ width: s.width, height: s.height });
+    await settle(page);
+    const at = `person page at ${s.label}`;
+    const m = await page.evaluate(() => {
+      const box = e => e.getBoundingClientRect();
+      const nav = box(document.querySelector(".person-links a"));
+      const mute = box(document.querySelector(".person-new button"));
+      const sections = [...document.querySelectorAll(".person-section")];
+      const accounts = sections[0];
+      const style = e => getComputedStyle(e);
+      const bio = document.querySelector(".bio-import"), add = document.querySelector(".person-link-add");
+      const sourcesEmpty = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Sources"))?.querySelector(".empty");
+      const title = box(add.querySelector(".link-form-title input")), button = box(add.querySelector(".link-form-actions .btn-primary"));
+      return {
+        nav: nav.top + nav.height / 2, mute: mute.top + mute.height / 2, muteRight: mute.right, sectionRight: box(accounts).right,
+        rules: sections.slice(1).map((x, i) => ({ border: parseFloat(style(x).borderTopWidth), top: box(x).top, above: box(sections[i]).bottom })),
+        bioInAccounts: accounts.contains(bio), bio: box(bio), add: box(add),
+        dashed: [style(bio).borderTopStyle, style(add).borderTopStyle],
+        heads: [...document.querySelectorAll(".bio-import-title, .link-group-title")].map(h => `${style(h).fontSize} ${style(h).fontWeight} ${style(h).color}`),
+        empty: sourcesEmpty ? box(sourcesEmpty).height : null,
+        titleRight: title.right, buttonRight: button.right,
+      };
+    });
+    if (!near(m.nav, m.mute, 2)) problems.push(`${at}: Mute is centred at y=${m.mute}, the Feed … Trash line at y=${m.nav}`);
+    if (!near(m.muteRight, m.sectionRight)) problems.push(`${at}: Mute ends at x=${m.muteRight}, the sections at x=${m.sectionRight}`);
+    m.rules.forEach((r, i) => {
+      if (r.border < 1) problems.push(`${at}: section ${i + 2} has no rule above it`);
+      if (r.top < r.above - 0.5) problems.push(`${at}: section ${i + 2} (top ${r.top}) overlaps the one before it (bottom ${r.above})`);
+    });
+    if (!m.bioInAccounts) problems.push(`${at}: the link-in-bio import is not inside Accounts`);
+    if (!near(m.bio.left, m.add.left) || !near(m.bio.right, m.add.right)) {
+      problems.push(`${at}: the import box spans x=${m.bio.left}…${m.bio.right}, Add a link x=${m.add.left}…${m.add.right}`);
+    }
+    if (m.dashed.some(d => d !== "dashed")) problems.push(`${at}: the import and Add a link boxes are ${m.dashed.join(" and ")}, not dashed`);
+    if (new Set(m.heads).size !== 1) problems.push(`${at}: the sub-headings differ: ${[...new Set(m.heads)].join(" | ")}`);
+    if (m.empty == null) problems.push(`${at}: the stress person's Sources has no empty state`);
+    else if (m.empty > 60) problems.push(`${at}: the empty Sources is ${m.empty}px tall`);
+    if (!near(m.titleRight, m.buttonRight)) problems.push(`${at}: Add a link's title ends at x=${m.titleRight}, its button at x=${m.buttonRight}`);
+  }
+
+  await openPage(page, { name: "Links", path: "/links" });
+  await stillPage(page);
+  for (const s of LINE_SIZES) {
+    await page.setViewportSize({ width: s.width, height: s.height });
+    await settle(page);
+    const at = `Links at ${s.label}`;
+    const m = await page.evaluate(person => {
+      const form = document.querySelector(".links-add .link-form");
+      const chip = [...document.querySelectorAll(".link-person")].find(c => c.title === `Person: ${person}`);
+      const text = chip?.querySelector(".chip-text");
+      return {
+        personRight: form.querySelector(".link-form-person .picker-input").getBoundingClientRect().right,
+        buttonRight: form.querySelector(".link-form-actions .btn-primary").getBoundingClientRect().right,
+        chip: chip ? chip.getBoundingClientRect().right : null,
+        text: text ? { right: text.getBoundingClientRect().right, cut: text.scrollWidth > text.clientWidth, overflow: getComputedStyle(text).textOverflow } : null,
+      };
+    }, STRESS_PERSON);
+    if (!near(m.personRight, m.buttonRight)) problems.push(`${at}: Add link ends at x=${m.buttonRight}, the Person field at x=${m.personRight}`);
+    if (!m.text) problems.push(`${at}: no person chip with a .chip-text for ${STRESS_PERSON}`);
+    else {
+      if (!m.text.cut || m.text.overflow !== "ellipsis") problems.push(`${at}: the long person name is not cut with an ellipsis (${JSON.stringify(m.text)})`);
+      if (m.text.right > m.chip + 0.5) problems.push(`${at}: the name runs past its chip (${m.text.right} > ${m.chip})`);
     }
   }
   expect(problems, problems.join("\n")).toEqual([]);

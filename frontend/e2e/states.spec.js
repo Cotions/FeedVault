@@ -1,10 +1,11 @@
 // Desktop state checks, at 1280x800 and 1440x900: what the resting layout
 // checks (layout.spec.js) cannot see.
-//  - Focus: Tab (then Shift+Tab back) through every page in the nav and a
-//    post page. Each stop shows a ring (an outline or box-shadow that
-//    differs from its unfocused look), not cut off by an overflow ancestor,
-//    not under the sticky header or the selection bar, and never on
-//    something hidden.
+//  - Focus: Tab (then Shift+Tab back) through every page in the nav, a
+//    post page and a person's page. Each stop shows a ring (an outline or
+//    box-shadow that differs from its unfocused look), not cut off by an
+//    overflow ancestor, not under the sticky header or the selection bar,
+//    and never on something hidden; and Tab never drops focus on <body>
+//    before the page's last stop.
 //  - Hover: one element of each kind in sight on those pages. Its box and
 //    its neighbours' stay put (one with a hover lift moves instead, and
 //    stays put under reduced motion), and whatever opens on hover stays in the
@@ -33,6 +34,7 @@ const BACK_STOPS = 10;       // then Shift+Tab, which scrolls up into the header
 // specs are loaded (and listing them needs none).
 const creatorUrl = () => { const S = stressData(); return `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`; };
 const postUrl = () => { const S = stressData(); return `/p/${S.post.platform}/${S.post.post_id}`; };
+const personUrl = () => `/people/${stressData().person}`;
 
 async function openUrl(page, url, ready) {
   await page.goto(url);
@@ -50,6 +52,8 @@ async function open(page, name) {
 const VIEWS = [
   ...PAGES.map(p => ({ name: p.name, open: page => open(page, p.name) })),
   { name: "Post", open: page => openUrl(page, postUrl(), ".post-page-head") },
+  // Accounts, the link-in-bio import, Sources, Links: with Mute loaded.
+  { name: "Person", open: page => openUrl(page, personUrl(), ".person-new button") },
 ];
 
 test.beforeEach(async ({ page }) => { await addProbes(page); });
@@ -76,12 +80,30 @@ const MAX_HOVER = 24;
 // per element and rule.
 async function walkFocus(page, view, size) {
   const found = [], seen = new Set();
-  let first = null;
+  let first = null, last = null, lost = null;
   await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
   const step = async key => {
     await page.keyboard.press(key);
-    const stop = await page.evaluate(allow => window.__fv.focusStop(allow), STATE_ALLOW);
-    if (!stop) return true;
+    // ``after``: this stop comes after the previous one in the document.
+    const stop = await page.evaluate(allow => {
+      const prev = document.querySelector("[data-fv-last-stop]");
+      const out = window.__fv.focusStop(allow);
+      if (!out) return null;
+      const el = document.activeElement;
+      const after = !prev || !!(prev.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+      prev?.removeAttribute("data-fv-last-stop");
+      el.setAttribute("data-fv-last-stop", "");
+      return { ...out, after };
+    }, STATE_ALLOW);
+    // Focus on <body>: past the page's last stop, or dropped by the one
+    // before (a stop that went away as it lost focus). The next Tab tells
+    // which: round to the top of the page, or on further down.
+    if (!stop) { if (key === "Tab") lost = last; return true; }
+    if (key === "Tab" && lost && stop.after) {
+      found.push({ view, size, state: key, rule: "focus-lost", detail: `Tab from ${lost.sel} "${lost.text}" left focus on <body>`, a: stop });
+    }
+    lost = null;
+    last = stop;
     const id = `${stop.sel}|${stop.text}|${stop.box.x},${stop.box.y + stop.scrollY}`;
     if (key === "Tab" && id === first) return false;             // round the page and back
     first ??= id;

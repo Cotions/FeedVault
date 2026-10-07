@@ -1,7 +1,8 @@
 // Desktop, 1440x900: saved links, on the Links page and on a person's
 // page. Addresses are invented (.example); FeedVault never opens them, and
 // neither does the test: it checks the anchors, it does not follow them.
-import { test, expect, openPage, idle } from "./fixtures.js";
+import { test, expect, openPage, idle, stressData } from "./fixtures.js";
+import { STRESS_LINKS } from "./stress.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -89,4 +90,39 @@ test("a person's Links: add, reorder, edit and delete", async ({ page }) => {
     for (const l of links) await page.request.delete(`/api/links/${l.id}`, { headers: H });
     await page.request.delete(`/api/people/${pid}`, { headers: H });
   }
+});
+
+// Editing the stress link with notes over several lines: the field opens
+// with all of them in view (it grows with its text), not one line of them.
+// Escape closes it unchanged.
+test("editing a link shows its whole notes", async ({ page }) => {
+  const stress = STRESS_LINKS.find(l => l.notes);
+  await openPage(page, { name: "Links", path: "/links" });
+  const row = page.locator(".link-row", { has: page.locator(`a[href="${stress.url}"]`) });
+  await row.getByRole("button", { name: /^Edit / }).click();
+  const notes = page.locator(".link-row.is-editing").getByLabel("Notes");
+  await expect(notes).toHaveValue(stress.notes);
+  const m = await notes.evaluate(t => ({ client: t.clientHeight, scroll: t.scrollHeight }));
+  expect(m.scroll, "the notes need no scrolling").toBeLessThanOrEqual(m.client + 1);
+  expect(m.client, "taller than one line").toBeGreaterThan(60);
+  await notes.press("Escape");
+  await expect(page.locator(".link-row.is-editing")).toHaveCount(0);
+  await idle(page);
+});
+
+// A person's page, by Tab: out of Add an account (a picker whose open list
+// of every account scrolls) on to the link-in-bio import's link to Settings
+// (the import is off in this instance), not to <body>: the open list was a
+// Tab stop (Chromium's focusable scrollers) that went as the field lost focus.
+test("Tab goes on from a person's Add an account picker", async ({ page }) => {
+  await page.goto(`/people/${stressData().person}`);
+  await expect(page.locator(".person-new button")).toBeVisible();
+  await idle(page);
+  const picker = page.getByRole("combobox", { name: "Add an account" });
+  await picker.focus();
+  await expect(page.locator(".person-add .picker-list")).toBeVisible();
+  expect(await page.locator(".person-add .picker-list").evaluate(ul => ul.scrollHeight > ul.clientHeight), "the open list scrolls").toBe(true);
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".bio-import").getByRole("link", { name: "Turn it on in Settings" })).toBeFocused();
+  await idle(page);
 });

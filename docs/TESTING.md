@@ -187,10 +187,10 @@ through with `pageErrors.allow(...)`.
 
 | Project | Spec | Viewport | Checks |
 |---|---|---|---|
-| `desktop` | `desktop.spec.js` | 1440×900 | Every page loads without errors, the Feed shows posts, Review keeps, trashes and undoes from the keyboard |
-| `layout` | `layout.spec.js` | 1024×768, 1280×800, 1440×900, 1920×1080 | 22 views and 7 dialogs: nothing overlaps, no text is clipped without a title, nothing is off screen, no sideways scroll, click targets of at least 24×24; every page title sits in the same place |
+| `desktop` | `desktop.spec.js`, `links.spec.js` | 1440×900 | Every page loads without errors, the Feed shows posts, Review keeps, trashes and undoes from the keyboard; saved links added, edited, reordered and deleted, a link's whole notes in view when editing, Tab out of a picker |
+| `layout` | `layout.spec.js` | 1024×768, 1280×800, 1440×900, 1920×1080 | 22 views and 7 dialogs: nothing overlaps, no text is clipped without a title, nothing is off screen, no sideways scroll, click targets of at least 24×24; every page title sits in the same place; the person page's and Links page's parts line up (1280 to 1920) |
 | `layout-zoom` | `layout.spec.js` | 1152×720 at 1.25 device pixels (1440×900 at 125% zoom) | The same layout rules (the title test is skipped) |
-| `states` | `states.spec.js` | 1280×800, 1440×900 | Focus rings, hover, popovers, scrolled pages, jumps landing below the header |
+| `states` | `states.spec.js` | 1280×800, 1440×900 | Focus rings (and Tab never dropping focus on `<body>`) on every page in the nav, a post and a person, hover, popovers, scrolled pages, jumps landing below the header |
 | `themes` | `themes.spec.js` | 1440×900 | WCAG AA text contrast in each of the 8 preset themes |
 | `phone` | `phone.spec.js`, `safe-area.spec.js` | 375×812 with touch (iPhone X, in Chromium) | No sideways scroll, the nav drawer, Review's bar, folded Feed filters, tables as cards, notch and home bar insets |
 
