@@ -132,6 +132,28 @@ test("a failed sync's notification lands on its source, highlighted", async ({ p
   }
 });
 
+// #126: Enter in New person's Name creates the person, as Create does.
+test("New person: Enter in Name creates them", async ({ page, request }) => {
+  const name = `E2E enter ${Date.now()}`;
+  let pid = null;
+  try {
+    await openPage(page, { name: "Creators", path: "/creators" });
+    await page.getByRole("button", { name: "New person" }).click();
+    const dialog = page.getByRole("alertdialog");
+    const field = dialog.getByRole("textbox", { name: "Name" });
+    await expect(field).toBeFocused();
+    await field.fill(name);
+    await field.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await expect(page).toHaveURL(/\/people\/\d+$/);
+    pid = page.url().match(/\/people\/(\d+)$/)[1];
+    await expect(page.locator("h2.page-title")).toHaveText(name);
+    await idle(page);
+  } finally {
+    if (pid) await request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});
+
 // #126: a Sync all whose last jobs were cancelled does not count them as
 // synced, in its toast and in the summary on Creators. The batch is faked.
 test("Sync all's summary counts cancelled syncs apart", async ({ page }) => {

@@ -700,6 +700,7 @@ export default function Creators() {
               maxLength={64}
               value={adding?.name || ""}
               onChange={e => setAdding(a => ({ ...a, name: e.target.value, error: null }))}
+              onKeyDown={e => { if (e.key === "Enter" && adding?.name.trim() && !busy) runAdd(); }}
             />
           </label>
           <label className="dialog-field">
