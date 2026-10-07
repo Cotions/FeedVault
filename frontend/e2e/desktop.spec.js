@@ -68,6 +68,22 @@ test("Review: K keeps, D trashes, Z undoes", async ({ page }) => {
   });
 });
 
+// QA pass 4: Enter on a focused link (the author, a hashtag, "Open post
+// page") kept the post and moved on, instead of following the link.
+test("Review: Enter on a focused link follows it and decides nothing", async ({ page }) => {
+  const decisions = [];
+  page.on("request", r => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/review") decisions.push(r.postData()); });
+  await openPage(page, { name: "Review", path: "/review" });
+  await expect(page.locator(".review-session")).toHaveText("0 kept · 0 trashed");
+  const open = page.locator(".review-open");
+  const href = await open.getAttribute("href");
+  await open.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`${href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+  await idle(page);
+  expect(decisions).toEqual([]);
+});
+
 async function openPerson(page) {
   await page.goto(`/people/${stressData().person}`);
   await expect(page.locator("h2.page-title")).toBeVisible();
