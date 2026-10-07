@@ -32,7 +32,17 @@ export class ApiError extends Error {
   }
 }
 
+// Whether the browser would send this path as it is. Route ids come from the
+// page's own URL, which any site can link to: /people/..%2Fbrowse gives the id
+// "../browse", and /api/people/../browse would go out as GET /api/browse, with
+// the header above. A path with a "." or ".." segment (or %2e forms) is refused.
+export function sentAsIs(path) {
+  const raw = path.split(/[?#]/, 1)[0];
+  return new URL(raw, "http://feedvault.invalid").pathname === raw;
+}
+
 async function request(method, path, body, { signal } = {}) {
+  if (!sentAsIs(path)) throw new ApiError("no such page", 404, null);
   const opts = { method, headers: { ...CSRF_HEADERS }, signal };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
