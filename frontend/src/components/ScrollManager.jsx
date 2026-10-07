@@ -17,18 +17,23 @@ export default function ScrollManager() {
     return () => { if ("scrollRestoration" in window.history) window.history.scrollRestoration = prev; };
   }, []);
 
-  // Remember the scroll offset for the current history entry as the user scrolls.
+  // Remember the scroll offset for the current history entry as the user
+  // scrolls. The entry is the one shown: switched before the new page
+  // scrolls (below), so its scroll to the top is never taken for the page
+  // just left, as a listener swapped by a later effect sometimes did.
+  const keyRef = useRef(location.key);
   useEffect(() => {
-    const onScroll = () => positions.current.set(location.key, window.scrollY);
+    const onScroll = () => positions.current.set(keyRef.current, window.scrollY);
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, [location.key]);
+  }, []);
 
   // On Back the page is often still loading, too short to scroll that far
   // (the Feed came back at the top, QA pass 3): the position is applied
   // again as the page grows, until it is reached, the user scrolls or
   // types, or RESTORE_MS went by.
   useLayoutEffect(() => {
+    keyRef.current = location.key;
     if (navType !== "POP") {
       window.scrollTo(0, 0);
       return undefined;
