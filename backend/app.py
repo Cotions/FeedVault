@@ -89,7 +89,7 @@ ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 CSRF_HEADER = "X-FeedVault"
 
 # (endpoint, method) another site may reach: exactly the userscript's calls
-# (userscript/feedvault.user.js; test_web_security checks the two agree).
+# (userscript/feedvault.user.js; test_foreign_origin checks the two agree).
 FOREIGN_ALLOWED = frozenset({
     ("saved", "POST"),                 # POST /api/saved
     ("save_post", "POST"),             # POST /api/save
