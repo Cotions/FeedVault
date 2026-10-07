@@ -3946,3 +3946,36 @@ def test_a_folder_above_the_scripts_folder_through_a_symlink_is_checked_where_it
             f"a folder above it ({deep / 'mid'}) is writable by group or others (chmod go-w '{deep / 'mid'}')"
     finally:
         (deep / "mid").chmod(0o755)
+
+
+@pytest.mark.parametrize("headers", FOREIGN)
+def test_the_userscripts_origin_cannot_schedule_a_script(client, folder, runner, source, headers, monkeypatch):
+    """Audit 3: a schedule set from another site would run the source's
+    script at the next tick. A source that runs a script is changed from
+    the dashboard only; one without a script still is from anywhere."""
+    for state in ("_notes", "_held", "_last"):
+        monkeypatch.setattr(scheduler, state, {})
+    attach(client, source["id"], "mine")
+    for options in ({"schedule": "hourly"}, {"full_history": True}, {"script": None}):
+        r = client.post(f"/api/sources/{source['id']}", json={"options": options}, headers={**H, **headers})
+        assert r.status_code == 403 and "own dashboard" in r.get_json()["error"], options
+    assert client.get(f"/api/sources/{source['id']}", headers=H).get_json()["options"]["schedule"] in (None, "off")
+    assert scheduler.tick() == []
+    assert runner.runs() == [] and jobs.active() == []
+    other = add_source(client, "dana.draws").get_json()["source"]
+    r = client.post(f"/api/sources/{other['id']}", json={"options": {"schedule": "daily"}}, headers={**H, **headers})
+    assert r.status_code == 200 and r.get_json()["source"]["options"]["schedule"] == "daily"
+
+
+@pytest.mark.parametrize("headers", FOREIGN)
+def test_the_userscripts_origin_cannot_rename_or_delete_a_script_source(client, folder, runner, source, headers):
+    """Review of audit 3: a rename changes the target the script gets (and
+    drops the scheduler's hold); a delete removes it. Dashboard only."""
+    attach(client, source["id"], "mine")
+    for method, url in (("post", f"/api/sources/{source['id']}/rename"), ("delete", f"/api/sources/{source['id']}/rename"),
+                        ("delete", f"/api/sources/{source['id']}")):
+        r = getattr(client, method)(url, json={"to": "x"}, headers={**H, **headers})
+        assert r.status_code == 403 and "own dashboard" in r.get_json()["error"], url
+    assert client.get(f"/api/sources/{source['id']}", headers=H).status_code == 200
+    other = add_source(client, "dana.draws").get_json()["source"]
+    assert client.delete(f"/api/sources/{other['id']}", headers={**H, **headers}).get_json()["ok"]

@@ -85,3 +85,30 @@ test("testapp.sh checks FEEDVAULT_TEST_PORT before any use", () => {
   assert.ok(check > 0 && check < text.indexOf("python3 -c \"import socket"), "checked before the Python port check");
   assert.match(text, /^PORT="\$\{FEEDVAULT_TEST_PORT-3389\}"$/m);
 });
+
+// testapp.sh's port block, run on its own the same way.
+function testappPort(env) {
+  const sh = readFileSync(`${repo}/testapp.sh`, "utf8");
+  const m = sh.match(/^# --- port -+\n[\s\S]*?^# --- port end -+$/m);
+  assert.ok(m, "testapp.sh has a port block");
+  const die = sh.match(/^die\(\) .*$/m)[0];
+  const port = sh.match(/^PORT=.*$/m)[0];
+  const script = `set -euo pipefail\n${die}\n${port}\n${m[0]}\nprintf '%s' "$PORT"\n`;
+  return spawnSync("bash", ["-c", script], { env: { PATH: process.env.PATH, ...env }, encoding: "utf8" });
+}
+
+test("testapp.sh never takes the live app's port, moved or not", () => {
+  for (const env of [{ FEEDVAULT_TEST_PORT: "3380" }, { FEEDVAULT_TEST_PORT: "03380" },
+                     { FEEDVAULT_TEST_PORT: "4100", FEEDVAULT_PORT: "4100" },
+                     { FEEDVAULT_TEST_PORT: "4100", FEEDVAULT_PORT: "04100" }]) {
+    const got = testappPort(env);
+    assert.notEqual(got.status, 0, JSON.stringify(env));
+    assert.match(got.stderr, /must not be the live app's port/);
+  }
+  for (const [env, used] of [[{}, "3389"], [{ FEEDVAULT_TEST_PORT: "4100", FEEDVAULT_PORT: "4000" }, "4100"],
+                             [{ FEEDVAULT_PORT: "junk" }, "3389"]]) {
+    const got = testappPort(env);
+    assert.equal(got.status, 0, got.stderr);
+    assert.equal(got.stdout, used);
+  }
+});

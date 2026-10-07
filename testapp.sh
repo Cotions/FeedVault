@@ -35,10 +35,18 @@ for arg in "$@"; do
   esac
 done
 
-# A number from 1 to 65535 before it goes anywhere (the Python check below).
+# --- port ---------------------------------------------------------------
+# A number from 1 to 65535 before it goes anywhere (the Python check below),
+# and never the live app's: 3380, or FEEDVAULT_PORT when run.sh is moved
+# (with the live app down, the busy-port check below would not see it).
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$PORT >= 1 && 10#$PORT <= 65535 )) \
   || die "FEEDVAULT_TEST_PORT must be a port number from 1 to 65535, not '$PORT'"
 PORT=$((10#$PORT))
+LIVE_PORT="${FEEDVAULT_PORT:-3380}"
+[[ "$LIVE_PORT" =~ ^[0-9]{1,5}$ ]] && LIVE_PORT=$((10#$LIVE_PORT))
+[ "$PORT" != 3380 ] && [ "$PORT" != "$LIVE_PORT" ] \
+  || die "FEEDVAULT_TEST_PORT must not be the live app's port ($PORT)"
+# --- port end -----------------------------------------------------------
 
 [ -x "$VENV/bin/python" ] || die "No virtualenv at $VENV. Run ./run.sh once."
 [ -f "$ROOT/frontend/dist/index.html" ] || die "UI not built. Run: ./run.sh --build"

@@ -24,6 +24,7 @@ read with html.parser and json only (never run), and only the profile links
 the routing table knows become suggestions; the user adds each one through
 the usual calls.
 """
+import codecs
 import ipaddress
 import json
 import re
@@ -71,7 +72,9 @@ class Refused(ValueError):
     busy, 502 the site)."""
 
     def __init__(self, message, status=400):
-        super().__init__(message)
+        # Messages quote the site (a Content-Type, a redirect's host) and are
+        # logged: no escape sequence or other control character gets through.
+        super().__init__("".join(c if c.isprintable() else "?" for c in message))
         self.status = status
 
 
@@ -151,7 +154,7 @@ def public(address):
     if not ip.is_global or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
         return False
     if ip.version == 6:
-        if ip.ipv4_mapped or ip.sixtofour or ip.teredo:
+        if ip.ipv4_mapped or ip.sixtofour or ip.teredo or ip.is_site_local:
             return False
         if any(ip in n for n in _V6_TUNNELS):
             return False
@@ -163,7 +166,19 @@ _V6_TUNNELS = [ipaddress.ip_network(n) for n in (
     "64:ff9b::/96", "64:ff9b:1::/48",          # NAT64
     "2002::/16",                               # 6to4
     "2001::/32",                               # Teredo
+    "3fff::/20",                               # documentation (2024), global to Python 3.12
 )]
+# The charsets a page may name (codecs.lookup names): C codecs, linear in the
+# page's size, that web pages use. Any other is read as UTF-8: Python also
+# has punycode, whose decoder took 156 s of CPU on 2 MB.
+WEB_CHARSETS = {
+    "utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "ascii",
+    *(f"iso8859-{n}" for n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16)),
+    *(f"cp{n}" for n in range(1250, 1259)), "cp874", "tis-620", "koi8-r", "koi8-u", "mac-roman",
+    "shift_jis", "cp932", "euc_jp", "iso2022_jp", "gb2312", "gbk", "gb18030", "big5", "big5hkscs", "euc_kr", "cp949",
+}
+# Web names Python's codecs do not know.
+_CHARSET_ALIASES = {"windows-874": "cp874", "windows-31j": "cp932", "x-sjis": "shift_jis", "x-cp1252": "cp1252"}
 
 
 # ---------------------------------------------------------------------------
@@ -382,12 +397,14 @@ class Fetcher:
         charset = "utf-8"
         m = re.search(r"charset\s*=\s*\"?([A-Za-z0-9._-]{1,40})", params)
         if m:
-            charset = m.group(1)
-        try:
-            text = body.decode(charset, "replace")
-        except (LookupError, UnicodeError, ValueError, TypeError):   # unknown, or not a text codec (idna, undefined)
-            text = body.decode("utf-8", "replace")
-        return "page", text
+            try:
+                given = m.group(1).lower()
+                name = codecs.lookup(_CHARSET_ALIASES.get(given, given)).name
+            except LookupError:
+                name = None
+            if name in WEB_CHARSETS:
+                charset = name
+        return "page", body.decode(charset, "replace")
 
     def _head(self, r):
         """(status, {lowercase name: value}): the status line and headers."""

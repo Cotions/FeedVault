@@ -1260,6 +1260,16 @@ def get_source(sid):
     return jsonify(_with_session(s))
 
 
+def _script_source_foreign(s):
+    """The 403 for another site's change to a source that runs a script
+    (a schedule, a rename, a delete), else None: such a source is changed
+    from the dashboard only, as its script is set there."""
+    if s["options"]["script"] and _foreign_origin():
+        return jsonify({"ok": False, "error": "a source that runs a script can only be changed from FeedVault's "
+                                              "own dashboard"}), 403
+    return None
+
+
 @app.post("/api/sources/<int:sid>")
 def update_source(sid):
     conn = db.connect()
@@ -1269,6 +1279,9 @@ def update_source(sid):
     body = request.get_json(silent=True) or {}
     if not isinstance(body.get("options"), dict):
         return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
+    refused = _script_source_foreign(s)
+    if refused:
+        return refused
     if sid in _sources_active() and set(body["options"]) - {"schedule"}:
         # The sync's end clears full history and last N: it would clear the new
         # ones. It reads the options again at the end, so a schedule can change.
@@ -1305,6 +1318,9 @@ def accept_rename(sid):
     s = sources.get(conn, sid)
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
+    refused = _script_source_foreign(s)
+    if refused:
+        return refused
     suggestion = s["health"]["rename"]
     body = request.get_json(silent=True) or {}
     if suggestion is None or suggestion["from"] != s["target"].lower():
@@ -1330,8 +1346,12 @@ def accept_rename(sid):
 @app.delete("/api/sources/<int:sid>/rename")
 def dismiss_rename(sid):
     conn = db.connect()
-    if sources.row(conn, sid) is None:
+    s = sources.get(conn, sid)
+    if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
+    refused = _script_source_foreign(s)
+    if refused:
+        return refused
     sources.dismiss_rename(conn, sid)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
@@ -1363,6 +1383,10 @@ def sync_all_sources():
 
 @app.delete("/api/sources/<int:sid>")
 def delete_source(sid):
+    s = sources.get(db.connect(), sid)
+    refused = _script_source_foreign(s) if s is not None else None
+    if refused:
+        return refused
     if sid in _sources_active():
         return jsonify({"ok": False, "error": "its sync is queued or running; cancel it first"}), 409
     if not sources.delete(db.connect(), sid):
@@ -1410,6 +1434,10 @@ def get_config():
 
 @app.post("/api/config")
 def set_config():
+    # Tool paths, roots, the schedules' pause, the link-in-bio switch: the
+    # dashboard's alone. The userscript (instagram.com) never writes them.
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": "settings can only be changed from FeedVault's own dashboard"}), 403
     body = request.get_json(silent=True) or {}
     # One read-modify-write at a time: two saves at once each keep the other's change.
     with config.editing:
