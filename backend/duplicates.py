@@ -22,6 +22,7 @@ import hashlib
 import heapq
 import json
 import os
+import threading
 import time
 from functools import lru_cache
 
@@ -58,11 +59,36 @@ def _key(members):
     return json.dumps(sorted(m["post_id"] if m["type"] == "post" else m["meta_path"] for m in members))
 
 
+_HASH_COLUMNS = "path, size, mtime_ns, partial, full, width, height, dhash"
+
+
+def _hash_row(r):
+    return (r[1], r[2], r[3], r[4], r[5] * r[6] if r[5] and r[6] else None, r[5] or None, r[6] or None,
+            hashing.from_db(r[7]))
+
+
+class _Hashes:
+    """path -> (size, mtime_ns, partial, full, pixels or None, width, height,
+    dhash), read from media_hash as asked for, each path once: groups need
+    the few files of their members, and reading every row up front took
+    most of a listing's time on a large archive (#perf). A path, once read,
+    keeps its value for the life of the object, so a group and its checks
+    (resolve) see the same hashes."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._rows = {}
+
+    def get(self, path, default=None):
+        if path not in self._rows:
+            r = self._conn.execute(f"SELECT {_HASH_COLUMNS} FROM media_hash WHERE path = ?", (path,)).fetchone()
+            self._rows[path] = _hash_row(r) if r is not None else None
+        h = self._rows[path]
+        return default if h is None else h
+
+
 def _hashes(conn):
-    """path -> (size, mtime_ns, partial, full, pixels or None, width, height, dhash)."""
-    return {r[0]: (r[1], r[2], r[3], r[4], r[5] * r[6] if r[5] and r[6] else None, r[5] or None, r[6] or None,
-                   hashing.from_db(r[7])) for r in conn.execute(
-        "SELECT path, size, mtime_ns, partial, full, width, height, dhash FROM media_hash")}
+    return _Hashes(conn)
 
 
 def _dismissed(conn, kind):
@@ -291,13 +317,24 @@ def _components(links):
     return list(out.values())
 
 
-def _content_components(conn, hashes):
-    """Lists of posts sharing a file (same size and full sha1), joined."""
+# The files of the digests more than one file has (by media_hash_full), and
+# their posts: (post id, size, full sha1).
+CONTENT_SQL = """
+    SELECT m.post_id, m.size, h.full
+    FROM (SELECT full, size FROM media_hash WHERE full IS NOT NULL AND full != ''
+          GROUP BY full, size HAVING COUNT(*) > 1) d
+    JOIN media_hash h ON h.full = d.full AND h.size = d.size
+    CROSS JOIN media m ON m.path = h.path
+    WHERE m.missing = 0 AND m.size = h.size"""
+
+
+def _content_components(conn, hashes=None):
+    """Lists of posts sharing a file (same size and full sha1), joined: read
+    from the digests more than one file has (CONTENT_SQL), not from every
+    media row."""
     by_digest = {}
-    for post_id, path, size in conn.execute("SELECT post_id, path, size FROM media WHERE missing = 0"):
-        h = hashes.get(path)
-        if h is not None and h[3] and h[0] == size:
-            by_digest.setdefault((size, h[3]), set()).add(post_id)
+    for post_id, size, full in conn.execute(CONTENT_SQL):
+        by_digest.setdefault((size, full), set()).add(post_id)
     links = []
     for posts in by_digest.values():
         if 1 < len(posts) <= MAX_SHARED:
@@ -330,7 +367,28 @@ def _masks(r):
     return [m for m in range(1 << 16) if m.bit_count() <= r]
 
 
+# near_pairs' last answers, by threshold: (values, pairs). Every listing of
+# similar groups asks again, after any change to the index (a decision, a
+# tag: db._memo), with the same pictures; the pairs are a function of them.
+_near = {}
+_near_lock = threading.Lock()
+
+
 def near_pairs(values, threshold):
+    """near_pairs_uncached(values, threshold), the last answer for that
+    threshold again when the values are the same. Do not modify it."""
+    values = tuple(values)
+    with _near_lock:
+        hit = _near.get(threshold)
+    if hit is not None and hit[0] == values:
+        return hit[1]
+    pairs = frozenset(near_pairs_uncached(values, threshold))
+    with _near_lock:
+        _near[threshold] = (values, pairs)
+    return pairs
+
+
+def near_pairs_uncached(values, threshold):
     """Index pairs (i, j), i < j, of 64-bit values at most ``threshold`` bits
     apart. Multi-index hashing: split into four 16-bit bands, two values
     within t bits agree within t // 4 bits on at least one band, so only
@@ -360,16 +418,17 @@ def near_pairs(values, threshold):
     return out
 
 
-def _pictures(conn, hashes):
-    """(post id, idx, dhash) of every image and video with a usable dHash."""
+def _pictures(conn, hashes=None):
+    """(post id, idx, dhash) of every image and video with a usable dHash,
+    in media row order."""
     out = []
-    for post_id, idx, path, size in conn.execute(
-            "SELECT post_id, idx, path, size FROM media WHERE missing = 0 AND kind IN ('image', 'video')"):
-        h = hashes.get(path)
-        if h is None or h[0] != size or h[7] is None:
-            continue
-        if FLAT_BITS < h[7].bit_count() < 64 - FLAT_BITS:
-            out.append((post_id, idx, h[7]))
+    for post_id, idx, value in conn.execute(
+            "SELECT m.post_id, m.idx, h.dhash FROM media m CROSS JOIN media_hash h ON h.path = m.path "
+            "WHERE m.missing = 0 AND m.kind IN ('image', 'video') AND h.size = m.size AND h.dhash IS NOT NULL "
+            "ORDER BY m.id"):
+        value = hashing.from_db(value)
+        if FLAT_BITS < value.bit_count() < 64 - FLAT_BITS:
+            out.append((post_id, idx, value))
     return out
 
 

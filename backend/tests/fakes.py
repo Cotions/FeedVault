@@ -27,6 +27,24 @@ def png(path, rgb=(47, 158, 79), size=(64, 64)):
         f.write(body)
 
 
+def noise_png(path, seed, scale=1):
+    """Write a 16x16 (times ``scale``) greyscale PNG of random pixels: unique
+    per seed, with structure enough for a real dHash (flat pictures have
+    none). The same seed at another scale is the same picture resized."""
+    import random
+    rng = random.Random(seed)
+    px = [[rng.randrange(256) for _ in range(16)] for _ in range(16)]
+    w = h = 16 * scale
+    raw = b"".join(b"\x00" + bytes(v for v in px[y // scale] for _ in range(scale)) for y in range(h))
+
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
+
+
 def base_name(ts):
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d_%H-%M-%S") + "_UTC"
 

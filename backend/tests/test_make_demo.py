@@ -72,3 +72,37 @@ def test_a_symlinked_marker_does_not_count(make_demo, tmp_path):
     (tmp_path / "elsewhere").write_text("")
     (root / ".feedvault-demo").symlink_to(tmp_path / "elsewhere")
     assert "no .feedvault-demo marker" in make_demo.prepare_root(str(root))
+
+
+def test_large_wants_a_number(make_demo, tmp_path, monkeypatch):
+    root = tmp_path / "vault"
+    for bad in (["--large"], ["--large", "many"], ["--large", "0"]):
+        monkeypatch.setattr(sys, "argv", ["make_demo.py", *bad, str(root)])
+        with pytest.raises(SystemExit) as e:
+            make_demo.main()
+        assert "--large wants a number" in str(e.value)
+    assert not root.exists()
+
+
+def test_large_adds_posts_people_and_trash(tmp_path):
+    """--large N (scripts/large_vault.py): N more invented posts over its
+    accounts, people linked to them, tags, collections, duplicates, and
+    posts in the trash once indexed."""
+    import json
+    import sqlite3
+    import subprocess
+    root = tmp_path / "vault"
+    out = subprocess.run([sys.executable, SCRIPT, "--large", "120", str(root)], capture_output=True, text=True,
+                         timeout=300)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "Large vault: 120 more posts" in out.stdout and "Trashed " in out.stdout
+    assert (root / ".feedvault-demo").is_file()
+    conn = sqlite3.connect(root / "data" / "feedvault.db")
+    one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
+    assert one("SELECT COUNT(*) FROM posts") > 120
+    assert one("SELECT COUNT(DISTINCT platform) FROM posts") == 4
+    assert one("SELECT COUNT(*) FROM people") >= 50
+    assert one("SELECT COUNT(*) FROM post_tags") > 0 and one("SELECT COUNT(*) FROM collection_posts") > 0
+    assert one("SELECT COUNT(*) FROM copies") > 0
+    manifest = root / "media" / ".feedvault-trash" / ".manifest.jsonl"
+    assert manifest.is_file() and all(json.loads(line) for line in manifest.read_text().splitlines())

@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test": "node --test scripts/fmt.test.js scripts/theme.test.js scripts/sourceOptions.test.js scripts/health.test.js scripts/userscript.test.js scripts/viteServer.test.js scripts/e2eHarness.test.js scripts/e2eShards.test.js scripts/reviewQueue.test.js scripts/launchScripts.test.js scripts/api.test.js scripts/notify.test.js scripts/links.test.js",
     "e2e": "playwright test",
+    "perf": "node e2e/perf.js",
     "preview": "vite preview"
   },
   "dependencies": {
