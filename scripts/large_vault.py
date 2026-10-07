@@ -17,9 +17,7 @@ import json
 import os
 import random
 import shutil
-import struct
 import sys
-import zlib
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend", "tests"))
@@ -35,22 +33,6 @@ TAGS = ["favourites", "to-print", "inspiration", "recipes", "travel", "ceramics"
         "architecture", "food", "pets", "sky", "sea", "mountains", "city", "black-and-white", "colour",
         "film", "macro", "people", "events", "reference", "work", "home", "garden", "shop", "wishlist",
         "later", "shared", "saved-for-mum", "misc"]
-
-
-def _chunk(tag, data):
-    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
-
-
-def png_bytes(seed, scale=1):
-    """A 16x16 (times ``scale``) PNG of random grey levels: unique per seed,
-    and structured enough for a real dHash. The same seed at another scale
-    is the same picture resized (a "similar" pair)."""
-    rng = random.Random(seed)
-    px = [[rng.randrange(256) for _ in range(16)] for _ in range(16)]
-    w = h = 16 * scale
-    raw = b"".join(b"\x00" + bytes(v for v in px[y // scale] for _ in range(scale)) for y in range(h))
-    return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
-            + _chunk(b"IDAT", zlib.compress(raw, 1)) + _chunk(b"IEND", b""))
 
 
 def _write(path, data):
@@ -111,7 +93,7 @@ class Builder:
 
     def image(self, path):
         self.seed += 1
-        _write(path, png_bytes(self.seed))
+        fakes.noise_png(path, self.seed)
         self.files += 1
         return self.seed
 
@@ -288,7 +270,7 @@ class Builder:
             new = fakes.write_post(other, f"LREPOST{i:05d}", ts, fakes.owner(handle, uid), kind="image",
                                    caption=f"repost {i}")
             if i % 4 == 0:                      # resized: similar, not identical
-                _write(new + ".jpg", png_bytes(self.first[base], 2))
+                fakes.noise_png(new + ".jpg", self.first[base], 2)
             else:
                 shutil.copyfile(src, new + ".jpg")
             self.files += 1
