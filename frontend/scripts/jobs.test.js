@@ -2,7 +2,22 @@
 // column and which toast style it gets (#139). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { endTone, jobExit } from "../src/lib/jobs.js";
+import { endTone, jobExit, scriptJobToReopen } from "../src/lib/jobs.js";
+
+test("Scripts opens again the log of the newest script run still going (#149)", () => {
+  assert.equal(scriptJobToReopen(null), null);
+  assert.equal(scriptJobToReopen([]), null);
+  const jobs = [
+    { id: 9, kind: "script-sync", state: "running" },     // a source's sync: not this page's
+    { id: 8, kind: "script", state: "done" },
+    { id: 7, kind: "script", state: "running" },
+    { id: 6, kind: "script", state: "queued" },
+    { id: 5, kind: "instaloader-profile", state: "running" },
+  ];
+  assert.equal(scriptJobToReopen(jobs).id, 7);
+  assert.equal(scriptJobToReopen(jobs.slice(3)).id, 6);
+  assert.equal(scriptJobToReopen([{ id: 3, kind: "script", state: "cancelled" }]), null);
+});
 
 test("a cancelled job's signal is not shown as its exit code", () => {
   assert.deepEqual(jobExit({ state: "cancelled", exit_code: -15 }),

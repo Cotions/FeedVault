@@ -45,6 +45,14 @@ test("the menu drawer opens, takes focus, closes on Escape and on a link", async
   await expect(page.getByRole("heading", { level: 2, name: "Storage", exact: true })).toBeVisible();
 });
 
+// #149: no keyboard to press "/" on: the search box shows no "/" hint.
+test("the header search shows no \"/\" hint on a touch screen", async ({ page }) => {
+  await openPage(page, PAGES[0]);
+  expect(await page.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true);
+  await expect(page.locator("input.header-search")).toBeVisible();
+  await expect(page.locator("kbd.search-kbd")).toBeHidden();
+});
+
 test("Review: Keep is on screen without a scroll; keep, trash and undo by tap", async ({ page }) => {
   await openPage(page, { name: "Review", path: "/review" });
   const bar = page.locator(".review-actions");

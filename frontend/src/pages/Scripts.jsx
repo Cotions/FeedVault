@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { getScript, getScripts, runScript } from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { ENDED, useJobs } from "../lib/jobs";
+import { ENDED, scriptJobToReopen, useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { fmtAgo, fmtBytes } from "../lib/fmt";
 import { scriptAnchor } from "../lib/sourceOptions";
@@ -66,6 +66,14 @@ function ScriptContent({ id }) {
   return <pre className="script-content" aria-label="Content, read-only">{state.content}</pre>;
 }
 
+// What a Target field asks for: what its tool takes, else what it becomes
+// (#149: a shell script's read "text").
+function targetHint(script) {
+  if (script.tool === "instaloader") return "profile name or shortcode";
+  if (script.tool) return "https://…";
+  return script.kind === "shell" ? "passed as FV_TARGET" : "passed as {target}";
+}
+
 /* Run a script with its inputs; the job's log shows below. */
 function RunForm({ script, onStarted }) {
   const [form,  setForm]  = useState({ target: "", url: "", folder: "" });
@@ -101,7 +109,7 @@ function RunForm({ script, onStarted }) {
         <label className="script-field">
           <span>Target</span>
           <input type="text" value={form.target} onChange={e => set({ target: e.target.value })} required
-                 placeholder={script.tool === "instaloader" ? "profile name or shortcode" : script.tool ? "https://…" : "text"} />
+                 placeholder={targetHint(script)} />
         </label>
       )}
       {script.needs === "url" && (
@@ -178,7 +186,18 @@ function CopyTemplate({ id, path }) {
 export default function Scripts() {
   const { list, started } = useJobs();
   const { data, error, reload } = useApi(getScripts);
-  const [jobId, setJobId] = useState(null);
+  // The job whose log shows; undefined until the job list is known.
+  const [jobId, setJobId] = useState(undefined);
+  // Back on the page (from Jobs, say) while a script run from here still
+  // runs: its log opens again, from the job list, once (#149); the id was
+  // the page's own state, gone on leaving it. Not scrolled to, nor
+  // focused: the page opens where it was left.
+  const [reopened, setReopened] = useState(null);
+  if (jobId === undefined && list) {
+    const again = scriptJobToReopen(list.jobs)?.id ?? null;
+    setJobId(again);
+    setReopened(again);
+  }
   const [shellOpen, setShellOpen] = useState(false);
   const [confirm, setConfirm] = useState(null);      // the job to cancel
 
@@ -203,14 +222,14 @@ export default function Scripts() {
   // form, and focus with it, went before the log came; QA pass 3).
   const focusLog = useRef(false);
   useEffect(() => {
-    if (shownId == null) return;
+    if (shownId == null || shownId === reopened) return;
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     if (focusLog.current) {
       focusLog.current = false;
       logRef.current?.focus({ preventScroll: true });
     }
     logRef.current?.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
-  }, [shownId]);
+  }, [shownId, reopened]);
   const all = data?.scripts || [];
   const builtins = all.filter(s => s.builtin);
   const files = all.filter(s => !s.builtin);

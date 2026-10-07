@@ -30,6 +30,16 @@ export const ENDED = new Set(["done", "failed", "cancelled", "interrupted"]);
 // The userscript's Save button (POST /api/save): one post, per platform.
 export const SAVE_KINDS = new Set(["instaloader-post", "gallery-dl-post", "yt-dlp-post"]);
 
+// The Scripts page's log to open again on coming back (#149): the job id
+// was the page's own state, lost on leaving it, while the script ran on.
+// The newest script run (POST /api/scripts/<id>/run, kind "script") still
+// queued or running, from GET /api/jobs' list (newest first); null if none.
+// A source's sync with a script is a Sync, followed on its source and Jobs.
+export const SCRIPT_KIND = "script";
+export function scriptJobToReopen(jobs) {
+  return (jobs || []).find(j => j.kind === SCRIPT_KIND && !ENDED.has(j.state)) ?? null;
+}
+
 // A job's params as shown: a script's SHA-256 is for the backend's check only.
 export const shownParams = job => Object.entries(job.params || {}).filter(([k]) => k !== "sha256").map(([, v]) => v);
 

@@ -38,6 +38,7 @@ export default function PostCard({ post, index = 0, selectMode = false, selected
 
   return (
     <article
+      data-post-id={post.id}
       className={`post-card${post.missing ? " is-missing" : ""}${cover ? "" : " is-text"}${selectMode ? " is-selecting" : ""}${selected ? " is-selected" : ""}`}
       style={{ animationDelay: `${Math.min(index % 60, 24) * 30}ms` }}
       onClickCapture={onClickCapture}

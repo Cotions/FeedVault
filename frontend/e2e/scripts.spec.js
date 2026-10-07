@@ -230,3 +230,148 @@ test("an open Jobs page shows a job started elsewhere within seconds (#139)", as
     await idle(page);
   });
 });
+
+// #149: the log of a script started on Scripts was the page's own state,
+// gone on coming back while the script still ran. It opens again from the
+// job list.
+test("Scripts: the log of a running script is there again on coming back (#149)", async ({ page, request }) => {
+  await withTicker(request, async ({ jobs }) => {
+    await page.goto("/scripts");
+    const entry = page.locator("#script-ticker");
+    await entry.getByRole("button", { name: "Run…" }).click();
+    const started = page.waitForResponse(r => r.url().endsWith("/api/scripts/ticker/run"));
+    await entry.getByRole("button", { name: "Run", exact: true }).click();
+    const { job } = await (await started).json();
+    jobs.push(job.id);
+    const log = page.getByRole("region", { name: "Script log" });
+    await expect(log.locator(".job-state")).toHaveText("running", { timeout: 20_000 });
+    await log.getByRole("link", { name: "Jobs" }).click();
+    await expect(page).toHaveURL(/\/jobs$/);
+    await page.locator('#main-nav a.side-link[href="/scripts"]').click();
+    await expect(page).toHaveURL(/\/scripts$/);
+    await expect(log).toContainText(`#${job.id}`);
+    await expect(log.locator(".job-state")).toHaveText("running");
+    await expect(log.locator(".job-log")).toContainText("tick");
+    // Closed, it stays closed while the page is open.
+    await log.getByRole("button", { name: "Close the log" }).click();
+    await expect(log).toHaveCount(0);
+    await page.waitForTimeout(1500);                // a few job polls
+    await expect(log).toHaveCount(0);
+    await request.post(`/api/jobs/${job.id}/cancel`, { headers: H });
+    await expect.poll(async () => (await getJob(request, job.id)).state, { timeout: 20_000 }).toBe("cancelled");
+    await idle(page);
+  });
+});
+
+// #149: a shell script's Target said "text"; it says what it becomes.
+test("Scripts: a shell script's Target says it is passed as FV_TARGET (#149)", async ({ page, request }) => {
+  await withScriptSource(request, async () => {
+    await page.goto("/scripts");
+    const entry = page.locator("#script-greet");
+    await entry.getByRole("button", { name: "Run…" }).click();
+    await expect(entry.getByRole("textbox", { name: "Target" })).toHaveAttribute("placeholder", "passed as FV_TARGET");
+    await idle(page);
+  });
+});
+
+const fieldset = (dialog, legend) => dialog.locator("fieldset.source-opt", { has: dialog.page().locator(`legend:text-is("${legend}")`) });
+
+// #149: with a script as the command, the tool's choices are not used:
+// dimmed and disabled, the schedule still live. Changed choices are not
+// dropped by Esc or Cancel without asking. "new posts" keeps its
+// description beside it, as "full history" does.
+test("a source's Options: a script disables the tool's choices, and changes are not dropped unasked (#149)", async ({ page, request }) => {
+  await withScriptSource(request, async ({ id }) => {
+    await page.goto("/creators");
+    const row = page.locator(`.source-row[data-source-id="${id}"]`);
+    await row.getByRole("button", { name: "Options" }).click();
+    const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
+    const pick = dialog.getByRole("combobox", { name: "Command a sync runs" });
+    await expect(pick).toHaveValue("greet");
+    for (const legend of ["Download", "Media", "Not older than", "First sync"]) {
+      const set = fieldset(dialog, legend);
+      if (await set.count()) {
+        await expect(set, legend).toHaveAttribute("disabled", "");
+        await expect(set, legend).toHaveClass(/is-unused/);
+        await expect(set.locator("input").first(), legend).toBeDisabled();
+      }
+    }
+    await expect(fieldset(dialog, "Download")).toHaveCount(1);
+    await expect(fieldset(dialog, "Schedule")).not.toHaveAttribute("disabled");
+    await expect(fieldset(dialog, "Schedule").getByRole("radio").first()).toBeEnabled();
+
+    // The tool's own command: its choices come back.
+    await pick.selectOption("");
+    for (const legend of ["Download", "Not older than", "First sync"]) {
+      await expect(fieldset(dialog, legend).locator("input").first(), legend).toBeEnabled();
+    }
+
+    // "new posts" and "full history": each description on its choice's line.
+    const first = fieldset(dialog, "First sync");
+    for (const name of ["new posts", "full history"]) {
+      const line = first.locator(".source-opt-line", { has: page.locator(`b:text-is("${name}")`) });
+      const b = await line.locator("b").first().boundingBox();
+      const d = await line.locator(".dim").boundingBox();
+      expect(d.y,`${name}: its description starts on its line`).toBeLessThan(b.y + b.height);
+      expect(d.x, `${name}: beside it`).toBeGreaterThan(b.x + b.width);
+    }
+
+    // Changed: Esc asks, Keep editing keeps the change.
+    await page.keyboard.press("Escape");
+    const discard = page.getByRole("alertdialog", { name: "Discard unsaved changes?" });
+    await expect(discard).toBeVisible();
+    await expect(discard.getByRole("button", { name: "Keep editing" })).toBeFocused();
+    await discard.getByRole("button", { name: "Keep editing" }).click();
+    await expect(discard).toHaveCount(0);
+    await expect(pick).toHaveValue("");
+    // Cancel asks too; Discard closes, and nothing was saved.
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await discard.getByRole("button", { name: "Discard" }).click();
+    await expect(dialog).toHaveCount(0);
+    const { sources } = await (await request.get("/api/sources", { headers: H })).json();
+    expect(sources.find(s => s.id === id).options.script).toBe("greet");
+    // Unchanged: Esc closes at once.
+    await row.getByRole("button", { name: "Options" }).click();
+    await expect(pick).toHaveValue("greet");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(discard).toHaveCount(0);
+    await idle(page);
+  });
+});
+
+// #149: an account card showed a refused script only in its badge's title.
+// It shows the source row's line, its See Scripts link with it. The demo's
+// @mossy.trails has an account card; its script is put back after.
+test("an account card shows its source's refused script and links to it (#149)", async ({ page, request }) => {
+  const dir = await scriptsDir(request);
+  const file = path.join(dir, "greet.sh");
+  fs.writeFileSync(file, GREET, { mode: 0o755 });
+  fs.chmodSync(file, 0o755);
+  const { sources } = await (await request.get("/api/sources", { headers: H })).json();
+  const src = sources.find(s => s.target === "mossy.trails");
+  expect(src, "the demo has a source for @mossy.trails").toBeTruthy();
+  const before = src.options.script ?? null;
+  try {
+    const set = await request.post(`/api/sources/${src.id}`, { headers: H, data: { options: { script: "greet" } } });
+    expect(set.ok(), await set.text()).toBe(true);
+    fs.chmodSync(file, 0o775);                // writable by group: refused
+    await page.goto(`/creators?source=${src.id}`);
+    const card = page.locator(".creator-card", { has: page.locator(".creator-name", { hasText: /^@mossy\.trails$/ }) });
+    await expect(card).toHaveCount(1);
+    const warn = card.locator(".source-script-warn");
+    await expect(warn).toContainText("script greet: refused");
+    await expect(warn).toContainText("greet.sh is refused: writable by group or others");
+    // Inside the card, not past its edges.
+    const c = await card.boundingBox();
+    const w = await warn.boundingBox();
+    expect(w.x + w.width).toBeLessThanOrEqual(c.x + c.width + 0.5);
+    expect(w.y + w.height).toBeLessThanOrEqual(c.y + c.height + 0.5);
+    await warn.getByRole("link", { name: "See Scripts" }).click();
+    await expect(page).toHaveURL(/\/scripts#script-greet$/);
+    await idle(page);
+  } finally {
+    await request.post(`/api/sources/${src.id}`, { headers: H, data: { options: { script: before } } });
+    fs.rmSync(file, { force: true });
+  }
+});
