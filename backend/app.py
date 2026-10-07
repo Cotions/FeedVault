@@ -467,9 +467,7 @@ def trash_restore():
         return jsonify({"ok": False, "error": "posts or keys must be a non-empty list of ids"}), 400
     cfg = config.load()
     report = trash.restore((posts or [])[:500], cfg["media_roots"], cfg["data_directory"],
-                           keys=(keys or [])[:5000])
-    if report.pop("decided"):
-        userdata.changed("decisions")          # a post trashed while kept comes back kept
+                           keys=(keys or [])[:5000])     # decisions.json follows a Keep put back
     return jsonify(report)
 
 

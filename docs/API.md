@@ -569,6 +569,24 @@ when the entry is restored or purged.
 those entries (partial deletes included), then re-indexes. Same response as
 with `posts`. Either `posts` or `keys` must be a non-empty list.
 
+A file goes back where it was, never over another file (that one is
+reported and stays in the trash). When its folder is gone (the account's
+folder renamed since), it goes to the folder the account's other indexed
+posts are in, if they are all in one folder of the same root, and the
+response lists it in `moved` (`{"post", "from", "to"}`, folders relative to
+the root); otherwise the old folder is made again and listed in `recreated`
+(`{"post", "folder"}`). `decision_unknown` lists the posts back without a
+decision whose manifest lines were written before deletions kept the
+decision: they may have been kept. The Trash page's toast says all three.
+
+A restore marks its manifest lines (`"restoring"`: where the file goes)
+before any file moves, and drops them only once the files are back, indexed
+and their Keep put back. A restore cut short (FeedVault killed) is finished
+by the next restore, purge, empty or scan (one runs at startup): a marked
+line whose file is at its destination and gone from the trash is done as
+the restore would have (indexed, not new, its Keep back) and dropped; any
+other marked line loses its mark.
+
 `POST /api/trash/purge` with `{ "keys": ["…"] }` (at most 5000) permanently
 deletes the files of those entries and drops their lines from the manifest.
 Unknown keys are ignored. A file is only deleted when its folder (symlinks
@@ -593,7 +611,10 @@ purged with them, not even within the same second.
 the lines removed for files that were already missing. An entry with an error
 keeps its lines.
 Delete, restore and purge never run at the same time (they share the
-manifest).
+manifest). A scan takes the same lock one folder at a time (and for its
+end), so a delete or a restore during a long rescan waits for the folder
+being read, not for the scan. The folders they change after the scan read
+them are read again at its end, before it marks anything missing.
 
 A delete moves each post's files, writes their lines, then drops the posts
 from the index in one commit at the end. When FeedVault is stopped or killed
@@ -616,7 +637,7 @@ name in the same folder, fsynced, renamed over it, the folder fsynced.
 | Method | Path | Returns |
 |---|---|---|
 | POST | `/api/review` | body `{ "posts": ["instagram:C8x…"], "decision": "keep" }` or `"decision": null` to clear → `{ "ok": true, "posts": [...] }` |
-| POST | `/api/trash/restore` | body `{ "posts": ["instagram:C8x…"] }` → moves those posts' files back out of the trash (their most recent deletion) and re-indexes them at once → `{ "ok": true, "posts": [...], "files": 4, "errors": [] }` |
+| POST | `/api/trash/restore` | body `{ "posts": ["instagram:C8x…"] }` → moves those posts' files back out of the trash (their most recent deletion) and re-indexes them at once → `{ "ok": true, "posts": [...], "files": 4, "errors": [], "moved": [], "recreated": [], "decision_unknown": [] }` |
 
 Every post summary carries `"decision": "keep"` or `"decision": null`.
 `/api/posts` takes `review=unreviewed` (no decision yet) or `review=kept`, and
@@ -911,6 +932,14 @@ Free-form labels, many per post. They are the user's own data: kept in the
 `<data_directory>/userdata/tags.json` and `post_tags.json` (2 s after the
 last change, `post_tags.json` naming tags by name, not id) so a rebuilt
 index gets them back.
+
+Every `userdata/*.json` file is written at once, not 2 s later, when the
+change left its table empty: an empty table is read back from its file at
+startup, so a file still listing the rows just removed would bring them
+back. `tags.json`, `collections.json`, `people.json` and `links.json` keep
+each row's `id`, and a rebuilt index gives it back (page URLs are built
+from it); a file without ids (older) or with an id that is not a positive
+whole number, or one given twice, still loads every row, those under new ids.
 
 - Names are compared without regard to case for ASCII letters only (`Outfits` and `outfits` are one
   tag, the first spelling kept; `Été` and `été` are two). Spaces inside a name are collapsed, and

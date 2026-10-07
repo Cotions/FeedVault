@@ -30,6 +30,7 @@ import uuid
 import archives
 import config
 import db
+import hashing
 import organize
 import scanner
 import thumbs
@@ -37,6 +38,9 @@ from parsers import IMAGE_EXT, VIDEO_EXT, ext_of
 
 TRASH_NAME = scanner.TRASH_NAME
 MANIFEST = ".manifest.jsonl"
+# On a line a restore is moving back: where the file goes. Written before
+# the file moves, so a restore cut short is finished by finish_restores.
+RESTORING = "restoring"
 # instaloader side files that live next to a post's metadata JSON.
 _SIDE_SUFFIXES = (".txt", "_location.txt", "_comments.json")
 
@@ -81,6 +85,7 @@ def _move(path, roots, line):
         os.rename(path, dest)
     except OSError as e:
         raise TrashError(f"could not move to the trash: {e.strerror or e}") from e
+    scanner.touched([os.path.dirname(path)])   # a scan under way reads the folder again
     now = time.time()
     with open(os.path.join(trash_dir(root), MANIFEST), "a", encoding="utf-8") as f:
         f.write(json.dumps({"from": path, "to": dest, **line, "at": int(now), "at_ms": _next_stamp(roots, now),
@@ -230,10 +235,14 @@ def _delete_post(conn, post, roots, data_dir, report):
     items = conn.execute("SELECT COUNT(*) FROM media WHERE post_id = ?", (post["id"],)).fetchone()[0]
     info = _never_again(_post_info(post, items, False), archives.post_entries(post), data_dir)
     # Its review decision leaves the index with it (db.remove_post); the
-    # lines keep it, so a restore brings the post back as it was.
+    # lines keep it, so a restore brings the post back as it was. None when
+    # it had none: lines without the key are from before decisions were
+    # kept, and a restore says it cannot tell (restore's decision_unknown).
     decision = conn.execute("SELECT decision, at FROM decisions WHERE post_id = ?", (post["id"],)).fetchone()
     if decision is not None:
         info = {**info, "decision": decision[0], "decided_at": decision[1]}
+    else:
+        info = {**info, "decision": None}
     moved = report["files"]
     if not _move_all(files, roots, post["id"], info, report, data_dir):
         _not_moved(info, report["files"] == moved, data_dir)
@@ -322,6 +331,7 @@ def _on_disk(roots):
 def empty(roots, data_dir=None):
     """Permanently delete every trash folder under the media roots."""
     with db.write_lock:
+        changed = finish_restores(roots, data_dir)     # their files are back: not in the trash
         before = _on_disk(roots)
         gone = set()
         for r in before["roots"]:
@@ -332,6 +342,7 @@ def empty(roots, data_dir=None):
             if os.path.isdir(r["path"]) and os.path.basename(r["path"]) == TRASH_NAME:
                 shutil.rmtree(r["path"])
         forgotten = _forget_gone(roots, gone)
+    scanner._changed(changed)
     return {"ok": True, "files": before["files"], "bytes": before["bytes"], "forgotten": forgotten}
 
 
@@ -349,7 +360,9 @@ def _forget_gone(roots, gone):
 # The manifest
 #
 # One JSON line per trashed file. Delete appends, restore and purge rewrite it;
-# all three hold db.write_lock. Reads do not: an append in progress at worst
+# all three hold db.write_lock. A restore rewrites it twice: its lines marked
+# (RESTORING) before any file moves, then without them once the files are
+# back, indexed and their decisions put back. Reads do not: an append in progress at worst
 # leaves a half line, which is skipped and read whole next time (the file's
 # size changed, so the cache misses).
 # ---------------------------------------------------------------------------
@@ -427,6 +440,9 @@ def _rebased(lines, root):
                 line = {**line, "to": base + to[i:]}
                 if line["from"].startswith(old + os.sep):
                     line["from"] = base + line["from"][len(old):]
+                back = line.get(RESTORING)
+                if isinstance(back, str) and back.startswith(old + os.sep):
+                    line[RESTORING] = base + back[len(old):]
         out.append(line)
     return out
 
@@ -817,14 +833,28 @@ def thumb(roots, key, data_dir):
 
 def restore(post_ids, roots, data_dir=None, keys=None):
     """Put files back, then re-index them: each post's most recent deletion
-    (``post_ids``), or exactly the entries named by ``keys``."""
-    report = {"ok": True, "posts": [], "files": 0, "errors": []}
+    (``post_ids``), or exactly the entries named by ``keys``.
+
+    A file goes back where it was, never over another one. When its folder
+    is gone (the account's folder renamed since it was deleted) it goes to
+    the folder the account's other posts are in, when they are all in one
+    folder of the same root (``moved``), else its folder is made again
+    (``recreated``): see _home.
+
+    The lines are marked with where each file goes (RESTORING) before any
+    file moves, and dropped only once the files are back, indexed again and
+    their decisions put back, so a restore cut short (FeedVault killed) is
+    finished by the next one, or by the next scan (finish_restores).
+
+    ``decision_unknown``: posts back without a decision whose lines are from
+    before deletions kept it (#155): it may have been a Keep."""
+    report = {"ok": True, "posts": [], "files": 0, "errors": [], "moved": [], "recreated": [],
+              "decision_unknown": []}
     wanted = set(post_ids or ())
     wanted_keys = set(keys or ())
-    touched_dirs = set()
-    archived = {}                                # tool -> archive entries the restored lines added
-    decided = {}                                 # post -> (decision, at) its restored lines kept
     with db.write_lock:
+        changed = finish_restores(roots, data_dir)
+        plans = []                               # (root, lines, {line index: destination}, homes)
         for root in roots:
             lines = _read_manifest(root)
             if not lines:
@@ -833,50 +863,186 @@ def restore(post_ids, roots, data_dir=None, keys=None):
             for e in lines:
                 if e.get("post") in wanted:
                     latest[e["post"]] = e.get("batch")
-            keep = []
-            for e in lines:
+            homes = {}                           # (post, folder) -> (where its files go, how), see _home
+            chosen = {}
+            for i, e in enumerate(lines):
                 pid = e.get("post")
                 if not (pid in latest and e.get("batch") == latest[pid]) \
                         and _line_key(root, e) not in wanted_keys:
-                    keep.append(e)
                     continue
-                src, dest = e.get("to"), e.get("from")
+                src, orig = e.get("to"), e.get("from")
                 try:
                     # Read back, never trusted: out of this root's trash, into this root.
-                    if not (isinstance(src, str) and isinstance(dest, str) and "\0" not in src + dest
+                    if not (isinstance(src, str) and isinstance(orig, str) and "\0" not in src + orig
                             and _removable(src, root)) or os.path.isdir(src) and not os.path.islink(src):
                         raise TrashError("not a file in this root's trash")
+                    _root_for(orig, [root])
+                    folder = os.path.dirname(orig)
+                    if (pid, folder) not in homes:
+                        homes[(pid, folder)] = _home(root, e, folder)
+                    dest = os.path.join(homes[(pid, folder)][0], os.path.basename(orig))
                     _root_for(dest, [root])
-                    if os.path.lexists(dest):
-                        raise TrashError("a file is already back at the original place")
+                    _free_for(dest, orig)
                     if not os.path.lexists(src):
                         raise TrashError("no longer in the trash")
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    os.rename(src, dest)
-                    report["files"] += 1
-                    touched_dirs.add(os.path.dirname(dest))
-                    if data_dir:
-                        thumbs.move(data_dir, src, dest)
-                    if isinstance(e.get("archive"), dict):
-                        for tool, entries in e["archive"].items():
-                            if isinstance(entries, list):
-                                archived.setdefault(tool, set()).update(x for x in entries if isinstance(x, str))
-                    if e.get("decision") == "keep" and isinstance(pid, str):
-                        at = e.get("decided_at")
-                        decided[pid] = ("keep", at if isinstance(at, int) and not isinstance(at, bool) else 0)
-                    if pid not in report["posts"]:
-                        report["posts"].append(pid)
+                    chosen[i] = dest
                 except (TrashError, OSError) as err:
-                    report["errors"].append({"path": dest if isinstance(dest, str) else None, "error": str(err)})
-                    keep.append(e)
-            if len(keep) != len(lines):
-                _write_manifest(root, keep)
-        if archived and data_dir:
-            archives.take_back({t: sorted(es) for t, es in archived.items()}, data_dir)
-    if touched_dirs:
-        scanner.index_dirs(roots, touched_dirs)
-    report["decided"] = _decide_again(decided)
+                    report["errors"].append({"path": orig if isinstance(orig, str) else None, "error": str(err)})
+            if chosen:
+                _write_manifest(root, [{**e, RESTORING: chosen[i]} if i in chosen else e
+                                       for i, e in enumerate(lines)])
+                plans.append((root, lines, chosen, homes))
+
+        restored, done = [], []
+        for root, lines, chosen, homes in plans:
+            moved = set()
+            for i, dest in chosen.items():
+                e = lines[i]
+                try:
+                    _free_for(dest, e["from"])
+                    if not os.path.lexists(e["to"]):
+                        raise TrashError("no longer in the trash")
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    os.rename(e["to"], dest)
+                except (TrashError, OSError) as err:
+                    report["errors"].append({"path": e["from"], "error": str(err)})
+                    continue
+                moved.add(i)
+                restored.append((e, dest))
+                report["files"] += 1
+                pid = e.get("post")
+                if pid not in report["posts"]:
+                    report["posts"].append(pid)
+            done.append(moved)
+            for (pid, folder), (home, how) in sorted(homes.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])):
+                if how and any(lines[i].get("post") == pid and os.path.dirname(lines[i]["from"]) == folder
+                               for i in moved):
+                    rel = lambda p: os.path.relpath(p, root)    # noqa: E731
+                    if how == "moved":
+                        report["moved"].append({"post": pid, "from": rel(folder), "to": rel(home)})
+                    else:
+                        report["recreated"].append({"post": pid, "folder": rel(folder)})
+        more, unknown = _put_back(restored, roots, data_dir)
+        changed += more
+        report["decision_unknown"] = unknown
+        for (root, lines, chosen, homes), moved in zip(plans, done):
+            # The lines of the files that did not move lose their mark.
+            _write_manifest(root, [e for i, e in enumerate(lines) if i not in moved])
+    scanner._changed(dict.fromkeys(changed))
+    if restored:
+        hashing.kick()                           # files back from the trash may need hashing again
     return report
+
+
+def _free_for(dest, orig):
+    """Refuse ``dest`` when something is there: a restore never replaces a file."""
+    if os.path.lexists(dest):
+        raise TrashError("a file is already back at the original place" if dest == orig
+                         else f"a file of that name is already in {os.path.dirname(dest)}")
+
+
+def _home(root, line, folder):
+    """(where the files of ``line``'s post that were in ``folder`` go back,
+    how): ``folder`` itself while it is there (how None). Gone (the account's
+    folder renamed or moved since), the one folder the account's posts are
+    in now, in this root, that is not in the trash ("moved"); when they are
+    in none or in several, ``folder``, made again ("recreated")."""
+    if os.path.isdir(folder):
+        return folder, None
+    author = line.get("author") if isinstance(line.get("author"), dict) else {}
+    platform = line.get("platform")
+    aid, handle = author.get("id"), author.get("handle")
+    if isinstance(platform, str) and (isinstance(aid, str) and aid or isinstance(handle, str) and handle):
+        column, value = ("author_id", aid) if isinstance(aid, str) and aid else ("author_handle", handle)
+        homes = set()
+        for (meta,) in db.connect().execute(
+                f"SELECT meta_path FROM posts WHERE platform = ? AND {column} = ? AND missing = 0",
+                (platform, value)):
+            homes.add(os.path.dirname(meta))
+            if len(homes) > 1:
+                break
+        if len(homes) == 1:
+            home = homes.pop()
+            if home != folder and os.path.isdir(home) and scanner.in_roots(os.path.join(home, "x"), [root]):
+                return home, "moved"
+    return folder, "recreated"
+
+
+def _put_back(restored, roots, data_dir):
+    """After a restore moved files back (``restored``: [(line, where its file
+    went)]), under db.write_lock: their thumbnails follow them, the archive
+    entries their deletion added are taken out, their folders are indexed
+    again and their posts' Keep put back. Returns (the user tables changed,
+    the posts back without a decision whose lines did not say)."""
+    archived, decided, unknown, dirs = {}, {}, set(), set()
+    for e, dest in restored:
+        dirs.add(os.path.dirname(dest))
+        if data_dir:
+            thumbs.move(data_dir, e["to"], dest)
+        if isinstance(e.get("archive"), dict):
+            for tool, entries in e["archive"].items():
+                if isinstance(entries, list):
+                    archived.setdefault(tool, set()).update(x for x in entries if isinstance(x, str))
+        pid = e.get("post")
+        if not isinstance(pid, str):
+            continue
+        if e.get("decision") == "keep":
+            at = e.get("decided_at")
+            decided[pid] = ("keep", at if isinstance(at, int) and not isinstance(at, bool) else 0)
+        elif "decision" not in e and e.get("partial") is not True and not isinstance(e.get("copy"), str):
+            unknown.add(pid)                     # a line from before decisions were kept
+    if archived and data_dir:
+        archives.take_back({t: sorted(es) for t, es in archived.items()}, data_dir)
+    changed = []
+    if dirs:
+        _, changed = scanner.index_dirs_locked(roots, dirs)
+    if _decide_again(decided):
+        changed.append("decisions")
+    conn = db.connect()
+    unknown = [pid for pid in sorted(unknown) if pid not in decided
+               and conn.execute("SELECT 1 FROM posts WHERE id = ?", (pid,)).fetchone()
+               and not conn.execute("SELECT 1 FROM decisions WHERE post_id = ?", (pid,)).fetchone()]
+    return changed, unknown
+
+
+def finish_restores(roots, data_dir=None):
+    """Finish the restores cut short (FeedVault killed between moving files
+    back and dropping their lines), under db.write_lock: a line marked
+    RESTORING whose file is at its destination and no longer in the trash
+    is done, as the restore would have (_put_back), and dropped; any other
+    loses its mark (its file did not move). Called before a restore, a
+    purge, emptying the trash, and by each scan (one at startup). Returns
+    the user tables changed, for scanner._changed once the lock is free."""
+    rewrites, restored = [], []
+    for root in roots:
+        lines = _read_manifest(root)
+        if not any(RESTORING in e for e in lines):
+            continue
+        keep = []
+        for e in lines:
+            if RESTORING not in e:
+                keep.append(e)
+                continue
+            dest = e[RESTORING]
+            line = {k: v for k, v in e.items() if k != RESTORING}
+            try:
+                back = isinstance(dest, str) and "\0" not in dest and os.path.lexists(dest) \
+                    and not os.path.lexists(line["to"]) and _root_for(dest, [root]) is not None
+            except (TrashError, OSError):
+                back = False
+            if back:
+                restored.append((line, dest))
+            else:
+                keep.append(line)
+        rewrites.append((root, keep))
+    if not rewrites:
+        return []
+    changed, _ = _put_back(restored, roots, data_dir)
+    for root, keep in rewrites:
+        _write_manifest(root, keep)
+    if restored:
+        print(f"[trash] finished a restore cut short: {len(restored)} files were back, their lines dropped")
+    return changed
 
 
 def _decide_again(decided):
@@ -908,9 +1074,12 @@ def purge(roots, keys, data_dir, match=None):
     """Permanently delete the files of the given entries and drop their lines.
     ``match`` (_matches arguments) picks the entries instead of ``keys``."""
     with db.write_lock:
+        changed = finish_restores(roots, data_dir)     # their files are back: not in the trash
         if match is not None:
             keys = [g["key"] for g in _all_entries(roots) if _matches(g, **match)]
-        return _purge(roots, keys, data_dir)
+        report = _purge(roots, keys, data_dir)
+    scanner._changed(changed)
+    return report
 
 
 def _purge(roots, keys, data_dir):

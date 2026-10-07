@@ -122,10 +122,113 @@ def _stat(path):
         return None, None
 
 
+_scan_lock = threading.Lock()                  # one scan at a time
+# Folders whose files changed while a scan ran (files moved to or from the
+# trash, a download, a save), for the scan to read again those it read
+# already. None when no scan runs. Read and changed under db.write_lock.
+_dirty = None
+
+
+def touched(dirs):
+    """Note folders whose files just changed (under db.write_lock), for a
+    scan under way to read them again before it ends."""
+    if _dirty is not None:
+        _dirty.update(os.path.normpath(d) for d in dirs)
+
+
 def scan(roots):
-    """Scan synchronously and return a report."""
-    with db.write_lock:
-        return _scan(roots)
+    """Scan synchronously and return a report.
+
+    The scan holds db.write_lock one folder at a time (listed, parsed,
+    indexed and committed under it), and again for its end, not for its
+    whole run: a delete or a restore waits for one folder, not for the
+    scan. Those note the folders whose files they move (touched); the scan
+    reads them again at its end, under the lock, before it marks what it
+    did not see as missing, so the index it leaves is the one a scan
+    started after them would leave. db.scanning tells the background work
+    that steps aside for the lock (hashing) to keep stepping aside between
+    folders."""
+    global _dirty
+    with _scan_lock:
+        db.scanning.set()
+        try:
+            with db.write_lock:
+                _dirty = set()
+            return _scan(roots)
+        finally:
+            with db.write_lock:
+                _dirty = None
+            db.scanning.clear()
+
+
+class _Folder:
+    """What a scan found in one folder."""
+    __slots__ = ("unmatched", "copies", "profiles", "account_files", "errors")
+
+    def __init__(self):
+        self.unmatched, self.copies, self.profiles, self.account_files, self.errors = [], [], [], [], []
+
+
+def _files_in(dirpath):
+    """The names of the files in ``dirpath`` a scan reads, as os.walk lists
+    them (a symlink to a folder is a folder), or None when it is gone."""
+    try:
+        with os.scandir(dirpath) as it:
+            return [e.name for e in it if not e.name.startswith(".") and not e.is_dir()]
+    except OSError:
+        return None
+
+
+def _read_folder(conn, roots, root, dirpath, names, fresh, started, report, seen_meta):
+    """Parse and index one folder's files (under db.write_lock). Returns
+    what it found besides the posts, as a _Folder."""
+    out = _Folder()
+    names, leading = _leading_out(roots, dirpath, names)
+    out.unmatched.extend((path, *_size_mtime(path), reason) for path, reason in leading)
+    if not names:
+        return out
+    result = parsers.parse_dir(root, dirpath, names)
+    out.profiles.extend(result.profiles)
+    out.account_files.extend(result.account_files)
+    for path, message in result.errors:
+        out.errors.append({"path": path, "error": message})
+        out.unmatched.append((path, *_size_mtime(path), message))
+    for path, reason in result.skipped:
+        out.unmatched.append((path, *_size_mtime(path), reason))
+    # Stamped per folder, right before its commit: a "Mark all seen" while
+    # the scan runs leaves the folders committed after it new. Not new at
+    # all while the root's part of the index is built from nothing.
+    first_seen = 0 if fresh else int(time.time())
+    for post in result.posts:
+        _index_post(conn, post, started, report, seen_meta, out.unmatched, out.copies, first_seen)
+    for n in names:
+        if n not in result.claimed and parsers.is_media(n):
+            path = os.path.join(dirpath, n)
+            out.unmatched.append((path, *_size_mtime(path), "no metadata file for this media"))
+    return out
+
+
+def _walked(root, dirpath):
+    """Whether a scan of ``root`` walks ``dirpath``, as _scan prunes os.walk:
+    no dot-folder or _SKIP_DIRS on the way, no virtualenv above it."""
+    rel = os.path.relpath(dirpath, root)
+    parts = [] if rel == "." else rel.split(os.sep)
+    if any(p == ".." or p.startswith(".") or p in _SKIP_DIRS for p in parts):
+        return False
+    d = root
+    for p in [None, *parts]:
+        d = d if p is None else os.path.join(d, p)
+        if os.path.exists(os.path.join(d, "pyvenv.cfg")):
+            return False
+    return True
+
+
+def _root_of(path, roots):
+    """The root of ``roots`` that ``path`` is (or is under), as configured."""
+    for r in roots:
+        if path == os.path.normpath(r) or path.startswith(r.rstrip(os.sep) + os.sep):
+            return r
+    return None
 
 
 def _scan(roots):
@@ -133,68 +236,88 @@ def _scan(roots):
     started = int(time.time())
     report = {"started_at": started, "finished_at": None,
               "added": 0, "updated": 0, "missing": 0, "unmatched": 0, "errors": []}
-    # Building the index, or a root's part of it, from nothing: what it
-    # finds is not new. Noted in the database until the build ends, so the
-    # scan after one that was cut short (FeedVault killed, the machine off)
-    # goes on building it, instead of finding the rest new.
-    fresh = {root: nothing_under(conn, root) or _building(conn, root) for root in roots}
-    with conn:
-        conn.executemany("INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')",
-                         [(BUILDING + root,) for root in roots if fresh[root]])
+    with db.write_lock:
+        restored = _finish_restores(roots)
+        # Building the index, or a root's part of it, from nothing: what it
+        # finds is not new. Noted in the database until the build ends, so the
+        # scan after one that was cut short (FeedVault killed, the machine off)
+        # goes on building it, instead of finding the rest new.
+        fresh = {root: nothing_under(conn, root) or _building(conn, root) for root in roots}
+        with conn:
+            conn.executemany("INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')",
+                             [(BUILDING + root,) for root in roots if fresh[root]])
     seen_meta = set()
-    unmatched = []                             # (path, size, mtime, reason)
-    copies = []                                # (parsed post, meta mtime), see db.save_copies
-    profiles = []                              # parsers.Profile, see db.save_profiles
-    account_files = []                         # parsers.AccountFile, see db.save_account_files
+    found = {}                                 # folder -> _Folder
 
-    read = []                                  # the roots walked
+    def read(root, dirpath):
+        """One folder, under db.write_lock, listed again there: a delete may
+        have moved files since os.walk listed it."""
+        names = _files_in(dirpath)
+        if names is None:
+            found.pop(dirpath, None)
+            return
+        found[dirpath] = _read_folder(conn, roots, root, dirpath, names, fresh[root], started, report, seen_meta)
+        conn.commit()
+
+    walked = []                                # the roots walked
     for root in roots:
         if not os.path.isdir(root):
             report["errors"].append({"path": root, "error": "media root not found"})
             continue
-        read.append(root)
+        walked.append(root)
         for dirpath, dirnames, filenames in os.walk(root):
             if "pyvenv.cfg" in filenames:     # a Python virtualenv parked in the folder
                 dirnames[:] = []
                 continue
             dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS)
-            names, out = _leading_out(roots, dirpath, [n for n in filenames if not n.startswith(".")])
-            unmatched.extend((path, *_size_mtime(path), reason) for path, reason in out)
-            if not names:
+            if all(n.startswith(".") for n in filenames):
                 continue
-            result = parsers.parse_dir(root, dirpath, names)
-            profiles.extend(result.profiles)
-            account_files.extend(result.account_files)
-            for path, message in result.errors:
-                report["errors"].append({"path": path, "error": message})
-                unmatched.append((path, *_size_mtime(path), message))
-            for path, reason in result.skipped:
-                unmatched.append((path, *_size_mtime(path), reason))
-            # Stamped per folder, right before its commit: a "Mark all seen"
-            # while the scan runs leaves the folders committed after it new.
-            first_seen = 0 if fresh[root] else int(time.time())
-            for post in result.posts:
-                _index_post(conn, post, started, report, seen_meta, unmatched, copies, first_seen)
-            for n in names:
-                if n not in result.claimed and parsers.is_media(n):
-                    path = os.path.join(dirpath, n)
-                    unmatched.append((path, *_size_mtime(path), "no metadata file for this media"))
-            conn.commit()
+            with db.write_lock:
+                read(root, dirpath)
+            db.write_lock.let_in()            # a delete or a restore waiting goes now
 
-    report["missing"], trashed = _mark_missing(conn, seen_meta, read)
-    db.save_copies(conn, copies, started, prune=True)
-    db.save_profiles(conn, profiles, prune=True)
-    db.save_account_files(conn, account_files, prune=read)
-    changed = people.refresh_aliases(conn)
-    conn.execute("DELETE FROM unmatched")
-    conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
-                     unmatched)
-    conn.executemany("DELETE FROM meta WHERE key = ?", [(BUILDING + root,) for root in read])
-    conn.commit()
-    _changed(changed + ["decisions"] if trashed else changed)   # their decisions went with them
+    with db.write_lock:
+        # The folders others changed while it ran: read again (one made
+        # after os.walk listed its parent is read for the first time).
+        for d in sorted(_dirty):
+            root = _root_of(d, walked)
+            if root is not None and os.path.isdir(d) and _walked(root, d):
+                read(root, d)
+            elif d in found and not os.path.isdir(d):
+                del found[d]
+        unmatched, copies, profiles, account_files = [], [], [], []
+        for f in found.values():
+            unmatched += f.unmatched
+            copies += f.copies
+            profiles += f.profiles
+            account_files += f.account_files
+            report["errors"] += f.errors
+        report["missing"], trashed = _mark_missing(conn, seen_meta, walked)
+        db.save_copies(conn, copies, started, prune=True)
+        db.save_profiles(conn, profiles, prune=True)
+        db.save_account_files(conn, account_files, prune=walked)
+        changed = people.refresh_aliases(conn)
+        conn.execute("DELETE FROM unmatched")
+        conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
+                         unmatched)
+        conn.executemany("DELETE FROM meta WHERE key = ?", [(BUILDING + root,) for root in walked])
+        conn.commit()
+    _changed(dict.fromkeys(restored + changed + (["decisions"] if trashed else [])))   # their decisions went too
     report["unmatched"] = len(unmatched)
     report["finished_at"] = int(time.time())
     return report
+
+
+def _finish_restores(roots):
+    """Restores cut short (trash.finish_restores), under db.write_lock.
+    Returns the user tables they changed."""
+    import config
+    import trash                               # imports this module
+    try:
+        data_dir = config.load().get("data_directory")
+    except Exception:                          # thumbnails and archives wait for the next restore
+        data_dir = None
+    return trash.finish_restores(roots, data_dir)
 
 
 def _changed(tables):
@@ -310,45 +433,54 @@ def index_dirs(roots, dirs, new=False, since=None):
     download's start), the report also counts the media files changed since
     that no parser could read (``unread``)."""
     with db.write_lock:
-        conn = db.connect()
-        now = int(time.time())
-        first_seen = now if new else 0
-        report = {"added": 0, "updated": 0, "unread": 0}
-        unmatched, copies, indexed, profiles, account_files, read = [], [], [], [], [], set()
-        for d in sorted(set(dirs)):
-            real = os.path.realpath(d)
-            root = next((r for r in roots
-                         if real == os.path.realpath(r)
-                         or real.startswith(os.path.realpath(r).rstrip(os.sep) + os.sep)), None)
-            if root is None or not os.path.isdir(d):
-                continue
-            names = [n for n in os.listdir(d) if not n.startswith(".") and os.path.isfile(os.path.join(d, n))]
-            names, out = _leading_out(roots, d, names)
-            unmatched.extend((path, *_size_mtime(path), reason) for path, reason in out)
-            result = parsers.parse_dir(root, d, names)
-            profiles.extend(result.profiles)
-            account_files.extend(result.account_files)
-            read.add(d)
-            seen = set()
-            for post in result.posts:
-                _index_post(conn, post, now, report, seen, unmatched, copies, first_seen)
-            indexed.extend(seen)
-            conn.execute(f"DELETE FROM unmatched WHERE path IN ({', '.join('?' for _ in result.claimed) or 'NULL'})",
-                         [os.path.join(d, n) for n in result.claimed])
-            unmatched.extend((path, *_size_mtime(path), reason) for path, reason in result.skipped)
-            if since is not None:
-                report["unread"] += sum(1 for n in names if n not in result.claimed and parsers.is_media(n)
-                                        and _written_since(os.path.join(d, n), since))
-        # A copy that is back keeps its "duplicate of" line; one that became
-        # the post (the first copy was trashed) is no longer a copy.
-        conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
-                         unmatched)
-        conn.executemany("DELETE FROM copies WHERE meta_path = ?", [(p,) for p in indexed])
-        db.save_copies(conn, copies, now, prune=False)
-        db.save_profiles(conn, profiles, prune=False)
-        db.save_account_files(conn, account_files, prune=False, dirs=read)
-        changed = people.refresh_aliases(conn)
-        conn.commit()
+        report, changed = index_dirs_locked(roots, dirs, new, since)
     _changed(changed)
     hashing.kick()                             # files back from the trash may need hashing again
     return report
+
+
+def index_dirs_locked(roots, dirs, new=False, since=None):
+    """index_dirs, under db.write_lock held by the caller (a restore).
+    Returns (report, the user tables changed): the caller hands those to
+    _changed, and calls hashing.kick, once the lock is released."""
+    touched(dirs)                              # a scan under way reads them again
+    conn = db.connect()
+    now = int(time.time())
+    first_seen = now if new else 0
+    report = {"added": 0, "updated": 0, "unread": 0}
+    unmatched, copies, indexed, profiles, account_files, read = [], [], [], [], [], set()
+    for d in sorted(set(dirs)):
+        real = os.path.realpath(d)
+        root = next((r for r in roots
+                     if real == os.path.realpath(r)
+                     or real.startswith(os.path.realpath(r).rstrip(os.sep) + os.sep)), None)
+        if root is None or not os.path.isdir(d):
+            continue
+        names = [n for n in os.listdir(d) if not n.startswith(".") and os.path.isfile(os.path.join(d, n))]
+        names, out = _leading_out(roots, d, names)
+        unmatched.extend((path, *_size_mtime(path), reason) for path, reason in out)
+        result = parsers.parse_dir(root, d, names)
+        profiles.extend(result.profiles)
+        account_files.extend(result.account_files)
+        read.add(d)
+        seen = set()
+        for post in result.posts:
+            _index_post(conn, post, now, report, seen, unmatched, copies, first_seen)
+        indexed.extend(seen)
+        conn.execute(f"DELETE FROM unmatched WHERE path IN ({', '.join('?' for _ in result.claimed) or 'NULL'})",
+                     [os.path.join(d, n) for n in result.claimed])
+        unmatched.extend((path, *_size_mtime(path), reason) for path, reason in result.skipped)
+        if since is not None:
+            report["unread"] += sum(1 for n in names if n not in result.claimed and parsers.is_media(n)
+                                    and _written_since(os.path.join(d, n), since))
+    # A copy that is back keeps its "duplicate of" line; one that became
+    # the post (the first copy was trashed) is no longer a copy.
+    conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
+                     unmatched)
+    conn.executemany("DELETE FROM copies WHERE meta_path = ?", [(p,) for p in indexed])
+    db.save_copies(conn, copies, now, prune=False)
+    db.save_profiles(conn, profiles, prune=False)
+    db.save_account_files(conn, account_files, prune=False, dirs=read)
+    changed = people.refresh_aliases(conn)
+    conn.commit()
+    return report, changed

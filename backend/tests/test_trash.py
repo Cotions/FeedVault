@@ -1,4 +1,6 @@
+import json
 import os
+import signal
 
 from conftest import H
 from fakes import owner, write_post, png
@@ -302,3 +304,180 @@ def test_merge_again_leaves_other_posts_and_single_entries(env, client):
     _trash_twice(env, client, [False, False])
     assert trash.merge_again(env["roots"], ["instagram:P2"], config.load()["data_directory"]) == []
     assert len(entries(client)) == 3
+
+
+# --- #159: restore into a renamed folder, a restore cut short, older lines ---
+
+def manifest(env):
+    with open(trash_root(env) / ".manifest.jsonl") as f:
+        return [json.loads(line) for line in f]
+
+
+def write_manifest(env, lines):
+    with open(trash_root(env) / ".manifest.jsonl", "w") as f:
+        f.writelines(json.dumps(line) + "\n" for line in lines)
+
+
+def meta_path(pid):
+    import db
+    row = db.connect().execute("SELECT meta_path FROM posts WHERE id = ?", (pid,)).fetchone()
+    return row and row[0]
+
+
+def test_restore_after_the_account_folder_was_renamed_goes_to_its_new_folder(env, client):
+    # It made the old folder again, with that one post in it: the account
+    # was split in two folders.
+    for i in (1, 2, 3):
+        write_post(env["media"] / "alice", f"P{i}", 1717243200 + i, ALICE, "image", caption="hi")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    os.rename(env["media"] / "alice", env["media"] / "alice.new")
+    scan(env)
+    r = client.post("/api/trash/restore", json={"posts": ["instagram:P1"]}, headers=H).get_json()
+    assert r["errors"] == [] and r["files"] == 3 and r["posts"] == ["instagram:P1"]
+    assert r["moved"] == [{"post": "instagram:P1", "from": "alice", "to": "alice.new"}] and r["recreated"] == []
+    assert not (env["media"] / "alice").exists()
+    assert len(os.listdir(env["media"] / "alice.new")) == 9
+    assert os.path.dirname(meta_path("instagram:P1")) == str(env["media"] / "alice.new")
+    assert entries(client) == []
+    assert (scan(env)["added"], scan(env)["missing"]) == (0, 0)
+
+
+def test_restore_says_which_folder_it_made_again_when_the_account_has_no_one_folder(env, client):
+    write_post(env["media"] / "alice", "P1", 1717243201, ALICE, "image")
+    write_post(env["media"] / "alice", "P2", 1717243202, ALICE, "image")
+    write_post(env["media"] / "alice-old", "P3", 1717243203, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    os.rename(env["media"] / "alice", env["media"] / "alice.new")
+    scan(env)                                   # alice.new and alice-old: which one is not clear
+    r = client.post("/api/trash/restore", json={"posts": ["instagram:P1"]}, headers=H).get_json()
+    assert r["errors"] == [] and r["moved"] == []
+    assert r["recreated"] == [{"post": "instagram:P1", "folder": "alice"}]
+    assert os.path.dirname(meta_path("instagram:P1")) == str(env["media"] / "alice")
+
+
+def test_restore_into_the_new_folder_never_replaces_a_file(env, client):
+    write_post(env["media"] / "alice", "P1", 1717243201, ALICE, "image")
+    write_post(env["media"] / "alice", "P2", 1717243202, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    os.rename(env["media"] / "alice", env["media"] / "alice.new")
+    base = write_post(env["media"] / "alice.new", "P1", 1717243201, ALICE, "image", caption="downloaded again")
+    scan(env)
+    with open(base + ".json", "rb") as f:
+        again = f.read()
+    r = client.post("/api/trash/restore", json={"posts": ["instagram:P1"]}, headers=H).get_json()
+    assert r["files"] == 0 and len(r["errors"]) == 2
+    assert all("already in" in e["error"] for e in r["errors"])
+    with open(base + ".json", "rb") as f:
+        assert f.read() == again
+    assert not (env["media"] / "alice").exists()
+    [entry] = entries(client)                   # still in the trash, whole
+    assert entry["post"] == "instagram:P1" and not entry["missing"]
+    assert not any("restoring" in line for line in manifest(env))
+
+
+RESTORE_KILLED = r"""
+import os, signal, sys
+sys.path.insert(0, sys.argv[1])
+import config, db, trash
+cfg = config.load()
+db.init(config.db_path(cfg))
+real, moved, after = os.rename, [0], int(sys.argv[3])
+mark = os.sep + ".feedvault-trash" + os.sep
+
+def rename(src, dst):
+    out = mark in str(src) and mark not in str(dst)
+    if out and after == 0:
+        os.kill(os.getpid(), signal.SIGKILL)
+    real(src, dst)
+    moved[0] += out
+    if out and moved[0] == after:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+os.rename = rename
+trash.restore([sys.argv[2]], cfg["media_roots"], cfg["data_directory"])
+"""
+
+
+def restore_killed(pid, after):
+    """Restore ``pid`` in another FeedVault, killed by its PID once
+    ``after`` files are back."""
+    import subprocess
+    import sys
+    from conftest import BACKEND
+    proc = subprocess.run([sys.executable, "-c", RESTORE_KILLED, BACKEND, pid, str(after)],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == -signal.SIGKILL, proc.stderr
+
+
+def test_a_restore_cut_short_is_finished_by_the_next_scan(env, client):
+    # Killed after its renames, before the manifest was rewritten: the lines
+    # stayed, the post came back at the next scan new and without its Keep,
+    # and the Trash page listed it with its files missing.
+    import db
+    write_post(env["media"] / "alice", "P1", 1717243201, ALICE, "image", caption="hi")
+    write_post(env["media"] / "alice", "P2", 1717243202, ALICE, "image")
+    scan(env)
+    client.post("/api/review", json={"posts": ["instagram:P1"], "decision": "keep"}, headers=H)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    restore_killed("instagram:P1", len(manifest(env)))      # every file back, then killed
+    assert len(os.listdir(env["media"] / "alice")) == 5
+    assert scan(env)["added"] == 0              # indexed by the restore finished, not found new
+    assert entries(client) == [] and manifest(env) == []
+    post = client.get("/api/posts/instagram/P1", headers=H).get_json()
+    assert post["decision"] == "keep"
+    assert db.connect().execute("SELECT first_seen FROM posts WHERE id = 'instagram:P1'").fetchone()[0] == 0
+
+
+def test_a_restore_killed_halfway_keeps_the_rest_in_the_trash(env, client):
+    write_post(env["media"] / "alice", "P1", 1717243201, ALICE, "image", caption="hi")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    restore_killed("instagram:P1", 0)           # killed before any file moved
+    assert os.listdir(env["media"] / "alice") == []
+    assert all("restoring" in line for line in manifest(env))     # marked, not dropped
+    scan(env)                                   # the next scan (one at startup) clears the marks
+    assert not any("restoring" in line for line in manifest(env)) and len(manifest(env)) == 3
+    [entry] = entries(client)
+    assert not entry["missing"] and entry["items"] == 1
+    restore_killed("instagram:P1", 1)           # one file back, then killed
+    scan(env)
+    assert len(manifest(env)) == 2 and not any("restoring" in line for line in manifest(env))
+    [entry] = entries(client)
+    assert not entry["missing"]
+    r = client.post("/api/trash/restore", json={"keys": [entry["key"]]}, headers=H).get_json()
+    assert r["errors"] == [] and r["files"] == 2
+    assert entries(client) == [] and len(os.listdir(env["media"] / "alice")) == 3
+    assert client.get("/api/posts/instagram/P1", headers=H).status_code == 200
+
+
+def test_restore_says_when_a_posts_decision_is_not_known(env, client):
+    # Lines written before #155 carry no decision: such a post comes back
+    # undecided, and may have been a Keep. The report says so.
+    for i in (1, 2, 3, 4):
+        write_post(env["media"], f"P{i}", 1717243200 + i, ALICE, "image")
+    scan(env)
+    client.post("/api/review", json={"posts": ["instagram:P1", "instagram:P3"], "decision": "keep"}, headers=H)
+    client.post("/api/delete", json={"posts": ["instagram:P1", "instagram:P2", "instagram:P3", "instagram:P4"]},
+                headers=H)
+    old = ("instagram:P3", "instagram:P4")     # as an older FeedVault wrote them
+    write_manifest(env, [{k: v for k, v in line.items() if k not in ("decision", "decided_at")}
+                         if line["post"] in old else line for line in manifest(env)])
+    keys = [e["key"] for e in entries(client)]
+    r = client.post("/api/trash/restore", json={"keys": keys}, headers=H).get_json()
+    assert r["errors"] == [] and len(r["posts"]) == 4
+    assert r["decision_unknown"] == ["instagram:P3", "instagram:P4"]
+    decision = lambda pid: client.get(f"/api/posts/instagram/{pid}", headers=H).get_json()["decision"]  # noqa: E731
+    assert [decision(p) for p in ("P1", "P2", "P3", "P4")] == ["keep", None, None, None]
+    # One decided since it was trashed is not unknown.
+    client.post("/api/delete", json={"posts": ["instagram:P3"]}, headers=H)
+    write_manifest(env, [{k: v for k, v in line.items() if k != "decision"} for line in manifest(env)])
+    write_post(env["media"], "P3", 1717243203, ALICE, "image")        # a sync brought it back
+    scan(env)
+    client.post("/api/review", json={"posts": ["instagram:P3"], "decision": "keep"}, headers=H)
+    os.remove(next(p for p in (env["media"]).iterdir() if p.name.endswith("12-00-03_UTC.json")))
+    os.remove(next(p for p in (env["media"]).iterdir() if p.name.endswith("12-00-03_UTC.jpg")))
+    r = client.post("/api/trash/restore", json={"posts": ["instagram:P3"]}, headers=H).get_json()
+    assert r["files"] == 2 and r["decision_unknown"] == []
