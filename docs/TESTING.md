@@ -102,8 +102,10 @@ npm run build       # Vite build into frontend/dist
 `frontend/scripts/`): formatting helpers, themes, source options, account
 health, the userscript, the Vite dev server's settings (its proxy follows
 `FEEDVAULT_PORT`), the review queue, the browser test harness and shards
-(below), `run.sh`'s port check (its port block runs alone in bash) and
-the `--help` of `run.sh` and `testapp.sh` (the only way either is started). A new `*.test.js` file has
+(below), the port checks of `run.sh` and `testapp.sh` and `testapp.sh`'s
+test data checks, reset and copy (each block runs alone in bash, against a
+tmp dir with a fake `HOME` and live config), and the `--help` of `run.sh`
+and `testapp.sh` (the only way either is started). A new `*.test.js` file has
 to be added to that list.
 
 ## Browser tests

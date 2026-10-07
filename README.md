@@ -61,14 +61,26 @@ and a built UI).
 
 - `--demo` builds a demo vault once with `scripts/make_demo.py`, in
   `~/.cache/feedvault-demo` (`$XDG_CACHE_HOME`, or `FEEDVAULT_DEMO_DIR`),
-  with fake downloaders in it, and reuses it afterwards.
+  with fake downloaders in it, and reuses it afterwards. `make_demo.py` only
+  builds in a new or empty folder or one it made (it leaves a
+  `.feedvault-demo` marker there), and chmods only the folders it creates.
+  A vault built before the marker existed is still used as it is; to
+  rebuild it, delete it, or `touch <folder>/.feedvault-demo` once you have
+  checked it is the demo.
 - Without `--demo` it copies `feedvault.db` (SQLite's backup, safe while the
-  live app runs) into `<data_directory>-test` (or `FEEDVAULT_TEST_DATA`), uses
+  live app runs) into `<data_directory>-test` (or `FEEDVAULT_TEST_DATA`, an
+  absolute path), uses
   `config.test.json` in `~/.config/feedvault/` (`$XDG_CONFIG_HOME`;
   `FEEDVAULT_CONFIG` is not read here), and pauses all schedules. With
   [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) installed
   it runs in a sandbox where your media folders, the live data directory and
   the live config are read-only; without it, it warns and runs unprotected.
+- The test data folder may not be, hold or sit inside the live data folder
+  or a media folder, nor be or hold `HOME` or `/`. testapp.sh leaves a
+  `.feedvault-test` marker in the folder it makes, and only uses, resets or
+  deletes a folder with that marker. A copy made before the marker existed
+  is refused with the command to remove it by hand; the next run makes a
+  fresh one.
 - It is not a full sandbox: it shares your `HOME`, so your scripts folder
   and the downloaders' own logins (instaloader's session, browser cookies)
   are the real ones. A Sync or a script run from it runs the real tool with
