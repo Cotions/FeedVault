@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a demo vault of invented instaloader and gallery-dl output, for trying the dashboard.
 
-    backend/venv/bin/python scripts/make_demo.py [--stress] /tmp/feedvault-demo
+    backend/venv/bin/python scripts/make_demo.py [--stress] [--large N] /tmp/feedvault-demo
 
 Writes <dir>/media (fake posts), <dir>/data (database goes here) and
 <dir>/config.json. It also installs stand-ins for gallery-dl and yt-dlp in
@@ -24,6 +24,12 @@ with a bare python3 the first start builds it and nothing is new.
 uses it): a creator with a 60-character handle and name, a long caption with
 an unbroken 80-character word and URL, and deep, long folder and file names
 on the Unmatched and Duplicates pages. Without it the vault is as before.
+
+--large N adds N invented posts (some 2.2 media files each, tiny
+placeholders) over 300 accounts, with 50 people, tags, collections,
+decisions, links, duplicates, stray files and, once indexed, posts in the
+trash: an archive the size of a real one, for performance work
+(scripts/large_vault.py, docs/TESTING.md). Videos stay placeholders.
 
 <dir> must be new, empty, or a demo vault this script made (it writes a
 .feedvault-demo marker there): a rebuild replaces <dir>/media. A vault made
@@ -523,7 +529,9 @@ def seed_news(config_path):
     db.init(config.db_path(cfg))
     conn = db.connect()
     userdata.restore_all(conn, cfg["data_directory"])
+    started = time.monotonic()
     scanner.scan(cfg["media_roots"])           # built from nothing: nothing new
+    print(f"Index built in {time.monotonic() - started:.2f} s")
     now = int(time.time())
     synced, looked = now - 3600, now - 2 * 3600
     with conn:
@@ -538,6 +546,7 @@ def seed_news(config_path):
                at=synced)
     userdata.export(conn, "seen_at", cfg["data_directory"])
     print(f"Indexed: {news.count(conn)[0]} new posts, 1 notification")
+    return cfg
 
 
 def add_old_yt_dlp_sync(media, root, ts):
@@ -660,6 +669,13 @@ def main():
     args = sys.argv[1:]
     stress = "--stress" in args
     args = [a for a in args if a != "--stress"]
+    large = 0
+    if "--large" in args:
+        i = args.index("--large")
+        if i + 1 >= len(args) or not args[i + 1].isdigit() or int(args[i + 1]) < 1:
+            sys.exit("make_demo: --large wants a number of posts")
+        large = int(args[i + 1])
+        del args[i:i + 2]
     if len(args) != 1:
         sys.exit(__doc__)
     root = os.path.abspath(args[0])
@@ -671,7 +687,7 @@ def main():
         shutil.rmtree(media)
     rng = random.Random(42)
     fakes.png = nicer_png(rng) or fakes.png
-    have_ffmpeg = shutil.which("ffmpeg") is not None
+    have_ffmpeg = shutil.which("ffmpeg") is not None and not large
     if have_ffmpeg:
         # fakes.fake_video writes a placeholder; swap in a real clip.
         fakes.fake_video = lambda path: real_video(path, tuple(rng.randrange(40, 200) for _ in range(3)))
@@ -705,15 +721,24 @@ def main():
     add_old_yt_dlp_sync(media, root, ts)
     if stress:
         add_stress(media, ts)
+    big = None
+    if large:
+        import large_vault
+        big = large_vault.build(media, large)
+        print(f"Large vault: {large} more posts, {big.files} media files, {len(big.accounts)} accounts")
 
     os.makedirs(os.path.join(root, "data"), exist_ok=True)
     seed_tags(os.path.join(root, "data"), tagged)
     seed_sources(os.path.join(root, "data"), media)
     seed_links(os.path.join(root, "data"))
+    if big:
+        large_vault.seed_userdata(os.path.join(root, "data"), big)
     tools = add_fake_tools(root, ts)
     with open(os.path.join(root, "config.json"), "w") as f:
         json.dump({"data_directory": os.path.join(root, "data"), "media_roots": [media], "tools": tools}, f, indent=2)
-    seed_news(os.path.join(root, "config.json"))
+    cfg = seed_news(os.path.join(root, "config.json"))
+    if big and cfg:
+        print(f"Trashed {large_vault.trash_some(cfg, big)} posts")
     print(f"Demo vault at {root} ({'real' if have_ffmpeg else 'placeholder'} videos)")
     print(f"Start: FEEDVAULT_CONFIG={root}/config.json backend/venv/bin/python backend/app.py")
 

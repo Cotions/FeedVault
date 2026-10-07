@@ -336,8 +336,11 @@ export function killRun(root, guard) {
 
 // Builds the demo vault and starts the backend; resolves to the instance.
 // ``stress``: the demo with make_demo.py's worst cases for the layout
-// checks (--stress), in this throwaway vault only.
-export async function startInstance({ log = () => {}, stress = false } = {}) {
+// checks (--stress), in this throwaway vault only. ``large``: that many
+// more invented posts (make_demo.py --large, for e2e/perf.js), with
+// ``readyMs`` for the backend's first scan of them; the generator's
+// output is logged.
+export async function startInstance({ log = () => {}, stress = false, large = 0, readyMs = READY_MS } = {}) {
   const port = await pickPort();
   checkSafe({ port });                        // before anything is made
   if (await portBusy(port)) throw new Error(`e2e: refusing port ${port}: something already listens there`);
@@ -356,8 +359,10 @@ export async function startInstance({ log = () => {}, stress = false } = {}) {
 
     await probeGuard(python, env, root);
     log(`e2e: building the demo vault in ${vault}`);
-    const demoArgs = [path.join(REPO, "scripts", "make_demo.py"), ...(stress ? ["--stress"] : []), vault];
-    await run(python, demoArgs, { env, cwd: root });
+    const demoArgs = [path.join(REPO, "scripts", "make_demo.py"), ...(stress ? ["--stress"] : []),
+      ...(large ? ["--large", String(large)] : []), vault];
+    const made = await run(python, demoArgs, { env, cwd: root });
+    if (large) log(made.trim());
     const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
     // Every tool the instance knows is one of the demo's fakes.
     for (const [tool, exe] of Object.entries(cfg.tools || {})) {
@@ -377,7 +382,7 @@ export async function startInstance({ log = () => {}, stress = false } = {}) {
     fs.closeSync(out);
     inst.url = `http://127.0.0.1:${port}`;
     log(`e2e: backend pid ${inst.pid} on ${inst.url}`);
-    await waitReady(inst);
+    await waitReady(inst, readyMs);
     // The server that answers is this one, not another on the same port.
     const answered = (await ask(inst.url, "/api/config")).data_directory;
     if (!answered || !within(answered, vault) || !within(vault, path.dirname(answered))) {
@@ -392,8 +397,8 @@ export async function startInstance({ log = () => {}, stress = false } = {}) {
 }
 
 // Up, and its first scan over (a scan ending refreshes the open page).
-async function waitReady(inst) {
-  const until = Date.now() + READY_MS;
+async function waitReady(inst, readyMs = READY_MS) {
+  const until = Date.now() + readyMs;
   let last;
   while (Date.now() < until) {
     if (inst.proc.exitCode !== null || inst.proc.signalCode !== null) throw new Error("e2e: the backend exited");
@@ -407,7 +412,7 @@ async function waitReady(inst) {
     }
     await new Promise(r => setTimeout(r, 250));
   }
-  throw new Error(`e2e: the backend was not ready within ${READY_MS / 1000} s (${last?.message})`);
+  throw new Error(`e2e: the backend was not ready within ${readyMs / 1000} s (${last?.message})`);
 }
 
 // PIDs of this user's processes whose working folder or command line is in
