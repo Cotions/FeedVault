@@ -19,6 +19,7 @@ import Review          from "./pages/Review";
 import Creators        from "./pages/Creators";
 import PersonPage      from "./pages/PersonPage";
 import Tags            from "./pages/Tags";
+import Links           from "./pages/Links";
 import Collections     from "./pages/Collections";
 import CollectionView  from "./pages/CollectionView";
 import Stats           from "./pages/Stats";
@@ -410,6 +411,7 @@ export default function App() {
           <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
           <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
           <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
+          <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
           <NavLink to="/collections" className="side-link"><Icon name="bookmark" />Collections</NavLink>
           <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
           <NavLink to="/storage" className="side-link"><Icon name="disk" />Storage</NavLink>
@@ -500,6 +502,7 @@ export default function App() {
             <Route path="/creators" element={<Creators />} />
             <Route path="/people/:id" element={<PersonPage />} />
             <Route path="/tags" element={<Tags />} />
+            <Route path="/links" element={<Links />} />
             <Route path="/collections" element={<Collections />} />
             <Route path="/collections/:id" element={<CollectionView />} />
             <Route path="/stats" element={<Stats />} />

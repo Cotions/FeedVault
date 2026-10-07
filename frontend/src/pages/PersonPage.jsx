@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getAuthors, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson } from "../lib/api";
+import { getAuthors, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
+  createLink, updateLink, deleteLink, orderPersonLinks } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
@@ -15,6 +16,7 @@ import MuteButton from "../components/MuteButton";
 import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
+import { LinkForm, LinkRow } from "../components/Links";
 
 function AccountRow({ account: a, busy, onUnlink }) {
   const url = safeUrl(a.url);
@@ -61,6 +63,99 @@ function AccountRow({ account: a, busy, onUnlink }) {
       </Link>
       <button type="button" className="btn-ghost" disabled={busy} onClick={() => onUnlink(a)}>Unlink</button>
     </li>
+  );
+}
+
+/* A person's saved links: socials first, then the others, each group in
+   the person's order (up and down move a link within its group). Add one
+   with the person preset; edit and delete in place. */
+function PersonLinks({ person: p, onChanged }) {
+  const toast = useToast();
+  const [busy,     setBusy]     = useState(false);
+  const [editing,  setEditing]  = useState(null);     // the id of the link being edited
+  const [removing, setRemoving] = useState(null);
+  const [dlgError, setDlgError] = useState(null);
+  const links = p.links || [];
+  const groups = [["Socials", links.filter(l => l.kind === "social")], ["Other", links.filter(l => l.kind !== "social")]];
+
+  async function call(fn, failed) {
+    setBusy(true);
+    try {
+      const r = await fn();
+      if (!r?.ok) return r?.id != null ? "That address is saved already, as another link (see Links)." : r?.error || failed;
+      onChanged();
+      return null;
+    } catch (err) {
+      return err.message;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function move(group, i, by) {
+    const ids = group.map(l => l.id);
+    [ids[i], ids[i + by]] = [ids[i + by], ids[i]];
+    const problem = await call(() => orderPersonLinks(p.id, ids), "Could not reorder.");
+    if (problem) toast(problem, "err");
+  }
+
+  async function remove() {
+    setDlgError(null);
+    const problem = await call(() => deleteLink(removing.id), "Could not delete.");
+    if (problem) { setDlgError(problem); return; }
+    toast("Link deleted.");
+    setRemoving(null);
+  }
+
+  return (
+    <section className="person-section person-links-section">
+      <h3 className="card-title">Links <span className="page-count">{links.length}</span></h3>
+      {links.length === 0 && <div className="empty">No link saved for them yet: a Linktree, a Patreon, their site, an interview…</div>}
+      {groups.map(([name, group]) => group.length > 0 && (
+        <div key={name} className="person-link-group">
+          <h4 className="link-group-title">{name}</h4>
+          <ul className="link-list">
+            {group.map((l, i) => editing === l.id ? (
+              <li key={l.id} className="link-row is-editing">
+                <LinkForm link={l} busy={busy} submitLabel="Save" idPrefix={`person-link-${l.id}`}
+                          onCancel={() => setEditing(null)}
+                          onSubmit={async body => {
+                            const problem = await call(() => updateLink(l.id, body), "Could not save the link.");
+                            if (!problem) setEditing(null);
+                            return problem;
+                          }} />
+              </li>
+            ) : (
+              <LinkRow key={l.id} link={l} showPerson={false} busy={busy}
+                       onUp={{ ok: i > 0, run: () => move(group, i, -1) }}
+                       onDown={{ ok: i < group.length - 1, run: () => move(group, i, 1) }}
+                       onEdit={x => setEditing(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
+            ))}
+          </ul>
+        </div>
+      ))}
+      <div className="person-link-add">
+        <h4 className="link-group-title">Add a link</h4>
+        <LinkForm busy={busy} idPrefix="person-link-add"
+                  onSubmit={async body => {
+                    const problem = await call(() => createLink({ ...body, person: p.id }), "Could not add the link.");
+                    if (!problem) toast("Link added.");
+                    return problem;
+                  }} />
+      </div>
+      <ConfirmDialog
+        open={!!removing}
+        title="Delete this link?"
+        confirmLabel="Delete link"
+        danger
+        busy={busy}
+        error={dlgError}
+        onConfirm={remove}
+        onCancel={() => setRemoving(null)}
+      >
+        <p className="link-confirm">{removing?.title ? <>{removing.title}<br /></> : null}<code>{removing?.url}</code></p>
+      </ConfirmDialog>
+    </section>
   );
 }
 
@@ -330,6 +425,8 @@ export default function PersonPage() {
           )}
           <AddSource person={p.id} onAdded={sources.reload} />
         </section>
+
+        <PersonLinks person={p} onChanged={reload} />
 
         <section className="person-section">
           <h3 className="card-title">Notes</h3>

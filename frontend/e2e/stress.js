@@ -2,8 +2,9 @@
 // make_demo.py --stress writes: through the throwaway instance's own API
 // (with its X-FeedVault header), never another server. STRESSpost01 gets
 // 15 tags, long ones among them, and goes in a collection with a long name;
-// its creator gets a person with a long name; STRESSpost02 is trashed, so
-// the Trash page has a post in it.
+// its creator gets a person with a long name, and saved links with a long
+// title, address and notes (on the Links page and theirs); STRESSpost02 is
+// trashed, so the Trash page has a post in it.
 //
 // Resolves to what the specs open: { post, author, collection, person }.
 export const STRESS_POST = { platform: "instagram", post_id: "STRESSpost01", id: "instagram:STRESSpost01" };
@@ -33,6 +34,14 @@ async function call(base, method, url, body) {
   return out;
 }
 
+// Saved links of the stress person: the longest of each field. Invented addresses, never opened.
+export const STRESS_LINKS = [
+  { url: "https://www.patreon.com/" + "averyveryverylongcreatorname".repeat(4),
+    title: "A link title long enough to need cutting short somewhere in the row, ".repeat(3).trim() },
+  { url: "https://interviews.example/" + "an-unbroken-path-segment-".repeat(14) + "?ref=" + "x".repeat(80),
+    title: "", notes: "Notes over several lines.\n" + "Words that go on and on about the interview. ".repeat(12) },
+];
+
 export async function seedStress(base) {
   for (const n of [...STRESS_TAGS, STRESS_COLLECTION, STRESS_PERSON]) {
     if (n.length > MAX_NAME) throw new Error(`e2e stress: name longer than ${MAX_NAME}: ${n}`);
@@ -47,6 +56,7 @@ export async function seedStress(base) {
   await call(base, "POST", `/api/collections/${collection.id}/add`, { posts: [STRESS_POST.id, ...others] });
   const { person } = await call(base, "POST", "/api/people",
     { name: STRESS_PERSON, accounts: [{ platform: STRESS_POST.platform, id: post.author.id }] });
+  for (const l of STRESS_LINKS) await call(base, "POST", "/api/links", { ...l, person: person.id });
   const trashed = await call(base, "POST", "/api/delete", { posts: [STRESS_TRASHED] });
   if (!trashed.posts?.includes(STRESS_TRASHED)) throw new Error(`e2e stress: ${STRESS_TRASHED} was not trashed`);
   return { post: STRESS_POST, author: post.author, collection: collection.id, person: person.id };
