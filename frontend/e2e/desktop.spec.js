@@ -131,3 +131,33 @@ test("a failed sync's notification lands on its source, highlighted", async ({ p
     await idle(page);
   }
 });
+
+// #126: the new counts (the sidebar's, the Feed's chip) follow a delete at
+// once, not with the next idle jobs poll 15 s later. The delete and the
+// counts are faked: the demo's posts stay as they are.
+test("deleting posts from the Feed updates the new counts at once", async ({ page }) => {
+  let deleted = false;
+  await page.route(url => url.pathname === "/api/jobs", async route => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), new: deleted ? 4 : 5 } });
+  });
+  await page.route(url => url.pathname === "/api/delete", async route => {
+    const ids = route.request().postDataJSON().posts;
+    deleted = true;
+    await route.fulfill({ json: { ok: true, posts: ids, files: 1, bytes: 1024, errors: [] } });
+  });
+  await openPage(page, PAGES[0]);
+  const sidebar = page.locator("#main-nav .side-new");
+  const chip = page.getByRole("button", { name: /^New since last visit/ });
+  await expect(sidebar).toHaveText("5 new");
+  await expect(chip).toHaveText("New since last visit (5)");
+
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await page.locator("article.post-card .select-check").first().click();
+  await page.getByRole("button", { name: "Delete…" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete 1 post" }).click();
+  await expect(page.getByRole("alertdialog")).toBeHidden();
+  await expect(sidebar).toHaveText("4 new", { timeout: 3_000 });
+  await expect(chip).toHaveText("New since last visit (4)", { timeout: 3_000 });
+  await idle(page);
+});
