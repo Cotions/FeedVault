@@ -34,6 +34,7 @@ const TMP_PREFIX = "feedvault-e2e-";
 const READY_MS = 90_000;
 const STOP_MS = 10_000;
 const EXIT_STOP_MS = 5_000;                   // the backend's shutdown, on the runner's way out
+const KILL_WAIT_MS = 2_000;                   // for SIGKILLed processes to be gone
 const OWNER = "owner.pid";
 const LAUNCHER = path.join(REPO, "frontend", "e2e", "die-with-runner.py");
 const PROC = fs.existsSync("/proc/self/stat");   // Linux: processes can be checked
@@ -250,10 +251,7 @@ export function sweepStale({ tmp = os.tmpdir(), log = () => {} } = {}) {
       continue;
     }
     if (ownerAlive(owner)) continue;
-    for (const pid of pidsIn(dir, owner.guard)) {
-      try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ }
-    }
-    const still = pidsIn(dir, owner.guard);
+    const still = killRun(dir, owner.guard);
     if (still.length) {
       log(`e2e: ${dir}: its runner is gone, but pids ${still.join(", ")} still run there: left`);
       continue;
@@ -317,10 +315,23 @@ export function exitCleanup(inst) {
       try { process.kill(inst.pid, "SIGKILL"); } catch { /* gone already */ }
     }
   }
-  for (const pid of pidsIn(inst.root, inst.guard)) {
-    try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ }
+  if (!killRun(inst.root, inst.guard).length) fs.rmSync(inst.root, { recursive: true, force: true });
+}
+
+// SIGKILL, by PID, to the run's processes in ``root`` (pidsIn), again for
+// any that appear, until none is left or KILL_WAIT_MS is over: a signal is
+// not instant. Returns the PIDs still there.
+export function killRun(root, guard) {
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  const until = Date.now() + KILL_WAIT_MS;
+  for (;;) {
+    const left = pidsIn(root, guard);
+    if (!left.length || Date.now() >= until) return left;
+    for (const pid of left) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ }
+    }
+    Atomics.wait(nap, 0, 0, 50);
   }
-  if (!pidsIn(inst.root, inst.guard).length) fs.rmSync(inst.root, { recursive: true, force: true });
 }
 
 // Builds the demo vault and starts the backend; resolves to the instance.
@@ -446,10 +457,7 @@ export async function stopInstance(inst, { saveLog } = {}) {
     throw new Error(`e2e: backend pid ${pid} is still running`);
   }
   if (root) {
-    for (const left of pidsIn(root, inst.guard)) {
-      try { process.kill(left, "SIGKILL"); } catch { /* gone already */ }
-    }
-    const still = pidsIn(root, inst.guard);
+    const still = killRun(root, inst.guard);
     if (still.length) throw new Error(`e2e: still running in ${root}: pids ${still.join(", ")}`);
   }
   let violations = "";

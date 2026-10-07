@@ -192,7 +192,12 @@ test("a SIGKILLed runner's backend dies with it, and the next start deletes its 
 });
 
 test("a setup that exits or throws midway stops the backend and deletes its tmp dir", LINUX, async () => {
-  for (const then of ["process.exit(130);", "throw new Error('setup failed');"]) {
+  // The last one: interrupted while another of the run's processes runs
+  // there (make_demo.py, say).
+  const helper = `const cp = await import("node:child_process");
+    cp.spawn(python, ${JSON.stringify(STUB)}, { cwd: inst.root, env: inst.env, stdio: "ignore" });
+    setTimeout(() => process.exit(130), 500);`;
+  for (const then of ["process.exit(130);", "throw new Error('setup failed');", helper]) {
     const tmp = testTmp();
     const { child, started, closed } = runner(tmp, then);
     let stub;
@@ -203,13 +208,22 @@ test("a setup that exits or throws midway stops the backend and deletes its tmp 
       assert.equal(startTime(stub), null, `${then}: the stub is stopped`);
       assert.equal(fs.existsSync(root), false, `${then}: the tmp dir is deleted`);
       assert.deepEqual(fs.readdirSync(tmp), []);
+      assert.deepEqual(withEnv(root), [], `${then}: none of the run's processes is left`);
     } finally {
       stopPid(child.pid);
       if (stub) stopPid(stub);
+      for (const pid of withEnv(tmp)) stopPid(pid);
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
 });
+
+// This user's processes whose environment names ``dir`` (the run's guard does).
+function withEnv(dir) {
+  return fs.readdirSync("/proc").filter(e => /^\d+$/.test(e)).filter(e => {
+    try { return fs.readFileSync(`/proc/${e}/environ`, "utf8").includes(dir); } catch { return false; }
+  }).map(Number);
+}
 
 // A process sleeping in ``cwd``, with FEEDVAULT_TEST_GUARD=``guard`` (none: unset).
 function sleeper(cwd, guard) {
