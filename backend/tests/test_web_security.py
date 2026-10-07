@@ -89,6 +89,27 @@ def test_no_page_of_feedvault_can_be_framed(env, client):
         assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
 
 
+def test_the_dashboard_loads_its_fonts_from_feedvault_only(env, client, monkeypatch):
+    # #148: the fonts came from Google Fonts. Now the build's woff2 files,
+    # served from dist/assets as fonts, and the pages' policy allows no other
+    # origin's font. A file's own stricter policy (default-src 'none') is kept.
+    import config
+    static = env["tmp"] / "dist"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("<p>dashboard</p>")
+    (static / "assets" / "jetbrains-mono-latin-500-normal-abc.woff2").write_bytes(b"wOF2font")
+    monkeypatch.setattr(config, "static_dir", lambda: str(static))
+    font = client.get("/assets/jetbrains-mono-latin-500-normal-abc.woff2")
+    assert (font.status_code, font.mimetype, font.data) == (200, "font/woff2", b"wOF2font")
+    for r in (client.get("/"), client.get("/settings"), font):
+        csp = [d.strip() for d in r.headers["Content-Security-Policy"].split(";")]
+        assert "font-src 'self'" in csp and "frame-ancestors 'none'" in csp
+    gallery_dl_case("twitter/photo", env["media"])
+    scanner.scan(env["roots"])
+    media = client.get("/media/1").headers["Content-Security-Policy"]
+    assert "default-src 'none'" in media and "font-src" not in media
+
+
 def test_media_refused_to_other_sites(env, client):
     # <img src="http://localhost:3380/media/N/thumb"> on any site: the Host
     # is ours, so only the browser's own word on who asks tells them apart.

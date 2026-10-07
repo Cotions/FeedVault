@@ -181,7 +181,13 @@ Environment variables:
 
 `fixtures.js` fails any test that logs a console error or a page error, or
 gets an `/api` response of 400 or more. A test can let one expected error
-through with `pageErrors.allow(...)`.
+through with `pageErrors.allow(...)`. It also aborts every request the
+browser makes to another origin than the instance's (another site, or
+another port of this machine: `offsite` in `harness.js`) and fails the
+test with the list, so no run reaches the network (#148: every page asked
+Google Fonts for its fonts). Pages a test opens in its own tab count too;
+`npm test` (`scripts/selfHosted.test.js`) checks the rule and that the
+source and built HTML and CSS point at no other origin.
 
 ### Projects
 
@@ -225,11 +231,13 @@ exactly one shard and `ci.yml` matches the number of shards.
 ### No pixel baselines
 
 The tests check geometry and computed styles (overlap, clipping, contrast),
-never screenshots against a baseline (`toHaveScreenshot`). The UI uses the
-system font (`system-ui`), and CI's Ubuntu runner falls back to DejaVu Sans,
-which is wider and has a shorter line than the Noto Sans of a typical
-desktop, so pixels would never match. A layout check can still pass locally
-and fail in CI because text wraps differently.
+never screenshots against a baseline (`toHaveScreenshot`). Titles and
+monospace text use the fonts the build bundles (Bricolage Grotesque and
+JetBrains Mono, the same everywhere), but body text uses the system font
+(`system-ui`), and CI's Ubuntu runner falls back to DejaVu Sans, which is
+wider and has a shorter line than the Noto Sans of a typical desktop, so
+pixels would never match. A layout check can still pass locally and fail in
+CI because text wraps differently.
 
 To run the browser tests with CI's font, point fontconfig at a config that
 only has DejaVu Sans (installed on most Linux systems as

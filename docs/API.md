@@ -90,6 +90,14 @@ browser from reading or changing the library; they are not a login.
 - **No framing.** Every response carries `X-Frame-Options: DENY` and a
   `Content-Security-Policy` with `frame-ancestors 'none'`, so no page can put
   the dashboard under its own and steer clicks into it.
+- **Nothing from other sites.** The dashboard loads all it needs from
+  FeedVault itself: its two fonts (Bricolage Grotesque, JetBrains Mono,
+  both SIL OFL, licences in `dist/assets/fonts-*.LICENSE.txt`) are woff2
+  files the build puts in `frontend/dist/assets`. Responses with no policy
+  of their own add `font-src 'self'` to that `Content-Security-Policy`. The
+  build fails if `dist/index.html` or a built style sheet points at another
+  origin (`frontend/vite.config.js`), and the browser tests abort and fail
+  any request to one (`frontend/e2e/fixtures.js`).
 - **Media is never a page.** A media file is served only from a path the
   scanner recorded (the URL carries a row id, never a path), only when what
   it opens as is inside a media root and outside its trash (see the end of

@@ -146,13 +146,17 @@ def _origin_guard():
 # No page of FeedVault's may be framed: under another site's page, a click
 # on the dashboard (Empty trash, Run) would pass every check above.
 NO_FRAMES = "frame-ancestors 'none'"
+# And the dashboard's fonts come from FeedVault only (#148: they came from
+# Google Fonts, which saw every page load). A response with a policy of its
+# own (a file's: default-src 'none') keeps it, stricter already.
+OWN_FONTS = "font-src 'self'"
 
 
 @app.after_request
 def _no_frames(resp):
     resp.headers["X-Frame-Options"] = "DENY"
     csp = resp.headers.get("Content-Security-Policy")
-    resp.headers["Content-Security-Policy"] = f"{csp}; {NO_FRAMES}" if csp else NO_FRAMES
+    resp.headers["Content-Security-Policy"] = f"{csp}; {NO_FRAMES}" if csp else f"{NO_FRAMES}; {OWN_FONTS}"
     return resp
 
 

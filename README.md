@@ -401,7 +401,8 @@ yourself: whoever reaches the port can run them, so never expose it. The server 
 each only if you turn it on: PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
 to say when an update is out (**Settings → Downloads → Downloaders → Check PyPI for new versions**); and a
 person's link-in-bio page (linktr.ee and a few like it), one page each time you click Import on their page
-(**Settings → Downloads → Link-in-bio import**), read for the accounts it lists and never stored. The rules each request is under:
+(**Settings → Downloads → Link-in-bio import**), read for the accounts it lists and never stored. The dashboard
+loads nothing from other sites: its fonts are bundled with it. The rules each request is under:
 [docs/API.md → Security rules](docs/API.md#security-rules). API reference:
 [docs/API.md](docs/API.md).
 

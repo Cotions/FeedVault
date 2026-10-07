@@ -27,7 +27,7 @@
 // tmp dir however it ends. Nothing here contacts another server.
 import { chromium } from "@playwright/test";
 import fs from "node:fs";
-import { startInstance, stopInstance } from "./harness.js";
+import { offsite, startInstance, stopInstance } from "./harness.js";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -294,6 +294,8 @@ async function main() {
     const browser = await chromium.launch();
     try {
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      // Nothing but the instance (#148): another origin's request is aborted.
+      await context.route(url => offsite(url.href, base), route => route.abort("blockedbyclient"));
       // The last DOM change and the last /api/ response, page time.
       await context.addInitScript(() => {
         window.__perf = { mutation: 0, api: 0, nodes: 0, events: [] };
