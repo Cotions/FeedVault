@@ -651,13 +651,20 @@ export default function Duplicates() {
         </div>
       ) : (
         <>
-          {current && result.identical > 0 && !sel.active && (
+          {current && (result.identical > 0 || result.pending > 0) && !sel.active && (
             <div className="dup-summary">
-              {plural(result.identical, "identical group")} would free {fmtBytes(result.identical_frees)}.
-              {identical.length > 0
-                ? <> Use <strong>Select</strong> to resolve them with the suggested copy in one go</>
-                : " Select leaves reposts out"}
-              {reposts > 0 && !withReposts ? ` (${plural(reposts, "repost")} left out: turn on Include reposts)` : ""}.
+              {result.identical > 0 && <>
+                {plural(result.identical, "identical group")} would free {fmtBytes(result.identical_frees)}.
+                {/* None of them listed yet: they are reposts left out, or further down (QA pass 3). */}
+                {identical.length > 0
+                  ? <> Use <strong>Select</strong> to resolve them with the suggested copy in one go</>
+                  : reposts > 0 && !withReposts ? " Select leaves reposts out" : " Load more to reach them"}
+                {reposts > 0 && !withReposts ? ` (${plural(reposts, "repost")} left out: turn on Include reposts)` : ""}.
+              </>}
+              {result.pending > 0 && <>
+                {result.identical > 0 && " "}
+                {result.pending === 1 ? "1 group is" : `${fmtInt(result.pending)} groups are`} still being hashed: Select takes {result.pending === 1 ? "it" : "them"} once {result.pending === 1 ? "it is" : "they are"}.
+              </>}
             </div>
           )}
           <div className="dup-groups" aria-busy={busy}>
