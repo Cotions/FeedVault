@@ -2932,9 +2932,17 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-rename { display: flex; align-items: center; gap: 6px; }
 .person-delete { flex-shrink: 0; white-space: nowrap; }
 .person-delete:hover:not(:disabled) { color: #ffb3b5; }
-.person-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 20px; }
-.person-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -8px 0 20px; }
+/* The person across the app on the left, their new posts and Mute on the
+   right of the same line (below it when the line is full). */
+.person-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 4px 0 20px; }
+.person-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.person-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.person-new:empty { display: none; }
+/* Sections apart by a rule, as Settings' cookie notes are. */
 .person-section { margin-bottom: 22px; }
+.person-section + .person-section { padding-top: 18px; border-top: 1px solid var(--border-soft); }
+/* An empty section says so in a line, not a page-sized gap. */
+.person-section .empty { padding: 14px 16px; }
 .person-section .card-title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
 .person-section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
 .person-section-head .card-title { margin-bottom: 0; flex: 1; }
@@ -2949,13 +2957,14 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-account-stats { flex-shrink: 0; }
 .person-add { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .person-add .creator-sub { white-space: normal; }
-.bio-import { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
-.bio-import-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+/* A box of its own under the accounts, as "Add a link" is under the links. */
+.bio-import, .person-link-add { margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 10px; }
 .bio-import-off { white-space: normal; margin: 0 0 8px; }
 .bio-import-form { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .bio-import-form .page-filter { flex: 1; min-width: 220px; max-width: 360px; }
 .bio-import .msg { margin-top: 8px; }
 .bio-import-result > .creator-sub { display: block; margin: 10px 0 6px; white-space: normal; }
+.bio-import-list.person-accounts { margin-bottom: 0; }
 .bio-import-row .creator-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bio-import-row > .btn-primary { flex-shrink: 0; }
 .person-notes {
@@ -3022,8 +3031,8 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .link-row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .link-confirm { overflow-wrap: anywhere; }
 .person-link-group { margin-bottom: 12px; }
-.link-group-title { font-size: 11px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
-.person-link-add { margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 10px; }
+/* The person page's sub-headings: a link group, the Add a link and import boxes. */
+.link-group-title, .bio-import-title { font-size: 12px; font-weight: 600; color: var(--text-dim); margin: 0 0 8px; }
 @media (max-width: 900px) {
   .link-form, .link-form:not(:has(.link-form-person)) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .link-form-url { grid-column: 1 / -1; }

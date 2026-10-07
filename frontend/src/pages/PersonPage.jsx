@@ -334,30 +334,32 @@ export default function PersonPage() {
         </>}
       />
       <div className="card person-page">
-        <nav className="person-links" aria-label={`${p.name} across the app`}>
-          <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
-          <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
-          <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
-          <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
-          <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
-        </nav>
+        <div className="person-bar">
+          <nav className="person-links" aria-label={`${p.name} across the app`}>
+            <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
+            <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
+            <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
+            <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
+            <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
+          </nav>
 
-        <div className="person-new">
-          {fresh?.count > 0 && (
-            <>
-              <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
-                    title="Their posts indexed since you last marked them seen">
-                {fmtInt(fresh.count)} new
-              </Link>
-              <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
-                      title="Their new posts stop being new; everyone else's stay">
-                <Icon name="check" size={14} /> Mark seen
-              </button>
-            </>
-          )}
-          {newApi.data && (
-            <MuteButton muted={muted} whom={{ person: p.id }} name={p.name} onDone={() => { newApi.reload(); started(); }} />
-          )}
+          <div className="person-new">
+            {fresh?.count > 0 && (
+              <>
+                <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
+                      title="Their posts indexed since you last marked them seen">
+                  {fmtInt(fresh.count)} new
+                </Link>
+                <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
+                        title="Their new posts stop being new; everyone else's stay">
+                  <Icon name="check" size={14} /> Mark seen
+                </button>
+              </>
+            )}
+            {newApi.data && (
+              <MuteButton muted={muted} whom={{ person: p.id }} name={p.name} onDone={() => { newApi.reload(); started(); }} />
+            )}
+          </div>
         </div>
 
         <section className="person-section">
