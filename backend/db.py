@@ -531,9 +531,62 @@ _cache_lock = threading.Lock()
 CACHE_MAX = 128
 _watch = None                                 # (path, connection) that only reads data_version
 _watch_lock = threading.Lock()
-# Held by a scan for its whole run and by deletions, so a scan never re-adds a
-# post that is halfway through being deleted.
-write_lock = threading.Lock()
+class _WriteLock:
+    """A threading.Lock that counts who waits for it: a holder that lets go
+    between steps (a scan, between folders) lets them in first (let_in),
+    instead of taking it back before they are woken."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._count = threading.Lock()
+        self._waiting = 0
+
+    def acquire(self, blocking=True, timeout=-1):
+        if self._lock.acquire(False):
+            return True
+        if not blocking:
+            return False
+        with self._count:
+            self._waiting += 1
+        try:
+            return self._lock.acquire(True, timeout)
+        finally:
+            with self._count:
+                self._waiting -= 1
+
+    def release(self):
+        self._lock.release()
+
+    def locked(self):
+        return self._lock.locked()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+    def let_in(self, limit=10.0):
+        """Not holding the lock: wait (up to ``limit`` seconds) until those
+        waiting for it have taken it."""
+        end = time.monotonic() + limit
+        while self._waiting and time.monotonic() < end:
+            time.sleep(0.001)
+
+
+# Held by deletions, restores and purges, and by a scan for each folder it
+# reads (and for its end), so a scan never re-adds a post that is halfway
+# through being deleted (scanner.scan).
+write_lock = _WriteLock()
+# Set for a scan's whole run: it lets go of write_lock between folders, but
+# the background work that steps aside for the lock steps aside for the scan.
+scanning = threading.Event()
+
+
+def writes_busy():
+    """Whether a scan runs or anything holds write_lock (hashing steps aside)."""
+    return write_lock.locked() or scanning.is_set()
 _path = None
 
 

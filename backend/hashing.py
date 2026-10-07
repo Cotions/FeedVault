@@ -466,9 +466,9 @@ def _turn(restart):
     """Wait until the next file may be read: not while anything holds
     db.write_lock (a scan, a delete), nor while a request is being answered
     (up to YIELD_MAX). False when the pass is to stop."""
-    if db.write_lock.locked():
+    if db.writes_busy():
         _set(paused=True)
-        while db.write_lock.locked():
+        while db.writes_busy():
             if restart is not None and restart.is_set():
                 return False
             time.sleep(0.5)
@@ -561,13 +561,13 @@ def _hash_all(conn, paths, phase, restart, fresh, work, workers=1):
             _state["bytes"] += read
             _state["done"] = done
         # Not while a scan or a delete holds the index: the rows wait.
-        if time.monotonic() - last_write >= COMMIT_EVERY and not db.write_lock.locked():
+        if time.monotonic() - last_write >= COMMIT_EVERY and not db.writes_busy():
             _write(conn, phase, pending)
             last_write = time.monotonic()
     finished = done == len(paths)
     # Rows of files read before a stop are good too, unless a scan holds the
     # index: then they are read again next pass rather than wait for it.
-    if finished or not db.write_lock.locked():
+    if finished or not db.writes_busy():
         _write(conn, phase, pending)
     return finished
 

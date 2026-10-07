@@ -55,6 +55,25 @@ function filterText(authors, author, when, person) {
 
 const plural = (n, word, many = `${word}s`) => `${fmtInt(n)} ${n === 1 ? word : many}`;
 
+// What a restore says besides the counts: where posts went when their
+// folder was gone, and posts whose earlier review decision is not known
+// (trashed before decisions were kept with them).
+function restoreNotes(r) {
+  const notes = [];
+  const folders = list => [...new Set(list)].join(", ");
+  if (r.moved?.length) {
+    notes.push(`Their folder was gone: put back in the account's folder now (${folders(r.moved.map(m => m.to))}).`);
+  }
+  if (r.recreated?.length) {
+    notes.push(`Their folder was gone and was made again (${folders(r.recreated.map(m => m.folder))}).`);
+  }
+  const unknown = r.decision_unknown?.length ?? 0;
+  if (unknown) {
+    notes.push(`Earlier review decision not known for ${plural(unknown, "post")} (trashed by an older FeedVault).`);
+  }
+  return notes.length ? ` ${notes.join(" ")}` : "";
+}
+
 function itemsLabel(e) {
   if (!e.partial) return null;
   return e.of ? `${e.items} of ${e.of} items` : `${plural(e.items, "item")} from the post`;
@@ -237,7 +256,7 @@ export default function Trash() {
       if (r.files) {
         started();   // the new counts (jobs poll) follow now
         toast(`Restored ${plural(r.posts?.length ?? 0, "post")} (${plural(r.files, "file")}). ${
-          (r.posts?.length ?? 0) === 1 ? "It is" : "They are"} back in the feed.`);
+          (r.posts?.length ?? 0) === 1 ? "It is" : "They are"} back in the feed.${restoreNotes(r)}`);
       }
       reload();
     } catch (e) {

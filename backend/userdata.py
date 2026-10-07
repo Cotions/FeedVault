@@ -10,6 +10,15 @@ registered here once, and gets the same treatment:
   (``changed(name)``, debounced), as ``{"version": 1, "rows": [...]}``
 - read back on startup when its table is empty, so deleting feedvault.db
   loses nothing a rescan cannot find again
+- written at once, not after the delay, when the change left the table
+  empty: a file still listing the rows just removed would bring them back
+  at the next start (FeedVault quit or killed within DELAY), since an empty
+  table is read back
+
+Tags, collections, people and links keep their id in the file and get it
+back (the URLs of their pages are built from it, and it breaks ties in
+their order); a file written before ids were kept loads as before, each row
+under a new id.
 
 A file that cannot be read is logged and renamed to ``<name>.json.corrupt-<time>``
 (so the next write cannot replace it); it never stops the app.
@@ -43,14 +52,19 @@ class Table:
     insert: tuple = ()
     # A row as read from the file, cleaned, or None to skip it.
     clean: object = None
+    # Whether the table's id is kept in the file (its last column, "id"), and
+    # inserted back when it is a usable one (_with_ids).
+    ids: bool = False
 
 
 REGISTRY = {}
 
 
-def register(name, table, columns, key, legacy=None, legacy_rows="rows", select=None, insert=(), clean=None):
+def register(name, table, columns, key, legacy=None, legacy_rows="rows", select=None, insert=(), clean=None,
+             ids=False):
     key = (key,) if isinstance(key, str) else tuple(key)
-    REGISTRY[name] = Table(name, table, tuple(columns), key, legacy, legacy_rows, select, tuple(insert), clean)
+    columns = tuple(columns) + (("id",) if ids else ())
+    REGISTRY[name] = Table(name, table, columns, key, legacy, legacy_rows, select, tuple(insert), clean, ids)
 
 
 register("decisions", "decisions", ("post_id", "decision", "at"), "post_id",
@@ -58,10 +72,12 @@ register("decisions", "decisions", ("post_id", "decision", "at"), "post_id",
 # "Not a duplicate": the key names the group's members (post ids, and the
 # metadata paths of extra copies), so a group that gains a member shows again.
 register("dismissed_duplicates", "dismissed_duplicates", ("key", "kind", "at"), "key")
-# Tags by name, not id: ids are not kept when the index is rebuilt. Order
-# matters, tags load before the posts that use them (a tag missing from
-# tags.json is created again from post_tags.json).
-register("tags", "tags", ("name", "color", "created_at"), "name")
+# Tags by name: the posts' tags refer to them by name, so a tag file edited
+# by hand (or one from before ids were kept) still matches. Each keeps its id
+# too, for the URLs built from it. Order matters, tags load before the posts
+# that use them (a tag missing from tags.json is created again, under a new
+# id, from post_tags.json).
+register("tags", "tags", ("name", "color", "created_at"), "name", ids=True)
 register("post_tags", "post_tags", ("post_id", "tag", "at"), ("post_id", "tag"),
          select="SELECT pt.post_id, t.name, pt.at FROM post_tags pt JOIN tags t ON t.id = pt.tag_id "
                 "ORDER BY pt.post_id, t.name",
@@ -70,9 +86,10 @@ register("post_tags", "post_tags", ("post_id", "tag", "at"), ("post_id", "tag"),
                  "SELECT :post_id, id, COALESCE(:at, 0) FROM tags WHERE name = :tag"))
 # Collections the same way: by name, before the posts in them.
 register("collections", "collections", ("name", "cover_post", "created_at", "position"), "name",
-         insert=("INSERT OR IGNORE INTO collections(name, cover_post, created_at, position) "
-                 "VALUES (:name, :cover_post, COALESCE(:created_at, 0), "
-                 "COALESCE(:position, (SELECT COALESCE(MAX(position), 0) + 1 FROM collections)))",))
+         insert=("INSERT OR IGNORE INTO collections(id, name, cover_post, created_at, position) "
+                 "VALUES (:id, :name, :cover_post, COALESCE(:created_at, 0), "
+                 "COALESCE(:position, (SELECT COALESCE(MAX(position), 0) + 1 FROM collections)))",),
+         ids=True)
 register("collection_posts", "collection_posts", ("collection", "post_id", "position", "at"),
          ("collection", "post_id"),
          select="SELECT c.name, cp.post_id, cp.position, cp.at FROM collection_posts cp "
@@ -85,8 +102,9 @@ register("collection_posts", "collection_posts", ("collection", "post_id", "posi
 # People by name, before the accounts linked to them, which are keyed by
 # platform and author id (a person missing from people.json is created again).
 register("people", "people", ("name", "notes", "created_at"), "name",
-         insert=("INSERT OR IGNORE INTO people(name, notes, created_at) "
-                 "VALUES (:name, COALESCE(:notes, ''), COALESCE(:created_at, 0))",))
+         insert=("INSERT OR IGNORE INTO people(id, name, notes, created_at) "
+                 "VALUES (:id, :name, COALESCE(:notes, ''), COALESCE(:created_at, 0))",),
+         ids=True)
 register("person_accounts", "person_accounts", ("platform", "author_id", "person", "at"), ("platform", "author_id"),
          select="SELECT pa.platform, pa.author_id, p.name, pa.at FROM person_accounts pa "
                 "JOIN people p ON p.id = pa.person_id ORDER BY pa.platform, pa.author_id",
@@ -114,16 +132,16 @@ register("sources", "sources", ("tool", "target", "platform", "author_id", "pers
 # (links.restore_row): the file may have been edited by hand, and a link is
 # rendered as a link. A URL the API would refuse is not put back.
 register("links", "links", ("url", "title", "notes", "person", "position", "created_at"), "url",
-         select="SELECT l.url, l.title, l.notes, p.name, l.position, l.created_at FROM links l "
+         select="SELECT l.url, l.title, l.notes, p.name, l.position, l.created_at, l.id FROM links l "
                 "LEFT JOIN people p ON p.id = l.person_id ORDER BY l.url",
          insert=("INSERT OR IGNORE INTO people(name, created_at) SELECT :person, COALESCE(:created_at, 0) "
                  "WHERE :person IS NOT NULL",
-                 "INSERT OR IGNORE INTO links(url, title, notes, person_id, position, created_at) "
-                 "SELECT :url, COALESCE(:title, ''), COALESCE(:notes, ''), p.id, "
+                 "INSERT OR IGNORE INTO links(id, url, title, notes, person_id, position, created_at) "
+                 "SELECT :id, :url, COALESCE(:title, ''), COALESCE(:notes, ''), p.id, "
                  "CASE WHEN p.id IS NULL THEN NULL ELSE :position END, COALESCE(:created_at, 0) "
                  "FROM (SELECT 1) LEFT JOIN people p ON p.name = :person "
                  "WHERE :url LIKE 'http://%' OR :url LIKE 'https://%'"),
-         clean=links.restore_row)
+         clean=links.restore_row, ids=True)
 
 # New handles the user accepted for a source's account (sources.rename).
 register("handle_renames", "handle_renames", ("platform", "author_id", "old", "new", "at"),
@@ -178,6 +196,8 @@ def load(conn, name, data_dir):
     rows = [r for r in rows if isinstance(r, dict) and all(r.get(k) is not None for k in t.key)]
     if t.clean:
         rows = [r for r in map(t.clean, rows) if r is not None]
+    if t.ids:
+        rows = _with_ids(rows)
     with conn:
         if t.insert:
             for r in rows:
@@ -189,6 +209,27 @@ def load(conn, name, data_dir):
         conn.executemany(f"INSERT OR IGNORE INTO {t.table} ({', '.join(t.columns)}) "
                          f"VALUES ({marks})", [tuple(r.get(c) for c in t.columns) for r in rows])
         return conn.total_changes - before
+
+
+def _usable_id(value):
+    return isinstance(value, int) and not isinstance(value, bool) and 0 < value < 2**53
+
+
+def _with_ids(rows):
+    """The rows of a table that keeps its ids, in the order to insert them:
+    those with a usable id first, by id, so each gets its own back; then the
+    rest (a file from before ids were kept, a row added by hand, an id
+    given twice) in file order, their id None so the table picks a new one,
+    above the others. The table is empty: no id is taken yet."""
+    seen, kept, rest = set(), [], []
+    for r in rows:
+        rid = r.get("id")
+        if _usable_id(rid) and rid not in seen:
+            seen.add(rid)
+            kept.append(r)
+        else:
+            rest.append({**r, "id": None})
+    return sorted(kept, key=lambda r: r["id"]) + rest
 
 
 def _source(t, data_dir):
@@ -245,16 +286,33 @@ def _write(name):
 
 def changed(name):
     """Note that a table changed; its file is rewritten after DELAY seconds
-    with no further change."""
+    with no further change, or now when the table is empty.
+
+    An empty table is read back from its file at the next start, so a file
+    still listing the rows just removed would bring them back if FeedVault
+    stopped before the delay ran out. Called after the change is committed
+    (in a transaction still open, the emptiness seen might not last: the
+    delay then applies)."""
     if name not in REGISTRY:
         raise KeyError(name)
+    now = False
+    try:
+        conn = db.connect()
+        now = not conn.in_transaction and \
+            conn.execute(f"SELECT 1 FROM {REGISTRY[name].table} LIMIT 1").fetchone() is None
+    except Exception as e:                     # the timer still writes it
+        print(f"[userdata] Could not look at {name}: {type(e).__name__}: {e}")
     with _lock:
         if name in _timers:
             _timers[name].cancel()
-        timer = threading.Timer(DELAY, _write, (name,))
-        timer.daemon = True
-        _timers[name] = timer
-        timer.start()
+            del _timers[name]
+        if not now:
+            timer = threading.Timer(DELAY, _write, (name,))
+            timer.daemon = True
+            _timers[name] = timer
+            timer.start()
+    if now:
+        _write(name)
 
 
 def flush():

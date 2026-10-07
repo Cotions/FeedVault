@@ -294,14 +294,14 @@ def test_userdata_round_trip_by_person_name(env, client):
         rows = json.load(f)["rows"]
     assert rows == [
         {"url": "https://alice.example", "title": "", "notes": "", "person": "Alice", "position": 1,
-         "created_at": rows[0]["created_at"]},
+         "created_at": rows[0]["created_at"], "id": 2},
         {"url": "https://news.example/a", "title": "An article", "notes": "", "person": None, "position": None,
-         "created_at": rows[1]["created_at"]},
+         "created_at": rows[1]["created_at"], "id": 3},
         {"url": "https://www.patreon.com/alice", "title": "Patreon", "notes": "tiers", "person": "Alice",
-         "position": 2, "created_at": rows[2]["created_at"]},
+         "position": 2, "created_at": rows[2]["created_at"], "id": 1},
     ]
 
-    # A rebuilt index: ids change, the person is found again by name.
+    # A rebuilt index: each link gets its id back, the person is found again by name.
     with conn:
         conn.execute("DELETE FROM links")
         conn.execute("DELETE FROM people")
@@ -313,6 +313,8 @@ def test_userdata_round_trip_by_person_name(env, client):
     assert [(x["url"], x["title"], x["position"]) for x in got] == [
         ("https://www.patreon.com/alice", "Patreon", 2), ("https://alice.example", "", 1)]
     assert urls(client, "?person=none") == ["https://news.example/a"]
+    assert [tuple(r) for r in conn.execute("SELECT id, url FROM links ORDER BY id")] == [
+        (1, "https://www.patreon.com/alice"), (2, "https://alice.example"), (3, "https://news.example/a")]
 
 
 def test_restore_skips_a_url_that_is_not_http(env):
