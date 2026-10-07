@@ -55,3 +55,16 @@ test("ordinary ids and query strings are sent", async () => {
   assert.ok(api.sentAsIs("/api/sources/resolve?url=https%3A%2F%2Fx.com%2F..%2Fa"));
   assert.ok(!api.sentAsIs("/api/people/1/../../browse"));
 });
+
+test("a DELETE can carry a JSON body (restoring a dismissed duplicate)", async () => {
+  const sent = [];
+  globalThis.fetch = async (url, opts) => {
+    sent.push([url, opts.method, opts.headers["Content-Type"], opts.body]);
+    return new Response('{"ok":false,"error":"no such dismissal; reload"}',
+                        { status: 404, headers: { "content-type": "application/json" } });
+  };
+  assert.deepEqual(await api.undismissDuplicate("4c1d"), { ok: false, error: "no such dismissal; reload" });
+  await assert.rejects(api.getDismissedDuplicates("copies"), e => e instanceof ApiError && e.status === 404);
+  assert.deepEqual(sent, [["/api/duplicates/dismiss", "DELETE", "application/json", '{"group":"4c1d"}'],
+                          ["/api/duplicates/dismissed?kind=copies", "GET", undefined, undefined]]);
+});

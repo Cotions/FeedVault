@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useSearchParams } from "react-router-dom";
-import { dismissDuplicate, getDuplicates, getDuplicatesStatus, resolveDuplicates } from "../lib/api";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { dismissDuplicate, getDismissedDuplicates, getDuplicates, getDuplicatesStatus, resolveDuplicates, undismissDuplicate } from "../lib/api";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
@@ -172,7 +172,7 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
         {!selectMode && (
           <>
             <button type="button" className="btn-ghost" onClick={() => onDismiss(g)} disabled={busy}
-              title="Not a duplicate: hide this group for good">
+              title="Not a duplicate: hide this group (restore it from Dismissed below)">
               Not a duplicate
             </button>
             <button
@@ -204,6 +204,63 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
         />
       )}
     </section>
+  );
+}
+
+function DismissedThumb({ m }) {
+  const [broken, setBroken] = useState(false);
+  return m.thumb_url && !broken ? (
+    <img src={m.thumb_url} alt="" loading="lazy" onError={() => setBroken(true)} />
+  ) : (
+    <span className="big-file-ph"><Icon name="image" size={16} /></span>
+  );
+}
+
+// Who a dismissed member is: the post's author, else its folder; "gone" once
+// it left the index (trashed, deleted).
+function dismissedName(m) {
+  if (m.post?.author?.handle) return `@${m.post.author.handle}`;
+  const folder = m.path ? lastPart(m.path.slice(0, m.path.lastIndexOf("/"))) : null;
+  if (folder) return `${folder}/`;
+  return m.id || "gone";
+}
+
+/* "Not a duplicate" is undone here: every dismissal of this kind, newest
+   first, each with Restore. Collapsed unless the URL asks for it
+   (/duplicates#dismissed, from Unmatched). */
+function Dismissed({ items, busy, onRestore, startOpen }) {
+  const ref = useRef(null);
+  const [open, setOpen] = useState(startOpen);
+  useEffect(() => {
+    if (startOpen) ref.current?.scrollIntoView({ block: "start" });
+  }, [startOpen]);
+  return (
+    <details ref={ref} id="dismissed" className="card dup-dismissed" open={open}
+      onToggle={e => setOpen(e.currentTarget.open)}>
+      <summary>Dismissed ({fmtInt(items.length)})</summary>
+      {items.length === 0 ? (
+        <p className="dim">Nothing marked not a duplicate.</p>
+      ) : (
+        <ul className="dup-dismissed-list">
+          {items.map(d => (
+            <li key={d.id} className="dup-dismissed-row">
+              <span className="dup-dismissed-thumbs" aria-hidden="true">
+                {d.members.slice(0, 4).map((m, i) => <span key={i} className="dup-dismissed-thumb"><DismissedThumb m={m} /></span>)}
+              </span>
+              <span className="dup-dismissed-who" title={d.members.map(m => m.path || m.id).filter(Boolean).join("\n")}>
+                {d.members.map(dismissedName).join(" · ")}
+              </span>
+              <span className="dup-member-sub" title={`Marked not a duplicate ${fmtFullDate(d.at)}`}>{fmtShortDate(d.at)}</span>
+              <button type="button" className="btn-secondary" onClick={() => onRestore(d.id)} disabled={busy}
+                aria-label={`Restore ${d.members.map(dismissedName).join(", ")}`}
+                title="It is a duplicate after all: list this group again">
+                <Icon name="undo" size={14} />Restore
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
 }
 
@@ -298,6 +355,7 @@ export default function Duplicates() {
   const { refreshKey, running: scanning } = useScan();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const kind = KINDS.some(k => k.value === params.get("kind")) ? params.get("kind") : "copies";
   const similar = kind === "similar";
   // The similar threshold lives in the URL (?t=), the config's default until moved.
@@ -443,7 +501,8 @@ export default function Duplicates() {
       const r = await dismissDuplicate(g.id, similar ? result.threshold : undefined);
       if (!r?.ok) { toast(r?.error || "Could not dismiss.", "err"); reload(); return; }
       drop([g.id]);
-      toast("Marked not a duplicate. It will not show again.");
+      // The dismissal keeps the group's id: Undo sends it straight back.
+      toast("Marked not a duplicate.", "ok", { label: "Undo", onClick: () => restore(g.id) });
       reload();
     } catch (e) {
       toast(e.message, "err");
@@ -451,6 +510,30 @@ export default function Duplicates() {
       setBusy(false);
     }
   }
+
+  async function restore(id) {
+    setBusy(true);
+    try {
+      const r = await undismissDuplicate(id);
+      if (!r?.ok) { toast(r?.error || "Could not restore.", "err"); reload(); return; }
+      toast("Restored: the group is listed again.");
+      reload();
+    } catch (e) {
+      toast(e.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // What was marked not a duplicate, for this kind: refetched with the groups.
+  const [dismissedList, setDismissedList] = useState(null);   // { kind, items }
+  useEffect(() => {
+    let alive = true;
+    getDismissedDuplicates(kind).then(r => { if (alive) setDismissedList({ kind, items: r.dismissed }); }, () => {});
+    return () => { alive = false; };
+  }, [kind, refreshKey, tick]);
+  const dismissedItems = dismissedList?.kind === kind ? dismissedList.items : null;
+  const askedDismissed = location.hash === "#dismissed";
 
   /* ── Render ──────────────────────────────────────────── */
   const k = KINDS.find(x => x.value === kind);
@@ -551,7 +634,7 @@ export default function Duplicates() {
             {hashing || scanning ? "Nothing found yet: files are still being compared."
               : similar ? `No pictures that look the same at ${plural(result.threshold, "bit")}.`
               : `No ${kind === "copies" ? "doubled downloads" : "shared files"} found.`}
-            {result.dismissed > 0 && ` ${plural(result.dismissed, "group")} marked not a duplicate.`}
+            {result.dismissed > 0 && ` ${plural(result.dismissed, "group")} marked not a duplicate: see Dismissed below.`}
           </div>
         </div>
       ) : (
@@ -592,6 +675,10 @@ export default function Duplicates() {
             </div>
           )}
         </>
+      )}
+
+      {current && dismissedItems && (dismissedItems.length > 0 || askedDismissed) && (
+        <Dismissed items={dismissedItems} busy={busy} onRestore={restore} startOpen={askedDismissed} />
       )}
 
       {sel.active && (

@@ -2006,6 +2006,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   padding: 3px 8px; border-radius: 6px;
   border: 1px solid rgba(var(--glow-rgb), 0.35);
 }
+button.toast-link { background: none; font: inherit; font-weight: 600; cursor: pointer; }
 .toast-link:hover { background: rgba(var(--accent-rgb), 0.16); }
 .toast-err .toast-link { color: #ffb3b5; border-color: rgba(229, 72, 77, 0.45); }
 .toast-err .toast-link:hover { background: rgba(229, 72, 77, 0.14); }
@@ -2450,6 +2451,23 @@ a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .dup-group.is-selecting { cursor: pointer; }
+.dup-dismissed { margin-top: 18px; padding: 12px 14px; scroll-margin-top: 80px; }
+.dup-dismissed > summary { cursor: pointer; font-weight: 700; color: var(--text); }
+.dup-dismissed > .dim { margin-top: 10px; }
+.dup-dismissed-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dup-dismissed-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.dup-dismissed-thumbs { display: flex; gap: 4px; flex-shrink: 0; }
+.dup-dismissed-thumb {
+  position: relative; width: 36px; height: 36px; border-radius: 6px; overflow: hidden;
+  background: var(--bg-soft); border: 1px solid var(--border);
+}
+.dup-dismissed-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dup-dismissed-who {
+  flex: 1; min-width: 0; font-size: 13px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dup-dismissed-row > .dup-member-sub { flex-shrink: 0; margin: 0; }
+.dup-dismissed-row > button { flex-shrink: 0; }
 .dup-group.is-selected {
   border-color: var(--glow);
   box-shadow: 0 0 0 2px rgba(var(--glow-rgb), 0.55), 0 0 26px -6px rgba(var(--glow-rgb), 0.6);

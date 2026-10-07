@@ -84,10 +84,10 @@ async function post(path, body = {}) {
   }
 }
 
-// DELETE, with the error body returned as post() returns it.
-async function del(path) {
+// DELETE (a JSON body when given), with the error body returned as post() returns it.
+async function del(path, body) {
   try {
-    return await request("DELETE", path);
+    return await request("DELETE", path, body);
   } catch (e) {
     if (e.body && typeof e.body === "object") return e.body;
     throw e;
@@ -189,8 +189,12 @@ export function getDuplicatesStatus() { return get("/api/duplicates/status"); }
 // → { ok, resolved, skipped: [{ group, error }], posts, copies, files, bytes, errors }
 // A similar group goes alone, with the threshold it was listed at.
 export function resolveDuplicates(groups, threshold) { return post("/api/duplicates/resolve", { groups, threshold }); }
-// "Not a duplicate", stored for good → { ok }
+// "Not a duplicate", stored until restored → { ok }
 export function dismissDuplicate(group, threshold) { return post("/api/duplicates/dismiss", { group, threshold }); }
+// Forgets a dismissal (Undo, Restore): the group shows again → { ok }
+export function undismissDuplicate(group) { return del("/api/duplicates/dismiss", { group }); }
+// kind (optional) → { dismissed: [{ id, kind, at, members: [{ type, id, post, path, thumb_url }] }] }
+export function getDismissedDuplicates(kind) { return get(`/api/duplicates/dismissed${qs({ kind })}`); }
 
 /* ── Tags (see docs/API.md "Tags") ───────────────────────── */
 
