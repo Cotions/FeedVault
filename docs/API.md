@@ -56,18 +56,37 @@ browser from reading or changing the library; they are not a login.
   `/userscript/feedvault.user.js` (installed by the userscript manager) and
   the dashboard's own pages and files (`/`, `/<path>`). They are still under
   the Host rule.
+- **Another site.** A request comes from another site's page when it has an
+  `Origin` that is not `http://` on `localhost`, `127.0.0.1` or `[::1]` (any
+  port: the Vite dev server is on another one), or a `Sec-Fetch-Site` other
+  than `same-origin` or `none`. The userscript's requests from instagram.com,
+  x.com and tiktok.com are; the dashboard's are not, nor a request with
+  neither header.
+- **Only the userscript's routes from another site (default-deny).** The
+  `X-FeedVault` header does not say who sends it: any userscript can, from
+  any site. So a `/api/*` request from another site reaches only what the
+  userscript calls, matched by route and method (`FOREIGN_ALLOWED` in
+  `backend/app.py`):
+  - `POST /api/saved`
+  - `POST /api/save`
+  - `GET /api/jobs/<id>`
+  - `GET /api/sources/resolve`
+  - `POST /api/sources` (403 when it sets an `options.script`)
+  - `GET /api/sources/<id>`
+  - `POST /api/sources/<id>/sync` (403 when the source runs a script)
+
+  Every other `/api/*` request from another site, whatever its method
+  (`HEAD` and `OPTIONS` included), a path no route has, and any route added
+  later, answers 403 `{ "ok": false, "error": "this can only be called from
+  FeedVault's own dashboard" }` before the route runs, after the Host and
+  header rules. Settings, scripts, deleting, the trash, people, tags,
+  collections, the other job and source routes and Quit are the
+  dashboard's alone. `backend/tests/test_foreign_origin.py` checks the list
+  against the userscript's calls. See [Who can run one](#scripts).
 - **Media from other sites.** `/media/*` and `/trash/<key>/thumb` answer 403
-  before doing any work when the request comes from another site's page: an
-  `Origin` that is not `http://` on `localhost`, `127.0.0.1` or `[::1]`, or a
-  `Sec-Fetch-Site` other than `same-origin` or `none`.
-- **Scripts from other sites.** The same test refuses (403) listing, reading
-  or running a script, setting a source's `script`, changing a source that
-  has one (a schedule, a rename or a delete) and syncing it; Sync all and a
-  person's Sync skip such sources with an error. The userscript's requests
-  from instagram.com are "another site" here. See [Who can run one](#scripts).
-- **Settings from other sites.** `POST /api/config` answers 403 to the same
-  test: tool paths, media roots, the schedules' pause and the link-in-bio
-  switch are the dashboard's alone.
+  before doing any work when the request comes from another site. The
+  dashboard's pages and `/userscript/feedvault.user.js` still open from a
+  link on any site (the userscript links to them).
 - **No framing.** Every response carries `X-Frame-Options: DENY` and a
   `Content-Security-Policy` with `frame-ancestors 'none'`, so no page can put
   the dashboard under its own and steer clicks into it.
@@ -179,7 +198,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
 | GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled; `{ "ok": false, "error": "zenity is not installed", "path": null }` without zenity |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` (the first 500 are looked up) → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
@@ -1189,8 +1208,8 @@ Link-in-bio import); `backend/biofetch.py`.
     request does not count).
 - Errors are `{ "ok": false, "error": "…" }`, short and specific: 400 for
   the link (`only https links`, `not an allowed site: …`), 403 when the
-  switch is off or the request comes from another site's page (as for
-  [scripts](#security-rules)), 404 for an unknown person, 429 while another
+  switch is off or the request comes from another site's page (see
+  [Security rules](#security-rules)), 404 for an unknown person, 429 while another
   import runs or within 5 s of the last, 502 for the site (`linktr.ee's
   address is not public (10.0.0.1)`, `timed out`, `page too large`, `not a
   web page (application/json)`, `the site answered 404`, `too many
@@ -1478,12 +1497,12 @@ no person yet.
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
 | POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, and for an `options.script` that does not exist or is refused; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site when the source runs a script |
-| DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site when the source runs a script |
-| POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site when the source runs a script |
-| DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site when the source runs a script |
+| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site (see [Security rules](#security-rules)) |
+| DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
+| POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site |
+| DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script and the request comes from another site; 404 for an unknown id |
-| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root, or a source that runs a script when the request comes from another site) listed in `errors` |
+| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors`; 403 from another site |
 
 Every `/api/sources/<id>…` call answers 404 `{ "ok": false, "error": "no
 such source" }` for an unknown id.
@@ -2752,7 +2771,7 @@ by then, fails the job.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/scripts` | `{ "dir": "/home/me/.config/feedvault/scripts", "dir_refused": null, "shell_template": "#!/bin/sh …", "scripts": [script, …] }`, built-ins first, then the files by name |
+| GET | `/api/scripts` | `{ "dir": "/home/me/.config/feedvault/scripts", "dir_refused": null, "shell_template": "#!/bin/sh …", "scripts": [script, …] }`, built-ins first, then the files by name; 403 from another site |
 | GET | `/api/scripts/<id>` | script with `content` (the file's text, or the built-in's JSON), or 404 (its `error` the scripts folder's refusal when it is refused); 403 from another site, as for the listing |
 | POST | `/api/scripts/<id>/run` | body `{ "target"?, "url"?, "folder"? }` → `{ "ok": true, "job": {…} }`; 400 bad input, refused script or refused scripts folder (its reason); 403 from another origin (see below); 404 unknown id |
 
@@ -2816,12 +2835,14 @@ being the source's. A script that is missing or refused when the sync is
 queued or starts fails that run with the reason in its log and on the
 source. It never falls back to the built-in command.
 
-**Who can run one.** Listing, reading and running scripts, setting a
-source's `script`, and syncing a source that has one are refused with a 403
-for a request whose `Origin` is present and is not `http://` on
-`localhost`, `127.0.0.1` or `[::1]` (any port: the Vite dev server is on
-another one), or whose `Sec-Fetch-Site` is anything but `same-origin` or
-`none`. Sync all and a person's Sync skip such sources with an error. The userscript's requests from instagram.com get
-nothing new here. FeedVault binds to `127.0.0.1` only. Exposing the port
+**Who can run one.** The dashboard only. A request from another site (an
+`Origin` that is present and is not `http://` on `localhost`, `127.0.0.1`
+or `[::1]`, any port, or a `Sec-Fetch-Site` that is anything but
+`same-origin` or `none`) never reaches the script routes, Sync all, a
+person's Sync or a source's settings (see [Security rules](#security-rules)).
+Of what it does reach, `POST /api/sources` refuses (403) an `options.script`
+and a source's Sync refuses (403) a source that has one, so the
+userscript's requests from instagram.com get nothing new here. FeedVault
+binds to `127.0.0.1` only. Exposing the port
 (`0.0.0.0`, a reverse proxy) would hand every script on disk to whoever
 reaches it.
