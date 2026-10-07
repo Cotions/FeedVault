@@ -340,6 +340,72 @@ test("a source's Options: a script disables the tool's choices, and changes are 
   });
 });
 
+// #153: a link inside the Options dialog ("See Scripts" here) dropped
+// changed choices without asking. It asks as Esc and Cancel do: Keep
+// editing stays in the dialog, focus back on the link; Discard goes on,
+// nothing saved. Unchanged, the link just goes.
+test("a source's Options: a link inside it asks before dropping changed choices (#153)", async ({ page, request }) => {
+  await withScriptSource(request, async ({ id }) => {
+    const optionsNow = async () =>
+      (await (await request.get("/api/sources", { headers: H })).json()).sources.find(s => s.id === id).options;
+    const before = await optionsNow();
+    await page.goto("/creators");
+    const row = page.locator(`.source-row[data-source-id="${id}"]`);
+    await row.getByRole("button", { name: "Options" }).click();
+    const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
+    const link = dialog.getByRole("link", { name: "Scripts", exact: true });
+    const schedule = fieldset(dialog, "Schedule").getByRole("radio");
+    await expect(schedule.first()).toBeChecked();
+    await schedule.nth(1).check();
+
+    // Changed: the link asks first, and the app stays where it is.
+    const discard = page.getByRole("alertdialog", { name: "Discard unsaved changes?" });
+    await link.click();
+    await expect(discard).toBeVisible();
+    await expect(discard).toContainText("not saved");
+    await expect(page).toHaveURL(/\/creators$/);
+    await expect(discard.getByRole("button", { name: "Keep editing" })).toBeFocused();
+    // Keep editing: still in the dialog, the change kept, focus on the link.
+    await discard.getByRole("button", { name: "Keep editing" }).click();
+    await expect(discard).toHaveCount(0);
+    await expect(page).toHaveURL(/\/creators$/);
+    await expect(dialog).toBeVisible();
+    await expect(link).toBeFocused();
+    await expect(schedule.nth(1)).toBeChecked();
+
+    // Discard: on to Scripts, the dialog gone, nothing saved.
+    await link.click();
+    await discard.getByRole("button", { name: "Discard" }).click();
+    await expect(page).toHaveURL(/\/scripts#script-greet$/);
+    await expect(dialog).toHaveCount(0);
+    await expect(discard).toHaveCount(0);
+    expect(await optionsNow()).toEqual(before);
+
+    // Unchanged, with the page's own edit (a typed new source): the page
+    // still asks for it, the dialog open over it.
+    await page.goto("/creators");
+    const typed = page.getByRole("textbox", { name: "Profile link, or an Instagram name" });
+    await typed.fill(`https://x.com/e2e_options_${id}`);
+    await row.getByRole("button", { name: "Options" }).click();
+    await expect(schedule.first()).toBeChecked();
+    await link.click();
+    await expect(discard).toContainText("The new source is not added yet.");
+    await discard.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(/\/creators$/);
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(typed).toHaveValue(`https://x.com/e2e_options_${id}`);
+    await typed.fill("");
+
+    // Unchanged, nothing else typed: the link goes at once.
+    await row.getByRole("button", { name: "Options" }).click();
+    await link.click();
+    await expect(page).toHaveURL(/\/scripts#script-greet$/);
+    await expect(discard).toHaveCount(0);
+    await idle(page);
+  });
+});
+
 // #149: an account card showed a refused script only in its badge's title.
 // It shows the source row's line, its See Scripts link with it. The demo's
 // @mossy.trails has an account card; its script is put back after.

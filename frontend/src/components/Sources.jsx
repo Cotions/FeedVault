@@ -14,6 +14,7 @@ import {
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
 import DiscardDialog from "./DiscardDialog";
+import { useUnsaved } from "../lib/unsaved";
 
 /* Where a source stands: its sync now (queued, waiting out the pause,
    running), else how its last one went. */
@@ -399,6 +400,9 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   const changed = JSON.stringify(optionsOf(form, s.choices, firstSync))
     !== JSON.stringify(optionsOf(formOf(s.options, s.choices), s.choices, firstSync));
   const cancel = () => (changed ? setAsking(true) : onClose());
+  // A link in it ("See Scripts", "Settings → Sync"), Back or Forward ask
+  // the same before the app leaves the page with them (#153).
+  const unsaved = useUnsaved(changed);
 
   async function save() {
     setBusy(true);
@@ -434,7 +438,9 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
                          onChange={setForm} firstSync={firstSync} />
         </div>
       </ConfirmDialog>
-      <DiscardDialog open={asking} onDiscard={onClose} onKeep={() => setAsking(false)}>
+      <DiscardDialog open={asking || unsaved.asking}
+                     onDiscard={unsaved.asking ? () => { unsaved.discard(); onClose(); } : onClose}
+                     onKeep={unsaved.asking ? unsaved.keep : () => setAsking(false)}>
         The changed choices for {sourceName(s)} are not saved.
       </DiscardDialog>
     </>
