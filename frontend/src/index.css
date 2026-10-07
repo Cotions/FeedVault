@@ -337,6 +337,8 @@ input[type="text"].header-search:focus {
   align-self: flex-start;
   height: calc(100vh - var(--header-h));
   overflow-y: auto;
+  /* When it scrolls (a short window), a link tabbed to keeps its focus ring in view. */
+  scroll-padding-block: 6px;
 }
 
 .side-link {
@@ -2961,6 +2963,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .link-form .picker, .link-form .picker-input { width: 100%; min-width: 0; height: 34px; }
 .link-form-notes { grid-column: 1 / -2; }
 .link-form-notes .person-notes { min-height: 34px; padding: 6px 11px; display: block; }
+/* As the fields beside it (input[type="text"]:focus): a ring, not only a border. */
+.link-form-notes .person-notes:focus { border-color: var(--accent); box-shadow: var(--ring); }
 .link-form-actions { display: flex; align-items: center; gap: 8px; align-self: end; }
 .link-form-actions .btn-primary { height: 34px; padding: 0 14px; white-space: nowrap; }
 .link-form-msg { grid-column: 1 / -1; }
@@ -2983,14 +2987,17 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .link-row-icon { color: var(--accent-hover); display: inline-flex; flex-shrink: 0; }
 .link-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .link-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.link-row-title { min-width: 0; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-row-title { display: inline-block; line-height: 24px; min-width: 0; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline; }
 .link-kind { flex-shrink: 0; }
 .link-kind.is-social { color: var(--accent-text); border-color: rgba(var(--glow-rgb), 0.35); background: rgba(var(--accent-rgb), 0.12); }
 .link-row-sub { display: flex; gap: 8px; min-width: 0; }
 .link-site { flex-shrink: 0; font-family: var(--mono); color: var(--text-dim); }
 .link-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.link-notes { font-size: 12px; color: var(--text-dim); white-space: pre-line; overflow-wrap: anywhere; max-height: 4.8em; overflow: hidden; }
+.link-notes {
+  font-size: 12px; color: var(--text-dim); white-space: pre-line; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden;
+}
 .link-person { flex-shrink: 1; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .link-row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .link-confirm { overflow-wrap: anywhere; }

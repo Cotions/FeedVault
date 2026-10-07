@@ -86,7 +86,7 @@ export function LinkRow({ link: l, showPerson = true, busy = false, onEdit, onDe
       <span className="link-row-main">
         <span className="link-row-head">
           {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="link-row-title" title={`${l.url} (opens in a new tab)`}>
+            <a href={href} target="_blank" rel="noopener noreferrer" className="link-row-title" title={l.title ? `${l.title}\n${l.url}` : l.url}>
               {label}
             </a>
           ) : <span className="link-row-title">{label}</span>}
@@ -98,7 +98,7 @@ export function LinkRow({ link: l, showPerson = true, busy = false, onEdit, onDe
           <span className="link-site">{l.site}</span>
           {l.title && <span className="link-url" title={l.url}>{l.url}</span>}
         </span>
-        {l.notes && <span className="link-notes">{l.notes}</span>}
+        {l.notes && <span className="link-notes" title={l.notes}>{l.notes}</span>}
       </span>
       {showPerson && l.person && (
         <Link to={personPath(l.person.id)} className="chip person-chip link-person" title={`Person: ${l.person.name}`}>
