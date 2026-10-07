@@ -79,6 +79,26 @@ test("Duplicates: Not a duplicate, then Restore from the Dismissed list", async 
   }
 });
 
+// #126: two copies in folders of one name, under different parents: each
+// card's label shows the parent that tells them apart. The folders are
+// renamed in the answer only: the vault is as it was.
+test("Duplicates: copies in folders of one name show their parents", async ({ page }) => {
+  const g = await stressGroup(page);
+  const folders = ["/vault/2023/instagram/same.name", "/vault/2024/instagram/same.name"];
+  await page.route(url => url.pathname === "/api/duplicates" && url.searchParams.get("kind") === "copies", async route => {
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const x of body.groups) if (x.id === g.id) x.members.forEach((m, i) => { m.folder = folders[i % 2]; });
+    await route.fulfill({ response: res, json: body });
+  });
+  await openPage(page, { name: "Duplicates", path: "/duplicates" });
+  const labels = groupOf(page, g.copy).locator(".dup-member-foot .dup-folder");
+  await expect(labels).toHaveText(["2023/instagram/same.name/", "2024/instagram/same.name/"]);
+  // Whole, not cut by the card's ellipsis.
+  for (const w of await labels.evaluateAll(els => els.map(e => e.scrollWidth - e.clientWidth))) expect(w).toBeLessThanOrEqual(0);
+  await idle(page);
+});
+
 test("Unmatched: a dismissed copy links to the Dismissed list, not to compare", async ({ page }) => {
   const g = await stressGroup(page);
   try {

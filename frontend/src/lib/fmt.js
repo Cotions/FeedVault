@@ -9,6 +9,18 @@ export function fmtInt(n) {
   return n == null ? "—" : Number(n).toLocaleString();
 }
 
+// The end of ``path`` that tells it from each of ``others``: its last folder
+// name, with as many parents before it as it takes ("a/same" and "b/same"
+// for two folders named "same"). A path equal to another keeps its name.
+export function distinctTail(path, others) {
+  const parts = path.split("/").filter(Boolean);
+  const rest = others.map(o => o.split("/").filter(Boolean)).filter(o => o.join("/") !== parts.join("/"));
+  const tail = k => p => p.slice(-k).join("/");
+  let k = 1;
+  while (k < parts.length && rest.some(o => tail(k)(o) === tail(k)(parts))) k += 1;
+  return tail(k)(parts) || path;
+}
+
 // "1 file", "1,204 files"; plural("copy", …, "copies") for an irregular one.
 export function plural(n, word, many = `${word}s`) {
   return `${fmtInt(n)} ${n === 1 ? word : many}`;
