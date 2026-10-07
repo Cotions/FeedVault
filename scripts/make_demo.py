@@ -25,6 +25,12 @@ uses it): a creator with a 60-character handle and name, a long caption with
 an unbroken 80-character word and URL, and deep, long folder and file names
 on the Unmatched and Duplicates pages. Without it the vault is as before.
 
+<dir> must be new, empty, or a demo vault this script made (it writes a
+.feedvault-demo marker there): a rebuild replaces <dir>/media. A vault made
+before the marker existed is refused; check it is one, then
+`touch <dir>/.feedvault-demo` or delete it. Folders that exist already are
+not chmodded.
+
 Every handle, name and caption is made up. If ffmpeg is installed, videos are
 real 3-second clips; otherwise they are placeholders that will not play.
 """
@@ -596,6 +602,59 @@ def add_stress(media, ts):
               (60, 60, 200))
 
 
+MARKER = ".feedvault-demo"
+MARKER_TEXT = "A demo vault made by FeedVault's scripts/make_demo.py, which may rebuild or replace it.\n"
+
+
+def make_dirs(folder):
+    """Make folder and the missing ones above it, 0700 (as
+    config.make_private_dir): the demo's config folder (its scripts folder's
+    parent) and its tools' folder are refused if group-writable (#75).
+    Folders that are there already are left as they are."""
+    missing, p = [], folder
+    while not os.path.isdir(p):
+        if os.path.lexists(p):
+            raise NotADirectoryError(f"{p} is not a folder")
+        missing.append(p)
+        p = os.path.dirname(p)
+    for p in reversed(missing):
+        os.mkdir(p, 0o700)                      # the umask can only take bits away
+
+
+def is_marked(root):
+    mark = os.path.join(root, MARKER)
+    return os.path.isfile(mark) and not os.path.islink(mark)
+
+
+def prepare_root(root):
+    """Make root ready for a (new) demo vault, or say why not (#111).
+
+    A new or empty folder becomes one: the .feedvault-demo marker is written
+    in it. A folder with anything else in it must carry that marker (a vault
+    this script made), since the build replaces its media/ and data. A demo
+    vault made before the marker existed is refused too: check it is one,
+    then add the marker (touch <root>/.feedvault-demo) or delete it."""
+    if os.path.lexists(root) and not os.path.isdir(root):
+        return f"refusing {root}: it is not a folder"
+    if os.path.isdir(root):
+        names = os.listdir(root)
+        if names and not is_marked(root):
+            return (f"refusing {root}: it is not empty and has no {MARKER} marker, so this script did not "
+                    f"make it, and building there would replace its media/ folder. Use a new or empty "
+                    f"folder. If it is a demo vault from an older FeedVault, check that, then "
+                    f"`touch {os.path.join(root, MARKER)}` (or delete it) and run again.")
+        if os.stat(root).st_mode & 0o022:
+            print(f"make_demo: warning: {root} is writable by group or others, so FeedVault will refuse "
+                  f"the demo's tools; chmod 700 it.", file=sys.stderr)
+    else:
+        make_dirs(root)
+    if not is_marked(root):
+        with open(os.path.join(root, MARKER), "w") as f:
+            f.write(MARKER_TEXT)
+    make_dirs(os.path.join(root, "bin"))
+    return None
+
+
 def main():
     args = sys.argv[1:]
     stress = "--stress" in args
@@ -603,16 +662,9 @@ def main():
     if len(args) != 1:
         sys.exit(__doc__)
     root = os.path.abspath(args[0])
-    # The demo's config folder (its scripts folder's parent) and its tools'
-    # folder: not group-writable whatever the umask, or they are refused (#75).
-    for folder in (root, os.path.join(root, "bin")):
-        missing, p = [], folder
-        while not os.path.isdir(p):
-            missing.append(p)
-            p = os.path.dirname(p)
-        for p in reversed(missing):             # the missing ones above it too, as config.make_private_dir
-            os.mkdir(p, 0o700)
-        os.chmod(folder, 0o700)
+    refused = prepare_root(root)
+    if refused:
+        sys.exit(f"make_demo: {refused}")
     media = os.path.join(root, "media")
     if os.path.exists(media):
         shutil.rmtree(media)
