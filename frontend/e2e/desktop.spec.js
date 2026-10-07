@@ -17,6 +17,26 @@ test("the Feed shows posts", async ({ page }) => {
   expect(await page.locator("article.post-card").count()).toBeGreaterThan(1);
 });
 
+// QA pass 3: Back from a post opened far down the Feed came back at the
+// top: the position was applied before the posts had loaded again.
+test("Feed: Back from a post returns to where the Feed was scrolled", async ({ page }) => {
+  await openPage(page, PAGES[0]);
+  const cards = page.locator("a.post-cover");
+  expect(await cards.count()).toBeGreaterThan(14);
+  const card = cards.nth(14);
+  await card.scrollIntoViewIfNeeded();
+  const before = await page.evaluate(() => window.scrollY);
+  expect(before).toBeGreaterThan(1000);
+  await card.click();
+  await expect(page).toHaveURL(/\/p\//);
+  await idle(page);
+  await page.goBack();
+  await expect(page.locator("article.post-card").first()).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before - 50);
+  expect(await page.evaluate(() => window.scrollY)).toBeLessThan(before + 50);
+  await idle(page);
+});
+
 test("Review: K keeps, D trashes, Z undoes", async ({ page }) => {
   await openPage(page, { name: "Review", path: "/review" });
   await keepTrashUndo(page, {
