@@ -46,8 +46,12 @@ browser from reading or changing the library; they are not a login.
   `Origin` that is not `http://` on `localhost`, `127.0.0.1` or `[::1]`, or a
   `Sec-Fetch-Site` other than `same-origin` or `none`.
 - **Scripts from other sites.** The same test refuses (403) listing, reading
-  or running a script, setting a source's `script`, and syncing a source that
-  has one; Sync all and a person's Sync skip such sources with an error. The
+  or running a script, setting a source's `script`, changing a source that
+  has one (a schedule would run it) and syncing it; Sync all and a person's
+  Sync skip such sources with an error.
+- **Settings from other sites.** `POST /api/config` answers 403 to the same
+  test: tool paths, media roots, the schedules' pause and the link-in-bio
+  switch are the dashboard's alone. The
   userscript's requests from instagram.com are "another site" here. See
   [Who can run one](#scripts).
 - **No framing.** Every response carries `X-Frame-Options: DENY` and a
@@ -161,7 +165,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
 | GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`. See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled; `{ "ok": false, "error": "zenity is not installed", "path": null }` without zenity |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` (the first 500 are looked up) → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
@@ -1383,7 +1387,7 @@ no person yet.
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
 | POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, and for an `options.script` that does not exist or is refused; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent |
+| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site when the source runs a script |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
 | POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile |
 | DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back) |

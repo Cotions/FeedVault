@@ -897,3 +897,16 @@ def test_web_charsets_are_codec_names():
     import codecs
     for name in biofetch.WEB_CHARSETS:
         assert codecs.lookup(name).name == name
+
+
+@pytest.mark.parametrize("foreign", [{"Origin": "https://www.instagram.com"}, {"Sec-Fetch-Site": "cross-site"}])
+def test_settings_cannot_be_changed_from_another_site(env, client, foreign):
+    """Audit 3: the switch (and every other setting: tools, roots, the
+    schedules' pause) is the dashboard's; the userscript never writes it."""
+    import config
+    for body in ({"bio_import": True}, {"schedules_paused": False}, {"tools": {"yt-dlp": "/tmp/yt-dlp-x"}}):
+        r = client.post("/api/config", json=body, headers={**H, **foreign})
+        assert r.status_code == 403 and "own dashboard" in r.get_json()["error"]
+    assert not biofetch.enabled(config.load())
+    assert client.post("/api/config", json={"bio_import": True}, headers={**H, "Origin": "http://localhost:5173",
+                                                                          "Sec-Fetch-Site": "same-origin"}).get_json()["ok"]

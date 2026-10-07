@@ -1130,6 +1130,11 @@ def update_source(sid):
     body = request.get_json(silent=True) or {}
     if not isinstance(body.get("options"), dict):
         return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
+    # A source that runs a script: changed from the dashboard only (a schedule
+    # set from another site would run the script at the next tick).
+    if s["options"]["script"] and _foreign_origin():
+        return jsonify({"ok": False, "error": "a source that runs a script can only be changed from FeedVault's "
+                                              "own dashboard"}), 403
     if sid in _sources_active() and set(body["options"]) - {"schedule"}:
         # The sync's end clears full history and last N: it would clear the new
         # ones. It reads the options again at the end, so a schedule can change.
@@ -1271,6 +1276,10 @@ def get_config():
 
 @app.post("/api/config")
 def set_config():
+    # Tool paths, roots, the schedules' pause, the link-in-bio switch: the
+    # dashboard's alone. The userscript (instagram.com) never writes them.
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": "settings can only be changed from FeedVault's own dashboard"}), 403
     body = request.get_json(silent=True) or {}
     # One read-modify-write at a time: two saves at once each keep the other's change.
     with config.editing:
