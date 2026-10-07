@@ -1,10 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
-// The phone breakpoint, the same as the CSS's max-width: 640px rules.
-export const PHONE = "(max-width: 640px)";
+// The phone layout: a narrow window, or a short one on a touch screen (a
+// phone on its side, #159). The same query as index.css's phone rules.
+export const PHONE = "(max-width: 640px), (max-height: 500px) and (pointer: coarse)";
 
 // What a focus trap cycles through.
 export const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// Keeps Tab inside ``box`` (a dialog): from its last control to its first,
+// from its first back to its last with Shift, and from outside it (focus
+// lost to <body>) into it. For a keydown handler.
+export function trapTab(e, box) {
+  if (e.key !== "Tab" || !box) return;
+  const items = [...box.querySelectorAll(FOCUSABLE)];
+  if (items.length === 0) { e.preventDefault(); return; }
+  const first = items[0], last = items[items.length - 1];
+  const a = document.activeElement;
+  if (!box.contains(a)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+  else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+}
 
 // Gives focus back to what had it before a dialog opened, without a
 // scroll: the page is still where it was when the dialog opened. Scrolled

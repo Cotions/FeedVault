@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
-import { FOCUSABLE, focusLost, restoreFocus } from "../lib/layout";
+import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 
 /* Modal confirmation. Traps Tab inside the dialog, Esc or a backdrop click
    cancels, focus starts on Cancel (so a stray Enter never destroys anything)
@@ -39,17 +39,7 @@ export default function ConfirmDialog({
       if (!busy) onCancel();
       return;
     }
-    if (e.key !== "Tab") return;
-    const items = [...boxRef.current.querySelectorAll(FOCUSABLE)];
-    if (items.length === 0) { e.preventDefault(); return; }
-    const first = items[0], last = items[items.length - 1];
-    if (!boxRef.current.contains(document.activeElement)) {
-      e.preventDefault(); (e.shiftKey ? last : first).focus();
-    } else if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault(); last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault(); first.focus();
-    }
+    trapTab(e, boxRef.current);
   }
   useEffect(() => { keysRef.current = onKeyDown; });
 

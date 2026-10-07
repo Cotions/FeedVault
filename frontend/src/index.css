@@ -451,7 +451,7 @@ main {
 }
 @keyframes pageFade { from { opacity: 0; } }
 
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   /* Nothing wider than a phone: the search box, a page's head and the
      source form shrink or wrap. */
   .header-search-wrap, input[type="text"].header-search { min-width: 0; }
@@ -890,7 +890,7 @@ button:disabled, button[aria-disabled="true"] { opacity: 0.4; cursor: default; }
 }
 /* Two cells of ~160px on a phone: at 40px "85.5 KB" and "in the trash ·
    7 files" were cut at the cell's edge. */
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .stats-hero-cell { padding: 22px 10px 18px; }
   .stats-hero-num { font-size: clamp(20px, 7vw, 28px); letter-spacing: -1px; }
   .stats-hero-label { text-align: center; }
@@ -1096,7 +1096,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
    not this): one row with the toggle, Sort and Select; the filters open in
    their own rows under it, and the clear button with them. The Person and
    Review links (only there with a creator filter) stay in sight under it. */
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .feed-fold { align-items: center; gap: 8px; }
   .feed-fold > * { order: 2; }
   .feed-fold > :is(.filters-toggle, .filter-sort, .page-head-spacer, .select-toggle) { order: 0; }
@@ -1402,6 +1402,19 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   overflow: hidden;
   box-shadow: 0 30px 70px -40px rgba(0, 0, 0, 0.9);
 }
+/* A sideways swipe pages the media (lib/swipe.js): the browser keeps the
+   up and down scroll and the pinch, and leaves the sideways move to it. */
+.carousel-stage, .review-stage { touch-action: pan-y pinch-zoom; }
+/* A phone: the stage ends 12px above the screen's bottom and the home bar
+   (#159), from where it starts (--stage-top, MediaCarousel.jsx), so a
+   video's controls show without a scroll; at least 160px on a phone on
+   its side, where the page head takes most of the screen. */
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  .carousel-stage {
+    height: max(160px, calc(100svh - var(--stage-top, 0px) - env(safe-area-inset-bottom) - 12px));
+    max-height: 820px;
+  }
+}
 .carousel-slide {
   position: absolute;
   inset: 0;
@@ -1586,7 +1599,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .kv-copy { user-select: all; }
 /* On a phone 110px of key left the value ~180px, so tool paths and the
    update note wrapped every two words. */
-@media (max-width: 640px) { .kv-key { width: 64px; } }
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) { .kv-key { width: 64px; } }
 
 /* ── Creators ───────────────────────────────────────────── */
 .creator-grid {
@@ -1689,7 +1702,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
    scroll re-laid them and moved every row's height, and a jump far down
    the list never settled (QA pass 3). Fixed widths: a row's height depends
    on its own text only. */
-@media (min-width: 641px) {
+@media (min-width: 641px) and (min-height: 501px), (min-width: 641px) and (pointer: fine), (min-width: 641px) and (pointer: none) {
   .unmatched-table { table-layout: fixed; }
   .unmatched-table th:nth-child(1) { width: 42%; }
   .unmatched-table th:nth-child(3) { width: 100px; }
@@ -1701,7 +1714,7 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
    explicit table roles, as a display other than a table's drops their
    semantics in some browsers. The column heads stay for screen readers;
    Storage's sort buttons stay in sight as a row of their own. */
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .table-wrap:has(> .card-table) { overflow: visible; border: none; border-radius: 0; }
   .card-table, .card-table tbody { display: block; }
   .card-table thead tr {
@@ -2122,7 +2135,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .creator-tools .creator-review { margin-right: 0; }
 .creator-tools .icon-btn { width: 26px; height: 26px; }
 /* A phone: the buttons go on a row of their own under the name. */
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .creator-card { flex-wrap: wrap; justify-content: flex-end; }
   .creator-card:has(> :not(.creator-main)) { padding-bottom: 8px; }
   .creator-card .creator-main { flex-basis: 100%; }
@@ -2269,7 +2282,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
    they are always open. Two classes: as specific as the toolbar buttons'
    rule (.feed-filters .btn-secondary), and later. */
 .btn-secondary.filters-toggle { display: none; }
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .btn-secondary.filters-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; }
   .filters-toggle .chip { margin-left: 2px; }
   .filters-toggle-chev { transition: transform 0.15s ease; }
@@ -2279,7 +2292,7 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
    first screen has left (Review.jsx sets --stage-h, at most 55vh), and the
    decision buttons are a bar fixed at the bottom, clear of the home
    indicator, so every decision is a tap with no scroll. */
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   /* pageIn moves <main>, and a transform, even a finished one held by its
      fill mode, makes <main> the bar's containing block: here it fades only. */
   main:has(> .review-page) { animation-name: pageFade; }
@@ -2306,9 +2319,15 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   .review-actions:has(.btn-danger-soft) > button { grid-column: span 2; font-size: 12.5px; }
   .review-actions-row { display: contents; }
   .review-actions-row .btn-secondary { min-height: 40px; padding: 6px 4px; }
+  /* No Fullscreen button (an iPhone, on a picture): Mute takes its cell. */
+  .review-actions:not(:has(.review-fullscreen)) .review-actions-row:last-child > :first-child { grid-column: span 2; }
   /* No keyboard on a phone: no key hints. */
   .review-side .kbd { display: none; }
   .review-wide { display: none; }
+}
+/* A phone on its side: one row of buttons, not two, under a short stage. */
+@media (max-height: 500px) and (pointer: coarse) {
+  .review-actions { grid-template-columns: repeat(12, minmax(0, 1fr)); }
 }
 
 /* ── Scrollbar ──────────────────────────────────────────── */
@@ -3113,7 +3132,7 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
   .link-form:not(:has(.link-form-person)) .link-form-title { grid-column: auto; }
   .link-form-notes, .link-form:not(:has(.link-form-person)) .link-form-notes { grid-column: 1 / -1; }
 }
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .link-form, .link-form:not(:has(.link-form-person)) { grid-template-columns: minmax(0, 1fr); }
   .link-row { flex-wrap: wrap; }
   .link-row-main { flex-basis: calc(100% - 40px); }
@@ -3293,7 +3312,7 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .notif-text { overflow-wrap: anywhere; min-width: 0; }
 .notif-when { grid-column: 2; font-size: 11px; color: var(--muted); }
 .notif-entry.is-unread { color: var(--text); background: rgba(var(--accent-rgb), 0.08); }
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .notif-panel {
     left: calc(8px + env(safe-area-inset-left)); right: calc(8px + env(safe-area-inset-right));
     width: auto; top: calc(var(--header-h) + 8px);
@@ -3322,11 +3341,11 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
   .source-rename .btn-link { padding: 8px 4px; }
   .review-open { padding: 8px 0; }
 }
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   /* Two tiles a row (Trash, Storage's biggest files), not one screen-high tile. */
   .big-files { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 }
-/* A phone on its side (641-860px, the sidebar still showing): the
+/* A narrow window or a tablet (641-860px, the sidebar still showing): the
    Collections page's form wraps instead of pushing the page sideways. */
 @media (max-width: 860px) {
   .collection-new input[type="text"] { min-width: 0; }
@@ -3334,4 +3353,34 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
      least width: at 375 it pushed the page 10px sideways. */
   .collection-new { flex: 1 1 220px; min-width: 0; }
   .collection-new input[type="text"] { width: 0; }
+}
+
+/* ── Touch targets (#159) ───────────────────────────────── */
+/* A touch screen: 44px for every control a thumb aims at on the Feed,
+   Review and the Post page (Apple's size; WCAG asks 24). A mouse keeps
+   the desktop's sizes. */
+@media (pointer: coarse) {
+  header .nav-menu-btn { width: 44px; height: 44px; }
+  input[type="text"].header-search { height: 44px; border-radius: 22px; }
+  /* Back, Delete post, Mark all seen, Select, the Feed's links to Review. */
+  :is(.page-head, .feed-filters) :is(.btn-secondary, .btn-back, .btn-danger-soft), .select-toggle, .review-link { height: 44px; }
+  .select-bar button { min-height: 44px; }
+  .review-actions-row .btn-secondary { min-height: 44px; }
+  .carousel-arrow { width: 44px; height: 44px; }
+  .carousel-dots { gap: 0; }
+  .carousel-dot { width: 44px; height: 44px; }
+  /* The check looks the same; its target reaches 10px past each side. */
+  .select-check { top: 10px; left: 10px; }
+  /* From its padding box, inside its 2px border: 12px. */
+  .select-check::after { content: ""; position: absolute; inset: -12px; }
+  .dup-check { position: relative; top: 0; left: 0; }
+}
+/* The taller search box in the same header height (--header-h): 4px above
+   and under it on a phone, 10px up to 860px; past that it sits on the
+   brand mark's row with room to spare. */
+@media (max-width: 640px) and (pointer: coarse), (max-height: 500px) and (pointer: coarse) {
+  header { padding-top: calc(4px + env(safe-area-inset-top)); padding-bottom: 4px; }
+}
+@media (min-width: 641px) and (max-width: 860px) and (min-height: 501px) and (pointer: coarse) {
+  header { padding-top: calc(10px + env(safe-area-inset-top)); padding-bottom: 10px; }
 }

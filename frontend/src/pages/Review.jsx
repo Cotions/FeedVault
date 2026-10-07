@@ -13,7 +13,8 @@ import TagInput from "../components/TagInput";
 import CollectionDialog from "../components/CollectionDialog";
 import Icon from "../components/Icon";
 import CreatorPicker from "../components/CreatorPicker";
-import { PHONE, useToastClearance } from "../lib/layout";
+import { PHONE, restoreFocus, trapTab, useToastClearance } from "../lib/layout";
+import { useSwipe } from "../lib/swipe";
 import { useFiltersOpen } from "../lib/useFiltersOpen";
 import FiltersToggle from "../components/FiltersToggle";
 import PageHeader from "../components/PageHeader";
@@ -63,6 +64,9 @@ const SHORTCUTS = [
   ["F", "Fullscreen"],
   ["?", "This help"],
 ];
+
+// The Fullscreen API on the page (not on an iPhone).
+const canFullscreen = typeof document !== "undefined" && document.fullscreenEnabled === true;
 
 function Kbd({ children }) {
   return <kbd className="kbd">{children}</kbd>;
@@ -274,6 +278,9 @@ function ReviewSession({ scope, scopeControls }) {
   };
 
   const stepItem = d => media.length > 1 && setItem(i => (Math.min(i, media.length - 1) + d + media.length) % media.length);
+  // A swipe across the stage pages the post's items, as ← and → do. Not a
+  // decision: the same move pages, and a stray one would trash files (#159).
+  const swipe = useSwipe(stepItem);
 
   function togglePlay() {
     const v = videoRef.current;
@@ -281,9 +288,18 @@ function ReviewSession({ scope, scopeControls }) {
     if (v.paused) v.play().catch(() => {}); else v.pause();
   }
 
+  // Fullscreen: Review's own, where the browser has the API. An iPhone has
+  // it for a <video> only (document.fullscreenEnabled is not there, #159):
+  // the video's own fullscreen then, and on any other item no button.
+  const videoFullscreen = !canFullscreen && m?.kind === "video" && !m.missing
+    && typeof HTMLVideoElement !== "undefined" && "webkitEnterFullscreen" in HTMLVideoElement.prototype;
   function toggleFullscreen() {
-    if (document.fullscreenElement) document.exitFullscreen?.();
-    else rootRef.current?.requestFullscreen?.().catch(() => {});
+    if (canFullscreen) {
+      if (document.fullscreenElement) document.exitFullscreen?.();
+      else rootRef.current?.requestFullscreen?.().catch(() => {});
+    } else if (videoFullscreen) {
+      try { videoRef.current?.webkitEnterFullscreen(); } catch { /* not ready yet */ }
+    }
   }
 
   // Latest handlers for the one window listener.
@@ -339,6 +355,24 @@ function ReviewSession({ scope, scopeControls }) {
   // Mouse clicks on the action buttons must not leave focus there, or the next
   // Enter would press the button again instead of meaning "keep".
   function act(e, fn) { e.currentTarget.blur(); fn(); }
+
+  // The shortcuts dialog keeps Tab inside it (#159), and on closing gives
+  // focus back to what had it, or, when that was nothing (the buttons let
+  // go of it, see act), to its own "Keyboard shortcuts" button.
+  const helpRef = useRef(null);
+  const helpBtnRef = useRef(null);
+  useEffect(() => {
+    if (!help) return;
+    const prev = document.activeElement;
+    const btn = helpBtnRef.current;
+    function onKey(e) { trapTab(e, helpRef.current); }
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      if (prev && prev !== document.body && document.contains(prev)) restoreFocus(prev);
+      else restoreFocus(btn);
+    };
+  }, [help]);
 
   // The next post's details start at their top, not where the last one's
   // were scrolled to (the panel stays mounted: focus inside it stays put).
@@ -464,7 +498,7 @@ function ReviewSession({ scope, scopeControls }) {
     <div className="review-page">
       <PageHeader title="Review" />
       <div className="review" ref={rootRef}>
-        <div className="review-stage" ref={stageRef}>
+        <div className="review-stage" ref={stageRef} {...swipe}>
           {stage}
           {media.length > 1 && cur && (
             <>
@@ -573,10 +607,12 @@ function ReviewSession({ scope, scopeControls }) {
               <button type="button" className="btn-secondary" onClick={e => act(e, () => setMuted(v => !v))} aria-pressed={muted} title="Mute (M)" aria-label="Mute">
                 <Icon name={muted ? "volumeOff" : "volume"} size={14} /><Kbd>M</Kbd>
               </button>
-              <button type="button" className="btn-secondary" onClick={e => act(e, toggleFullscreen)} title="Fullscreen (F)" aria-label="Fullscreen">
-                <Icon name="expand" size={14} /><Kbd>F</Kbd>
-              </button>
-              <button type="button" className="btn-secondary" onClick={e => act(e, () => setHelp(true))} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
+              {(canFullscreen || videoFullscreen) && (
+                <button type="button" className="btn-secondary review-fullscreen" onClick={e => act(e, toggleFullscreen)} title="Fullscreen (F)" aria-label="Fullscreen">
+                  <Icon name="expand" size={14} /><Kbd>F</Kbd>
+                </button>
+              )}
+              <button type="button" className="btn-secondary" ref={helpBtnRef} onClick={e => act(e, () => setHelp(true))} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
                 <Icon name="keyboard" size={14} /><Kbd>?</Kbd>
               </button>
             </div>
@@ -594,7 +630,7 @@ function ReviewSession({ scope, scopeControls }) {
 
         {help && (
           <div className="review-help" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onClick={() => setHelp(false)}>
-            <div className="review-help-box" onClick={e => e.stopPropagation()}>
+            <div className="review-help-box" ref={helpRef} onClick={e => e.stopPropagation()}>
               <h3 className="modal-title">Keyboard shortcuts</h3>
               <dl>
                 {SHORTCUTS.map(([k, d]) => (
