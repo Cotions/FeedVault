@@ -13,6 +13,12 @@
 // The backend listens on a free port, never the live app's (3380) or
 // testapp.sh's (3389), and is stopped by its PID; the tmp dir is deleted.
 //
+// A run that is cut short (#110) cleans up too: the backend gets SIGTERM
+// when the runner dies, however it dies (die-with-runner.py); a runner
+// that exits during setup or the tests stops it and deletes the tmp dir
+// on its way out; and each start sweeps the tmp dirs of runs whose runner
+// is gone (owner.pid), killing only what carries that run's guard.
+//
 // No Playwright import here: the Node tests (npm test) check the refusals.
 import { spawn, execFile } from "node:child_process";
 import fs from "node:fs";
@@ -27,6 +33,10 @@ export const RESERVED_PORTS = new Set([3380, 3389]);   // the live app, testapp.
 const TMP_PREFIX = "feedvault-e2e-";
 const READY_MS = 90_000;
 const STOP_MS = 10_000;
+const EXIT_STOP_MS = 5_000;                   // the backend's shutdown, on the runner's way out
+const OWNER = "owner.pid";
+const LAUNCHER = path.join(REPO, "frontend", "e2e", "die-with-runner.py");
+const PROC = fs.existsSync("/proc/self/stat");   // Linux: processes can be checked
 
 // Folders the instance must never be in: the user's real config and demo.
 export function protectedDirs(env = process.env, home = os.homedir()) {
@@ -182,6 +192,137 @@ async function ask(base, url) {
   return r.json();
 }
 
+// The kernel's start time of ``pid`` (clock ticks since boot, a string),
+// or null when there is no such process (or only its zombie): with the
+// boot's id, what tells a runner from a later process given its PID.
+export function startTime(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    // Field 22; the name (field 2) may hold spaces and parentheses.
+    const after = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return after[0] === "Z" ? null : after[19];
+  } catch {
+    return null;
+  }
+}
+
+function bootId() {
+  try { return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(); } catch { return ""; }
+}
+
+// A run's owner.pid: {pid, start, boot, guard}, or null when it is missing
+// or not one this harness wrote for ``root`` (its guard names ``root``).
+export function readOwner(root) {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(root, OWNER), "utf8"));
+    const ok = Number.isInteger(o.pid) && o.pid > 0 && typeof o.start === "string" && o.start !== ""
+      && typeof o.boot === "string" && typeof o.guard === "string"
+      && JSON.parse(o.guard).roots?.[0] === fs.realpathSync(root);
+    return ok ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+export function ownerAlive(owner) {
+  return owner.boot === bootId() && startTime(owner.pid) === owner.start;
+}
+
+// Deletes this user's tmp dirs (``feedvault-e2e-*`` in ``tmp``) whose
+// runner is gone, after killing, by PID, what still runs in them with
+// their run's guard (pidsIn). A dir whose runner is alive (another
+// checkout's run, say), or with no valid owner.pid (made before #110, or
+// at this very instant), is left alone. Returns the dirs deleted.
+export function sweepStale({ tmp = os.tmpdir(), log = () => {} } = {}) {
+  if (!PROC) return [];                       // no telling a live runner from a dead one
+  let names;
+  try { names = fs.readdirSync(tmp); } catch { return []; }
+  const swept = [];
+  for (const name of names) {
+    if (!name.startsWith(TMP_PREFIX)) continue;
+    const dir = path.join(tmp, name);
+    let st;
+    try { st = fs.lstatSync(dir); } catch { continue; }
+    if (!st.isDirectory() || st.uid !== process.getuid()) continue;   // a link, a file, someone else's
+    const owner = readOwner(dir);
+    if (!owner) {
+      log(`e2e: ${dir} has no owner.pid: left alone (delete it by hand once no run uses it)`);
+      continue;
+    }
+    if (ownerAlive(owner)) continue;
+    for (const pid of pidsIn(dir, owner.guard)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ }
+    }
+    const still = pidsIn(dir, owner.guard);
+    if (still.length) {
+      log(`e2e: ${dir}: its runner is gone, but pids ${still.join(", ")} still run there: left`);
+      continue;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+    log(`e2e: deleted ${dir}, left by an interrupted run (runner pid ${owner.pid})`);
+    swept.push(dir);
+  }
+  return swept;
+}
+
+// Sweeps the dead runs' tmp dirs, then makes this run's, owned by this
+// process (owner.pid), with the isolated environment for ``python``. Until
+// stopInstance takes over, this process's exit stops the backend and
+// deletes the dir (exitCleanup): a setup that throws or is interrupted
+// leaves nothing behind.
+export function openRun({ python, tmp = os.tmpdir(), log = () => {} }) {
+  sweepStale({ tmp, log });
+  const root = fs.mkdtempSync(path.join(tmp, TMP_PREFIX));
+  const inst = { root, guard: null, env: null, pid: null, proc: null, url: null, logFile: path.join(root, "backend.log") };
+  try {
+    inst.env = isolatedEnv(root, python);
+    inst.guard = inst.env.FEEDVAULT_TEST_GUARD;
+    const owner = { pid: process.pid, start: startTime(process.pid) || "", boot: bootId(), guard: inst.guard };
+    fs.writeFileSync(path.join(root, OWNER), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+  } catch (e) {
+    fs.rmSync(root, { recursive: true, force: true });
+    throw e;
+  }
+  inst.onExit = () => exitCleanup(inst);
+  process.on("exit", inst.onExit);
+  return inst;
+}
+
+// Starts ``python args`` as the run's backend, in the tmp dir with the
+// run's environment, through die-with-runner.py (Linux): it gets SIGTERM
+// if this process dies without stopping it.
+export function launchBackend(inst, python, args, { env = {}, stdio = "ignore" } = {}) {
+  const argv = PROC ? [LAUNCHER, String(process.pid), python, ...args] : args;
+  inst.proc = spawn(python, argv, { cwd: inst.root, env: { ...inst.env, ...env }, stdio });
+  inst.pid = inst.proc.pid;
+  return inst.proc;
+}
+
+function running(inst) {
+  return Boolean(inst.pid && inst.proc && inst.proc.exitCode === null && inst.proc.signalCode === null);
+}
+
+// On this process's way out with the run not stopped (a setup that threw
+// or was interrupted, a runner that exits mid-run), synchronously: SIGTERM
+// to the backend and up to EXIT_STOP_MS for its shutdown (it stops its
+// jobs), SIGKILL after; SIGKILL to the run's processes left; the tmp dir
+// deleted once nothing runs there (else the next start's sweep does it).
+export function exitCleanup(inst) {
+  if (running(inst)) {
+    try { process.kill(inst.pid, "SIGTERM"); } catch { /* gone already */ }
+    const nap = new Int32Array(new SharedArrayBuffer(4));
+    const until = Date.now() + EXIT_STOP_MS;
+    while (startTime(inst.pid) !== null && Date.now() < until) Atomics.wait(nap, 0, 0, 50);
+    if (startTime(inst.pid) !== null) {
+      try { process.kill(inst.pid, "SIGKILL"); } catch { /* gone already */ }
+    }
+  }
+  for (const pid of pidsIn(inst.root, inst.guard)) {
+    try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ }
+  }
+  if (!pidsIn(inst.root, inst.guard).length) fs.rmSync(inst.root, { recursive: true, force: true });
+}
+
 // Builds the demo vault and starts the backend; resolves to the instance.
 // ``stress``: the demo with make_demo.py's worst cases for the layout
 // checks (--stress), in this throwaway vault only.
@@ -192,13 +333,12 @@ export async function startInstance({ log = () => {}, stress = false } = {}) {
   const dist = path.join(REPO, "frontend", "dist", "index.html");
   if (!fs.existsSync(dist)) throw new Error("e2e: the UI is not built (npm run build)");
   const python = findPython();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), TMP_PREFIX));
-  const inst = { root, pid: null, proc: null, url: null, logFile: path.join(root, "backend.log") };
+  const inst = openRun({ python, log });
+  const { root, env } = inst;
   try {
     const vault = path.join(root, "vault");
     const configPath = path.join(vault, "config.json");
     checkSafe({ port, configPath, root });
-    const env = isolatedEnv(root, python);
     for (const d of [env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.XDG_STATE_HOME, env.XDG_CACHE_HOME, env.TMPDIR, env.PATH]) {
       fs.mkdirSync(d, { recursive: true, mode: 0o700 });
     }
@@ -217,15 +357,13 @@ export async function startInstance({ log = () => {}, stress = false } = {}) {
     fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
 
     const out = fs.openSync(inst.logFile, "a");
-    inst.proc = spawn(python, [path.join(REPO, "backend", "app.py")], {
-      cwd: root,
-      env: { ...env, FEEDVAULT_CONFIG: configPath, FEEDVAULT_PORT: String(port), FEEDVAULT_NO_BROWSER: "1" },
+    // Not detached: a Ctrl+C reaches it too. What it starts in sessions of
+    // its own is found by stopInstance.
+    launchBackend(inst, python, [path.join(REPO, "backend", "app.py")], {
+      env: { FEEDVAULT_CONFIG: configPath, FEEDVAULT_PORT: String(port), FEEDVAULT_NO_BROWSER: "1" },
       stdio: ["ignore", out, out],
-      // Not detached: a Ctrl+C reaches it too. What it starts in sessions of
-      // its own is found by stopInstance.
     });
     fs.closeSync(out);
-    inst.pid = inst.proc.pid;
     inst.url = `http://127.0.0.1:${port}`;
     log(`e2e: backend pid ${inst.pid} on ${inst.url}`);
     await waitReady(inst);
@@ -262,25 +400,35 @@ async function waitReady(inst) {
 }
 
 // PIDs of this user's processes whose working folder or command line is in
-// ``root`` (Linux's /proc; none elsewhere): what the backend started in
-// sessions of their own (jobs, tool probes) and left behind.
-export function pidsIn(root) {
+// ``root`` and whose environment holds ``guard`` as its
+// FEEDVAULT_TEST_GUARD (Linux's /proc; none elsewhere): what the run's
+// backend started in sessions of their own (jobs, tool probes) and left
+// behind. The guard names the run's tmp dir, so a shell cd'd there or a
+// tail -f of its log is not the run's; nor is a process whose environment
+// cannot be read.
+export function pidsIn(root, guard) {
+  if (!guard) return [];
   let entries;
   try { entries = fs.readdirSync("/proc"); } catch { return []; }
+  let realRoot = root;
+  try { realRoot = fs.realpathSync(root); } catch { /* deleted: as given */ }
+  const inRoot = x => [root, realRoot].some(r => x === r || x.startsWith(r + path.sep));
+  const mark = `FEEDVAULT_TEST_GUARD=${guard}`;
   const out = [];
   for (const e of entries) {
     if (!/^\d+$/.test(e) || Number(e) === process.pid) continue;
     try {
       const cwd = fs.readlinkSync(`/proc/${e}/cwd`);
       const cmd = fs.readFileSync(`/proc/${e}/cmdline`, "utf8").split("\0");
-      if ([cwd, ...cmd].some(x => x === root || x.startsWith(root + path.sep))) out.push(Number(e));
-    } catch { /* gone, or not ours */ }
+      if (!(inRoot(cwd) || cmd.some(inRoot))) continue;
+      if (fs.readFileSync(`/proc/${e}/environ`, "utf8").split("\0").includes(mark)) out.push(Number(e));
+    } catch { /* gone, or not ours (its environment unreadable) */ }
   }
   return out;
 }
 
-// Stops the backend by its PID (SIGTERM, then SIGKILL), then anything left
-// running in the tmp dir, by PID; checks the guard's log, and deletes the
+// Stops the backend by its PID (SIGTERM, then SIGKILL), then anything of
+// the run's left running in the tmp dir (pidsIn), by PID; checks the guard's log, and deletes the
 // tmp dir. ``saveLog``: where to copy the backend's log first.
 export async function stopInstance(inst, { saveLog } = {}) {
   if (!inst) return;
@@ -298,10 +446,10 @@ export async function stopInstance(inst, { saveLog } = {}) {
     throw new Error(`e2e: backend pid ${pid} is still running`);
   }
   if (root) {
-    for (const left of pidsIn(root)) {
+    for (const left of pidsIn(root, inst.guard)) {
       try { process.kill(left, "SIGKILL"); } catch { /* gone already */ }
     }
-    const still = pidsIn(root);
+    const still = pidsIn(root, inst.guard);
     if (still.length) throw new Error(`e2e: still running in ${root}: pids ${still.join(", ")}`);
   }
   let violations = "";
@@ -314,5 +462,6 @@ export async function stopInstance(inst, { saveLog } = {}) {
     }
     fs.rmSync(root, { recursive: true, force: true });
   }
+  if (inst.onExit) process.off("exit", inst.onExit);   // stopped: nothing left for the way out
   if (violations) throw new Error(`e2e: the test guard refused:\n${violations}`);
 }
