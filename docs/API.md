@@ -2509,7 +2509,8 @@ logs it. It never changes a folder above them.
     util-linux 2.39.3 parse them, one inside another: `env`, `nice`,
     `nohup`, `timeout`, `stdbuf`, `ionice`, `taskset`, by their bare name
     or a path in `/bin`, `/usr/bin`, `/usr/local/bin`, `/sbin` or
-    `/usr/sbin` (a program of yours under one of these names is not one).
+    `/usr/sbin` (a program of yours under one of these names is not one;
+    nor is a path through `..`, which the kernel reads past a symlink).
     A placeholder may not be in their own items: options, `timeout`'s
     duration, `taskset`'s mask, `env`'s `NAME=value` (a program can read
     a variable as code: `LD_PRELOAD`, `BASH_ENV`) and `env -C` (the folder
@@ -2517,6 +2518,19 @@ logs it. It never changes a folder above them.
     modules are found in). One run so that it runs no program (`--help`,
     `ionice -p`, `taskset -p`), with an option it does not have, or `env
     -S`: refused with a placeholder anywhere;
+  - a shell (`sh`, `bash`, `dash`, `zsh`, `ksh`, `mksh`, `ash`) and
+    Python (`python3`, `python3.12`, `pypy3` …) count, as launchers, only
+    by their bare name or a path in those folders (#105): `/home/me/bin/sh
+    -c … {url}`, `env /home/me/bin/bash -s {url}` and
+    `/opt/venv/bin/python -m yt_dlp {url}` are refused, the reason naming
+    the path (run the venv's `yt-dlp` itself instead: a downloader counts
+    by any path). Such a path is also followed through its symlinks, even
+    though its own name is known, and must end at a program of the same
+    kind: `/bin/sh` → `dash` and `/usr/bin/python3` → `python3.12` count,
+    a `sh` linked to `perl` or `busybox` does not (a bare `sh` still
+    does: the job's `PATH` decides). A shell linked to another is read
+    with the options of both (a `dash` linked to `bash` takes `-O`'s
+    value);
   - a placeholder never names the program to run (`argv[0]`, the item a
     launcher runs, a shell's script file when it has no `-c` or `-s`,
     what Python runs), nor is among Python's options (`-W` imports a
@@ -2592,7 +2606,11 @@ could not be read.
   `nice timeout 60 env X=1 yt-dlp`). Not read: `env -S` (its
   text is split by env's own rules), a name looked up on `PATH` that is a
   symlink, and other programs (`setsid`, `chrt`, `flock`, `sudo`, a wrapper script):
-  those run in `scripts`.
+  those run in `scripts`. Python is read so wherever it is: a command
+  with no placeholder such as `/opt/venv/bin/python -m yt_dlp` runs in
+  `yt-dlp`'s group (one with a placeholder is refused, see above), as
+  reading a program as a downloader only ever keeps it beside that
+  tool's syncs.
 - `argv` is the command as run, or the script's path. `argv` and `params`
   are scrubbed as output is (`health.scrub`).
 - The log starts with `[feedvault]` lines: the script's path and the
