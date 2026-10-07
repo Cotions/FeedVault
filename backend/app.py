@@ -960,6 +960,40 @@ def person_accounts(pid):
     return jsonify({"ok": True, **r})
 
 
+BIO_OFF = "link-in-bio import is off: turn it on in Settings → Downloads"
+
+
+@app.post("/api/people/<int:pid>/bio-import")
+def bio_import(pid):
+    """The accounts a person's link-in-bio page lists (biofetch.py): the one
+    page fetched, nothing added. The dashboard adds each one the user picks
+    through /api/people/<id>/accounts or /api/sources."""
+    if _foreign_origin():
+        return jsonify({"ok": False, "error": "a link-in-bio page can only be imported from FeedVault's own "
+                                              "dashboard"}), 403
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) != {"url"} or not isinstance(body["url"], str):
+        return jsonify({"ok": False, "error": "send { url: a link-in-bio page's link }"}), 400
+    cfg = config.load()
+    if not biofetch.enabled(cfg):
+        return jsonify({"ok": False, "error": BIO_OFF}), 403
+    try:
+        page = biofetch.fetch(body["url"])
+    except biofetch.Refused as e:
+        try:
+            shown = biofetch.check_url(body["url"])[2]
+        except biofetch.Refused:
+            shown = "a refused link"           # not logged as sent: it may hold anything
+        print(f"[people] link-in-bio import of {shown}: {e}")
+        return jsonify({"ok": False, "error": str(e)}), e.status
+    found = biofetch.suggest(conn, pid, biofetch.page_links(page.text), sources.routes(cfg), cfg["media_roots"])
+    print(f"[people] link-in-bio import of {page.url}: {len(found['accounts'])} accounts, {found['other']} other links")
+    return jsonify({"ok": True, "url": page.url, **found})
+
+
 # ---------------------------------------------------------------------------
 # Sources (sources.py: where a person's posts are downloaded from)
 # ---------------------------------------------------------------------------

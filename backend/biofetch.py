@@ -19,17 +19,25 @@ bounded:
 - one fetch at a time, at least MIN_GAP seconds apart, and never a link
   found in the page: the caller only parses what comes back.
 
-The page's body is never logged or stored; its URL may be logged.
+The page's body is never logged or stored; its URL may be logged. It is
+read with html.parser and json only (never run), and only the profile links
+the routing table knows become suggestions; the user adds each one through
+the usual calls.
 """
 import ipaddress
+import json
 import re
 import socket
 import ssl
 import threading
 import time
+from html.parser import HTMLParser
 from urllib.parse import quote, urljoin, urlsplit
 
 import config
+import db
+import people
+import sources
 
 # Link-in-bio sites whose every profile is a path on one host. Left out:
 # sites where a profile is a subdomain or the user's own domain (carrd.co,
@@ -463,3 +471,177 @@ def fetch(url, clock=time.monotonic):
         return FETCHER.fetch(url)
     finally:
         _busy.release()
+
+
+# ---------------------------------------------------------------------------
+# What the page links to
+# ---------------------------------------------------------------------------
+
+MAX_LINKS = 1000                               # distinct links read from a page
+MAX_SUGGESTIONS = 100
+_JSON_NODES = 200_000                          # values walked in the page's JSON, all blocks together
+_URL_START = re.compile(r"https?://", re.IGNORECASE)
+
+
+class _Links(HTMLParser):
+    """The href of every <a> and <area>, and the text of JSON <script>
+    blocks (Next.js' __NEXT_DATA__, application/json, application/ld+json),
+    which some sites draw their links from. Nothing else is read."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.hrefs, self.blocks, self._json = [], [], None
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag in ("a", "area") and a.get("href"):
+            self.hrefs.append(a["href"])
+        elif tag == "script":
+            kind = (a.get("type") or "").split(";")[0].strip().lower()
+            if a.get("id") == "__NEXT_DATA__" or kind in ("application/json", "application/ld+json"):
+                self._json = []
+
+    def handle_data(self, data):
+        if self._json is not None:
+            self._json.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self._json is not None:
+            self.blocks.append("".join(self._json))
+            self._json = None
+
+
+def _json_urls(block, budget):
+    """The http(s) strings anywhere in a JSON text, in order; ``budget``
+    ([values left]) bounds the walk over every block of a page."""
+    try:
+        stack = [json.loads(block)]
+    except (ValueError, RecursionError):
+        return []
+    out = []
+    while stack and budget[0] > 0:
+        budget[0] -= 1
+        v = stack.pop()
+        if isinstance(v, str):
+            if _URL_START.match(v.strip()):
+                out.append(v)
+        elif isinstance(v, dict):
+            stack.extend(reversed(list(v.values())))
+        elif isinstance(v, list):
+            stack.extend(reversed(v))
+    return out
+
+
+def page_links(text):
+    """The distinct absolute http(s) links of a page, in order: anchors,
+    then JSON blocks. Malformed HTML gives what was read before it broke."""
+    parser = _Links()
+    try:
+        parser.feed(text)
+        parser.close()
+    except Exception:                          # html.parser on broken markup: keep what it found
+        pass
+    if parser._json is not None:               # a JSON block the page never closed
+        parser.blocks.append("".join(parser._json))
+    found, budget = list(parser.hrefs), [_JSON_NODES]
+    for block in parser.blocks:
+        found.extend(_json_urls(block, budget))
+    out = []
+    for link in dict.fromkeys(f.strip() for f in found):
+        if _URL_START.match(link):
+            out.append(link)
+            if len(out) >= MAX_LINKS:
+                break
+    return out
+
+
+def profile(link, table):
+    """(platform, handle, url, tool, target) of a link to a profile the
+    routing table knows, else None: a post, a video, a search or a site's
+    home page is not one. ``url`` is the link as sources.parse_url
+    normalizes it (https, the table's host, the path checked)."""
+    parsed, _ = sources.parse_url(link, table)
+    if parsed is None:
+        return None
+    url, host, tool = parsed
+    platform = sources.platform_of(host)
+    if tool == "instaloader":
+        target = sources.parse_target("instaloader", url)
+        return (platform, target, url, tool, target) if target else None
+    parts = [p for p in urlsplit(url).path.split("/") if p]
+    i = next((i for i, p in enumerate(parts) if p.lstrip("@").lower() not in sources._PAGE_WORDS), None)
+    if i is None:
+        return None
+    handle = parts[i].lstrip("@")
+    if not handle or handle.lower() in people._NOT_HANDLES:
+        return None
+    # A profile's own tab (/@name/videos) is still the profile; /name/status/1 is a post.
+    if any(p.lower() not in sources._PAGE_WORDS for p in parts[i + 1:]):
+        return None
+    if platform == "tiktok" and not parts[i].startswith("@"):
+        return None                            # tiktok.com/@name only
+    return platform, handle, url, tool, url
+
+
+def _by_name(accounts):
+    """{(platform, lowercase name): {account keys}}: every handle an
+    account had, its aliases and its id."""
+    out = {}
+    for key, a in accounts.items():
+        names = {key[1], a["handle"], *(h["handle"] for h in a["handles"]), *a["aliases"]}
+        for n in names:
+            if n:
+                out.setdefault((key[0], n.lower().lstrip("@")), set()).add(key)
+    return out
+
+
+def _account(a):
+    return {k: a[k] for k in ("platform", "id", "handle", "name", "count", "url")}
+
+
+def suggest(conn, pid, links, table, roots):
+    """{accounts: [suggestion], other: n} for a person from a page's links.
+
+    A suggestion: {platform, handle, url, tool, status, account, person,
+    source}. ``status``: "linked" (theirs already, as an account or a
+    source), "other" (``person``'s), "indexed" (an account in the index
+    linked to nobody: add it to them), "source" (a source linked to nobody
+    yet), "new" (nothing downloaded: add it as a source of theirs).
+    ``other``: the links that are not a profile the routing table knows,
+    the bio site's own pages aside."""
+    accounts = db.accounts(conn)
+    by_name = _by_name(accounts)
+    out, seen, other = [], set(), 0
+    for link in links:
+        found = profile(link, table)
+        if found is None:
+            if _host(urlsplit(link).hostname) not in SITES:
+                other += 1
+            continue
+        platform, handle, url, tool, target = found
+        if (platform, handle.lower()) in seen:
+            continue
+        seen.add((platform, handle.lower()))
+        if len(out) >= MAX_SUGGESTIONS:
+            other += 1
+            continue
+        keys = by_name.get((platform, handle.lower()), set())
+        account = accounts[next(iter(keys))] if len(keys) == 1 else None
+        folder = sources.default_folder(tool, platform, target, roots) if roots else None
+        sid = sources.existing(conn, tool, target, folder)
+        source = sources.get(conn, sid) if sid is not None else None
+        owner = (account or {}).get("person") or (source or {}).get("person")
+        if owner and owner["id"] == pid:
+            status = "linked"
+        elif owner:
+            status = "other"
+        elif account:
+            status = "indexed"
+        elif source:
+            status = "source"
+        else:
+            status = "new"
+        out.append({"platform": platform, "handle": handle, "url": url, "tool": tool, "status": status,
+                    "account": _account(account) if account else None,
+                    "person": {"id": owner["id"], "name": owner["name"]} if owner else None, "source": sid})
+    return {"accounts": out, "other": other}

