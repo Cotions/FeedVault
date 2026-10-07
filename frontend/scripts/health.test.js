@@ -46,6 +46,11 @@ test("the Creators warning says which source and why", () => {
   assert.deepEqual(warnings([{ target: "a", health: { warning: "account not found" } },
                              { target: "b", health: { warning: "3 failed syncs in a row" } }], s => `@${s.target}`),
                    ["@a: account not found", "@b: 3 failed syncs in a row"]);
+  // #138: a script its next sync would fail on.
+  assert.deepEqual(warnings([{ target: "a", health: { warning: "account not found" }, options: { script: "greet" },
+                               script_warning: { state: "refused", reason: "greet.sh is refused: not executable" } },
+                             { target: "b", options: { script: null }, script_warning: null }]),
+                   ["a: account not found", "a: script greet: greet.sh is refused: not executable"]);
 });
 
 test("a stopped schedule says why", () => {

@@ -918,11 +918,19 @@ def parse_shell(text):
 
 def _builtin(name):
     t = BUILTINS[name]
-    return {"id": BUILTIN + name, "builtin": True, "kind": "command", "file": None, "path": None,
-            "name": t["name"], "description": t["description"], "needs": t["needs"], "rescan": t["rescan"],
-            "tool": t["argv"][0], "argv": list(t["argv"]), "refused": None,
-            "sha256": hashlib.sha256(template(name).encode()).hexdigest(),
-            "size": None, "mtime": None}
+    return _runs({"id": BUILTIN + name, "builtin": True, "kind": "command", "file": None, "path": None,
+                  "name": t["name"], "description": t["description"], "needs": t["needs"], "rescan": t["rescan"],
+                  "tool": t["argv"][0], "argv": list(t["argv"]), "refused": None,
+                  "sha256": hashlib.sha256(template(name).encode()).hexdigest(),
+                  "size": None, "mtime": None, "readable": True})
+
+
+def _runs(script):
+    """``script`` (not refused) with what it runs: ``program`` (see
+    program; None for a shell script) and ``group``, the lock group a run of
+    it on its own takes (see group)."""
+    script["program"], script["group"] = program(script), group(script)
+    return script
 
 
 def _entry(name, folder):
@@ -931,7 +939,7 @@ def _entry(name, folder):
     return {"id": sid, "builtin": False, "kind": KINDS[m.group(2)] if m else None, "file": name,
             "path": os.path.join(folder, name), "name": None, "description": None, "needs": None,
             "rescan": None, "tool": None, "argv": None, "refused": None, "sha256": None, "size": None,
-            "mtime": None}
+            "mtime": None, "readable": False, "program": None, "group": None}
 
 
 def _folder_refused(st, what, path):
@@ -997,7 +1005,8 @@ def _read(name, folder, dir_fd):
     if len(raw) > SIZE_MAX:
         out["refused"] = f"larger than {SIZE_MAX // 1024} KiB"
         return out, None
-    out.update(size=len(raw), mtime=int(st.st_mtime), sha256=hashlib.sha256(raw).hexdigest())
+    # Its text can be shown (GET /api/scripts/<id>), refused or not.
+    out.update(size=len(raw), mtime=int(st.st_mtime), sha256=hashlib.sha256(raw).hexdigest(), readable=True)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -1009,6 +1018,7 @@ def _read(name, folder, dir_fd):
     else:
         out.update(fields)
         out["name"] = out["name"] or out["id"]
+        _runs(out)
     return out, raw
 
 
@@ -1044,6 +1054,7 @@ def _files():
         if len(same) > 1:
             for s in same:
                 s["refused"] = f"two files have the id {s['id']}: {', '.join(x['file'] for x in same)}"
+                s["program"] = s["group"] = None           # refused: it runs nothing
     return None, found
 
 
@@ -1393,6 +1404,44 @@ def runnable(sid, sha256=None, raw=False):
     return _usable(script, sha256)
 
 
+def runnable_for(sid, tool, sha256=None, raw=False):
+    """runnable, for a ``tool`` source's sync: also refused (jobs.BadRequest)
+    when it runs another tool (foreign)."""
+    script = runnable(sid, sha256, raw)
+    why = foreign(script, tool)
+    if why:
+        raise jobs.BadRequest(why)
+    return script
+
+
+def foreign(script, tool):
+    """Why ``script`` may not be a ``tool`` source's, else None: it runs
+    another tool FeedVault locks (group: instaloader, gallery-dl, yt-dlp,
+    ffmpeg). A source's sync runs in its tool's lock group, with its pause
+    and its reading of the output: that other tool would run beside its
+    own syncs, without their pause, its failures read as ``tool``'s."""
+    other = group(script)
+    if other in ("scripts", tool):
+        return None
+    return (f"{script['file'] or script['id']} runs {other}, not {tool}: a {tool} source's script runs {tool}, "
+            f"or a program that is not {', '.join(t for t in jobs.TOOLS if t != tool)}")
+
+
+def warning(sid, tool):
+    """What a ``tool`` source whose script is ``sid`` shows before its next
+    sync, which would fail: {state: "missing" | "refused" | "other_tool",
+    reason}, else None (it can run)."""
+    script, refused = lookup(sid)
+    if script is None:
+        return {"state": "refused" if refused else "missing", "reason": missing(sid, refused)}
+    try:
+        _usable(script)
+    except jobs.BadRequest as e:
+        return {"state": "refused", "reason": str(e)}
+    why = foreign(script, tool)
+    return {"state": "other_tool", "reason": why} if why else None
+
+
 def _usable(script, sha256=None):
     """``script`` (read already) when it may run, else jobs.BadRequest."""
     if script["refused"]:
@@ -1545,7 +1594,7 @@ def sync_params(sid, src):
     the run then fails with that reason), and the source's target."""
     base = {"script": sid, "target": src["target"]}
     try:
-        return {**base, "sha256": runnable(sid)["sha256"]}
+        return {**base, "sha256": runnable_for(sid, src["tool"])["sha256"]}
     except jobs.BadRequest as e:
         return {**base, "why": health.scrub(str(e))[:WHY_MAX]}
 
@@ -1567,11 +1616,16 @@ def _source_values(script, src, cfg):
     return values(script, cfg, folder, src["target"], url)
 
 
+FAILED = "the source's script: {why}"
+
+
 def _sync_build(params):
     """As the tool's own sync checks a source (stored data is checked again:
     sources.json can be edited by hand), then the script's command. A
-    script missing or refused is not an error here: the run fails with
-    the reason (_sync_check), so the source and its schedule see it."""
+    script missing or refused (or running another tool) is not an error
+    here: the run fails with the reason at once (jobs.submit's "fail": it
+    is never queued, so it neither waits out its tool's pause nor holds its
+    lock group), so the source and its schedule see it."""
     src = _source(params)
     if src["tool"] != "instaloader":
         # gallery-dl's and yt-dlp's checks are their sync's own (a $ in the folder too).
@@ -1588,20 +1642,22 @@ def _sync_build(params):
             raise jobs.BadRequest(sources.SAVED_REFUSED.format(folder=folder))
     roots = cfg["media_roots"]
     try:
+        if "sha256" not in params:             # it could not run when queued: that run fails
+            raise jobs.BadRequest(params.get("why") or "it could not be run")
+        script = runnable_for(params["script"], src["tool"], params["sha256"])
+    except jobs.BadRequest as e:
+        # Failed at once, never started (were it started, _sync_check sees no
+        # sha256): never this spec's program, and nothing made for it.
+        if "sha256" in params:
+            del params["sha256"]
+            params["why"] = health.scrub(str(e))[:WHY_MAX]
+        return {"tool": params["script"], "args": [], "group": src["tool"],
+                "fail": FAILED.format(why=params["why"])}
+    try:
         os.makedirs(folder, exist_ok=True)
         config.make_private_dir(os.path.join(cfg["data_directory"], DIR_NAME))
     except OSError as e:
         raise jobs.BadRequest(f"cannot create the source's folder: {e.strerror or e}")
-    try:
-        if "sha256" not in params:             # it could not run when queued: that run fails
-            raise jobs.BadRequest(params.get("why"))
-        script = runnable(params["script"], params["sha256"])
-    except jobs.BadRequest as e:
-        # The run fails at _sync_check, which sees no sha256: never this spec's program.
-        if "sha256" in params:
-            del params["sha256"]
-            params["why"] = health.scrub(str(e))[:WHY_MAX]
-        return {"tool": params["script"], "args": [], "rescan": folder, "group": src["tool"]}
     vals = _source_values(script, src, cfg)
     spec = _spec(script, vals, cfg, _rescan(script, vals, roots) or folder)
     return {**spec, "group": src["tool"]}
@@ -1616,14 +1672,17 @@ def _sync_check(params, note):
     try:
         if "sha256" not in params:
             # Why it could not run when queued; if that is fixed by now, it says so.
-            runnable(params["script"])
+            runnable_for(params["script"], src["tool"])
             why = params.get("why") or "it could not be run"
             raise jobs.BadRequest(f"{why}; that was when the sync was queued, it can run now: sync again")
-        script = runnable(params["script"], params["sha256"], raw=True)
+        script = runnable_for(params["script"], src["tool"], params["sha256"], raw=True)
     except jobs.BadRequest as e:
-        message = f"the source's script: {e}"
+        message = FAILED.format(why=e)
         note(message)
         raise jobs.BadRequest(message)
+    # What a failure is named after (_sync_outcome): the program that runs,
+    # else the script's file. In the params the hooks get, never shown.
+    params["ran"] = program(script) or script["file"] or script["id"]
     return _say(script, _source_values(script, src, config.load()), note)
 
 
@@ -1652,14 +1711,19 @@ def _sync_pause(params):
     return _tool_pause(_tool(params))
 
 
+def _sync_outcome(params, code, lines, index, note):
+    """Read as the tool's own sync's (its errors, health, notices), a
+    failure named after the program that ran (_sync_check)."""
+    return sync._outcome(params, code, lines, index, note, _tool(params), ran=params.get("ran"))
+
+
 jobs.register(SYNC_KIND, label="Sync with a script",
               params={**sync.PARAMS, "script": {"type": "text", "max": 80},
                       "target": {"type": "text", "max": sources.URL_MAX},
                       "sha256": {"type": "text", "max": 64, "required": False},
                       "why": {"type": "text", "max": WHY_MAX, "required": False}},
               build=_sync_build, group=_tool, check=_sync_check, start=_sync_start, after=sync._strip_cookies,
-              outcome=lambda p, code, lines, index, note: sync._outcome(p, code, lines, index, note, _tool(p)),
-              ended=sync._ended, pause=_sync_pause, scrub=("argv",),
+              outcome=_sync_outcome, ended=sync._ended, pause=_sync_pause, scrub=("argv",),
               describe=lambda params, argv: f"Sync {params.get('target', '').removeprefix('https://')} "
                                             f"with {params.get('script')}")
 JOB_KINDS = (KIND, SYNC_KIND)

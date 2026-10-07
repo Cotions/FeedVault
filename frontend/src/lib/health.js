@@ -39,7 +39,11 @@ export function loginText(h) {
 }
 
 /* Why a card's sources need a look (health.warning: not found, login
-   needed, 3+ failures in a row), one line per source, or [] when none. */
+   needed, 3+ failures in a row; script_warning: its script would fail
+   its next sync), one line each, or [] when none. */
 export function warnings(sources, name = s => s.target) {
-  return (sources || []).filter(s => s.health?.warning).map(s => `${name(s)}: ${s.health.warning}`);
+  return (sources || []).flatMap(s => [
+    ...(s.health?.warning ? [`${name(s)}: ${s.health.warning}`] : []),
+    ...(s.script_warning ? [`${name(s)}: script ${s.options?.script}: ${s.script_warning.reason}`] : []),
+  ]);
 }

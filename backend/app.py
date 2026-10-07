@@ -1222,14 +1222,21 @@ def _with_session(s, cfg=None):
     session = sync.session_of(s["tool"], s["options"], cfg)
     if session["mode"] == "login":
         session = {**session, "session_file": downloaders.session_file_exists(session["user"])}
-    return {**s, "session": session, "schedule": scheduler.status(s, cfg)}
+    return {**s, "session": session, "schedule": scheduler.status(s, cfg), "script_warning": _script_warning(s)}
+
+
+def _script_warning(s):
+    """Why a source's script would fail its next sync (scripts.warning), or None."""
+    sid = s["options"]["script"]
+    return scripts.warning(sid, s["tool"]) if sid is not None else None
 
 
 @app.get("/api/sources")
 def list_sources():
     r = sources.listing(db.connect(), _roots(), _sources_active())
     cfg = config.load()
-    return jsonify({**r, "sources": [_with_session(s, cfg) for s in r["sources"]]})
+    with scripts.read_once():                  # the scripts folder read once for every source's warning
+        return jsonify({**r, "sources": [_with_session(s, cfg) for s in r["sources"]]})
 
 
 def _source_or_404(sid):
@@ -1260,17 +1267,18 @@ def resolve_source():
                     "session": sync.session_of(r["tool"], sources.clean_options(None), cfg)})
 
 
-def _script_refused(options):
+def _script_refused(options, tool=None):
     """(error, status) when ``options`` (a source's, as sent) set a script
-    that cannot be: from another origin (403), or one that does not exist
-    or is refused now (400). Else None; a malformed id is parse_options'."""
+    that cannot be: from another origin (403), or one that does not exist,
+    is refused now, or runs another tool than ``tool`` when it is known
+    (400). Else None; a malformed id is parse_options'."""
     sid = options.get("script") if isinstance(options, dict) else None
     if not isinstance(sid, str) or not sources.SCRIPT_ID_RE.fullmatch(sid):
         return None
     if _foreign_origin():
         return FOREIGN, 403
     try:
-        scripts.runnable(sid)
+        scripts.runnable(sid) if tool is None else scripts.runnable_for(sid, tool)
     except jobs.BadRequest as e:
         return str(e), 400
     return None
@@ -1300,6 +1308,9 @@ def create_source():
         if tool is not None and r["tool"] != tool:
             return jsonify({"ok": False, "error": f"this link syncs with {r['tool']} (Settings → Link routing)"}), 400
         tool, target = r["tool"], r["target"]
+    refused = _script_refused(body.get("options"), tool)   # now that its tool is known
+    if refused:
+        return jsonify({"ok": False, "error": refused[0]}), refused[1]
     folder, person, account = body.get("folder"), body.get("person"), body.get("account")
     if folder is not None and not isinstance(folder, str):
         return jsonify({"ok": False, "error": "folder must be an absolute path inside a media root"}), 400
@@ -1347,7 +1358,7 @@ def update_source(sid):
         # ones. It reads the options again at the end, so a schedule can change.
         return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
     sent = body["options"]
-    refused = _script_refused(sent) if sent.get("script") != s["options"]["script"] else None
+    refused = _script_refused(sent, s["tool"]) if sent.get("script") != s["options"]["script"] else None
     if refused:
         return jsonify({"ok": False, "error": refused[0]}), refused[1]
     options, error = sources.parse_options(sent, base=s["options"], tool=s["tool"], platform=s["platform"],

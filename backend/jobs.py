@@ -91,7 +91,9 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
     build:     checked params -> {"tool": name or absolute path, "args": [...],
                "cwd": folder or None, "rescan": folder or None, "full_scan": bool,
                "env": the process's whole environment (else FeedVault's own),
-               "group": a lock group, instead of ``group``'s}
+               "group": a lock group, instead of ``group``'s,
+               "fail": a message: the job fails at once with it, never
+               queued nor run (no check, start or pause; its ended hook runs)}
     group:     lock group, or a function of the params returning one
     check:     optional, (params, note) -> None or a Script, run in the job's
                thread before anything else (before its tool is looked for); an
@@ -331,6 +333,14 @@ def submit(kind_name, params):
     # database busy with a scan must not stall running jobs.
     job = Job(_insert(kind.name, params, spec, group, cwd, rescan, now),
               kind.name, params, spec, group, cwd, rescan, now)
+    if spec.get("fail"):
+        # Nothing to run: it fails now, with its reason in its log, never
+        # queued (no pause waited out, no lock group or slot taken).
+        job.state, job.started_at = "running", now
+        _note(job, f"[feedvault] {spec['fail']}")
+        _finish(job, "failed", message=spec["fail"])
+        with _lock:
+            return job.public(live=True)
     with _lock:
         closing = _closing
         if not closing:

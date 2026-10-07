@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { getScript, getScripts, runScript } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { fmtAgo, fmtBytes } from "../lib/fmt";
+import { scriptAnchor } from "../lib/sourceOptions";
 import Icon from "../components/Icon";
 import { JobLog } from "./Jobs";
 import PageHeader from "../components/PageHeader";
@@ -118,12 +119,16 @@ function RunForm({ script, onStarted }) {
   );
 }
 
-function ScriptRow({ script: s, dir, onStarted }) {
+/* One script. A refused one is never run; its text, when it could be read
+   (``readable``), can still be viewed, read-only: it is how to find what
+   to fix. ``lit``: the entry a source's warning linked to. */
+function ScriptRow({ script: s, dir, onStarted, lit = false }) {
   const [open, setOpen] = useState(null);       // "view" | "run" | "copy"
   const toggle = what => setOpen(o => (o === what ? null : what));
   const name = s.builtin ? s.id.slice("builtin:".length) : s.id;
+  const viewable = !s.refused || s.readable;
   return (
-    <li className={`dl-row script-row${s.refused ? " is-refused" : ""}`}>
+    <li id={scriptAnchor(s.id)} className={`dl-row script-row${s.refused ? " is-refused" : ""}${lit ? " is-flash" : ""}`}>
       <div className="dl-head">
         <span className="tool-name">{s.name || s.file}</span>
         <code className="dim">{s.id}</code>
@@ -133,7 +138,12 @@ function ScriptRow({ script: s, dir, onStarted }) {
         {s.builtin && <span className="chip">built-in</span>}
         {s.refused && <span className="chip job-state-failed">refused</span>}
         <div className="page-head-spacer" />
-        {!s.refused && <button type="button" className="btn-ghost" onClick={() => toggle("view")}>{open === "view" ? "Hide" : "View"}</button>}
+        {viewable && (
+          <button type="button" className="btn-ghost" onClick={() => toggle("view")}
+                  title={s.refused ? "Its text, read-only: it is never run" : undefined}>
+            {open === "view" ? "Hide" : "View"}
+          </button>
+        )}
         {!s.refused && <button type="button" className="btn-ghost" onClick={() => toggle("run")}>Run…</button>}
         {s.builtin && <button type="button" className="btn-ghost" onClick={() => toggle("copy")}>Copy template</button>}
       </div>
@@ -186,6 +196,22 @@ export default function Scripts() {
   const builtins = all.filter(s => s.builtin);
   const files = all.filter(s => !s.builtin);
 
+  // A source's script warning links to its entry (#script-<id>): shown lit,
+  // brought into view once it is listed.
+  const { hash } = useLocation();
+  // Anchors are [a-z0-9_.-] (scriptAnchor): no decoding needed, none to fail.
+  const target = hash ? hash.slice(1) : null;
+  const scrolled = useRef(null);
+  useEffect(() => {
+    if (!data || !target || scrolled.current === target) return;
+    const el = document.getElementById(target);
+    if (!el) return;
+    scrolled.current = target;
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
+  }, [data, target]);
+  const litOf = s => target === scriptAnchor(s.id);
+
   function onStarted(j) {
     started(j);
     setJobId(j.id);
@@ -214,7 +240,7 @@ export default function Scripts() {
           <div className="empty">No script on disk yet. Copy a template below, or start a shell script.</div>
         ) : (
           <ul className="dl-list">
-            {files.map(s => <ScriptRow key={s.file} script={s} dir={data.dir} onStarted={onStarted} />)}
+            {files.map(s => <ScriptRow key={s.file} script={s} dir={data.dir} onStarted={onStarted} lit={litOf(s)} />)}
           </ul>
         )}
       </div>
@@ -242,7 +268,7 @@ export default function Scripts() {
           Run one as it is, or copy it into a file to change it: its id is then the file&rsquo;s name.
         </p>
         <ul className="dl-list">
-          {builtins.map(s => <ScriptRow key={s.id} script={s} dir={data?.dir} onStarted={onStarted} />)}
+          {builtins.map(s => <ScriptRow key={s.id} script={s} dir={data?.dir} onStarted={onStarted} lit={litOf(s)} />)}
         </ul>
       </div>
 

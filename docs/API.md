@@ -1371,7 +1371,8 @@ no person yet.
   "job": { "id": 42, "state": "queued", "waits_until": 1727503660 },
   "session": { "mode": "login", "user": "me", "session_file": true },
   "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "stopped": null,
-                "failures": 1 } }
+                "failures": 1 },
+  "script_warning": null }
 ```
 
 - `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
@@ -1525,18 +1526,24 @@ no person yet.
   `null`), `stopped` (`"paused: account not found"` or `"paused: login
   required"` while the scheduler no longer syncs it, `next_at` then
   `null`; else `null`), `failures` (as `last_result.failures`, `0` when none).
+- `script_warning`: `null`, or why its script (`options.script`) would
+  fail its next sync, read from the scripts folder now: `{ "state":
+  "refused", "reason": "greet.sh is refused: writable by group or others
+  (chmod go-w …)" }`; `state` is `refused` (the file, or the scripts
+  folder), `missing` (no such script now) or `other_tool` (it runs
+  another tool than the source's, see [Scripts](#scripts) "On a source").
 
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, and for an `options.script` that does not exist or is refused; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site (see [Security rules](#security-rules)) |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
 | POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site |
 | DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site |
-| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script and the request comes from another site; 404 for an unknown id |
+| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }` (already `failed`, with the reason, for a script that cannot run, see [Scripts](#scripts) "On a source"); 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script and the request comes from another site; 404 for an unknown id |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors`; 403 from another site |
 
 Every `/api/sources/<id>…` call answers 404 `{ "ok": false, "error": "no
@@ -1869,7 +1876,8 @@ stored value that is not valid counts as the default (no flag).
 - **`script`**: `null`, or the id of a [script](#scripts) the source's
   Sync runs instead of the flags above (they then do nothing: the script
   is the whole command). Set from FeedVault's own dashboard only (403
-  otherwise), and only to a script that exists and is not refused (400).
+  otherwise), and only to a script that exists, is not refused and does
+  not run another tool than the source's (400).
   A script that goes missing or is refused later fails the source's next
   sync, never falling back to the tool's command.
 
@@ -2360,7 +2368,7 @@ Built-in kinds:
 | `gallery-dl-post` | `platform` (`twitter`), `id`, `handle` (optional); the same params as `yt-dlp-post` | gallery-dl for one X post, see [How an X or TikTok save runs](#how-an-x-or-tiktok-save-runs); started by `POST /api/save` only | `gallery-dl` |
 | `yt-dlp-post` | `platform` (`tiktok`), `id`, `handle` (optional) | yt-dlp for one TikTok video, as above | `yt-dlp` |
 | `script` | `script`, `target`, `url`, `folder`, `sha256` | a script on its own, see [Scripts](#scripts); started by `POST /api/scripts/<id>/run` only | the tool's name for a downloader's command, else `scripts` |
-| `script-sync` | `source`, `script`, `target`, `sha256` or `why`, `scheduled` | a source's script instead of its tool's command, see [Scripts](#scripts); started by the source's Sync (or the scheduler) only; `result` as a sync's | the source's tool |
+| `script-sync` | `source`, `script`, `target`, `sha256` or `why`, `scheduled` | a source's script instead of its tool's command, see [Scripts](#scripts); started by the source's Sync (or the scheduler) only; `result` as a sync's; one with `why` is `failed` at once, never queued | the source's tool |
 
 ### Sync all
 
@@ -2821,13 +2829,20 @@ A script:
   "path": "/home/me/.config/feedvault/scripts/my-insta.json",
   "name": "instaloader, no videos", "description": "…", "needs": "target", "rescan": "{root}",
   "tool": "instaloader", "argv": ["instaloader", "…"], "refused": null, "sha256": "…",
-  "size": 312, "mtime": 1727500000 }
+  "size": 312, "mtime": 1727500000, "readable": true, "program": "instaloader", "group": "instaloader" }
 ```
 
 `kind`: `command` or `shell`; `tool`: `argv[0]` of a command, `null` for a
-shell script; `argv`: `null` for a shell script. A refused file has
-`refused` set, and only `id`, `file`, `path` and `refused` filled when it
-could not be read.
+shell script; `argv`: `null` for a shell script. `program`: the name of
+the program a command runs, read as for its lock group (below), `null`
+for a shell script; `group`: the lock group a run of it takes
+(`instaloader`, `gallery-dl`, `yt-dlp`, `ffmpeg` or `scripts`). A refused
+file has `refused` set, `program` and `group` `null`, and only `id`,
+`file`, `path`, `refused` and `readable` filled when it could not be
+read. `readable`: whether its text was read, and so can be shown
+(`GET /api/scripts/<id>` `content`), refused or not: `false` for a file
+refused before it is opened (a symlink, someone else's, writable by
+group or others, too large).
 
 **Runs.** Job kind `script`, started by `POST /api/scripts/<id>/run` only
 (`POST /api/jobs` refuses it), shown in the [Jobs](#jobs) list as any job.
@@ -2870,9 +2885,27 @@ kind `script-sync`, params `{ "source", "script", "target", "sha256"?, "why"?,
 "scheduled"? }` (`sha256` the script's when queued, else `why` it could not run),
 in the tool's lock group with its pause. It reads its outcome, account
 health, notifications and schedule like the tool's own sync, the tool
-being the source's. A script that is missing or refused when the sync is
-queued or starts fails that run with the reason in its log and on the
-source. It never falls back to the built-in command.
+being the source's; a failure that output does not explain is named after
+the program that ran (`echo failed: …`, a shell script's file:
+`greet.sh failed: …`), not the tool. It never falls back to the built-in
+command.
+
+- A script that is missing or refused when the sync is queued fails that
+  run at once: the job is `failed` as it is created, `message` `"the
+  source's script: <why>"`, in its log and on the source too. It is never
+  queued, so it neither waits out the tool's pause nor waits for (or
+  holds) the tool's lock group. One that is missing, refused or changed
+  when the sync starts (read again then) fails it the same way.
+- A source's script may not run another tool FeedVault locks (`group`
+  other than `scripts` and the source's tool: a `builtin:yt-dlp-video` or
+  a gallery-dl command on an instaloader source). Its sync runs in the
+  source's tool's group with that tool's pause and output reading, so
+  the other tool would run beside its own syncs and without their pause.
+  Attaching one is a 400, and a sync of one stored before (sources.json
+  edited by hand) fails at once, as above. A program that is not one of
+  those tools (a shell script, `echo`) can be any source's.
+- The source's `script_warning` says why its next sync would fail, before
+  it runs (see [Sources](#sources)).
 
 **Who can run one.** The dashboard only. A request from another site (an
 `Origin` that is present and is not `http://` on `localhost`, `127.0.0.1`
