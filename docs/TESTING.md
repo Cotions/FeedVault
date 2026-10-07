@@ -144,8 +144,32 @@ about 130 tests, 4 to 5 minutes for a full local run.
   tests, it checks that the server answering on its port reports this
   vault's data directory.
 - When the run ends, the backend is stopped by its PID (SIGTERM, then SIGKILL
-  after 10 s), any process left in the folder is stopped, the backend log is
-  copied to `frontend/test-results/backend.log`, and the folder is deleted.
+  after 10 s), any process of the run's left in the folder is stopped, the
+  backend log is copied to `frontend/test-results/backend.log`, and the
+  folder is deleted. A process counts as the run's only if its working
+  folder or command line is in the folder and its environment
+  (`/proc/<pid>/environ`) holds the run's `FEEDVAULT_TEST_GUARD`: a shell
+  `cd`'d there, or a `tail -f` of the backend log, is left alone.
+
+#### An interrupted run
+
+A run cut short (Ctrl+C, `kill`, SIGKILL, a CI cancel, a crash) leaves
+nothing running, and its folder goes at the latest at the next run (Linux):
+
+- The backend starts through `e2e/die-with-runner.py`, which sets
+  `PR_SET_PDEATHSIG` and then execs it: the kernel sends it SIGTERM when the
+  Playwright runner dies, however it dies. SIGTERM is the backend's usual
+  shutdown, which stops the jobs it started in sessions of their own.
+- If the runner exits before teardown (setup failed or was interrupted, or it
+  exits mid-run), its exit stops the backend (SIGTERM, up to 5 s, then
+  SIGKILL), stops the run's processes left, and deletes the folder.
+- Each run writes `owner.pid` in its folder (the runner's PID, its start time
+  and the boot id, so a reused PID does not count, and the run's guard). Each
+  start then deletes this user's `feedvault-e2e-*` folders whose runner is
+  gone, after stopping by PID what still runs there with that run's guard. A
+  folder whose runner is alive (another checkout's run) is left alone, and so
+  is one with no `owner.pid` (from before this change): delete that by hand
+  once no run uses it.
 
 Environment variables:
 
