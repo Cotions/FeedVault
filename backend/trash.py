@@ -403,6 +403,34 @@ def _parse(data):
     return lines
 
 
+_MARK = os.sep + TRASH_NAME + os.sep
+
+
+def _rebased(lines, root):
+    """``root``'s manifest lines, those written before the root moved
+    (renamed, or its disk mounted elsewhere, and the root set to its new
+    place) with their trash path, and their original path when it was under
+    the same old place, put under ``root``, where the files are now.
+    Without this nothing in that trash could be restored, and a purge only
+    dropped the lines. Restore still checks both paths, as for any line."""
+    base = root.rstrip(os.sep)
+    real = None
+    out = []
+    for line in lines:
+        to = line["to"]
+        i = to.find(_MARK)
+        if i > 0 and to[:i] != base:
+            old = to[:i]                       # the root it was written in, as resolved then
+            if real is None:
+                real = os.path.realpath(root)  # a root that is a symlink: the lines have its target
+            if old != real:
+                line = {**line, "to": base + to[i:]}
+                if line["from"].startswith(old + os.sep):
+                    line["from"] = base + line["from"][len(old):]
+        out.append(line)
+    return out
+
+
 def _load(root):
     """(lines, entries, entries by key) of one root's manifest, parsed once per
     version of the file. Shared between callers: never mutate them.
@@ -434,11 +462,11 @@ def _load(root):
     view = memoryview(data)
     h = hashlib.sha1(view[:hit[4]] if hit and hit[4] <= end else b"")
     if hit and hit[0][2] == st.st_ino and hit[4] <= end and h.digest() == hit[5]:
-        lines = hit[1] + _parse(data[hit[4]:end])
+        lines = hit[1] + _rebased(_parse(data[hit[4]:end]), root)
         entries = _group(root, lines, prior=hit[3], start=len(hit[1]))
         h.update(view[hit[4]:end])
     else:
-        lines = _parse(data[:end])
+        lines = _rebased(_parse(data[:end]), root)
         entries = _group(root, lines)
         h = hashlib.sha1(view[:end])
     digest = h.digest()

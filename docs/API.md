@@ -494,6 +494,14 @@ the post was decided on again since), so it comes back kept. Lines written befor
 still work: the platform comes from the post id, the media kind from the file
 extension, the size from the file on disk, and `author` is `null`.
 
+`from` and `to` are absolute. A media root that moved with its trash
+(renamed, or its disk mounted elsewhere, and the root set to the new place
+in Settings) keeps working: a line whose `to` is in a `.feedvault-trash`
+folder of another place than its root (nor the root's symlink target) is
+read with that place replaced by the root, in `to` and, when it starts with
+the same place, in `from`. A restore or purge writes the lines back that
+way. Restore checks both paths as for any line.
+
 `GET /api/trash/items` groups the lines by trash folder, post and batch, newest
 deletion first:
 
