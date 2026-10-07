@@ -2007,8 +2007,9 @@ def test_the_userscripts_origin_cannot_run_a_script(client, folder, runner, sour
     attach(client, source["id"], "mine", status=403, headers=headers)
     attach(client, source["id"], "mine")
     assert "only FeedVault's own dashboard" in sync_now(client, source["id"], status=403, headers=headers)["error"]
-    r = client.post("/api/sources/sync-all", headers={**H, **headers}).get_json()
-    assert r["jobs"] == [] and r["errors"][0]["source"] == source["id"]
+    # Sync all is the dashboard's alone (#112): refused before it runs.
+    r = client.post("/api/sources/sync-all", headers={**H, **headers})
+    assert r.status_code == 403 and "own dashboard" in r.get_json()["error"]
     assert runner.runs() == [] and jobs.active() == []
     # A source without a script still syncs from there, as before.
     other = add_source(client, "dana.draws", headers=headers).get_json()["source"]
@@ -3951,8 +3952,8 @@ def test_a_folder_above_the_scripts_folder_through_a_symlink_is_checked_where_it
 @pytest.mark.parametrize("headers", FOREIGN)
 def test_the_userscripts_origin_cannot_schedule_a_script(client, folder, runner, source, headers, monkeypatch):
     """Audit 3: a schedule set from another site would run the source's
-    script at the next tick. A source that runs a script is changed from
-    the dashboard only; one without a script still is from anywhere."""
+    script at the next tick. A source is changed from the dashboard only,
+    with a script or without (#112: the userscript never changes one)."""
     for state in ("_notes", "_held", "_last"):
         monkeypatch.setattr(scheduler, state, {})
     attach(client, source["id"], "mine")
@@ -3964,13 +3965,15 @@ def test_the_userscripts_origin_cannot_schedule_a_script(client, folder, runner,
     assert runner.runs() == [] and jobs.active() == []
     other = add_source(client, "dana.draws").get_json()["source"]
     r = client.post(f"/api/sources/{other['id']}", json={"options": {"schedule": "daily"}}, headers={**H, **headers})
-    assert r.status_code == 200 and r.get_json()["source"]["options"]["schedule"] == "daily"
+    assert r.status_code == 403 and "own dashboard" in r.get_json()["error"]
+    assert client.get(f"/api/sources/{other['id']}", headers=H).get_json()["options"]["schedule"] in (None, "off")
 
 
 @pytest.mark.parametrize("headers", FOREIGN)
 def test_the_userscripts_origin_cannot_rename_or_delete_a_script_source(client, folder, runner, source, headers):
     """Review of audit 3: a rename changes the target the script gets (and
-    drops the scheduler's hold); a delete removes it. Dashboard only."""
+    drops the scheduler's hold); a delete removes it. Dashboard only, for
+    a source without a script too (#112)."""
     attach(client, source["id"], "mine")
     for method, url in (("post", f"/api/sources/{source['id']}/rename"), ("delete", f"/api/sources/{source['id']}/rename"),
                         ("delete", f"/api/sources/{source['id']}")):
@@ -3978,4 +3981,6 @@ def test_the_userscripts_origin_cannot_rename_or_delete_a_script_source(client, 
         assert r.status_code == 403 and "own dashboard" in r.get_json()["error"], url
     assert client.get(f"/api/sources/{source['id']}", headers=H).status_code == 200
     other = add_source(client, "dana.draws").get_json()["source"]
-    assert client.delete(f"/api/sources/{other['id']}", headers={**H, **headers}).get_json()["ok"]
+    r = client.delete(f"/api/sources/{other['id']}", headers={**H, **headers})
+    assert r.status_code == 403 and "own dashboard" in r.get_json()["error"]
+    assert client.get(f"/api/sources/{other['id']}", headers=H).status_code == 200
