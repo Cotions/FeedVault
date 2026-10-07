@@ -439,8 +439,9 @@ export function pidsIn(root, guard) {
 }
 
 // Stops the backend by its PID (SIGTERM, then SIGKILL), then anything of
-// the run's left running in the tmp dir (pidsIn), by PID; checks the guard's log, and deletes the
-// tmp dir. ``saveLog``: where to copy the backend's log first.
+// the run's left running in the tmp dir (pidsIn), by PID; checks the
+// guard's log, and deletes the tmp dir. ``saveLog``: where to copy the
+// backend's log first.
 export async function stopInstance(inst, { saveLog } = {}) {
   if (!inst) return;
   const { pid, root } = inst;
