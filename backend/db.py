@@ -508,12 +508,19 @@ def _migrate_21(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS links_person ON links(person_id)")
 
 
+def _migrate_22(conn):
+    """Content duplicates (duplicates._content_components) read the files
+    that share a size and full sha1: by this index, the few rows with a twin
+    instead of grouping every hashed file, on each listing."""
+    conn.execute("CREATE INDEX IF NOT EXISTS media_hash_full ON media_hash(full, size) WHERE full IS NOT NULL")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
-              _migrate_19, _migrate_20, _migrate_21]
+              _migrate_19, _migrate_20, _migrate_21, _migrate_22]
 
 BACKUPS_KEPT = 3
 
