@@ -15,7 +15,7 @@ import threading
 import time
 import webbrowser
 
-from flask import Flask, Response, abort, jsonify, make_response, request, send_file, send_from_directory
+from flask import Flask, Response, abort, g, jsonify, make_response, request, send_file, send_from_directory
 from werkzeug.exceptions import NotFound
 from werkzeug.routing import IntegerConverter
 from werkzeug.security import safe_join
@@ -154,6 +154,31 @@ def _no_frames(resp):
     csp = resp.headers.get("Content-Security-Policy")
     resp.headers["Content-Security-Policy"] = f"{csp}; {NO_FRAMES}" if csp else NO_FRAMES
     return resp
+
+
+# The hashing worker waits before its next file while a request is being
+# answered (hashing.request_started). Counted until the response is made,
+# not while a file is streamed: that is reading, not Python.
+@app.before_request
+def _answering():
+    hashing.request_started()
+    g.answering = True
+
+
+def _answered():
+    if g.pop("answering", False):
+        hashing.request_finished()
+
+
+@app.after_request
+def _answered_response(resp):
+    _answered()
+    return resp
+
+
+@app.teardown_request
+def _answered_teardown(_exc):
+    _answered()                                # when an error skipped after_request
 
 
 def _roots():

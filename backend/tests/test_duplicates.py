@@ -186,6 +186,37 @@ def test_pass_is_resumable_and_follows_changes(env):
     assert copy_base + ".jpg" not in hashes()
 
 
+def test_a_file_rewritten_while_it_is_read_keeps_no_hash(env, monkeypatch):
+    """Rewritten in place at the same size while being hashed: no row
+    describes it with what was read (the hash used to be stored under the
+    size and mtime of before), and the next pass hashes it as it is."""
+    monkeypatch.setitem(hashing._state, "errors", [])             # the error noted here stays here
+    _, copy_base = two_folders(env, "image")
+    run_scan(env)
+    path = copy_base + ".jpg"
+    real = hashing.partial_hash
+
+    def rewritten(p, size):
+        digest = real(p, size)
+        if p == path:
+            with open(p, "r+b") as f:
+                f.write(b"\xff")
+            t = time.time() + 5
+            os.utime(p, (t, t))
+        return digest
+    monkeypatch.setattr(hashing, "partial_hash", rewritten)
+    hashing.run_pass(db.connect())
+    row = hashes().get(path)
+    assert row is None or row["partial"] is None
+    assert any(e["path"] == path for e in hashing.status()["errors"])
+    monkeypatch.setattr(hashing, "partial_hash", real)
+    hashing.run_pass(db.connect())
+    row = hashes()[path]
+    st = os.stat(path)
+    assert (row["size"], row["mtime_ns"]) == (st.st_size, st.st_mtime_ns)
+    assert row["partial"] == real(path, st.st_size)
+
+
 def test_worker_steps_aside_while_the_write_lock_is_held(env):
     two_folders(env, "image")
     run_scan(env)

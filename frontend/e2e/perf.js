@@ -8,6 +8,9 @@
 //
 // - the index: built from nothing (make_demo.py's own scan, cold) and a
 //   rescan of it with nothing changed (POST /api/scan, warm);
+// - the hashing worker: its first pass over every file, a few calls the
+//   pages make timed while it runs and once it is idle, and the pass the
+//   warm rescan starts;
 // - the API calls the pages make: each one "uncached" (right after a
 //   write, which drops the backend's memo caches, as a sync or a review
 //   decision does) and "cached" (the same call again), the median of
@@ -142,6 +145,36 @@ async function measureList(page, base, list, touch) {
   return { interactive, ...counted, action: label, ...after };
 }
 
+// Calls a page makes, timed one after another while the hashing worker runs
+// and again once it is idle (median and slowest).
+const DURING = ["/api/posts?limit=60&offset=0", "/api/stats", "/api/sources", "/api/duplicates?kind=content&offset=0&limit=50"];
+
+async function hashingPass(base) {
+  const busy = Object.fromEntries(DURING.map(u => [u, []]));
+  const end = Date.now() + 30 * 60_000;
+  let started = null, last = null;
+  while (Date.now() < end) {
+    const scan = (await call(base, "GET", "/api/scan")).json;
+    last = (await call(base, "GET", "/api/duplicates/status")).json;
+    if (last.running && started == null) started = performance.now();
+    if (!last.running && !scan.running && last.finished_at) break;
+    if (last.running) {
+      for (const u of DURING) busy[u].push((await call(base, "GET", u)).took);
+    }
+    await new Promise(r => setTimeout(r, 50));
+  }
+  const pass_s = started == null ? 0 : (performance.now() - started) / 1000;
+  const idle = Object.fromEntries(DURING.map(u => [u, []]));
+  for (let i = 0; i < 20; i++) {
+    for (const u of DURING) idle[u].push((await call(base, "GET", u)).took);
+  }
+  const sum = xs => (xs.length ? { median_ms: median(xs), max_ms: Math.max(...xs), n: xs.length } : null);
+  return {
+    cold_s: pass_s, hashed: last.hashed, fingerprinted: last.fingerprinted,
+    calls: DURING.map(u => ({ url: u, during: sum(busy[u]), idle: sum(idle[u]) })),
+  };
+}
+
 async function main() {
   const out = { posts: POSTS, index: {}, api: [], pages: [], lists: [] };
   const lines = [];
@@ -153,13 +186,17 @@ async function main() {
     const base = inst.url;
     const built = /Index built in ([\d.]+) s/.exec(lines.join("\n"));
     out.index.cold_s = built ? Number(built[1]) : null;
-    // The first start's own scan and hashing pass, out of the way.
-    await until(async () => !(await call(base, "GET", "/api/duplicates/status")).json.running, "hashing");
+    // The first start's own scan, then its hashing pass of every file, with
+    // the dashboard's calls timed while it runs.
+    out.hashing = await hashingPass(base);
     const t = performance.now();
     await call(base, "POST", "/api/scan");
     await until(async () => !(await call(base, "GET", "/api/scan")).json.running, "rescan");
     out.index.warm_s = (performance.now() - t) / 1000;
+    // The pass a rescan that changed nothing starts.
+    const h = performance.now();
     await until(async () => !(await call(base, "GET", "/api/duplicates/status")).json.running, "hashing");
+    out.hashing.warm_s = (performance.now() - h) / 1000;
 
     const stats = (await call(base, "GET", "/api/stats")).json;
     out.vault = { posts: stats.posts, media: stats.media, unmatched: stats.unmatched };
@@ -323,7 +360,15 @@ async function main() {
   }
 
   console.log(`\nVault: ${JSON.stringify(out.vault)}`);
-  console.log(`Index: built in ${out.index.cold_s} s (cold), rescan ${out.index.warm_s?.toFixed(2)} s (warm)\n`);
+  console.log(`Index: built in ${out.index.cold_s} s (cold), rescan ${out.index.warm_s?.toFixed(2)} s (warm)`);
+  const hp = out.hashing;
+  console.log(`Hashing: first pass ${hp.cold_s.toFixed(2)} s (${hp.hashed} hashed, ${hp.fingerprinted} fingerprinted), `
+    + `after the rescan ${hp.warm_s?.toFixed(2)} s\n`);
+  console.log("| API call while hashing | median ms | max ms | idle median ms | idle max ms |\n|---|---:|---:|---:|---:|");
+  for (const r of hp.calls) {
+    console.log(`| \`${r.url}\` | ${ms(r.during?.median_ms)} | ${ms(r.during?.max_ms)} | ${ms(r.idle.median_ms)} | ${ms(r.idle.max_ms)} |`);
+  }
+  console.log("");
   console.log("| API call | uncached ms | cached ms | KiB |\n|---|---:|---:|---:|");
   for (const r of out.api) console.log(`| \`${r.url}\` | ${ms(r.uncached_ms)} | ${ms(r.cached_ms)} | ${Math.round(r.bytes / 1024)} |`);
   if (out.lists.length) {

@@ -285,6 +285,9 @@ and prints Markdown tables:
 
 - the index: built from nothing (cold) and rescanned with nothing changed
   (warm, `POST /api/scan`);
+- the hashing worker: its first pass over every file, with four calls the
+  pages make timed while it runs and once it is idle, and the pass the
+  warm rescan starts;
 - about 40 API calls the pages make: *uncached* right after a write, which
   drops the backend's memo caches as a sync or review does, and *cached*,
   the same call again; the median of `--runs`;
@@ -343,8 +346,47 @@ It stops the backend by its PID and deletes the tmp dir however it ends.
 | Jobs | 110 ms | 94 ms |
 
 The first `similar` after the pictures change still compares them all
-(about 370 ms here); later ones reuse the pairs. Hashing new pictures runs
-in the background after a scan (about 13 s for 36k files).
+(about 370 ms here); later ones reuse the pairs.
+
+### Hashing
+
+Hashing never blocked a request or a scan: it is a background thread that
+starts once the scan is done and commits in short batches. What it cost the
+dashboard was Python's one-thread-at-a-time lock: while its threads
+decoded pictures (the dHash phase, most of the first pass), every request
+waited for that lock each time it read a row. `perf.js` times four calls
+back to back while the first pass runs. Before is `main` at 739d9da, after
+is the background-hashing pass. Same vault as above.
+
+| Measure | before | after |
+|---|---:|---:|
+| `/api/posts?limit=60` while hashing, median (idle: 3 ms) | 17 ms | 4 ms |
+| `/api/posts?limit=60` while hashing, slowest | 33 ms | 20 ms |
+| `/api/duplicates?kind=content` while hashing, slowest (idle: 4 ms) | 634 ms | 100 ms |
+| `/api/stats` while hashing, median (idle: 21 ms) | 25 ms | 22 ms |
+| Pass after a rescan that changed nothing | 1.40 s | 0.69 s |
+| First pass, dashboard idle (36k files) | 21.1 s | 17.4 s |
+| of which the dHash phase | 14.7 s | 9.4 s |
+| First pass, the dashboard asking without pause | 13.8 s | 20.5 s |
+
+- The worker waits before each file while a request is being answered (at
+  most a second per file, so a dashboard that never stops asking slows
+  the pass down without stopping it: the last row). Finding which videos to
+  measure, which compares every picture with every other at the loosest
+  threshold (1.8 s here, after every scan that brings new pictures), waits
+  the same way between buckets of pictures.
+- Each phase stats its files first and keeps only the new or changed ones
+  (by size and mtime), so a pass that has nothing to do opens no file, and
+  the Duplicates page's "Fingerprinting pictures 1,200 / 7,500" counts
+  only what is left.
+- The picture threads each take the next file when free; they used to take
+  four at a time and wait for the slowest (an ffmpeg frame) before the
+  next four.
+
+The slowest calls left during a pass are the first ones after each of the
+worker's commits (every 10 s), which drop the memo caches as any write
+does. "Dashboard idle" is a script that runs `hashing.run_pass` on a copy
+of the vault with nothing else running.
 
 ### The long list pages
 
@@ -408,6 +450,13 @@ anything:
 - the content-duplicate query's plan uses its index (migration 22) and does
   not scan `media_hash`;
 - similar pairs are computed once for the same pictures;
+- a hashing pass after a rescan that changed nothing opens no file and
+  announces nothing to do; one rewritten picture is read once per phase;
+  an interrupted pass keeps what it read and the next reads only the rest;
+- the hashing worker reads no file while a request is being answered (the
+  app counts each request once), one slow file holds up only its own
+  thread, and finding the videos to measure pauses as often as its
+  buckets say;
 - instaloader's parser goes over a folder's names a fixed number of times,
   and its name index matches what its old pattern matched.
 
