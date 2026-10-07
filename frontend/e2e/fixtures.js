@@ -2,8 +2,11 @@
 // a console error, throws, or gets a failed /api answer (4xx, 5xx, or no
 // answer; a request aborted by leaving the page aside). A test may let
 // one known error through with pageErrors.allow(pattern), each pointing at
-// its issue.
+// its issue. And any test whose browser asks another origin than the
+// instance's for anything (#148: the fonts came from Google): the request
+// is aborted, so no run reaches the network, and the test fails.
 import { test as base, expect } from "@playwright/test";
+import { offsite } from "./harness.js";
 
 // Requests in flight on a page, from its start (the fixture below, addProbes
 // for a tab of a test's own), and when the last of them, and of its /api
@@ -39,10 +42,25 @@ async function noRequestFor(page, kind, ms, end, what) {
   }
 }
 
+// What each context's pages asked of another origin, aborted.
+const offsiteAsked = new WeakMap();
+
 export const test = base.extend({
+  // Every page of the test's context, its own tabs and popups included.
+  context: async ({ context, baseURL }, provide) => {
+    const asked = [];
+    offsiteAsked.set(context, asked);
+    await context.route(url => offsite(url.href, baseURL), route => {
+      const r = route.request();
+      asked.push(`offsite: ${r.method()} ${r.url()} (${r.resourceType()})`);
+      return route.abort("blockedbyclient");
+    });
+    await provide(context);
+  },
   pageErrors: [async ({ page }, provide, testInfo) => {
     trackRequests(page);
     const errors = [];
+    const asked = offsiteAsked.get(page.context());
     page.on("console", msg => {
       if (msg.type() !== "error") return;
       const where = msg.location()?.url;
@@ -62,6 +80,7 @@ export const test = base.extend({
     });
     const allowed = [];
     await provide({ allow: re => allowed.push(re) });
+    expect(asked, "requests to another origin than the instance's (aborted)").toEqual([]);
     expect(errors.filter(e => !allowed.some(re => re.test(e))), "console errors and failed /api requests").toEqual([]);
     // A test that passed: its pages closed before its context, which takes
     // some 0.8 s more with the app still open. A failed one keeps them for

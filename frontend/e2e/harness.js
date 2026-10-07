@@ -118,6 +118,20 @@ export async function pickPort(env = process.env, free = freePort) {
   return port;
 }
 
+// Whether the browser asking for ``url`` would leave the instance (#148):
+// an http(s) or ws(s) address on any origin but ``own`` (the instance's,
+// its scheme, host and port), so another site, the live app on 3380 or a
+// localhost server of anything else's. data:, blob: and about: stay in the
+// page. The fixtures (fixtures.js) abort such a request and fail the test.
+export function offsite(url, own) {
+  let u;
+  try { u = new URL(url); } catch { return true; }
+  if (!["http:", "https:", "ws:", "wss:"].includes(u.protocol)) return false;
+  const base = new URL(own);
+  const scheme = { "ws:": "http:", "wss:": "https:" }[u.protocol] || u.protocol;
+  return scheme !== base.protocol || u.host !== base.host;
+}
+
 export function freePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
