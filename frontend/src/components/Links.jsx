@@ -88,11 +88,11 @@ export function LinkForm({
 /* One link: its title (or address) opening the site in a new tab, the
    site and kind, its person (``showPerson``), notes, and the row's actions.
    Only an http(s) address is ever a link (safeUrl); anything else is text. */
-export function LinkRow({ link: l, showPerson = true, busy = false, onEdit, onDelete, onUp, onDown, flash = false }) {
+export function LinkRow({ link: l, showPerson = true, busy = false, onEdit, onDelete, onUp, onDown, flash = false, index }) {
   const href = safeUrl(l.url);
   const label = l.title || l.url.replace(/^https?:\/\//, "");
   return (
-    <li className={`link-row${flash ? " is-flash" : ""}`} data-link-id={l.id}>
+    <li className={`link-row${flash ? " is-flash" : ""}`} data-link-id={l.id} data-index={index}>
       <span className="link-row-icon" aria-hidden="true"><Icon name="link" size={15} /></span>
       <span className="link-row-main">
         <span className="link-row-head">

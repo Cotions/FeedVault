@@ -11,7 +11,9 @@ import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
 import PersonScopeHead from "../components/PersonScopeHead";
-import { personPath } from "../lib/people";
+import { accountText, matches, personPath } from "../lib/people";
+import { useWindow } from "../lib/windowing";
+import { GapRow } from "../components/WinGap";
 
 // Sortable creator columns. Share is the size as a fraction of the whole, so
 // it sorts like size.
@@ -31,14 +33,20 @@ function pct(part, whole) {
   return `${p >= 10 || p === 0 ? p.toFixed(0) : p.toFixed(1)}%`;
 }
 
-function CreatorTable({ rows, total }) {
+// With thousands of creators only the rows near the viewport are rendered
+// (lib/windowing.js), so the browser's find bar does not see the others:
+// the search box above the table does.
+function CreatorTable({ rows, total, query }) {
   const [sort, setSort] = useState({ key: "bytes", dir: "desc" });
   const sorted = useMemo(() => {
     const field = COLUMNS.find(c => c.key === sort.key)?.by || sort.key;
     const sign = sort.dir === "asc" ? 1 : -1;
-    return [...rows].sort((a, b) => sign * (a[field] - b[field]) || (a.handle || "").localeCompare(b.handle || ""));
-  }, [rows, sort]);
-  const max = Math.max(1, ...rows.map(r => r.bytes));
+    const shown = query.trim()
+      ? rows.filter(a => matches(`${accountText(a)} ${a.person?.name || ""}`.toLowerCase(), query)) : rows;
+    return [...shown].sort((a, b) => sign * (a[field] - b[field]) || (a.handle || "").localeCompare(b.handle || ""));
+  }, [rows, sort, query]);
+  const max = useMemo(() => rows.reduce((m, r) => Math.max(m, r.bytes), 1), [rows]);
+  const { listRef, focusProps, render, settled } = useWindow(sorted.length, { estimate: 58 });
 
   function toggle(key) {
     setSort(s => (s.key === key ? { key, dir: s.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
@@ -75,9 +83,15 @@ function CreatorTable({ rows, total }) {
             <th scope="col" role="columnheader" aria-label="Actions" />
           </tr>
         </thead>
-        <tbody role="rowgroup">
-          {sorted.map((a, i) => (
-            <tr key={`${a.platform}:${a.id}`} role="row" style={{ animationDelay: `${Math.min(i, 30) * 20}ms` }}>
+        <tbody role="rowgroup" ref={listRef} className={settled ? "is-settled" : undefined} {...focusProps}>
+          {sorted.length === 0 && (
+            <tr role="row"><td role="cell" colSpan={COLUMNS.length + 3}><div className="empty">No creator matches.</div></td></tr>
+          )}
+          {render(i => {
+            const a = sorted[i];
+            return (
+            <tr key={`${a.platform}:${a.id}`} role="row" data-index={i}
+                style={settled ? undefined : { animationDelay: `${Math.min(i, 30) * 20}ms` }}>
               <td role="cell" className="cell-main" data-label="Creator">
                 <Link to={authorFeedPath(a.platform, a)} className="storage-creator" title={`Show posts by @${a.handle}`}>
                   <span className="storage-creator-name">@{a.handle || a.id}</span>
@@ -94,7 +108,7 @@ function CreatorTable({ rows, total }) {
               <td role="cell" className="num storage-size" data-label="Size">{fmtBytes(a.bytes)}</td>
               <td role="cell" className="storage-share" data-label="Share">
                 <span className="channel-bar-track" aria-hidden="true">
-                  <span className="channel-bar-fill" style={{ width: `${(a.bytes / max) * 100}%`, "--d": `${Math.min(i, 30) * 20}ms` }} />
+                  <span className="channel-bar-fill" style={{ width: `${(a.bytes / max) * 100}%`, "--d": settled ? "0ms" : `${Math.min(i, 30) * 20}ms` }} />
                 </span>
                 <span className="mono storage-pct">{pct(a.bytes, total)}</span>
               </td>
@@ -124,7 +138,8 @@ function CreatorTable({ rows, total }) {
                 </div>
               </td>
             </tr>
-          ))}
+            );
+          }, (height, key) => <GapRow key={key} height={height} cols={COLUMNS.length + 3} />)}
         </tbody>
       </table>
     </div>
@@ -179,6 +194,7 @@ export default function Storage() {
   const [delErrors, setDelErrors] = useState(null);
   // Hidden at once on success; the reload that follows brings the new totals.
   const [gone, setGone] = useState(() => new Set());
+  const [query, setQuery] = useState("");              // the creator table's search
 
   async function runTrash() {
     const item = pending;
@@ -275,10 +291,22 @@ export default function Storage() {
       {trashNote}
 
       <div className="card">
-        <div className="card-title">Per creator · {fmtInt(s.by_author.length)}</div>
+        <div className="storage-creators-head">
+          <div className="card-title">Per creator · {fmtInt(s.by_author.length)}</div>
+          {s.by_author.length > 8 && (
+            <input
+              type="text"
+              className="page-filter"
+              placeholder="Handle, name or person…"
+              aria-label="Search creators"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+            />
+          )}
+        </div>
         {s.by_author.length === 0
           ? <div className="empty">No creator has posts yet.</div>
-          : <CreatorTable rows={s.by_author} total={s.totals.bytes} />}
+          : <CreatorTable rows={s.by_author} total={s.totals.bytes} query={query} />}
       </div>
 
       <div className="stats-split storage-bars">
