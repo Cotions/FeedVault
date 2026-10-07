@@ -6,6 +6,7 @@ import os
 import random
 import re
 import shutil
+import threading
 
 import pytest
 
@@ -15,6 +16,7 @@ import db
 import duplicates
 import hashing
 import scanner
+import thumbs
 from parsers import instaloader, is_media
 
 ACCOUNTS = [owner("alice.example", 111, "Alice"), owner("bob.example", 222, "Bob"), owner("carol", 333, "Carol")]
@@ -140,7 +142,7 @@ def test_content_duplicates_use_their_index(env):
 def test_similar_pairs_are_found_once_for_the_same_pictures(monkeypatch):
     calls = []
     real = duplicates.near_pairs_uncached
-    monkeypatch.setattr(duplicates, "near_pairs_uncached", lambda v, t: calls.append(t) or real(v, t))
+    monkeypatch.setattr(duplicates, "near_pairs_uncached", lambda v, t, pause=None: calls.append(t) or real(v, t, pause))
     monkeypatch.setattr(duplicates, "_near", {})
     rng = random.Random(5)
     values = [rng.getrandbits(64) for _ in range(500)]
@@ -152,6 +154,166 @@ def test_similar_pairs_are_found_once_for_the_same_pictures(monkeypatch):
     values[2] = values[0] ^ 1
     assert (0, 2) in duplicates.near_pairs(values, 6)
     assert calls == [6, 4, 6]
+
+
+# ---------------------------------------------------------------------------
+# The hashing worker (hashing.py): what a pass reads, and when
+# ---------------------------------------------------------------------------
+
+class Reads:
+    """The files a hashing pass opens, by phase, and the totals its
+    progress announced (hashing.status()["total"])."""
+
+    def __init__(self, monkeypatch):
+        self.files = {"partial": 0, "full": 0, "dhash": 0}
+        self.totals = {}
+        for name, phase in (("partial_hash", "partial"), ("full_hash", "full"), ("dhash", "dhash")):
+            real = getattr(hashing, name)
+            monkeypatch.setattr(hashing, name, self._counting(real, phase))
+        real_set = hashing._set
+        monkeypatch.setattr(hashing, "_set", lambda **kw: (
+            kw.get("phase") and "total" in kw and self.totals.__setitem__(kw["phase"], kw["total"]),
+            real_set(**kw)))
+
+    def _counting(self, real, phase):
+        def counted(*a, **kw):
+            self.files[phase] += 1
+            return real(*a, **kw)
+        return counted
+
+
+def test_a_pass_after_a_rescan_that_changed_nothing_reads_no_file(env, monkeypatch):
+    """Every phase stats its files first and reads only the new or changed
+    ones (by size and mtime), so its progress counts what is left to do
+    (it counted every candidate, and the picture phase handed every file to
+    its threads to find out)."""
+    write_posts(env["media"], 0, 30)
+    duplicates_of(env["media"])
+    index(env)
+    reads = Reads(monkeypatch)
+    scanner.scan(env["roots"])
+    assert hashing.run_pass(db.connect())
+    assert reads.files == {"partial": 0, "full": 0, "dhash": 0}
+    assert set(reads.totals.values()) == {0}
+    # One picture rewritten: that one file, in each phase that covers it.
+    path = db.connect().execute(
+        "SELECT h.path FROM media_hash h JOIN media m ON m.path = h.path "
+        "WHERE h.partial IS NOT NULL AND m.kind = 'image' ORDER BY h.path LIMIT 1").fetchone()[0]
+    noise_png(path, 99_999)
+    later = os.stat(path).st_mtime + 5
+    os.utime(path, (later, later))
+    scanner.scan(env["roots"])
+    assert hashing.run_pass(db.connect())
+    assert (reads.files["partial"], reads.files["dhash"]) == (1, 1)
+    assert (reads.totals["partial"], reads.totals["dhash"]) == (1, 1)
+
+
+def test_an_interrupted_pass_resumes_with_what_is_left(env, monkeypatch):
+    """A stop (a new scan, the app shutting down) keeps the rows of the
+    files already read; the next pass reads only the others."""
+    write_posts(env["media"], 0, 12)
+    duplicates_of(env["media"])
+    scanner.scan(env["roots"])
+    stop = threading.Event()
+    real = hashing.partial_hash
+    seen = []
+    monkeypatch.setattr(hashing, "partial_hash", lambda p, s: (
+        seen.append(p), len(seen) == 3 and stop.set(), real(p, s))[-1])
+    assert hashing.run_pass(db.connect(), restart=stop) is False
+    assert len(seen) == 3
+    kept = db.connect().execute("SELECT COUNT(*) FROM media_hash WHERE partial IS NOT NULL").fetchone()[0]
+    assert kept == 3
+    reads = Reads(monkeypatch)
+    assert hashing.run_pass(db.connect())
+    total = db.connect().execute("SELECT COUNT(*) FROM media_hash WHERE partial IS NOT NULL").fetchone()[0]
+    assert reads.files["partial"] == reads.totals["partial"] == total - 3
+
+
+def test_the_worker_waits_while_a_request_is_answered(env, client, monkeypatch):
+    """Python runs one thread at a time: a request answered while the worker
+    decoded pictures took several times as long. Now the worker waits
+    before its next file while a request is being answered."""
+    write_posts(env["media"], 0, 6)
+    duplicates_of(env["media"])
+    scanner.scan(env["roots"])
+    reads = Reads(monkeypatch)
+    monkeypatch.setattr(hashing, "YIELD_MAX", 60)
+    hashing.request_started()                    # a request, being answered
+    try:
+        t = threading.Thread(target=lambda: hashing.run_pass(db.connect()), daemon=True)
+        t.start()
+        for _ in range(500):                     # until the worker is waiting on it
+            if hashing._idle._waiters:
+                break
+            t.join(0.01)
+        assert hashing._idle._waiters and sum(reads.files.values()) == 0
+    finally:
+        hashing.request_finished()
+    t.join(30)
+    assert not t.is_alive() and reads.files["partial"] > 0 and hashing._requests == 0
+    # The app counts each request it answers, an error too, and ends each
+    # count once; one the origin guard refuses never starts one.
+    calls = []
+    monkeypatch.setattr(hashing, "request_started", lambda: calls.append("start"))
+    monkeypatch.setattr(hashing, "request_finished", lambda: calls.append("end"))
+    assert client.get("/api/stats", headers={"X-FeedVault": "1"}).status_code == 200
+    assert client.get("/api/nothing-here", headers={"X-FeedVault": "1"}).status_code == 404
+    assert client.get("/api/stats").status_code == 403                   # no X-FeedVault header
+    assert calls == ["start", "end"] * 2
+
+
+def test_a_slow_file_holds_up_only_its_own_thread(env):
+    """The picture phase's threads each take the next file when free: one
+    stuck on a file (ffmpeg extracting a frame) does not keep the others
+    waiting for it, as reading the files four at a time did. They are
+    daemons, so shutting the app down does not wait for them."""
+    paths = []
+    for n in range(8):
+        p = env["tmp"] / f"f{n}"
+        p.write_bytes(b"x" * (n + 1))
+        paths.append(str(p))
+    others = threading.Event()
+    done, daemons = [], []
+
+    def work(path, st):
+        daemons.append(threading.current_thread().daemon)
+        if path == paths[0]:
+            others.wait(10)                      # until every other file is done
+        else:
+            done.append(path)
+            if len(done) == len(paths) - 1:
+                others.set()
+        return None, 0
+
+    assert hashing._hash_all(db.connect(), paths, "probe", None, lambda p, st: False, work, workers=2)
+    assert others.is_set() and sorted(done) == sorted(paths[1:])
+    assert daemons and all(daemons)
+
+
+def test_grouping_videos_to_measure_gives_way_to_requests(env, monkeypatch):
+    """Finding which videos to measure compares every picture with every
+    other at the loosest threshold (seconds on a large archive, after every
+    scan that brings new pictures, since videos in no group stay
+    unmeasured); the worker pauses in it, between buckets, as it does
+    between files."""
+    rng = random.Random(7)
+    values = [rng.getrandbits(64) for _ in range(3000)]
+    pauses = []
+    duplicates.near_pairs_uncached(values, duplicates.SIMILAR_MAX, pause=lambda: pauses.append(1))
+    per_band = [len({(v >> s) & 0xFFFF for v in values}) for s in (0, 16, 32, 48)]
+    assert len(pauses) == sum(-(-n // duplicates.PAUSE_EVERY) for n in per_band) < sum(per_band)
+    # A pass hands it the worker's wait.
+    write_posts(env["media"], 0, 9)
+    scanner.scan(env["roots"])
+    given = []
+    real = duplicates.near_pairs_uncached
+    monkeypatch.setattr(duplicates, "near_pairs_uncached", lambda v, t, pause=None: (
+        given.append((t, pause)), real(v, t, pause))[-1])
+    monkeypatch.setattr(duplicates, "_near", {})
+    monkeypatch.setattr(thumbs, "ffprobe_path", lambda: "/usr/bin/ffprobe")     # never run: video_size is stubbed
+    monkeypatch.setattr(hashing, "video_size", lambda path, ffprobe=None: None)
+    assert hashing.run_pass(db.connect())
+    assert given == [(duplicates.SIMILAR_MAX, hashing._wait_idle)]
 
 
 class Counted(list):
