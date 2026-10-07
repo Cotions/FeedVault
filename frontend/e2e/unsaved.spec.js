@@ -185,3 +185,267 @@ test("a person's page asks before dropping unsaved notes (#125)", async ({ page,
     await request.delete(`/api/people/${pid}`, { headers: H });
   }
 });
+
+// #132: a tag's new name, and the add forms (a new link on the Links page
+// and on a person's page, a new source on a person's page and on Creators).
+// Each asks only once something is typed, and never after it went through.
+const nav = (page, path) => page.locator(`#main-nav a.side-link[href="${path}"]`).click();
+// On the page ``title`` and settled: the page left is gone, its question
+// with it, before Back.
+async function arrived(page, title) {
+  await expect(page.locator("h2.page-title")).toHaveText(title);
+  await idle(page);
+}
+
+async function removeLinks(request, stamp) {
+  const { links } = await (await request.get(`/api/links?q=${stamp}`, { headers: H })).json();
+  for (const l of links) await request.delete(`/api/links/${l.id}`, { headers: H });
+}
+
+async function removeSources(request, stamp) {
+  const { sources } = await (await request.get("/api/sources", { headers: H })).json();
+  for (const s of sources.filter(x => x.target.includes(`${stamp}`))) await request.delete(`/api/sources/${s.id}`, { headers: H });
+}
+
+test("Tags: another rename or leaving asks before dropping a typed name (#132)", async ({ page, request }) => {
+  const stamp = Date.now();
+  const [a, b] = [`e2e-unsaved-a-${stamp}`, `e2e-unsaved-b-${stamp}`];
+  const { posts } = await (await request.get("/api/posts?limit=1", { headers: H })).json();
+  await request.post("/api/tags/apply", { headers: H, data: { posts: [posts[0].id], add: [a, b] } });
+  try {
+    await page.goto("/tags");
+    const filterBox = page.getByRole("textbox", { name: "Filter tags" });
+    const narrow = async () => { if (await filterBox.count()) await filterBox.fill(`${stamp}`); };
+    const row = name => page.locator(".tag-row", { hasText: name });
+    const field = name => page.getByRole("textbox", { name: `New name for ${name}` });
+    const dialog = page.getByRole("alertdialog");
+    await expect(row(a)).toHaveCount(1);
+    await narrow();
+    await idle(page);
+
+    // Opened and left as it was: another Rename, or leaving, just goes on.
+    await row(a).getByRole("button", { name: "Rename" }).click();
+    await row(b).getByRole("button", { name: "Rename" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(field(b)).toHaveValue(b);
+    await nav(page, "/links");
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(dialog).toHaveCount(0);
+    await page.goBack();
+    await expect(row(a)).toHaveCount(1);
+    await narrow();
+
+    // Typed: another Rename asks. Keep editing keeps the typed name.
+    await row(a).getByRole("button", { name: "Rename" }).click();
+    await field(a).fill(`${a}-typed`);
+    await row(b).getByRole("button", { name: "Rename" }).click();
+    await expect(dialog).toContainText(`The new name for “${a}” is not saved.`);
+    await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeFocused();
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(field(a)).toHaveValue(`${a}-typed`);
+    await expect(field(b)).toHaveCount(0);
+
+    // Discard: B's rename opens, A keeps its name.
+    await row(b).getByRole("button", { name: "Rename" }).click();
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(field(b)).toHaveValue(b);
+    await expect(field(a)).toHaveCount(0);
+    await expect(row(a).locator(".tag-row-name")).toHaveText(a);
+
+    // Typed, then away: asked too. Keep editing stays; Discard goes.
+    await field(b).fill(`${b}-typed`);
+    await nav(page, "/links");
+    await expect(dialog).toContainText(`The new name for “${b}” is not saved.`);
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(/\/tags$/);
+    await expect(field(b)).toHaveValue(`${b}-typed`);
+    await nav(page, "/links");
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(page).toHaveURL(/\/links$/);
+    await arrived(page, "Links");
+    await page.goBack();
+    await expect(row(a)).toHaveCount(1);
+    await narrow();
+
+    // Renamed: nothing left to ask about.
+    await row(a).getByRole("button", { name: "Rename" }).click();
+    await field(a).fill(`${a}-renamed`);
+    await field(a).press("Enter");
+    await expect(page.locator(".tag-row-name", { hasText: `${a}-renamed` })).toHaveCount(1);
+    await nav(page, "/links");
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(dialog).toHaveCount(0);
+    await idle(page);
+  } finally {
+    for (const name of [a, b, `${a}-renamed`]) await request.post("/api/tags/delete", { headers: H, data: { name } });
+  }
+});
+
+test("Links: a half-filled new link is asked about before it goes (#132)", async ({ page, request }) => {
+  const stamp = Date.now();
+  try {
+    await page.goto("/links");
+    const url = page.locator("#links-add-url");
+    const dialog = page.getByRole("alertdialog");
+    await expect(url).toHaveValue("");
+    await idle(page);
+
+    // Untouched: the app goes on.
+    await nav(page, "/tags");
+    await expect(page).toHaveURL(/\/tags$/);
+    await expect(dialog).toHaveCount(0);
+    await page.goBack();
+
+    // Typed: leaving asks; Keep editing keeps it. A filter leaves the form be.
+    await url.fill(`https://e2e-${stamp}.example/new`);
+    await nav(page, "/tags");
+    await expect(dialog).toContainText("The new link is not saved.");
+    await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeFocused();
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(url).toHaveValue(`https://e2e-${stamp}.example/new`);
+    await page.locator(".links-filters select").first().selectOption("social");
+    await expect(page).toHaveURL(/\/links\?kind=social$/);
+    await expect(dialog).toHaveCount(0);
+    await expect(url).toHaveValue(`https://e2e-${stamp}.example/new`);
+
+    // Discard: the app goes on, and the form is empty on the way back.
+    await nav(page, "/tags");
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(page).toHaveURL(/\/tags$/);
+    await arrived(page, "Tags");
+    await page.goBack();
+    await expect(url).toHaveValue("");
+
+    // Added: nothing left to ask about.
+    await url.fill(`https://e2e-${stamp}.example/added`);
+    await page.locator(".links-add").getByRole("button", { name: "Add link" }).click();
+    await expect(url).toHaveValue("");
+    await nav(page, "/tags");
+    await expect(page).toHaveURL(/\/tags$/);
+    await expect(dialog).toHaveCount(0);
+    await idle(page);
+  } finally {
+    await removeLinks(request, stamp);
+  }
+});
+
+test("a person's page asks before dropping a half-filled new link or source (#132)", async ({ page, request }) => {
+  const stamp = Date.now();
+  const [pid] = await makePeople(request, [`E2E adds ${stamp}`]);
+  try {
+    await page.goto(`/people/${pid}`);
+    await expect(page.locator("h2.page-title")).toHaveText(`E2E adds ${stamp}`);
+    const url = page.locator("#person-link-add-url");
+    const source = page.getByRole("textbox", { name: "Profile link, or an Instagram name" });
+    const dialog = page.getByRole("alertdialog");
+    const back = async () => { await page.goBack(); await expect(page.locator("h2.page-title")).toHaveText(`E2E adds ${stamp}`); };
+    await idle(page);
+
+    // Untouched: the app goes on.
+    await nav(page, "/links");
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(dialog).toHaveCount(0);
+    await back();
+
+    // A new link typed: asked; Keep editing keeps it, Discard drops it.
+    await url.fill(`https://e2e-${stamp}.example/person`);
+    await nav(page, "/links");
+    await expect(dialog).toContainText(`Not saved for E2E adds ${stamp}: the new link.`);
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(new RegExp(`/people/${pid}$`));
+    await expect(url).toHaveValue(`https://e2e-${stamp}.example/person`);
+    await nav(page, "/links");
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(page).toHaveURL(/\/links$/);
+    await arrived(page, "Links");
+    await back();
+    await expect(url).toHaveValue("");
+
+    // A new source typed: the same.
+    await source.fill(`https://x.com/e2e_person_${stamp}`);
+    await nav(page, "/links");
+    await expect(dialog).toContainText(`Not saved for E2E adds ${stamp}: the new source.`);
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(new RegExp(`/people/${pid}$`));
+    await expect(source).toHaveValue(`https://x.com/e2e_person_${stamp}`);
+    await nav(page, "/links");
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(page).toHaveURL(/\/links$/);
+    await arrived(page, "Links");
+    await back();
+    await expect(source).toHaveValue("");
+
+    // Both added: nothing left to ask about.
+    await url.fill(`https://e2e-${stamp}.example/person-added`);
+    await page.locator(".person-link-add").getByRole("button", { name: "Add link" }).click();
+    await expect(url).toHaveValue("");
+    await expect(page.locator(".person-links-section .link-row")).toHaveCount(1);
+    await source.fill(`https://x.com/e2e_person_${stamp}`);
+    const add = page.getByRole("button", { name: "Add source" });
+    await expect(add).toBeEnabled();
+    await add.click();
+    await expect(source).toHaveValue("");
+    await nav(page, "/links");
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(dialog).toHaveCount(0);
+    await idle(page);
+  } finally {
+    await removeSources(request, stamp);
+    await removeLinks(request, stamp);
+    await request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});
+
+test("Creators: a half-typed new source is asked about before it goes (#132)", async ({ page, request }) => {
+  const stamp = Date.now();
+  try {
+    await page.goto("/creators");
+    const source = page.getByRole("textbox", { name: "Profile link, or an Instagram name" });
+    const dialog = page.getByRole("alertdialog");
+    await expect(source).toHaveValue("");
+    await idle(page);
+
+    // Untouched: the app goes on.
+    await nav(page, "/links");
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(dialog).toHaveCount(0);
+    await page.goBack();
+
+    // Typed: leaving asks; Keep editing keeps it, through a filter too.
+    await source.fill(`https://x.com/e2e_creators_${stamp}`);
+    await nav(page, "/links");
+    await expect(dialog).toContainText("The new source is not added yet.");
+    await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeFocused();
+    await dialog.getByRole("button", { name: "Keep editing" }).click();
+    await expect(page).toHaveURL(/\/creators$/);
+    await expect(source).toHaveValue(`https://x.com/e2e_creators_${stamp}`);
+    const filter = page.getByRole("textbox", { name: "Filter creators" });
+    await filter.fill(`nothing ${stamp}`);
+    await expect(source).toBeHidden();
+    await filter.fill("");
+    await expect(source).toHaveValue(`https://x.com/e2e_creators_${stamp}`);
+
+    // Discard: the app goes on, and the field is empty on the way back.
+    await nav(page, "/links");
+    await dialog.getByRole("button", { name: "Discard" }).click();
+    await expect(page).toHaveURL(/\/links$/);
+    await arrived(page, "Links");
+    await page.goBack();
+    await expect(source).toHaveValue("");
+
+    // Added: nothing left to ask about.
+    await source.fill(`https://x.com/e2e_creators_${stamp}`);
+    const add = page.getByRole("button", { name: "Add source" });
+    await expect(add).toBeEnabled();
+    await add.click();
+    await expect(source).toHaveValue("");
+    await nav(page, "/links");
+    await expect(page).toHaveURL(/\/links$/);
+    await expect(dialog).toHaveCount(0);
+    await idle(page);
+  } finally {
+    await removeSources(request, stamp);
+  }
+});
