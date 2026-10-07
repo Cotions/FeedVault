@@ -303,6 +303,8 @@ MESSAGES = {
     "login_required": "Instagram wants a logged-in session for this post; see Settings → Downloaders",
     "generic": "instaloader failed",
 }
+# A private post when the save used no login (mode "none", #124).
+NO_SESSION = "Private post and no login in use: set one that follows its account in Settings → Sync"
 
 
 def _outcome(params, code, lines, index, note=None):
@@ -346,6 +348,8 @@ def _outcome(params, code, lines, index, note=None):
     result["error"], line = sync.classify(lines, FAILURES)
     result["line"] = health.scrub(line)
     message = MESSAGES[result["error"]]
+    if result["error"] == "private" and sync.settings()["session"]["mode"] == "none":
+        message = NO_SESSION                   # the setting _build read: a save has no session of its own
     if result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"
     return "failed", result, message

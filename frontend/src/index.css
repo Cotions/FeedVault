@@ -2832,7 +2832,8 @@ a.btn-primary { color: var(--on-accent); }
 .job-message.is-err { color: #ffb3b5; }
 .job-table tbody tr { cursor: pointer; }
 .job-table tbody tr.is-selected td { background: rgba(var(--accent-rgb), 0.08); }
-.job-table .btn-link { text-align: left; }
+/* A target of its own: 24px tall at least, as the layout checks want. */
+.job-table .btn-link { text-align: left; min-height: 24px; }
 
 /* Settings: downloaders */
 .dl-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -3117,6 +3118,12 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-row {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  transition: border-color 0.18s, box-shadow 0.3s;
+}
+/* The source a notification pointed at (Creators ?source=), lit for a moment
+   as Links lights a link saved already. */
+.source-row.is-flash, .creator-card.is-flash, .creator-card.is-flash:hover {
+  border-color: rgba(var(--glow-rgb), 0.7); box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.18);
 }
 /* One width for TT, IG and X, so the names after them line up. */
 .source-row > .platform-chip { min-width: 28px; justify-content: center; }

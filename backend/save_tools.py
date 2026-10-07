@@ -293,6 +293,8 @@ MESSAGES = {
     "login_required": "{name} wants a logged-in session for this post; see Settings → Downloaders (browser cookies)",
     "generic": "{tool} failed",
 }
+# A private post when the save used no cookies (mode "none", #124).
+NO_SESSION = "Private post and no cookies in use: set a browser's cookies with access in Settings → Sync"
 
 
 def _outcome(params, code, lines, index, note=None):
@@ -339,6 +341,8 @@ def _outcome(params, code, lines, index, note=None):
     result["error"], line = sync.classify(lines, health.TABLES[spec["tool"]])
     result["line"] = health.scrub(line)
     message = MESSAGES[result["error"]].format(name=spec["name"], tool=spec["tool"])
+    if result["error"] == "private" and sync.tool_settings(spec["tool"])["session"]["mode"] == "none":
+        message = NO_SESSION                   # the setting _build read: a save has no session of its own
     if result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"
     return "failed", result, message

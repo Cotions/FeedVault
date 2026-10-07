@@ -146,12 +146,12 @@ export function SourceHealth({ source: s, job, onSaved }) {
 
 /* One source: its profile, what it downloads, tool, folder, schedule, last
    sync, Options, Sync and Remove. ``onSaved``: after its options changed. */
-export function SourceRow({ source: s, job, onSync, onRemove, onSaved }) {
+export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = false }) {
   const [editing, setEditing] = useState(false);
   const url = safeUrl(s.url);
   const summary = optionsSummary(s);
   return (
-    <li className="source-row">
+    <li className={`source-row${flash ? " is-flash" : ""}`} data-source-id={s.id}>
       <span className="chip platform-chip" title={platformLabel(s.platform)}>{platformShort(s.platform)}</span>
       <span className="source-id">
         <span className="creator-name" title={sourceName(s)}>

@@ -1438,7 +1438,9 @@ no person yet.
   - `state`: the job's (`done`, `failed`, `cancelled`, `interrupted`)
   - `error`: `null` when it worked, else what the output says went wrong:
     `login_required` (the site wants a logged-in session),
-    `private` (a private profile the session does not follow),
+    `private` (a private profile the session in use does not follow; when
+    the sync used no session or cookies, `message` says so and points to
+    Settings → Sync instead: "Private profile and no login in use: …"),
     `not_found` (no such profile: renamed or deleted),
     `rate_limited` (HTTP 429, "Please wait a few minutes"), or `generic`.
     An HTTP 403 counts as `login_required`: it is how Instagram turns away
