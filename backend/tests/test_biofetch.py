@@ -803,3 +803,97 @@ def test_a_broken_link_in_the_page_is_counted_not_a_crash(bio, client, monkeypat
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(page).fetcher())
     r = bio_import(client, bio["id"])
     assert len(r["accounts"]) == 1 and r["other"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Security audit 3
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("address", ["fec0::1", "feff:ffff::1", "3fff::1", "3fff:fff:ffff::1"])
+def test_site_local_and_documentation_v6_are_not_public(address):
+    """fec0::/10 (site-local, deprecated but still routed on some networks)
+    and 3fff::/20 (documentation) pass ipaddress' is_global on Python 3.12."""
+    assert not biofetch.public(address)
+    net = Net(dns={"linktr.ee": [address]})
+    assert "address is not public" in refused(net, "https://linktr.ee/alice")
+    assert net.connects == []
+
+
+@pytest.mark.parametrize("charset", ["punycode", "utf-7", "raw_unicode_escape", "unicode_escape"])
+def test_only_web_charsets_decode_the_page(charset):
+    """Python's punycode decoder is quadratic (2 MB took 156 s of CPU, under
+    the fetch lock and past the time limit); a page decodes with the charsets
+    web pages use, else as UTF-8."""
+    body = b"x-" + b"a" * 64
+    net = Net(pages={("linktr.ee", "/a"): html_answer(body, headers={
+        "Content-Type": f"text/html; charset={charset}"})})
+    assert net.get("https://linktr.ee/a").text == body.decode()
+
+
+@pytest.mark.parametrize("charset, text", [
+    ("Shift_JIS", "リンク"), ("windows-1251", "ссылка"), ("gb18030", "链接"), ("latin-1", "café"), ("us-ascii", "ok"),
+])
+def test_web_charsets_still_decode(charset, text):
+    net = Net(pages={("linktr.ee", "/a"): html_answer(text.encode(charset), headers={
+        "Content-Type": f"text/html; charset={charset}"})})
+    assert net.get("https://linktr.ee/a").text == text
+
+
+@pytest.mark.parametrize("headers", [
+    {"Content-Type": "text/\x1b[2J\x1b]0;owned\x07plain"},
+    {"Content-Type": "text/\x9b31mplain"},
+])
+def test_site_text_in_an_error_has_no_control_characters(bio, client, monkeypatch, capsys, headers):
+    """The error shown and logged quotes the site's Content-Type (or a
+    redirect's host): escape sequences must not reach the terminal."""
+    net = bio_net("<p>x</p>")
+    net.pages["linktr.ee", "/alice"] = html_answer(b"x", headers=headers)
+    monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
+    r = bio_import(client, bio["id"], status=502)
+    out = capsys.readouterr().out
+    assert r["error"].startswith("not a web page")
+    for text in (r["error"], out):
+        assert not any(not c.isprintable() and c != "\n" for c in text), repr(text)
+
+
+def test_a_redirect_host_in_an_error_has_no_control_characters():
+    net = Net(pages={("linktr.ee", "/a"): redirect("https://evil\x9b31m.example/")})
+    error = refused(net, "https://linktr.ee/a")
+    assert "not an allowed site" in error and all(c.isprintable() for c in error), repr(error)
+
+
+def test_the_tls_handshake_has_one_total_limit():
+    """The handshake runs under the socket's timeout as a whole (CPython's
+    _ssl keeps one deadline across its reads), not a fresh timeout per read:
+    a site dripping a byte every 0.2 s is cut at the time left. A local
+    socket pair, nothing leaves this machine."""
+    import threading
+    import time
+    a, b = socket.socketpair()
+    stop = threading.Event()
+
+    def drip():
+        b.recv(65536)                                        # the ClientHello
+        b.sendall(b"\x16\x03\x03\x40\x00")                   # a 16 KB handshake record follows...
+        while not stop.wait(0.2):
+            try:
+                b.sendall(b"\x00")                           # ...a byte at a time
+            except OSError:
+                return
+    threading.Thread(target=drip, daemon=True).start()
+    a.settimeout(0.6)
+    start = time.monotonic()
+    try:
+        with pytest.raises((socket.timeout, ssl.SSLError)):
+            biofetch.system_wrap(a, "linktr.ee")
+        assert time.monotonic() - start < 2
+    finally:
+        stop.set()
+        a.close()
+        b.close()
+
+
+def test_web_charsets_are_codec_names():
+    import codecs
+    for name in biofetch.WEB_CHARSETS:
+        assert codecs.lookup(name).name == name
