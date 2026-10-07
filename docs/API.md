@@ -243,7 +243,10 @@ new.
   with nothing indexed under it yet (a root just added: its part of the
   index is built from nothing), files back from the trash and files moved
   by Duplicates are not: they were there before. Files put by hand into a
-  root that never had a post count as that root's first scan too.
+  root that never had a post count as that root's first scan too. Such a
+  build is noted in the database (`meta` key `building:<root>`) until it
+  ends, so when FeedVault is stopped or killed halfway, the next scan goes
+  on building and what it finds is not new either.
 - `seen_at` is user data: table `seen_at`, one row, written to
   `<data_directory>/userdata/seen_at.json` (`{"version": 1, "rows": [{"id":
   1, "at": 1727500000}]}`) like the others and read back into a database

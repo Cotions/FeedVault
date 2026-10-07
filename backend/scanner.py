@@ -134,8 +134,13 @@ def _scan(roots):
     report = {"started_at": started, "finished_at": None,
               "added": 0, "updated": 0, "missing": 0, "unmatched": 0, "errors": []}
     # Building the index, or a root's part of it, from nothing: what it
-    # finds is not new.
-    fresh = {root: nothing_under(conn, root) for root in roots}
+    # finds is not new. Noted in the database until the build ends, so the
+    # scan after one that was cut short (FeedVault killed, the machine off)
+    # goes on building it, instead of finding the rest new.
+    fresh = {root: nothing_under(conn, root) or _building(conn, root) for root in roots}
+    with conn:
+        conn.executemany("INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')",
+                         [(BUILDING + root,) for root in roots if fresh[root]])
     seen_meta = set()
     unmatched = []                             # (path, size, mtime, reason)
     copies = []                                # (parsed post, meta mtime), see db.save_copies
@@ -184,6 +189,7 @@ def _scan(roots):
     conn.execute("DELETE FROM unmatched")
     conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
                      unmatched)
+    conn.executemany("DELETE FROM meta WHERE key = ?", [(BUILDING + root,) for root in read])
     conn.commit()
     _changed(changed)
     report["unmatched"] = len(unmatched)
@@ -196,6 +202,15 @@ def _changed(tables):
     see people.refresh_aliases), for userdata.py to write."""
     for name in tables:
         userdata.changed(name)
+
+
+BUILDING = "building:"                         # meta key prefix: a root's first scan under way
+
+
+def _building(conn, root):
+    """Whether a scan that was building ``root``'s part of the index from
+    nothing did not finish."""
+    return conn.execute("SELECT 1 FROM meta WHERE key = ?", (BUILDING + root,)).fetchone() is not None
 
 
 def nothing_under(conn, root):

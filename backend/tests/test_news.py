@@ -130,6 +130,37 @@ def test_the_scan_that_builds_the_index_finds_nothing_new(env, client):
     assert new_count(client)["count"] == 0
 
 
+def test_a_build_cut_short_goes_on_at_the_next_scan_with_nothing_new(env, client, monkeypatch):
+    # QA pass 4: FeedVault killed while its first scan built the index (a
+    # deleted database, a large archive). The folders committed by then made
+    # the root look indexed, so the next scan found every other post new.
+    archive(env)                               # carol.cooks, walked first
+    archive(env, 3, "dana.draws", 888)
+    news.ensure(db.connect())
+    set_seen(db.connect(), 1000)
+    real = scanner._index_post
+
+    def killed(conn, post, *args):
+        if post.author_handle == "dana.draws":
+            raise SystemExit("killed")         # nothing after this runs: no cleanup, no commit
+        return real(conn, post, *args)
+    monkeypatch.setattr(scanner, "_index_post", killed)
+    try:
+        scanner.scan(env["roots"])
+    except SystemExit:
+        pass
+    db.connect().rollback()
+    monkeypatch.setattr(scanner, "_index_post", real)
+    assert db.connect().execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 2
+    assert scanner.scan(env["roots"])["added"] == 3
+    assert new_count(client)["count"] == 0
+    assert db.connect().execute("SELECT COUNT(*) FROM posts WHERE first_seen > 0").fetchone()[0] == 0
+    # The build is over: later posts are new again.
+    write_post(env["media"] / "dana.draws", "NEWDANA0001", TS + 100, owner("dana.draws", 888))
+    scanner.scan(env["roots"])
+    assert ids(client, new="1") == ["instagram:NEWDANA0001"]
+
+
 def test_rescan_of_existing_files_is_never_new(env, client):
     folder = archive(env)
     scanner.scan(env["roots"])
