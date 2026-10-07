@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import queue
+import stat as stat_module
 import subprocess
 import sys
 import threading
@@ -165,11 +166,25 @@ class Changed(Exception):
     """The file did not read back at the size it was stat'ed at."""
 
 
+def _open(path):
+    """``path`` opened for reading, as a regular file: never a FIFO, whose
+    open would wait for a writer and stall the pass, nor a device, which
+    can be read forever (a file replaced by one since it was stat'ed)."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+            raise Changed("not a regular file any more")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def partial_hash(path, size):
     h = hashlib.sha1()
-    with open(path, "rb") as f:
+    with _open(path) as f:
         if size <= 2 * CHUNK:
-            data = f.read()
+            data = f.read(size + 1)              # never more: the file may have grown since
             if len(data) != size:
                 raise Changed("size changed while reading")
             h.update(data)
@@ -187,8 +202,9 @@ def partial_hash(path, size):
 def full_hash(path, size):
     h = hashlib.sha1()
     n = 0
-    with open(path, "rb") as f:
-        while chunk := f.read(CHUNK):
+    with _open(path) as f:
+        # One byte past ``size`` at most: enough to tell it grew.
+        while n <= size and (chunk := f.read(min(CHUNK, size + 1 - n))):
             h.update(chunk)
             n += len(chunk)
     if n != size:
@@ -258,6 +274,16 @@ def stat(path):
     except OSError:
         return None
     return st.st_size, st.st_mtime_ns
+
+
+def _file_stat(path):
+    """stat(), or None for anything but a regular file (symlinks followed):
+    a FIFO or a device in a media file's place is never read."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime_ns) if stat_module.S_ISREG(st.st_mode) else None
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +456,7 @@ def _stale(paths, fresh):
     read. A stat each, no file opened."""
     out = []
     for path in paths:
-        st = stat(path)
+        st = _file_stat(path)
         if st is not None and not fresh(path, st):
             out.append(path)
     return out
@@ -517,7 +543,7 @@ def _hash_all(conn, paths, phase, restart, fresh, work, workers=1):
     last_write = time.monotonic()
 
     def one(path):
-        st = stat(path)                          # again: it may have changed since _stale
+        st = _file_stat(path)                    # again: it may have changed since _stale
         if st is None or fresh(path, st):
             return None, 0
         try:
