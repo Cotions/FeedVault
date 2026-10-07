@@ -84,19 +84,34 @@ def _typename(node):
     return t[3:] if t.startswith("XDTGraph") else t
 
 
-def _media_for(dirpath, base, names):
+def _media_index(names):
+    """{base: [(slot, name)]} of a folder's media files, under every base
+    whose ``base.ext`` or ``base_N.ext`` they are (ext ASCII letters and
+    digits, N decimal digits; a name can be both). Built once per folder:
+    matching each post's pattern against every name was quadratic in the
+    folder's size, most of a rescan's time on a large archive."""
+    out = {}
+    for n in names:
+        stem, dot, ext = n.rpartition(".")
+        if not dot or not ext or not (ext.isascii() and ext.isalnum()) or not is_media(n):
+            continue
+        out.setdefault(stem, []).append((1, n))
+        head, under, num = stem.rpartition("_")
+        if under and num.isdecimal():          # what \d matches
+            out.setdefault(head, []).append((int(num), n))
+    return out
+
+
+def _media_for(dirpath, base, names, index=None):
     """Media files named after ``base``, grouped per carousel slot.
 
     A slot with an .mp4 is a video, and a .jpg beside it is its thumbnail.
+    ``index``: _media_index(names), when the caller has it.
     """
-    pattern = re.compile(re.escape(base) + r"(?:_(\d+))?\.([A-Za-z0-9]+)$")
+    index = _media_index(names) if index is None else index
     slots = {}
     claimed = set()
-    for n in names:
-        m = pattern.fullmatch(n)
-        if not m or not is_media(n):
-            continue
-        idx = int(m.group(1)) if m.group(1) else 1
+    for idx, n in index.get(base, ()):
         slots.setdefault(idx, []).append(n)
         claimed.add(n)
     media = []
@@ -353,6 +368,7 @@ def parse_dir(root, dirpath, names):
     result = DirResult()
     names_set = set(names)
     seen_instaloader = False
+    index = None                               # _media_index(names), once a post needs it
 
     for n in sorted(names):
         base = _meta_base(n)
@@ -381,7 +397,9 @@ def parse_dir(root, dirpath, names):
         if node_type not in _POST_TYPES:
             continue                           # Profile, Hashtag, iterator state
         node = data["node"] if isinstance(data["node"], dict) else {}
-        media, claimed = _media_for(dirpath, base, names)
+        if index is None:
+            index = _media_index(names)
+        media, claimed = _media_for(dirpath, base, names, index)
         post = _post_from(node, node_type, info.get("version"), path, media)
         if post is None:
             result.errors.append((path, "no post id in metadata"))
