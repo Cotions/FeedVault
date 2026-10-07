@@ -1827,31 +1827,133 @@ def test_a_script_broken_after_its_sync_was_queued_fails_it(client, folder, runn
     assert all("--extra" not in r["args"] for r in runner.runs())
 
 
-def test_a_script_refused_when_queued_and_fixed_by_its_start_still_fails(client, folder, runner, source, env,
-                                                                          monkeypatch):
-    """Its params hold no SHA-256 to run: the run fails, says why it was
-    refused then and that it can run now. Nothing is built or run for it."""
+@pytest.mark.parametrize("breakage", ["refused", "removed", "other-tool"])
+def test_a_script_that_cannot_run_when_queued_fails_at_once(client, folder, runner, source, env, monkeypatch,
+                                                            breakage):
+    """#138: its params hold no SHA-256 to run, so it fails as it is asked
+    for, with the reason: it never waits out instaloader's pause, nor for
+    the instaloader run that holds the lock group, and takes no slot. Its
+    Options can be changed right away. Nothing is built or run for it."""
     gate = env["tmp"] / "gate"
     os.mkfifo(gate)
     monkeypatch.setenv("RECORDER_GATE", str(gate))
-    cfg = config.load()
-    cfg["instaloader"] = {"pause": 0}
-    config.save(cfg)
     attach(client, source["id"], "mine")
     write(folder, "insta-hold.json", {"needs": "none", "argv": ["instaloader", "--hold"]})
     blocker = run(client, "insta-hold")["job"]
     wait_for(lambda: runner.runs())
-    (folder / "mine.json").chmod(0o666)
-    queued = sync_now(client, source["id"])["job"]
-    assert "sha256" not in queued["params"] and "writable by group or others" in queued["params"]["why"]
-    (folder / "mine.json").chmod(0o644)
-    with open(gate, "w") as f:
-        f.write("go\n")
+    pause = time.time() + 600                  # instaloader's pause, ten minutes left of it
+    jobs._cool["instaloader"] = pause
+    if breakage == "refused":
+        (folder / "mine.json").chmod(0o666)
+        why = "mine.json is refused: writable by group or others"
+    elif breakage == "removed":
+        (folder / "mine.json").unlink()
+        why = "no script mine"
+    else:                                      # stored before the check (sources.json edited by hand)
+        write(folder, "mine.json", {"needs": "url", "argv": ["yt-dlp", "{url}"]})
+        why = "mine.json runs yt-dlp, not instaloader"
+    try:
+        job = sync_now(client, source["id"])["job"]
+        assert job["state"] == "failed" and job["kind"] == "script-sync" and job["started_at"] is not None
+        assert job["message"].startswith(f"the source's script: {why}")
+        assert "sha256" not in job["params"] and why in job["params"]["why"]
+        assert job["id"] not in jobs._active and jobs.get(job["id"])["state"] == "failed"
+        assert jobs._cool["instaloader"] == pause                       # no pause of its own either
+        assert [j["id"] for j in jobs.active()] == [blocker["id"]]      # the lock group's run, still running
+        assert any(why in t for t in log_of(client, job["id"]))
+        s = client.get(f"/api/sources/{source['id']}", headers=H).get_json()
+        assert s["job"] is None and s["last_result"]["state"] == "failed" and s["last_result"]["message"] == job["message"]
+        attach(client, source["id"], None)     # its Options: never "its sync is queued or running"
+    finally:
+        with open(gate, "w") as f:
+            f.write("go\n")
     ended(blocker["id"])
-    job = ended(queued["id"])
-    assert job["state"] == "failed"
-    assert "writable by group or others" in job["message"] and "it can run now: sync again" in job["message"]
     assert len(runner.runs()) == 1             # the blocker only
+
+
+def test_a_script_attached_to_another_tools_source_is_refused(client, folder, runner, source):
+    """#138: a yt-dlp command on an instaloader source would run yt-dlp in
+    instaloader's lock group, beside yt-dlp's own syncs and without their
+    pause: refused when attached, and listed as running yt-dlp."""
+    write(folder, "video.json", {"needs": "url", "argv": ["yt-dlp", "{url}"]})
+    error = attach(client, source["id"], "video", status=400)["error"]
+    assert error.startswith("video.json runs yt-dlp, not instaloader")
+    assert add_source(client, "dana.draws", script="video").status_code == 400
+    assert attach(client, source["id"], "builtin:yt-dlp-video", status=400)["error"].startswith(
+        "builtin:yt-dlp-video runs yt-dlp, not instaloader")
+    got = listed(client)
+    assert (got["video"]["program"], got["video"]["group"]) == ("yt-dlp", "yt-dlp")
+    assert (got["mine"]["program"], got["mine"]["group"]) == ("instaloader", "instaloader")
+    # A program that is not a downloader stays the source's to run.
+    write(folder, "greet.sh", "#!/bin/sh\n# needs: target\necho hi\n", 0o755)
+    assert (listed(client)["greet"]["program"], listed(client)["greet"]["group"]) == (None, "scripts")
+    attach(client, source["id"], "greet")
+    attach(client, source["id"], "mine")
+
+
+@pytest.mark.parametrize("kind", ["shell", "command"])
+def test_a_failed_script_sync_names_the_program_that_ran(client, folder, runner, source, monkeypatch, kind):
+    """#138: not "instaloader failed" for what instaloader never ran."""
+    if kind == "shell":
+        write(folder, "greet.sh", "#!/bin/sh\n# needs: target\necho 'something odd happened'\nexit 1\n", 0o755)
+        sid, name = "greet", "greet.sh"
+    else:
+        write(folder, "greet.json", command(runner, "{target}"))
+        sid, name = "greet", "echo"
+        monkeypatch.setenv("RECORDER_EXIT", "1")
+        monkeypatch.setenv("RECORDER_SAY", "something odd happened")
+    attach(client, source["id"], sid)
+    job = ended(sync_now(client, source["id"])["job"]["id"])
+    assert job["state"] == "failed" and job["result"]["error"] == "generic"
+    assert job["message"] == f"{name} failed: something odd happened"
+    assert "ran" not in job["params"]          # the hooks' only
+
+
+def warning_of(client, sid):
+    one = client.get(f"/api/sources/{sid}", headers=H).get_json()
+    every = {s["id"]: s for s in client.get("/api/sources", headers=H).get_json()["sources"]}
+    assert every[sid]["script_warning"] == one["script_warning"]
+    return one["script_warning"]
+
+
+def test_a_source_says_why_its_script_would_fail(client, folder, runner, source):
+    """#138: GET /api/sources (and /<id>) carry script_warning, for the row
+    to warn before the next sync fails."""
+    assert warning_of(client, source["id"]) is None                  # no script
+    attach(client, source["id"], "mine")
+    assert warning_of(client, source["id"]) is None                  # one that can run
+    path = folder / "mine.json"
+    path.chmod(0o666)
+    w = warning_of(client, source["id"])
+    assert w["state"] == "refused" and w["reason"].startswith("mine.json is refused: writable by group or others")
+    assert "chmod go-w" in w["reason"]
+    path.chmod(0o644)
+    path.unlink()
+    assert warning_of(client, source["id"]) == {"state": "missing", "reason": f"no script mine (in {folder})"}
+    write(folder, "mine.json", {"needs": "url", "argv": ["yt-dlp", "{url}"]})
+    w = warning_of(client, source["id"])
+    assert w["state"] == "other_tool" and w["reason"].startswith("mine.json runs yt-dlp, not instaloader")
+    write(folder, "mine.json", INSTA)
+    folder.chmod(0o777)
+    try:
+        w = warning_of(client, source["id"])
+    finally:
+        folder.chmod(0o755)
+    assert w["state"] == "refused" and "the scripts folder is writable by group or others" in w["reason"]
+    assert warning_of(client, source["id"]) is None
+
+
+def test_a_refused_file_s_text_is_readable_when_it_could_be_read(client, folder):
+    """#138: what the Scripts page offers View for."""
+    write(folder, "bad.json", {"needs": "target", "argv": ["sh", "-c", "{target}"]})
+    write(folder, "open.json", INSTA, 0o666)
+    write(folder, "good.json", INSTA)
+    got = listed(client)
+    assert got["bad"]["refused"] and got["bad"]["readable"] is True
+    assert got["open"]["refused"] and got["open"]["readable"] is False
+    assert got["good"]["readable"] is True and got["builtin:instaloader-profile"]["readable"] is True
+    assert '"sh"' in client.get("/api/scripts/bad", headers=H).get_json()["content"]
+    assert client.get("/api/scripts/open", headers=H).get_json()["content"] is None
 
 
 def test_a_refused_folder_is_the_reason_given(client, folder, runner, source):

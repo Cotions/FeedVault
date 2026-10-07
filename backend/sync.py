@@ -1003,19 +1003,19 @@ def _owner(params):
     return {"account": account, "person": src["person"]["id"] if src["person"] else None}
 
 
-def _outcome(params, code, lines, index, note=None, tool="instaloader"):
+def _outcome(params, code, lines, index, note=None, tool="instaloader", ran=None):
     # The session it used: a source's options do not change while it syncs
     # (app.update_source).
     src = sources.row(db.connect(), _source_id(params)) if "source" in params else None
     session = session_of(tool, _options(src)) if src is not None else None
-    state, result, message = _ended_as(params, code, lines, index, note, tool, session)
+    state, result, message = _ended_as(params, code, lines, index, note, tool, session, ran)
     if src is not None:
         # As the output tells (health.login).
         result["login"] = health.login(tool, lines, session, _said(state, result))
     return state, result, message
 
 
-def _ended_as(params, code, lines, index, note, tool, session=None):
+def _ended_as(params, code, lines, index, note, tool, session=None, ran=None):
     if tool != "instaloader":
         _note_listed(params, tool, lines)
     added = index["added"] if index else 0
@@ -1050,6 +1050,8 @@ def _ended_as(params, code, lines, index, note, tool, session=None):
         result["error"], result["line"] = classify(
             lines, GALLERY_DL_FAILURES if tool == "gallery-dl" else YT_DLP_FAILURES)
         message = TOOL_MESSAGES.get(result["error"], f"{tool} failed")
+    if result["error"] == "generic" and ran:
+        message = f"{ran} failed"              # a source's script: the program that ran, not its tool
     if result["error"] == "private" and session is not None and session.get("mode", "none") == "none":
         message = NO_SESSION["instaloader" if tool == "instaloader" else "tools"]
     # Tool output is untrusted text: no cookie, token or session path is kept (health.scrub).
@@ -1059,7 +1061,7 @@ def _ended_as(params, code, lines, index, note, tool, session=None):
     if added:
         message += f" ({notify.plural(added, 'new post')} before it stopped)"
     message += unread
-    old = _outdated(tool)
+    old = _outdated(tool) if ran in (None, tool) else None
     if old:
         result["outdated"] = True
         message += f". {tool} {old[0]} is out of date ({old[1]} is out): update it in Settings → Downloaders"

@@ -144,6 +144,12 @@ export function needsLogin(form, choices, session) {
   return (choices?.login || []).filter(k => form.content.includes(k));
 }
 
+/* A script's entry on the Scripts page (its element's id, and the link to
+   it): ids are [a-z0-9_-], a built-in's "builtin:<name>"; ":" becomes ".",
+   which no file's id holds. */
+export const scriptAnchor = id => `script-${String(id).replace(/[^a-z0-9_-]/gi, ".")}`;
+export const scriptHref = id => `/scripts#${scriptAnchor(id)}`;
+
 /* One line for a source's row: "posts, reels · images · since 2024-01-01",
    or "script my-insta" when a script runs instead of its tool's command.
    Only what differs from the defaults; "" when nothing does. */

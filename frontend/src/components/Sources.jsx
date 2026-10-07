@@ -9,7 +9,7 @@ import { healthBadge, lastGood, loginText } from "../lib/health";
 import { fmtAgo, fmtFullDate, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
 import {
   FIRST_POSTS_MAX, MEDIA, SCHEDULES, firstPostsEach, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin,
-  optionsOf, optionsSummary, scheduleShort, scheduleText, toggleKind, today,
+  optionsOf, optionsSummary, scheduleShort, scheduleText, scriptHref, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
@@ -161,6 +161,7 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
           {s.person && !s.account && <span className="creator-sub"> · first sync not done yet</span>}
         </span>
         {summary && <span className="source-summary" title={`What it downloads: ${summary}`}>{summary}</span>}
+        <ScriptWarning source={s} />
         <ScheduleLine source={s} />
         <SourceHealth source={s} job={job} onSaved={onSaved} />
         <code className="source-folder" title={s.folder}>{s.folder}</code>
@@ -280,14 +281,38 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
   );
 }
 
+// A script's line in the picker: short, its reason (if any) shown below it.
+const OPTION_MAX = 60;
+function scriptLabel(sc) {
+  const text = `${sc.id}${sc.name && sc.name !== sc.id ? ` · ${sc.name}` : ""}`;
+  return text.length > OPTION_MAX ? `${text.slice(0, OPTION_MAX - 1)}…` : text;
+}
+
 /* Which command a sync runs: the tool's own (the choices above), or a
-   script from the Scripts page. A refused one shows why and cannot be
-   picked; one gone from disk stays shown, so the sync's failure is not a
-   surprise. */
+   script from the Scripts page, grouped by what it runs. A script that runs
+   another tool FeedVault locks (its ``group``) is not offered: a source's
+   sync runs in its own tool's lock group, with that tool's pause, so it
+   would run that tool beside its own syncs and without their pause (the
+   backend refuses it too, docs/API.md "On a source"). A refused one is
+   listed apart and cannot be picked; one gone from disk, refused or running
+   another tool stays shown when it is the current one, with why its syncs
+   fail. */
 function ScriptPicker({ tool, value, onChange }) {
   const { data, error } = useApi(getScripts);
   const scripts = data?.scripts || [];
   const current = scripts.find(sc => sc.id === value);
+  const usable = scripts.filter(sc => !sc.refused);
+  const own = usable.filter(sc => sc.group === tool);
+  const any = usable.filter(sc => sc.group === "scripts");
+  const others = usable.filter(sc => sc.group !== tool && sc.group !== "scripts");
+  const refused = scripts.filter(sc => sc.refused);
+  const otherTools = [...new Set(others.map(sc => sc.group))].sort();
+  const foreign = current && !current.refused && others.includes(current);
+  const option = (sc, disabled = false) => (
+    <option key={sc.id} value={sc.id} disabled={disabled} title={sc.name || sc.id}>
+      {scriptLabel(sc)}{sc.refused ? " · refused" : ""}
+    </option>
+  );
   return (
     <fieldset className="source-opt">
       <legend>Command</legend>
@@ -295,25 +320,58 @@ function ScriptPicker({ tool, value, onChange }) {
         <select className="sort-select script-pick" value={value} onChange={e => onChange(e.target.value)}
                 aria-label="Command a sync runs" disabled={!data && !value}>
           <option value="">{tool}&rsquo;s own command, with the choices above</option>
-          {value && !current && <option value={value}>{value} (not found)</option>}
-          {scripts.map(sc => (
-            <option key={sc.id} value={sc.id} disabled={!!sc.refused}>
-              {`${sc.id}${sc.name && sc.name !== sc.id ? ` · ${sc.name}` : ""}${sc.tool && sc.tool !== tool ? ` (${sc.tool})` : ""}`
-                + (sc.refused ? ` · refused: ${sc.refused}` : "")}
-            </option>
-          ))}
+          {value && !current && <option value={value}>{value} · not found</option>}
+          {own.length > 0 && <optgroup label={`Runs ${tool}`}>{own.map(sc => option(sc))}</optgroup>}
+          {any.length > 0 && <optgroup label="Runs another program (not a downloader)">{any.map(sc => option(sc))}</optgroup>}
+          {foreign && <optgroup label={`Runs ${current.group}, not ${tool}`}>{option(current)}</optgroup>}
+          {refused.length > 0 && (
+            <optgroup label="Refused (see Scripts)">
+              {refused.map(sc => option(sc, sc.id !== value))}
+            </optgroup>
+          )}
         </select>
       </label>
       {error && <div className="msg err source-msg" role="alert">Could not list the scripts: {error.message}</div>}
+      {value && data && (current?.refused || foreign || !current) && (
+        <span className="dl-warn script-pick-why" role="note">
+          {current?.refused ? `${value}: refused: ${current.refused}. Its syncs fail.`
+            : foreign ? `${value} runs ${current.group}, not ${tool}: its syncs fail. Pick one that runs ${tool}.`
+              : `${value}: no such script now. Its syncs fail.`}
+        </span>
+      )}
+      {others.length > 0 && (
+        <span className="dim script-pick-note">
+          {others.length === 1 ? "1 script runs" : `${others.length} scripts run`} {otherTools.join(", ")}, not shown:
+          {" "}a sync of this source runs in {tool}&rsquo;s lock group, with its pause between syncs.
+        </span>
+      )}
       {value && (
         <span className="dim">
-          {current?.refused ? <span className="dl-warn">refused: {current.refused}. Its syncs fail. </span>
-            : !current && data ? <span className="dl-warn">no such script now: its syncs fail. </span> : null}
           A sync runs this script instead, with the source&rsquo;s target and folder; the choices above are not
-          used, the schedule is. See <Link to="/scripts" className="text-link">Scripts</Link>.
+          used, the schedule is. See <Link to={scriptHref(value)} className="text-link">Scripts</Link>.
         </span>
       )}
     </fieldset>
+  );
+}
+
+/* Why a source's script would fail its next sync (``script_warning``):
+   refused, gone, or running another tool; with the reason (the chmod fix
+   in it) and a link to its entry on the Scripts page. */
+const SCRIPT_STATES = { refused: "refused", missing: "not found", other_tool: "runs another tool" };
+export function ScriptWarning({ source: s }) {
+  const w = s.script_warning;
+  if (!w) return null;
+  const id = s.options.script;
+  return (
+    <span className="source-script-warn" role="note">
+      <Icon name="warn" size={12} />
+      <span>
+        <b>script {id}: {SCRIPT_STATES[w.state] || w.state}</b>
+        {" "}<span className="source-script-why">({w.reason})</span>. Its syncs fail.{" "}
+        <Link to={scriptHref(id)} className="text-link">See Scripts</Link>
+      </span>
+    </span>
   );
 }
 
