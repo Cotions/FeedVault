@@ -33,6 +33,7 @@ import db
 import hashing
 import organize
 import scanner
+import sources
 import thumbs
 from parsers import IMAGE_EXT, VIDEO_EXT, ext_of
 
@@ -946,7 +947,11 @@ def _home(root, line, folder):
     how): ``folder`` itself while it is there (how None). Gone (the account's
     folder renamed or moved since), the one folder the account's posts are
     in now, in this root, that is not in the trash ("moved"); when they are
-    in none or in several, ``folder``, made again ("recreated")."""
+    in none or in several, ``folder``, made again ("recreated").
+
+    Never a home: a folder in ``_saved`` (sources.in_saved, #163: a source's
+    post does not go among saved posts), in the trash, or outside this root;
+    each symlinks followed, as _root_for and the scan do."""
     if os.path.isdir(folder):
         return folder, None
     author = line.get("author") if isinstance(line.get("author"), dict) else {}
@@ -963,9 +968,24 @@ def _home(root, line, folder):
                 break
         if len(homes) == 1:
             home = homes.pop()
-            if home != folder and os.path.isdir(home) and scanner.in_roots(os.path.join(home, "x"), [root]):
+            if home != folder and _good_home(home, root):
                 return home, "moved"
     return folder, "recreated"
+
+
+def _good_home(home, root):
+    """Whether ``home`` (symlinks followed) is a folder of ``root``, out of
+    its trash and out of its ``_saved``: see _home."""
+    if not os.path.isdir(home):
+        return False
+    real = os.path.realpath(home)
+    r = os.path.realpath(root)
+    if not (real == r or real.startswith(r.rstrip(os.sep) + os.sep)):
+        return False
+    trash = os.path.realpath(trash_dir(root))
+    if real == trash or real.startswith(trash.rstrip(os.sep) + os.sep):
+        return False
+    return not sources.in_saved(home, [root])
 
 
 def _put_back(restored, roots, data_dir):

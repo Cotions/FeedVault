@@ -357,6 +357,56 @@ def test_restore_says_which_folder_it_made_again_when_the_account_has_no_one_fol
     assert os.path.dirname(meta_path("instagram:P1")) == str(env["media"] / "alice")
 
 
+def test_restore_never_moves_a_post_into_saved(env, client):
+    # #163: the account's only other posts are saved ones. The post goes
+    # back to its own folder, not among them.
+    saved = env["media"] / "_saved" / "alice"
+    write_post(env["media"] / "alice", "P1", 1717243201, ALICE, "image")
+    write_post(saved, "P2", 1717243202, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    os.rmdir(env["media"] / "alice")
+    r = client.post("/api/trash/restore", json={"posts": ["instagram:P1"]}, headers=H).get_json()
+    assert r["errors"] == [] and r["files"] == 2 and r["moved"] == []
+    assert r["recreated"] == [{"post": "instagram:P1", "folder": "alice"}]
+    assert os.path.dirname(meta_path("instagram:P1")) == str(env["media"] / "alice")
+    assert len(os.listdir(saved)) == 2                               # P2's own files, nothing more
+
+
+def _restore_when_the_other_folder_leads_to(env, client, target):
+    """alice holds P1, alice.new P2. P1 is deleted and alice is gone; then
+    alice.new, still indexed, becomes a symlink to ``target`` (made by
+    ``target(env)``), its files moved there. Restore P1."""
+    write_post(env["media"] / "alice", "P1", 1717243201, ALICE, "image")
+    write_post(env["media"] / "alice.new", "P2", 1717243202, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    os.rmdir(env["media"] / "alice")
+    dest = target(env)
+    dest.mkdir(parents=True)
+    for f in os.listdir(env["media"] / "alice.new"):
+        os.rename(env["media"] / "alice.new" / f, dest / f)
+    os.rmdir(env["media"] / "alice.new")
+    os.symlink(dest, env["media"] / "alice.new")
+    r = client.post("/api/trash/restore", json={"posts": ["instagram:P1"]}, headers=H).get_json()
+    assert r["errors"] == [] and r["files"] == 2 and r["moved"] == []
+    assert r["recreated"] == [{"post": "instagram:P1", "folder": "alice"}]
+    assert os.path.dirname(meta_path("instagram:P1")) == str(env["media"] / "alice")
+    assert len(os.listdir(dest)) == 2                                # P2's own files, nothing more
+
+
+def test_restore_never_moves_a_post_into_saved_through_a_symlink(env, client):
+    _restore_when_the_other_folder_leads_to(env, client, lambda env: env["media"] / "_saved" / "alice")
+
+
+def test_restore_never_moves_a_post_into_the_trash_through_a_symlink(env, client):
+    _restore_when_the_other_folder_leads_to(env, client, lambda env: trash_root(env) / "elsewhere")
+
+
+def test_restore_never_moves_a_post_out_of_the_root_through_a_symlink(env, client):
+    _restore_when_the_other_folder_leads_to(env, client, lambda env: env["tmp"] / "outside" / "alice")
+
+
 def test_restore_into_the_new_folder_never_replaces_a_file(env, client):
     write_post(env["media"] / "alice", "P1", 1717243201, ALICE, "image")
     write_post(env["media"] / "alice", "P2", 1717243202, ALICE, "image")
