@@ -1026,6 +1026,18 @@ def _link_text(body):
     return title, notes, None
 
 
+def _json_object():
+    """The JSON body as a dict ({} when there is none, or it is not JSON), or
+    None when it is JSON of another shape (a list, a string, a number)."""
+    body = request.get_json(silent=True)
+    if body is None:
+        return {}
+    return body if isinstance(body, dict) else None
+
+
+_NOT_OBJECT = "the body must be a JSON object"
+
+
 def _taken(lid):
     return jsonify({"ok": False, "error": "that link is saved already", "id": lid}), 409
 
@@ -1044,7 +1056,9 @@ def list_links():
 
 @app.post("/api/links")
 def create_link():
-    body = request.get_json(silent=True) or {}
+    body = _json_object()
+    if body is None:
+        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
     url = links.clean_url(body.get("url"))
     if url is None:
         return jsonify({"ok": False, "error": _BAD_URL}), 400
@@ -1068,7 +1082,9 @@ def update_link(lid):
     conn = db.connect()
     if links.get(conn, lid) is None:
         return jsonify({"ok": False, "error": "no such link"}), 404
-    body = request.get_json(silent=True) or {}
+    body = _json_object()
+    if body is None:
+        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
     url = None if "url" not in body else links.clean_url(body["url"])
     if "url" in body and url is None:
         return jsonify({"ok": False, "error": _BAD_URL}), 400
@@ -1104,7 +1120,10 @@ def order_person_links(pid):
     conn = db.connect()
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
-    ids = (request.get_json(silent=True) or {}).get("ids")
+    body = _json_object()
+    if body is None:
+        return jsonify({"ok": False, "error": _NOT_OBJECT}), 400
+    ids = body.get("ids")
     if not isinstance(ids, list) or not ids or len(ids) > links.MAX_IDS \
             or any(not isinstance(i, int) or isinstance(i, bool) for i in ids):
         return jsonify({"ok": False, "error": f"ids must be a list of 1 to {links.MAX_IDS} link ids"}), 400

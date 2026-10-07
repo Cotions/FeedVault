@@ -148,6 +148,21 @@ def test_bad_bodies(client):
     assert urls(client) == ["https://x.com/a"]
 
 
+@pytest.mark.parametrize("raw", ["[]", '["https://x.com/a"]', '"https://x.com/a"', "3", "true", "null"])
+def test_a_body_that_is_not_an_object_is_a_400(client, raw):
+    pid = person(client, "Alice")
+    lid = add(client, "https://x.com/a", person=pid)["link"]["id"]
+    for url in ("/api/links", f"/api/links/{lid}", f"/api/people/{pid}/links/order"):
+        r = client.post(url, data=raw, headers={**H, "Content-Type": "application/json"})
+        assert r.status_code == 400, (url, raw, r.status_code)
+        body = r.get_json()
+        assert body["ok"] is False
+        if raw != "null":                      # no body to speak of: the fields' own errors
+            assert body["error"] == "the body must be a JSON object"
+    [link] = get(client, "/api/links")["links"]
+    assert (link["url"], link["title"], link["person"]["id"]) == ("https://x.com/a", "", pid)
+
+
 def test_duplicate_url_is_a_409_with_the_existing_id(client):
     first = add(client, "https://linktr.ee/alice")["link"]["id"]
     r = add(client, "HTTPS://LINKTR.EE/alice", 409)

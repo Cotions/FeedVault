@@ -1252,8 +1252,10 @@ A **link**:
   among their links are ignored (as `/api/collections/<id>/order`).
 - Deleting a person keeps their links, tied to no one. Merging people moves
   the others' links to the one kept, after its own.
-- A bad body is a 400 `{ "ok": false, "error": "…" }`; an unknown link or
-  person id in the path a 404, an unknown `person` in a body a 400.
+- A bad body is a 400 `{ "ok": false, "error": "…" }`, a JSON body that is
+  not an object (a list, a string) too (`the body must be a JSON object`);
+  an unknown link or person id in the path a 404, an unknown `person` in a
+  body a 400.
 
 ## Sources
 
