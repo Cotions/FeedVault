@@ -10,12 +10,18 @@ import { useBlocker } from "react-router-dom";
    Returns { asking, discard, keep, leave }: ``asking`` while a move waits;
    discard() goes on with it, keep() stays; leave(fn) runs fn without asking
    (after a delete the page goes on its own: nothing is left to keep).
-   One per page: the router holds one blocker at a time. */
-export function useUnsaved(dirty) {
+   One per page: the router holds one blocker at a time.
+   ``passes(from, to)``, when given, lets a move that cannot lose the edits
+   through without asking (the Links page clearing its filters: every link,
+   the one being edited too, stays in the list). */
+export function useUnsaved(dirty, passes = null) {
   const leaving = useRef(false);
+  const passesRef = useRef(passes);
+  useEffect(() => { passesRef.current = passes; });
   const blocker = useBlocker(useCallback(
     ({ currentLocation: from, nextLocation: to }) =>
-      dirty && !leaving.current && (from.pathname !== to.pathname || from.search !== to.search),
+      dirty && !leaving.current && (from.pathname !== to.pathname || from.search !== to.search)
+      && !passesRef.current?.(from, to),
     [dirty],
   ));
 

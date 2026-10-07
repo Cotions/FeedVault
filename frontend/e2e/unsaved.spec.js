@@ -130,7 +130,7 @@ test("Links: opening Edit on another link asks before dropping the first one's e
     await page.locator('#main-nav a.side-link[href="/tags"]').click();
     await expect(dialog).toContainText("not saved");
     await dialog.getByRole("button", { name: "Keep editing" }).click();
-    await expect(page).toHaveURL(/\/links$/);
+    await expect(page).toHaveURL(new RegExp(`/links\\?q=${stamp}$`));
     await expect(editing.getByLabel("Notes")).toHaveValue("a note not saved yet");
     await idle(page);
   } finally {
