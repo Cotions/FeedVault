@@ -428,8 +428,9 @@ function useResolved(text) {
 
 /* Paste a profile link (the tool comes from Settings → Link routing), or an
    Instagram name. Before saving it shows the tool, platform and folder,
-   and what the source can download. */
-export function AddSource({ person = null, onAdded }) {
+   and what the source can download. onDirty(bool) hears whether something
+   is typed and not added yet (false again when the form goes). */
+export function AddSource({ person = null, onAdded, onDirty }) {
   const toast = useToast();
   const [target, setTarget] = useState("");
   const [forms,  setForms]  = useState({});      // the options picked, by tool and platform
@@ -441,6 +442,11 @@ export function AddSource({ person = null, onAdded }) {
   const form = kind && (forms[kind] || formOf(null, resolved.choices));
   const problem = form && formError(form, resolved.choices);
   const login = form ? needsLogin(form, resolved.choices, resolved.session) : [];
+
+  useEffect(() => {
+    onDirty?.(!!text);
+    return () => onDirty?.(false);
+  }, [text, onDirty]);
 
   async function add(e) {
     e.preventDefault();

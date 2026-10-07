@@ -7,8 +7,10 @@ import { useToast } from "../lib/toast";
 import { tagFeedPath } from "../lib/fmt";
 import { cleanName, sameTag } from "../lib/tags";
 import { setTagColors } from "../lib/tagColors";
+import { useUnsaved } from "../lib/unsaved";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DiscardDialog from "../components/DiscardDialog";
 import PageHeader from "../components/PageHeader";
 
 // The colours a tag can wear: distinct on the dark surface, readable as text.
@@ -17,7 +19,9 @@ const COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6"
 /* Every tag with its post count. Rename in place; renaming to the name of
    another tag merges the two (asked first). Delete asks first too. A tag
    can wear a colour, shown on its chips everywhere. Tags on no post are
-   dimmed; "Delete unused" removes them (asked first, never on its own). */
+   dimmed; "Delete unused" removes them (asked first, never on its own).
+   A name typed and not saved is asked about before another rename starts
+   or the app leaves the page. */
 export default function Tags() {
   const { refreshKey } = useScan();
   const { data, error, loading, reload } = useApi(getTags, refreshKey);
@@ -29,6 +33,18 @@ export default function Tags() {
   const [confirm, setConfirm] = useState(null);     // { type: "merge" | "delete" | "unused", name?, to?, count?, names? }
   const [busy,    setBusy]    = useState(false);
   const [dlgError, setDlgError] = useState(null);
+  const [nextRename, setNextRename] = useState(null); // the tag whose rename waits on the answer
+  const renameDirty = editing != null && editing.text !== editing.name;
+  const unsaved = useUnsaved(renameDirty);
+
+  function startRename(name) {
+    if (editing?.name === name) return;
+    if (renameDirty) setNextRename(name); else setEditing({ name, text: name });
+  }
+  function discardRename() {
+    setEditing({ name: nextRename, text: nextRename });
+    setNextRename(null);
+  }
 
   const tags = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -192,7 +208,7 @@ export default function Tags() {
                       <span className={`tag-swatch${t.color ? "" : " is-none"}`} style={t.color ? { background: t.color } : undefined} />
                       Colour
                     </button>
-                    <button type="button" className="btn-ghost" onClick={() => setEditing({ name: t.name, text: t.name })}
+                    <button type="button" className="btn-ghost" onClick={() => startRename(t.name)}
                             title="Rename; a name that already exists merges the two">
                       Rename
                     </button>
@@ -250,6 +266,11 @@ export default function Tags() {
             </p>
           )}
         </ConfirmDialog>
+        <DiscardDialog open={nextRename != null || unsaved.asking}
+                       onDiscard={nextRename != null ? discardRename : unsaved.discard}
+                       onKeep={nextRename != null ? () => setNextRename(null) : unsaved.keep}>
+          <p>The new name for “{editing?.name}” is not saved.</p>
+        </DiscardDialog>
       </div>
     </>
   );
