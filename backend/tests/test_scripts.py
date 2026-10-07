@@ -1459,6 +1459,145 @@ def test_a_data_only_program_takes_a_placeholder_as_data(argv, why):
     assert (error is None) if why is None else why in error
 
 
+# #105: a shell or Python counts only by its bare name or by a path in
+# SYSTEM_DIRS (as a launcher), its symlinks ending at one of the same kind.
+# A file of the user's named sh or python3 elsewhere may be anything.
+NOT_SYSTEM = "is not a program FeedVault reads the arguments of: a shell or Python counts only by its bare name"
+
+
+@pytest.mark.parametrize("argv, item", [
+    (["/home/x/bin/sh", "-c", "x", "{url}"], "/home/x/bin/sh"),
+    (["/home/x/bin/sh", "-c", 'yt-dlp -- "$1"', "sh", "{url}"], "/home/x/bin/sh"),
+    (["/usr/bin/env", "/home/x/bin/bash", "-s", "{url}"], "/home/x/bin/bash"),
+    (["/usr/bin/nice", "/opt/bin/dash", "/home/me/fetch.sh", "{url}"], "/opt/bin/dash"),
+    (["/home/x/bin/python3", "-m", "yt_dlp", "{url}"], "/home/x/bin/python3"),
+    (["/opt/venv/bin/python", "-m", "gallery_dl", "--", "{url}"], "/opt/venv/bin/python"),
+    (["/usr/bin/env", "-i", "/home/x/bin/pypy3", "-m", "yt_dlp", "{url}"], "/home/x/bin/pypy3"),
+    (["/usr/bin/env", "./sh", "-s", "{url}"], "./sh"),
+    # A system folder only as normpath reads it: past a link, the kernel goes elsewhere.
+    (["/home/x/link/../../../usr/bin/sh", "-s", "{url}"], "/home/x/link/../../../usr/bin/sh"),
+])
+def test_a_shell_or_python_outside_the_system_folders_is_refused_with_a_placeholder(argv, item):
+    assert why_refused(argv).startswith(f"{item} {NOT_SYSTEM}")
+    # Without a placeholder it is the user's own command, as before.
+    assert why_refused([re.sub(r"\{(url|root)\}", "x", a) for a in argv]) is None
+
+
+def test_a_dotdot_path_is_no_launcher_nor_echo(client, folder):
+    for argv in (["/home/x/link/../../../usr/bin/env", "yt-dlp", "{url}"], ["/home/x/l/../../../bin/echo", "{url}"],
+                 ["/usr/bin/../bin/nice", "yt-dlp", "{url}"]):
+        assert " is not a program FeedVault reads the arguments of" in why_refused(argv)
+    # With no placeholder it is accepted, and its lock group still the downloader's.
+    write(folder, "dl.json", {"needs": "none", "argv": ["/usr/bin/../bin/env", "yt-dlp", "--version"]})
+    assert scripts.group(scripts.get("dl")) == "yt-dlp"
+
+
+@pytest.fixture
+def system(env, monkeypatch):
+    """A folder that stands in for /usr/bin (scripts.SYSTEM_DIRS) and one of
+    the user's, holding empty fake programs: nothing in them is run."""
+    sysdir, home = env["tmp"] / "sys", env["tmp"] / "home-bin"
+    for d in (sysdir, home):
+        d.mkdir()
+        for name in ("perl", "dash", "bash", "zsh", "ksh93", "python3.12", "python3.13t", "busybox", "yt-dlp"):
+            (d / name).write_text("")
+    monkeypatch.setattr(scripts, "SYSTEM_DIRS", (*scripts.SYSTEM_DIRS, str(sysdir)))
+    return collections.namedtuple("System", "sys home")(sysdir, home)
+
+
+def test_a_fake_shell_or_python_of_the_users_is_refused(system):
+    for name in ("sh", "bash", "python3"):
+        (system.home / name).write_text("")
+    assert why_refused([str(system.home / "sh"), "-c", "x", "{url}"]).startswith(f"{system.home / 'sh'} {NOT_SYSTEM}")
+    assert why_refused(["/usr/bin/env", str(system.home / "bash"), "-s", "{url}"]) \
+        .startswith(f"{system.home / 'bash'} {NOT_SYSTEM}")
+    assert why_refused([str(system.home / "python3"), "-m", "yt_dlp", "{url}"]) \
+        .startswith(f"{system.home / 'python3'} {NOT_SYSTEM}")
+    # A link of the user's whose name is unknown, to a system shell: still the user's path.
+    (system.home / "mysh").symlink_to("/bin/sh")
+    assert why_refused([str(system.home / "mysh"), "-s", "{url}"]).startswith(f"{system.home / 'mysh'} {NOT_SYSTEM}")
+
+
+# A shell or Python in a system folder is followed through its symlinks
+# even though its own name is a known one: it is trusted only when the
+# file they end at is one of the same kind (/bin/sh to dash, /usr/bin/python3
+# to python3.12). Downloaders (#98) and launchers are not affected.
+@pytest.mark.parametrize("link, to, argv, refused", [
+    ("sh", "perl", ["-c", 'x "$1"', "sh", "{url}"], True),
+    ("sh", "../home-bin/perl", ["-s", "{url}"], True),
+    ("mksh", "busybox", ["-s", "{url}"], True),            # busybox picks its applet by argv[0]: mksh is none
+    ("ksh", "perl", ["-s", "{url}"], True),
+    ("python3", "perl", ["-m", "yt_dlp", "{url}"], True),
+    ("sh", "dash", ["-c", 'x "$1"', "sh", "{url}"], False),
+    ("sh", "../home-bin/bash", ["-s", "{url}"], False),   # a system folder's link is root's choice
+    ("python3", "python3.12", ["-m", "yt_dlp", "{url}"], False),
+    ("python3", "python3.13t", ["-m", "yt_dlp", "{url}"], False),  # free-threaded
+    ("ksh", "ksh93", ["-c", 'x "$1"', "ksh", "{url}"], False),       # Debian's alternatives
+    ("sh", "busybox", ["-s", "{url}"], False),             # Alpine: busybox runs as ash for argv[0] sh
+])
+def test_a_system_shell_or_python_is_followed_through_its_symlinks(system, link, to, argv, refused):
+    (system.sys / link).symlink_to(to)
+    error = why_refused([str(system.sys / link), *argv])
+    assert error.startswith(f"{system.sys / link} {NOT_SYSTEM}") if refused else error is None
+
+
+def test_a_system_shell_linked_to_another_is_read_with_both_grammars(system):
+    """bash -O takes the next item; dash's -O is a flag: a dash linked to
+    bash reads `-O x {url}` as bash does, running {url} as its file."""
+    argv = [str(system.sys / "dash"), "-O", "x", "{url}"]
+    assert why_refused(argv) is None                       # dash alone: -O a flag, x its file
+    (system.sys / "dash").unlink()
+    (system.sys / "dash").symlink_to("bash")
+    assert why_refused(argv).startswith("'{url}': a shell runs the file its first argument names")
+
+
+def test_a_downloader_symlink_is_not_checked_as_a_shell(system, folder):
+    """#98: a downloader by any path and through symlinks keeps its tool's
+    lock group and checks, wherever it is."""
+    (system.home / "ytdl").symlink_to(system.home / "yt-dlp")
+    for item in (system.home / "yt-dlp", system.home / "ytdl", "/home/x/bin/yt-dlp"):
+        write(folder, "dl.json", {"needs": "url", "argv": [str(item), "--", "{url}"]})
+        script = scripts.get("dl")
+        assert script["refused"] is None and scripts.group(script) == "yt-dlp"
+
+
+@pytest.mark.parametrize("argv, group", [
+    (["/bin/sh", "-c", 'yt-dlp -- "$1"', "sh", "{url}"], "scripts"),
+    (["/usr/bin/env", "python3", "-m", "yt_dlp", "{url}"], "yt-dlp"),
+    (["/usr/bin/python3", "-m", "gallery_dl", "{url}"], "gallery-dl"),
+    (["/usr/bin/env", "bash", "-s", "{url}"], "scripts"),
+    (["/home/x/bin/yt-dlp", "--", "{url}"], "yt-dlp"),
+    (["/home/x/bin/gallery-dl", "{url}"], "gallery-dl"),
+])
+def test_a_shell_python_or_downloader_feedvault_reads_stays_accepted(client, folder, argv, group):
+    write(folder, "ok.json", {"needs": "url", "argv": argv})
+    script = scripts.get("ok")
+    assert script["refused"] is None
+    assert scripts.group(script) == group
+
+
+def test_a_saved_path_named_sh_is_listed_never_run_and_can_be_fixed(client, folder, env, runner):
+    fake = env["tmp"] / "mine-bin" / "sh"
+    fake.parent.mkdir()
+    fake.write_text("")
+    saved = {"name": "Mine", "needs": "url", "argv": [str(fake), "-c", 'yt-dlp -- "$1"', "sh", "{url}"]}
+    write(folder, "mine.json", saved)
+    why = f"{fake} {NOT_SYSTEM}"
+
+    item = listed(client)["mine"]
+    assert item["refused"].startswith(why) and item["path"] == str(folder / "mine.json")
+    got = client.get("/api/scripts/mine", headers=H)
+    assert got.status_code == 200 and json.loads(got.get_json()["content"]) == saved
+    assert f"mine.json is refused: {why}" in run(client, "mine", status=400, url="https://x.com/a")["error"]
+    assert jobs.active() == [] and runner.runs() == []
+
+    # Edited at its path to name the system's shell, it is accepted; deleted, it is gone.
+    write(folder, "mine.json", {**saved, "argv": ["/bin/sh", *saved["argv"][1:]]})
+    assert listed(client)["mine"]["refused"] is None
+    (folder / "mine.json").unlink()
+    assert "mine" not in listed(client)
+
+
 def test_a_shell_script_with_fv_variables_is_still_accepted(client, folder):
     write(folder, "fetch.sh", "#!/bin/sh\n# needs: url\n# rescan: {root}\nexec yt-dlp -P \"$FV_ROOT\" -- \"$FV_URL\"\n",
           0o755)

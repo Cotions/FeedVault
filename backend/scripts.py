@@ -355,7 +355,9 @@ LAUNCHERS = {
 # follow: refused with a placeholder anywhere, as any program it does not read.
 RUNNERS = ("xargs", "sudo", "doas", "su", "runuser", "ssh", "watch", "script", "parallel", "find", "chrt",
            "flock", "setsid", "exec", "time", "busybox", "unshare", "nsenter", "systemd-run", "firejail", "bwrap")
-# Where a launcher or a DATA_ONLY program named by its path must be.
+# Where a launcher, a DATA_ONLY program, a shell or Python named by its
+# path must be (_system; a shell's or Python's symlinks must end at one of
+# the same kind: _trusted_shell).
 SYSTEM_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin")
 # Programs that only ever treat their arguments as data (printed), so a
 # placeholder may reach them: echo (coreutils: -n, -e, -E, its escapes
@@ -365,7 +367,8 @@ SYSTEM_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/sbin", "/usr/sbin")
 DATA_ONLY = ("echo", "printf")
 # A shell's -c text is read as code, and the file its first argument names
 # when it has no -c (nor -s) is run. fish is not one: its -c, -C and more
-# take values of their own.
+# take values of their own. By its bare name or a path in SYSTEM_DIRS only
+# (_trusted_shell), as Python.
 SHELLS = ("sh", "bash", "dash", "zsh", "ksh", "mksh", "ash")
 # Each shell's short options that take the next item (bash -o, -O; ksh93
 # -R; mksh -T); sh and ksh may be any of them, so they get them all:
@@ -384,6 +387,11 @@ SHELL_LONG_VALUES = ("--rcfile", "--init-file", "--emulate")
 # (--help, --version) runs nothing, and "--" ends them.
 MODULES = {"yt_dlp": "yt-dlp", "gallery_dl": "gallery-dl", "instaloader": "instaloader"}
 PYTHON_RE = re.compile(r"(?:python|pypy)[0-9.]*")
+# What a system shell's or Python's symlinks may end at (_trusted_shell):
+# a versioned name (ksh93, python3.13t, free-threaded), busybox as sh or ash.
+SHELL_END_RE = re.compile(rf"({'|'.join(SHELLS)})[0-9.]*")
+PYTHON_END_RE = re.compile(r"(?:python|pypy)[0-9.]*t?")
+BUSYBOX_SHELLS = ("sh", "ash")
 PY_FLAGS, PY_VALUES = "bBdEhiIJOPqRsStuvVx?", "WX"
 
 
@@ -477,32 +485,79 @@ def _known(name):
 
 def _system(item):
     """Whether ``item`` names a program by its bare name (the job's PATH
-    finds it) or by a path in one of SYSTEM_DIRS."""
+    finds it) or by a path in one of SYSTEM_DIRS, as normpath reads it
+    (enough for a lock group: _launch)."""
     return "/" not in item or os.path.dirname(os.path.normpath(item)) in SYSTEM_DIRS
+
+
+def _sure(item):
+    """_system, and never through "..", for the checks: the kernel reads
+    /home/x/link/../../../usr/bin/sh past the link, into the user's files."""
+    return _system(item) and ".." not in item.split("/")
 
 
 LINK_HOPS = 40                                 # as the kernel's limit on a path's symlinks
 
 
-def _name(item):
-    """The name of the program ``item`` runs: its file name, or, for an
-    absolute path whose name is none of the known ones (_known), the first
-    known name along the symlinks it leads through, one at a time (~/bin/ytdl
-    to yt-dlp; ~/bin/ytdl to /snap/bin/yt-dlp to /usr/bin/snap: yt-dlp). A
-    name found on PATH is not followed: the job's PATH decides."""
-    name = os.path.basename(item)
-    if _known(name) or not os.path.isabs(item):
-        return name
-    path = item
+def _links(item):
+    """The file names along the symlinks an absolute ``item`` leads
+    through, one at a time, its own first and the one it runs last (just
+    its own for a name found on PATH: the job's PATH decides)."""
+    names, path = [os.path.basename(item)], item
+    if not os.path.isabs(item):
+        return names
     for _ in range(LINK_HOPS):
         try:
             link = os.readlink(path)
         except OSError:                        # not a link (any more), or unreadable
             break
         path = os.path.join(os.path.dirname(path), link)
-        if _known(os.path.basename(path)):
-            return os.path.basename(path)
-    return name
+        names.append(os.path.basename(path))
+    return names
+
+
+def _name(item):
+    """The name of the program ``item`` runs: its file name, or, for an
+    absolute path whose name is none of the known ones (_known), the first
+    known name along the symlinks it leads through (_links: ~/bin/ytdl to
+    yt-dlp; ~/bin/ytdl to /snap/bin/yt-dlp to /usr/bin/snap: yt-dlp)."""
+    name = os.path.basename(item)
+    if _known(name):
+        return name
+    return next((n for n in _links(item)[1:] if _known(n)), name)
+
+
+def _shell_of(name, own):
+    """The shell (one of SHELLS) a file named ``name`` that a symlink chain
+    ends at runs, for an item named ``own``: a versioned name's (ksh93,
+    bash5.2), ash for busybox run as sh or ash (it picks its applet by
+    argv[0]'s name, the item's own), else None."""
+    if name == "busybox":
+        return "ash" if own in BUSYBOX_SHELLS else None
+    m = SHELL_END_RE.fullmatch(name)
+    return m and m.group(1)
+
+
+def _trusted_shell(item, name):
+    """Whether ``item``, a shell or Python named ``name`` (_name), is one
+    FeedVault reads (#105): by its bare name, or by a path in SYSTEM_DIRS
+    whose symlinks end at a program of the same kind, followed although
+    its own name is known (/bin/sh to dash, /usr/bin/python3 to python3.12,
+    /bin/ksh to ksh93; not a sh linked to perl). One of the user's named
+    so elsewhere may be anything."""
+    if not _sure(item):
+        return False
+    end, own = _links(item)[-1], os.path.basename(item)
+    return (_shell_of(end, own) if name in SHELLS else PYTHON_END_RE.fullmatch(end)) is not None
+
+
+def _shell_values(item, shell):
+    """The short options that take the next item for the shell ``item``
+    (_name ``shell``): those of each shell along its symlinks (a dash
+    linked to bash is read as both)."""
+    own = os.path.basename(item)
+    shells = {s for n in _links(item) if (s := _shell_of(n, own))} | {shell}
+    return "".join(SHELL_VALUES.get(s, SHELL_ANY_VALUES) for s in sorted(shells))
 
 
 def _python(argv, i):
@@ -669,13 +724,12 @@ def _walk(argv):
     return i, name, found + sorted(read + maybe)
 
 
-def _check_sh(argv, shell):
-    """Why a placeholder would be read as code by ``shell`` given ``argv``,
+def _check_sh(argv, letters):
+    """Why a placeholder would be read as code by a shell given ``argv``,
     else None: in its options, or in the first item after them (its
-    SHELL_VALUES and SHELL_LONG_VALUES take the next one): its -c text once
-    one of them holds c, else, unless one holds s (commands from stdin), the
-    file it runs."""
-    letters = SHELL_VALUES.get(shell, SHELL_ANY_VALUES)
+    ``letters`` (_shell_values) and SHELL_LONG_VALUES take the next one):
+    its -c text once one of them holds c, else, unless one holds s
+    (commands from stdin), the file it runs."""
     run, stdin, value = False, False, False
     for a in argv:
         if _used([a]) and (value or a.startswith(("-", "+"))):
@@ -719,12 +773,18 @@ def _check_program(argv):
     one that reads the arguments must be one FeedVault follows (LAUNCHERS,
     Python running a downloader), with no placeholder in its own items; the
     last one a downloader (its options are checked: _check_shell), a shell
-    (_check_sh) or DATA_ONLY. A placeholder never names a program."""
+    (_check_sh) or DATA_ONLY. A placeholder never names a program. A
+    shell or Python counts by its bare name or a system path only
+    (_trusted_shell)."""
     if not _used(argv):
         return None
     start, _, chain, why = _launch(argv)
     if start is None:
         return f"{why}: not in a command with a FeedVault placeholder"
+    for at, name in chain:
+        if not _sure(argv[at]):
+            return (f"{argv[at]} is not a program FeedVault reads the arguments of: a launcher counts only by "
+                    f"its bare name or a path in {', '.join(SYSTEM_DIRS)}, never through \"..\": {SCRIPT_HINT}")
     for n in range(start):
         if _used([argv[n]]):
             launcher = next(name for at, name in reversed(chain) if at <= n)
@@ -735,6 +795,10 @@ def _check_program(argv):
     name = _name(argv[start])
     if _used([argv[start]]):
         return f"{argv[start]!r}: a placeholder may not name the program to run"
+    if (name in SHELLS or PYTHON_RE.fullmatch(name)) and not _trusted_shell(argv[start], name):
+        return (f"{argv[start]} is not a program FeedVault reads the arguments of: a shell or Python counts "
+                f"only by its bare name or by a path in {', '.join(SYSTEM_DIRS)} that leads to one, so it may "
+                f"read a FeedVault placeholder as code: {SCRIPT_HINT}")
     if PYTHON_RE.fullmatch(name):
         ran = _python(argv, start)
         if ran is None:
@@ -747,13 +811,13 @@ def _check_program(argv):
         return None
     if name in TOOLS or name in SHELLS:
         return None
-    if name == "printf" and _system(argv[start]):
+    if name == "printf" and _sure(argv[start]):
         rest = argv[start + 1:]
         fmt = rest[1:2] if rest[:1] == ["--"] else rest[:1]
         if _used(fmt):
             return f"{fmt[0]!r}: printf's format may not hold a FeedVault placeholder: pass it after the format (%s)"
         return None
-    if name in DATA_ONLY and _system(argv[start]):
+    if name in DATA_ONLY and _sure(argv[start]):
         return None
     if name in RUNNERS:
         return (f"{name} runs a command FeedVault does not follow, so no FeedVault placeholder may be in it: "
@@ -769,7 +833,7 @@ def _check_shell(argv):
     if start is None:                          # _check_program's to refuse
         return None
     if tool in SHELLS:
-        return _check_sh(argv[start + 1:], tool)
+        return _check_sh(argv[start + 1:], _shell_values(argv[start], tool))
     for f in found:
         if f.index < start:
             continue
