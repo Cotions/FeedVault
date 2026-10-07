@@ -78,10 +78,28 @@ app.url_map.converters["int"] = IdConverter
 #
 # /media is exempt because <img> and <video> cannot send headers; it is
 # refused instead when the browser says another site asks (_foreign_origin).
+#
+# The header does not say who sends it: any userscript can, from any site.
+# So an /api request from another site (the userscript's, from instagram.com)
+# reaches only what the userscript calls (FOREIGN_ALLOWED); every other
+# route, a new one included, answers it 403 before it runs (#112).
 # ---------------------------------------------------------------------------
 
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 CSRF_HEADER = "X-FeedVault"
+
+# (endpoint, method) another site may reach: exactly the userscript's calls
+# (userscript/feedvault.user.js; test_web_security checks the two agree).
+FOREIGN_ALLOWED = frozenset({
+    ("saved", "POST"),                 # POST /api/saved
+    ("save_post", "POST"),             # POST /api/save
+    ("get_job", "GET"),                # GET /api/jobs/<id>
+    ("resolve_source", "GET"),         # GET /api/sources/resolve
+    ("create_source", "POST"),         # POST /api/sources (never with a script)
+    ("get_source", "GET"),             # GET /api/sources/<id>
+    ("sync_source", "POST"),           # POST /api/sources/<id>/sync (never a script)
+})
+FOREIGN_REFUSED = "this can only be called from FeedVault's own dashboard"
 
 
 def _host_only(host_header):
@@ -91,6 +109,19 @@ def _host_only(host_header):
     return host.rsplit(":", 1)[0] if ":" in host else host
 
 
+def _foreign_origin():
+    """Whether the request comes from a page that is not FeedVault's: an
+    Origin not on this machine, or a browser saying it is cross-site. The
+    userscript's requests from instagram.com are; the dashboard's are not
+    (nor the Vite dev server's, on another port of this machine)."""
+    origin = request.headers.get("Origin")
+    if origin is not None:
+        scheme, _, host = origin.partition("://")
+        if scheme != "http" or _host_only(host) not in ALLOWED_HOSTS:
+            return True
+    return request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
+
+
 @app.before_request
 def _origin_guard():
     if _host_only(request.headers.get("Host")) not in ALLOWED_HOSTS:
@@ -98,6 +129,11 @@ def _origin_guard():
     if request.path.startswith("/api/") and request.method != "OPTIONS" \
             and not request.headers.get(CSRF_HEADER):
         return jsonify({"ok": False, "error": f"missing {CSRF_HEADER} header"}), 403
+    # Default-deny for another site: by the matched endpoint and the method
+    # (an unmatched path has no endpoint, so it is refused too).
+    if request.path.startswith("/api/") and _foreign_origin() \
+            and (request.endpoint, request.method) not in FOREIGN_ALLOWED:
+        return jsonify({"ok": False, "error": FOREIGN_REFUSED}), 403
     # Media cannot send a header, so another site's <img> or link reaches it:
     # refused when the browser says the page is not ours, before any work.
     media = request.path.startswith("/media/")
@@ -1007,10 +1043,8 @@ BIO_OFF = "link-in-bio import is off: turn it on in Settings → Downloads"
 def bio_import(pid):
     """The accounts a person's link-in-bio page lists (biofetch.py): the one
     page fetched, nothing added. The dashboard adds each one the user picks
-    through /api/people/<id>/accounts or /api/sources."""
-    if _foreign_origin():
-        return jsonify({"ok": False, "error": "a link-in-bio page can only be imported from FeedVault's own "
-                                              "dashboard"}), 403
+    through /api/people/<id>/accounts or /api/sources. Never from another
+    site (_origin_guard)."""
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or set(body) != {"url"} or not isinstance(body["url"], str):
         return jsonify({"ok": False, "error": "send { url: a link-in-bio page's link }"}), 400
@@ -1278,16 +1312,6 @@ def get_source(sid):
     return jsonify(_with_session(s))
 
 
-def _script_source_foreign(s):
-    """The 403 for another site's change to a source that runs a script
-    (a schedule, a rename, a delete), else None: such a source is changed
-    from the dashboard only, as its script is set there."""
-    if s["options"]["script"] and _foreign_origin():
-        return jsonify({"ok": False, "error": "a source that runs a script can only be changed from FeedVault's "
-                                              "own dashboard"}), 403
-    return None
-
-
 @app.post("/api/sources/<int:sid>")
 def update_source(sid):
     body = _body()
@@ -1297,9 +1321,6 @@ def update_source(sid):
         return jsonify({"ok": False, "error": "no such source"}), 404
     if not isinstance(body.get("options"), dict):
         return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
-    refused = _script_source_foreign(s)
-    if refused:
-        return refused
     if sid in _sources_active() and set(body["options"]) - {"schedule"}:
         # The sync's end clears full history and last N: it would clear the new
         # ones. It reads the options again at the end, so a schedule can change.
@@ -1337,9 +1358,6 @@ def accept_rename(sid):
     s = sources.get(conn, sid)
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
-    refused = _script_source_foreign(s)
-    if refused:
-        return refused
     suggestion = s["health"]["rename"]
     if suggestion is None or suggestion["from"] != s["target"].lower():
         return jsonify({"ok": False, "error": "this source has no rename to accept"}), 400
@@ -1367,9 +1385,6 @@ def dismiss_rename(sid):
     s = sources.get(conn, sid)
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
-    refused = _script_source_foreign(s)
-    if refused:
-        return refused
     sources.dismiss_rename(conn, sid)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
@@ -1401,10 +1416,6 @@ def sync_all_sources():
 
 @app.delete("/api/sources/<int:sid>")
 def delete_source(sid):
-    s = sources.get(db.connect(), sid)
-    refused = _script_source_foreign(s) if s is not None else None
-    if refused:
-        return refused
     if sid in _sources_active():
         return jsonify({"ok": False, "error": "its sync is queued or running; cancel it first"}), 409
     if not sources.delete(db.connect(), sid):
@@ -1453,9 +1464,7 @@ def get_config():
 @app.post("/api/config")
 def set_config():
     # Tool paths, roots, the schedules' pause, the link-in-bio switch: the
-    # dashboard's alone. The userscript (instagram.com) never writes them.
-    if _foreign_origin():
-        return jsonify({"ok": False, "error": "settings can only be changed from FeedVault's own dashboard"}), 403
+    # dashboard's alone: _origin_guard refuses another site (instagram.com).
     body = _body()
     # One read-modify-write at a time: two saves at once each keep the other's change.
     with config.editing:
@@ -1634,34 +1643,17 @@ def cancel_job(job_id):
 # Scripts (scripts.py: files on disk, listed and run; nothing here writes one)
 # ---------------------------------------------------------------------------
 
-def _foreign_origin():
-    """Whether the request comes from a page that is not FeedVault's: an
-    Origin not on this machine, or a browser saying it is cross-site. The
-    userscript's requests from instagram.com are; the dashboard's are not
-    (nor the Vite dev server's, on another port of this machine). Running
-    scripts is refused to them, on top of the X-FeedVault header."""
-    origin = request.headers.get("Origin")
-    if origin is not None:
-        scheme, _, host = origin.partition("://")
-        if scheme != "http" or _host_only(host) not in ALLOWED_HOSTS:
-            return True
-    return request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
-
-
 FOREIGN = "scripts can only be run from FeedVault's own dashboard"
 
 
+# Another site never reaches these (_origin_guard's FOREIGN_ALLOWED).
 @app.get("/api/scripts")
 def list_scripts():
-    if _foreign_origin():
-        return jsonify({"ok": False, "error": FOREIGN}), 403
     return jsonify(scripts.listing())
 
 
 @app.get("/api/scripts/<sid>")
 def get_script(sid):
-    if _foreign_origin():
-        return jsonify({"ok": False, "error": FOREIGN}), 403
     s, refused = scripts.lookup(sid, content=True)
     if s is None:
         # A refused folder lists nothing: its reason, not "no such script".
@@ -1672,8 +1664,6 @@ def get_script(sid):
 @app.post("/api/scripts/<sid>/run")
 def run_script(sid):
     """A script by id, with its inputs: never a command, a path or its text."""
-    if _foreign_origin():
-        return jsonify({"ok": False, "error": FOREIGN}), 403
     body = request.get_json(silent=True)
     body = {} if body is None else body
     if not isinstance(body, dict) or set(body) - set(scripts.INPUTS) \
