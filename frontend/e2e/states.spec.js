@@ -21,6 +21,7 @@
 import fs from "node:fs";
 import {
   test, expect, PAGES, stressData, settle, frame, quiet, addProbes, STATE_ALLOW, formatStateFindings,
+  fakeDecisions, underToasts, dismissToasts,
 } from "./fixtures.js";
 
 const SIZES = [
@@ -421,4 +422,52 @@ test.describe("closing a selection bar dialog leaves the Feed where it was", () 
       await expect(button).toBeFocused();
     });
   }
+});
+
+// Toasts never cover the buttons pinned at the bottom: the selection
+// bar's right after a bulk action, Review's after an undo (#121). The
+// decisions are faked: nothing changes on the server.
+const TOAST_SIZES = [
+  { label: "1280x800", width: 1280, height: 800 },
+  { label: "1440x900", width: 1440, height: 900 },
+  { label: "1920x1080", width: 1920, height: 1080 },
+];
+
+test.describe("toasts stay clear of the bottom buttons", () => {
+  test("Feed: the selection bar after Keep", async ({ page }) => {
+    await fakeDecisions(page);
+    await open(page, "Feed");
+    await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+    await expect(page.locator(".select-bar")).toBeVisible();
+    const keep = page.locator(".select-bar").getByRole("button", { name: "Keep", exact: true });
+    for (const s of TOAST_SIZES) {
+      await atSize(page, s);
+      // Two toasts: the second keep comes while the first shows.
+      for (const n of [1, 2]) {
+        await page.locator("article.post-card").nth(n).click();
+        await keep.click();
+        await expect(page.locator(".toast")).toHaveCount(n);
+      }
+      await settle(page);
+      expect(await underToasts(page, ".select-bar button"), `${s.label}: buttons under a toast`).toEqual([]);
+      await dismissToasts(page);
+    }
+  });
+
+  test("Review: its buttons after Undo", async ({ page }) => {
+    await fakeDecisions(page);
+    await open(page, "Review");
+    const bar = page.locator(".review-actions");
+    const undo = bar.getByRole("button", { name: /^Undo/ });
+    for (const s of TOAST_SIZES) {
+      await atSize(page, s);
+      await bar.getByRole("button", { name: /^Keep/ }).click();
+      await expect(page.locator(".review-session")).toHaveText(/^1 kept/);
+      await undo.click();
+      await expect(page.locator(".toast", { hasText: "Undone." })).toBeVisible();
+      await settle(page);
+      expect(await underToasts(page, ".review-actions button"), `${s.label}: buttons under a toast`).toEqual([]);
+      await dismissToasts(page);
+    }
+  });
 });

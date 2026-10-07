@@ -1971,10 +1971,13 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
 /* ── Toasts ─────────────────────────────────────────────── */
+/* Above what a page pins at the bottom (the selection bar, Review's
+   buttons): --toast-clear, set by lib/layout's useToastClearance, is how far
+   up its top is. Never over the buttons a user is working through (#121). */
 .toasts {
   position: fixed; z-index: 120;
   right: calc(20px + env(safe-area-inset-right));
-  bottom: calc(20px + env(safe-area-inset-bottom));
+  bottom: max(calc(20px + env(safe-area-inset-bottom)), calc(var(--toast-clear, 0px) + 12px));
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
   pointer-events: none;
 }
@@ -2271,8 +2274,6 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
   /* No keyboard on a phone: no key hints. */
   .review-side .kbd { display: none; }
   .review-wide { display: none; }
-  /* Toasts ("Kept", "Undone") above the bar, not over its buttons. */
-  body:has(.review-actions) .toasts { bottom: calc(var(--review-bar-h, 120px) + 12px); }
 }
 
 /* ── Scrollbar ──────────────────────────────────────────── */
