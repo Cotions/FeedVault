@@ -65,42 +65,83 @@ fi
 
 [ -f "$LIVE_CONFIG" ] || die "No live config at $LIVE_CONFIG. Start the real app once first, or use --demo."
 
-read -r LIVE_DATA < <(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data_directory"])' "$LIVE_CONFIG")
-TEST_DATA="${FEEDVAULT_TEST_DATA:-${LIVE_DATA%/}-test}"
-[ "$TEST_DATA" != "$LIVE_DATA" ] || die "Test data dir must differ from the live one ($LIVE_DATA)."
+# --- test data ----------------------------------------------------------
+# Where the copy goes (#111): an absolute path, resolved, that is not the
+# live data, a media folder, HOME or /, holds none of them and is inside
+# neither of the first two. Only a folder this script made (it carries a
+# .feedvault-test marker) is ever reset or written into.
+LIVE_DATA="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1])).get("data_directory")
+print(d if isinstance(d, str) else "")' "$LIVE_CONFIG")" || die "Cannot read $LIVE_CONFIG"
+[[ "$LIVE_DATA" = /* ]] \
+  || die "data_directory in $LIVE_CONFIG must be an absolute path, not '$LIVE_DATA'"
+LIVE_DATA="$(realpath -m -- "$LIVE_DATA")"
 
-mapfile -t MEDIA_ROOTS < <(python3 - "$LIVE_CONFIG" <<'PY'
-import json, os, sys
+# Every media root in the live config, there or not (an unmounted disk too).
+mapfile -t ALL_MEDIA_ROOTS < <(python3 - "$LIVE_CONFIG" <<'PY'
+import json, sys
 for r in json.load(open(sys.argv[1])).get("media_roots") or []:
-    if os.path.isdir(r):
+    if isinstance(r, str) and r and "\n" not in r:
         print(r)
 PY
 )
+MEDIA_ROOTS=()
+for r in "${ALL_MEDIA_ROOTS[@]}"; do [ -d "$r" ] && MEDIA_ROOTS+=("$r"); done
+
+TEST_DATA="${FEEDVAULT_TEST_DATA:-$LIVE_DATA-test}"
+[[ "$TEST_DATA" = /* ]] || die "FEEDVAULT_TEST_DATA must be an absolute path, not '$TEST_DATA'"
+TEST_DATA="$(realpath -m -- "$TEST_DATA")"
+TEST_MARK="$TEST_DATA/.feedvault-test"
+
+under() { [ "$1" = "$2" ] || [[ "$1" == "${2%/}/"* ]]; }    # $1 is $2 or inside it
+for p in "$LIVE_DATA" "${ALL_MEDIA_ROOTS[@]}"; do
+  p="$(realpath -m -- "$p")"
+  if under "$TEST_DATA" "$p" || under "$p" "$TEST_DATA"; then
+    die "Test data dir $TEST_DATA overlaps $p (the live data or a media folder). Set FEEDVAULT_TEST_DATA elsewhere."
+  fi
+done
+for p in "${HOME:-/}" /; do
+  p="$(realpath -m -- "$p")"
+  if under "$p" "$TEST_DATA"; then
+    die "Test data dir $TEST_DATA would hold $p. Set FEEDVAULT_TEST_DATA elsewhere."
+  fi
+done
+
+marked() { [ -f "$TEST_MARK" ] && [ ! -L "$TEST_MARK" ]; }
+if [ "$MODE" != status ] && { [ -e "$TEST_DATA" ] || [ -L "$TEST_DATA" ]; } && ! marked; then
+  die "$TEST_DATA exists but has no .feedvault-test marker, so testapp.sh did not make it; nothing was changed. If it is an old test copy, check it, remove it by hand (rm -rf -- '$TEST_DATA') and run again; otherwise set FEEDVAULT_TEST_DATA to a new folder."
+fi
+# --- test data end ------------------------------------------------------
 
 if [ "$MODE" = status ]; then
   echo "live config   $LIVE_CONFIG"
   echo "live data     $LIVE_DATA"
   echo "test config   $TEST_CONFIG $([ -f "$TEST_CONFIG" ] && echo '(exists)' || echo '(not created yet)')"
-  echo "test data     $TEST_DATA $([ -d "$TEST_DATA" ] && echo "($(du -sh "$TEST_DATA" | cut -f1))" || echo '(not created yet)')"
+  echo "test data     $TEST_DATA $([ -d "$TEST_DATA" ] && echo "($(du -sh "$TEST_DATA" | cut -f1)$(marked || echo ', no .feedvault-test marker: not made here'))" || echo '(not created yet)')"
   echo "test port     $PORT"
   echo "shared, read-only in the sandbox:"
   printf '              %s\n' "${MEDIA_ROOTS[@]}"
   exit 0
 fi
 
+# --- test copy ----------------------------------------------------------
 if [ "$MODE" = reset ] && [ -d "$TEST_DATA" ]; then
+  marked || die "Not removing $TEST_DATA: it has no .feedvault-test marker"
   say "Removing the old copy at $TEST_DATA"
-  rm -rf "$TEST_DATA"
+  rm -rf -- "$TEST_DATA"
 fi
 
 if [ ! -f "$TEST_DATA/feedvault.db" ]; then
   [ -f "$LIVE_DATA/feedvault.db" ] || die "No database at $LIVE_DATA/feedvault.db"
   say "Copying your database to $TEST_DATA"
   mkdir -p "$TEST_DATA"
+  marked || printf 'A test copy made by FeedVault'"'"'s testapp.sh; --reset deletes this folder.\n' > "$TEST_MARK"
   # The backup API gives a consistent copy even while the live app is writing.
   python3 -c 'import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d)' \
     "$LIVE_DATA/feedvault.db" "$TEST_DATA/feedvault.db"
 fi
+# --- test copy end -----------------------------------------------------
 
 python3 - "$TEST_CONFIG" "$LIVE_CONFIG" "$TEST_DATA" <<'PY'
 import json, sys

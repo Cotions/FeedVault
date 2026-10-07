@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -110,5 +110,139 @@ test("testapp.sh never takes the live app's port, moved or not", () => {
     const got = testappPort(env);
     assert.equal(got.status, 0, got.stderr);
     assert.equal(got.stdout, used);
+  }
+});
+
+// testapp.sh's test data blocks (#111), run on their own the same way, in a
+// tmp dir with a fake HOME and a fake live config: never the real ones.
+// "--- test data" only resolves and checks (it writes nothing); "--- test
+// copy" resets and copies, and only runs where a regression could do no
+// more than delete part of the tmp dir.
+function testappData({ mode = "reset", testData, config, copy = true, cwd }) {
+  const sh = readFileSync(`${repo}/testapp.sh`, "utf8");
+  const block = name => {
+    const m = sh.match(new RegExp(`^# --- ${name} -+\\n[\\s\\S]*?^# --- ${name} end -+$`, "m"));
+    assert.ok(m, `testapp.sh has a ${name} block`);
+    return m[0];
+  };
+  const line = re => { const m = sh.match(re); assert.ok(m, String(re)); return m[0]; };
+  const script = ["set -euo pipefail", line(/^say\(\) .*$/m), line(/^die\(\) .*$/m), `MODE=${mode}`,
+                  line(/^CONFIG_HOME=.*$/m), line(/^LIVE_CONFIG=.*$/m), block("test data"),
+                  ...(copy ? [block("test copy")] : []), `printf '%s' "$TEST_DATA"`].join("\n");
+  const t = config.root;
+  writeFileSync(`${t}/home/.config/feedvault/config.json`, JSON.stringify(config.json));
+  const env = { PATH: process.env.PATH, HOME: `${t}/home` };
+  if (testData !== undefined) env.FEEDVAULT_TEST_DATA = testData;
+  return spawnSync("bash", ["-c", script], { env, cwd: cwd || `${t}/cwd`, encoding: "utf8", timeout: 10000 });
+}
+
+function fakeLive() {
+  const t = realpathSync(mkdtempSync(`${tmpdir()}/feedvault-testdata-`));
+  for (const d of ["home/.config/feedvault", "cwd", "live/data", "media/creator"]) mkdirSync(`${t}/${d}`, { recursive: true });
+  writeFileSync(`${t}/live/data/feedvault.db`, "");           // an empty SQLite database
+  writeFileSync(`${t}/home/keep`, "mine");
+  writeFileSync(`${t}/media/creator/keep`, "mine");
+  symlinkSync(`${t}/live/data`, `${t}/link`);
+  const json = { data_directory: `${t}/live/data/`, media_roots: [`${t}/media`, `${t}/gone/media`] };
+  writeFileSync(`${t}/home/.config/feedvault/config.json`, JSON.stringify(json));
+  return { root: t, json };
+}
+
+// Every file under dir, relative, sorted.
+function tree(dir) {
+  return readdirSync(dir, { recursive: true }).map(String).sort();
+}
+
+test("testapp.sh refuses a test data dir that is or holds HOME, the live data or a media folder (#111)", () => {
+  const config = fakeLive();
+  const t = config.root;
+  try {
+    const before = tree(t);
+    for (const [dir, why] of [[`${t}/home`, /would hold/], [t, /overlaps|would hold/],
+                              [`${t}/live/data`, /overlaps/], [`${t}/live/data/`, /overlaps/],
+                              [`${t}/live/data/../data`, /overlaps/], [`${t}/link`, /overlaps/],
+                              [`${t}/live/data/sub`, /overlaps/], [`${t}/live`, /overlaps/],
+                              [`${t}/media`, /overlaps/], [`${t}/media/creator`, /overlaps/],
+                              [`${t}/gone`, /overlaps/], [`${t}/gone/media/x`, /overlaps/]]) {
+      for (const mode of ["reset", "start"]) {
+        const got = testappData({ mode, testData: dir, config });
+        assert.notEqual(got.status, 0, `${mode} ${dir}`);
+        assert.match(got.stderr, why, `${mode} ${dir}`);
+        assert.equal(got.stdout, "", `${mode} ${dir}`);
+      }
+    }
+    for (const dir of ["rel", "./x", "~/x"]) {
+      const got = testappData({ testData: dir, config });
+      assert.notEqual(got.status, 0, dir);
+      assert.match(got.stderr, /FEEDVAULT_TEST_DATA must be an absolute path/, dir);
+    }
+    // The checks alone for these: nothing after them runs even if they fail.
+    for (const dir of ["/", "//", "/.", "/tmp/.."]) {
+      const got = testappData({ testData: dir, config, copy: false });
+      assert.notEqual(got.status, 0, dir);
+      assert.match(got.stderr, /overlaps|would hold \//, dir);
+    }
+    assert.deepEqual(tree(t), before);
+    assert.equal(readFileSync(`${t}/home/keep`, "utf8"), "mine");
+    assert.equal(readFileSync(`${t}/media/creator/keep`, "utf8"), "mine");
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test("testapp.sh refuses an empty, null or relative data_directory (#111)", () => {
+  const config = fakeLive();
+  const t = config.root;
+  try {
+    for (const data of ["", null, "relative/data", "None", undefined, 3]) {
+      const json = { ...config.json, data_directory: data };
+      if (data === undefined) delete json.data_directory;
+      const got = testappData({ config: { root: t, json }, copy: false });
+      assert.notEqual(got.status, 0, String(data));
+      assert.match(got.stderr, /data_directory in .* must be an absolute path/, String(data));
+    }
+    assert.deepEqual(readdirSync(`${t}/cwd`), []);
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test("testapp.sh resets and writes into only a folder it marked (#111)", () => {
+  const config = fakeLive();
+  const t = config.root;
+  try {
+    // A folder it did not make: refused, left as it is, with how to remove it.
+    mkdirSync(`${t}/old`);
+    writeFileSync(`${t}/old/feedvault.db`, "old copy");
+    writeFileSync(`${t}/old/notes`, "mine");
+    for (const mode of ["reset", "start"]) {
+      const got = testappData({ mode, testData: `${t}/old`, config });
+      assert.notEqual(got.status, 0, mode);
+      assert.match(got.stderr, /no \.feedvault-test marker/, mode);
+      assert.ok(got.stderr.includes(`rm -rf -- '${t}/old'`), got.stderr);
+    }
+    // A marker that is a symlink does not count.
+    symlinkSync(`${t}/home/keep`, `${t}/old/.feedvault-test`);
+    assert.notEqual(testappData({ testData: `${t}/old`, config }).status, 0);
+    assert.deepEqual(tree(`${t}/old`), [".feedvault-test", "feedvault.db", "notes"]);
+    assert.equal(readFileSync(`${t}/home/keep`, "utf8"), "mine");
+
+    // The default, <data_directory>-test: made and marked, then reset.
+    const made = `${t}/live/data-test`;
+    let got = testappData({ mode: "start", config });
+    assert.equal(got.status, 0, got.stderr);
+    assert.equal(got.stdout.split("\n").pop(), made);
+    assert.deepEqual(tree(made), [".feedvault-test", "feedvault.db"]);
+    writeFileSync(`${made}/scratch`, "");
+    got = testappData({ mode: "start", config });
+    assert.equal(got.status, 0, got.stderr);
+    assert.deepEqual(tree(made), [".feedvault-test", "feedvault.db", "scratch"]);
+    got = testappData({ mode: "reset", config });
+    assert.equal(got.status, 0, got.stderr);
+    assert.match(got.stdout, /Removing the old copy/);
+    assert.deepEqual(tree(made), [".feedvault-test", "feedvault.db"]);
+    assert.equal(readFileSync(`${t}/live/data/feedvault.db`, "utf8"), "");
+  } finally {
+    rmSync(t, { recursive: true, force: true });
   }
 });
