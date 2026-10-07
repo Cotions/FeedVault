@@ -5,10 +5,12 @@ import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { fmtInt } from "../lib/fmt";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DiscardDialog from "../components/DiscardDialog";
 import CreatorPicker from "../components/CreatorPicker";
 import PageHeader from "../components/PageHeader";
 import { LinkForm, LinkRow } from "../components/Links";
 import { KIND_LABEL } from "../lib/links";
+import { useOneEdit, useUnsaved } from "../lib/unsaved";
 
 /* Every saved link: a creator's Linktree, Patreon or site, an interview, an
    article, tied to a person or to no one. Add at the top; filter by kind
@@ -23,11 +25,12 @@ export default function Links() {
   const [person,   setPerson]   = useState(null);     // a person id, "none", or null for anyone
   const [query,    setQuery]    = useState("");
   const [q,        setQ]        = useState("");       // the query, once typing pauses
-  const [editing,  setEditing]  = useState(null);     // the id of the link being edited
   const [removing, setRemoving] = useState(null);     // the link to delete
   const [flash,    setFlash]    = useState(null);     // the id of a link to point at (a URL saved already)
   const [busy,     setBusy]     = useState(false);
   const [dlgError, setDlgError] = useState(null);
+  const edit = useOneEdit();                          // the link being edited, and whether it has changes
+  const unsaved = useUnsaved(edit.dirty);
 
   useEffect(() => {
     const t = setTimeout(() => setQ(query.trim()), 250);
@@ -78,7 +81,7 @@ export default function Links() {
         if (r?.id != null) return "That address is saved already, as another link.";
         return r?.error || "Could not save the link.";
       }
-      setEditing(null);
+      edit.close();
       reload();
       return null;
     } catch (err) {
@@ -182,14 +185,15 @@ export default function Links() {
           <div className="empty">{filtered ? "No link matches." : "No links yet. Add one above."}</div>
         ) : (
           <ul className="link-list">
-            {links.map(l => editing === l.id ? (
+            {links.map(l => edit.editing === l.id ? (
               <li key={l.id} className="link-row is-editing">
                 <LinkForm link={l} people={people || []} busy={busy} submitLabel="Save"
-                          idPrefix={`link-${l.id}`} onSubmit={body => save(l.id, body)} onCancel={() => setEditing(null)} />
+                          idPrefix={`link-${l.id}`} onSubmit={body => save(l.id, body)} onCancel={edit.close}
+                          onDirty={edit.onDirty} />
               </li>
             ) : (
               <LinkRow key={l.id} link={l} busy={busy} flash={flash === l.id}
-                       onEdit={x => setEditing(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
+                       onEdit={x => edit.open(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
             ))}
           </ul>
         )}
@@ -206,6 +210,11 @@ export default function Links() {
         >
           <p className="link-confirm">{removing?.title ? <>{removing.title}<br /></> : null}<code>{removing?.url}</code></p>
         </ConfirmDialog>
+        <DiscardDialog open={edit.asking || unsaved.asking}
+                       onDiscard={edit.asking ? edit.discard : unsaved.discard}
+                       onKeep={edit.asking ? edit.keep : unsaved.keep}>
+          <p>The changes to the link you are editing are not saved.</p>
+        </DiscardDialog>
       </div>
     </>
   );

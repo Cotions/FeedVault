@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Routes, Route, Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, Link, NavLink, useLocation, useNavigate, useParams } from "react-router-dom";
 import { getScan, startScan, getJobs, getNotifications, quitApp, onConnectionChange } from "./lib/api";
 import { ScanContext } from "./lib/scan";
 import { JobsContext, ENDED, SAVE_KINDS, shownParams } from "./lib/jobs";
@@ -41,6 +41,15 @@ const JOBS_IDLE_POLL_MS   = 15000;
 // Desktop notifications on: a hidden tab still polls, now and then.
 const DESKTOP_POLL_MS     = 60000;
 const DESKTOP_MAX         = 5;               // notifications shown at once; the bell lists the rest
+
+/* A page about one entity (a person, a collection, a post), mounted afresh
+   for each: going from one to the next in the app (a link between two
+   people, Back, Forward) keeps nothing typed or opened for the first, so a
+   save always goes to the entity whose text it is. */
+function PerEntity({ page: Page }) {
+  const params = useParams();
+  return <Page key={JSON.stringify(params)} />;
+}
 
 export default function App() {
   const location = useLocation();
@@ -497,14 +506,14 @@ export default function App() {
           )}
           <Routes>
             <Route path="/" element={<Feed />} />
-            <Route path="/p/:platform/:postId" element={<PostPage />} />
+            <Route path="/p/:platform/:postId" element={<PerEntity page={PostPage} />} />
             <Route path="/review" element={<Review />} />
             <Route path="/creators" element={<Creators />} />
-            <Route path="/people/:id" element={<PersonPage />} />
+            <Route path="/people/:id" element={<PerEntity page={PersonPage} />} />
             <Route path="/tags" element={<Tags />} />
             <Route path="/links" element={<Links />} />
             <Route path="/collections" element={<Collections />} />
-            <Route path="/collections/:id" element={<CollectionView />} />
+            <Route path="/collections/:id" element={<PerEntity page={CollectionView} />} />
             <Route path="/stats" element={<Stats />} />
             <Route path="/storage" element={<Storage />} />
             <Route path="/trash" element={<Trash />} />

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getAuthors, getConfig, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
   createLink, updateLink, deleteLink, orderPersonLinks } from "../lib/api";
@@ -10,6 +10,7 @@ import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, pl
 import { accountKey, accountRef } from "../lib/people";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DiscardDialog from "../components/DiscardDialog";
 import CreatorPicker from "../components/CreatorPicker";
 import Suggestions from "../components/Suggestions";
 import BioImport from "../components/BioImport";
@@ -18,6 +19,7 @@ import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources"
 import { useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
 import { LinkForm, LinkRow } from "../components/Links";
+import { useOneEdit, useUnsaved } from "../lib/unsaved";
 
 function AccountRow({ account: a, busy, onUnlink }) {
   const url = safeUrl(a.url);
@@ -69,15 +71,17 @@ function AccountRow({ account: a, busy, onUnlink }) {
 
 /* A person's saved links: socials first, then the others, each group in
    the person's order (up and down move a link within its group). Add one
-   with the person preset; edit and delete in place. */
-function PersonLinks({ person: p, onChanged }) {
+   with the person preset; edit and delete in place. onDirty(bool): whether
+   the link being edited has unsaved changes. */
+function PersonLinks({ person: p, onChanged, onDirty }) {
   const toast = useToast();
   const [busy,     setBusy]     = useState(false);
-  const [editing,  setEditing]  = useState(null);     // the id of the link being edited
+  const edit = useOneEdit();                          // the link being edited, and whether it has changes
   const [removing, setRemoving] = useState(null);
   const [dlgError, setDlgError] = useState(null);
   const links = p.links || [];
   const groups = [["Socials", links.filter(l => l.kind === "social")], ["Other", links.filter(l => l.kind !== "social")]];
+  useEffect(() => { onDirty(edit.dirty); }, [edit.dirty, onDirty]);
 
   async function call(fn, failed) {
     setBusy(true);
@@ -116,13 +120,13 @@ function PersonLinks({ person: p, onChanged }) {
         <div key={name} className="person-link-group">
           <h4 className="link-group-title">{name}</h4>
           <ul className="link-list">
-            {group.map((l, i) => editing === l.id ? (
+            {group.map((l, i) => edit.editing === l.id ? (
               <li key={l.id} className="link-row is-editing">
                 <LinkForm link={l} busy={busy} submitLabel="Save" idPrefix={`person-link-${l.id}`}
-                          onCancel={() => setEditing(null)}
+                          onCancel={edit.close} onDirty={edit.onDirty}
                           onSubmit={async body => {
                             const problem = await call(() => updateLink(l.id, body), "Could not save the link.");
-                            if (!problem) setEditing(null);
+                            if (!problem) edit.close();
                             return problem;
                           }} />
               </li>
@@ -130,7 +134,7 @@ function PersonLinks({ person: p, onChanged }) {
               <LinkRow key={l.id} link={l} showPerson={false} busy={busy}
                        onUp={{ ok: i > 0, run: () => move(group, i, -1) }}
                        onDown={{ ok: i < group.length - 1, run: () => move(group, i, 1) }}
-                       onEdit={x => setEditing(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
+                       onEdit={x => edit.open(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
             ))}
           </ul>
         </div>
@@ -156,6 +160,9 @@ function PersonLinks({ person: p, onChanged }) {
       >
         <p className="link-confirm">{removing?.title ? <>{removing.title}<br /></> : null}<code>{removing?.url}</code></p>
       </ConfirmDialog>
+      <DiscardDialog open={edit.asking} onDiscard={edit.discard} onKeep={edit.keep}>
+        <p>The changes to the link you are editing are not saved.</p>
+      </DiscardDialog>
     </section>
   );
 }
@@ -179,7 +186,13 @@ export default function PersonPage() {
   const [confirm,  setConfirm]  = useState(false);
   const [dlgError, setDlgError] = useState(null);
   const [removing, setRemoving] = useState(null);     // the source to remove
+  const [linkEdits, setLinkEdits] = useState(false);  // a link being edited has changes
   const sources = useSources();
+
+  // What was typed and not saved, asked about before the app leaves the page.
+  const notesDirty  = !!p && notes != null && notes !== p.notes;
+  const renameDirty = !!p && editName != null && editName !== p.name;
+  const unsaved = useUnsaved(notesDirty || renameDirty || linkEdits);
 
   const linked = useMemo(() => new Set((p?.accounts || []).map(accountKey)), [p]);
 
@@ -220,7 +233,7 @@ export default function PersonPage() {
       const r = await deletePerson(p.id);
       if (!r?.ok) { setDlgError(r?.error || "Could not delete."); return; }
       toast(`${p.name} deleted; ${r.unlinked} account${r.unlinked === 1 ? "" : "s"} unlinked.`);
-      navigate("/creators");
+      unsaved.leave(() => navigate("/creators"));
     } catch (err) {
       setDlgError(err.message);
     } finally {
@@ -436,7 +449,7 @@ export default function PersonPage() {
           <AddSource person={p.id} onAdded={sources.reload} />
         </section>
 
-        <PersonLinks person={p} onChanged={reload} />
+        <PersonLinks person={p} onChanged={reload} onDirty={setLinkEdits} />
 
         <section className="person-section">
           <h3 className="card-title">Notes</h3>
@@ -449,13 +462,20 @@ export default function PersonPage() {
             value={notesValue}
             onChange={e => setNotes(e.target.value)}
           />
-          {notes != null && notes !== p.notes && (
+          {notesDirty && (
             <div className="person-notes-actions">
               <button type="button" className="btn-primary" disabled={busy} onClick={() => save({ notes }, () => setNotes(null))}>Save notes</button>
               <button type="button" className="btn-ghost" disabled={busy} onClick={() => setNotes(null)}>Discard</button>
             </div>
           )}
         </section>
+
+        <DiscardDialog open={unsaved.asking} onDiscard={unsaved.discard} onKeep={unsaved.keep}>
+          <p>
+            Not saved for {p.name}:{" "}
+            {[notesDirty && "the notes", renameDirty && "the new name", linkEdits && "the changes to a link"].filter(Boolean).join(", ")}.
+          </p>
+        </DiscardDialog>
 
         <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
 
