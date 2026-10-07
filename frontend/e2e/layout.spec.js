@@ -208,7 +208,7 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
         const hb = head.getBoundingClientRect(), tb = h2.getBoundingClientRect();
         const next = head.nextElementSibling?.getBoundingClientRect();
         const card = [...document.querySelectorAll("main .card")].find(c => c.getBoundingClientRect().height > 0)?.getBoundingClientRect();
-        return { x: tb.x, y: tb.y, bottom: hb.bottom, next: next?.top ?? null, card: card?.top ?? null,
+        return { x: tb.x, y: tb.y, bottom: hb.bottom, right: hb.right, next: next?.top ?? null, card: card?.top ?? null,
           tall: document.documentElement.scrollHeight - innerHeight };
       });
       const at = `${v.name} at ${s.label}`;
@@ -217,6 +217,8 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
       if (Math.abs(m.x - f.x) > 1 || Math.abs(m.y - f.y) > 1) {
         problems.push(`${at}: title at (${m.x}, ${m.y}), ${f.name} has it at (${f.x}, ${f.y})`);
       }
+      // The head's rule as long on every page: Settings' ended 88px short (#149).
+      if (Math.abs(m.right - f.right) > 1) problems.push(`${at}: the head ends at x=${m.right}, ${f.name}'s at x=${f.right}`);
       if (m.next != null && m.next < m.bottom - 0.5) problems.push(`${at}: the head (bottom ${m.bottom}) overlaps what follows it (top ${m.next})`);
       // Review fits the window with its head: the media never sets its height.
       if (v.name.startsWith("Review") && m.tall > 1) problems.push(`${at}: Review is ${m.tall}px taller than the window`);

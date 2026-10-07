@@ -147,3 +147,29 @@ test("Duplicates: while files are hashed, the summary says so, not that reposts 
   await expect(summary).not.toContainText("repost");
   await idle(page);
 });
+
+// #149: copies groups are settled once the byte hashes are; the pass then
+// fingerprints pictures for a long time. The page reloads its groups when
+// the pass goes on to its next phase, not only when it ends, so Keep this
+// is offered as soon as it can be. Status and pending are changed in the
+// browser only.
+test("Duplicates: a group hashed during a pass can be kept before the pass ends", async ({ page }) => {
+  const g = await stressGroup(page);
+  let phase = "full";
+  const status = { running: true, paused: false, done: 3, total: 9, bytes: 0, hashed: 9, fingerprinted: 0, errors: [] };
+  await page.route(url => url.pathname === "/api/duplicates/status", route => route.fulfill({ json: { ...status, phase } }));
+  await page.route(url => url.pathname === "/api/duplicates" && (url.searchParams.get("kind") || "copies") === "copies", async route => {
+    const res = await route.fetch();
+    const body = await res.json();
+    if (phase === "full") for (const x of body.groups) { x.identical = null; x.pending = true; }
+    await route.fulfill({ response: res, json: body });
+  });
+  await openPage(page, { name: "Duplicates", path: "/duplicates" });
+  const keep = groupOf(page, g.copy).getByRole("button", { name: /^Keep this, trash the rest/ });
+  await expect(keep).toBeDisabled();
+  await expect(keep).toHaveAttribute("title", "Wait until every file is hashed");
+  phase = "dhash";                                   // whole files done: fingerprints next, still running
+  await expect(keep).toBeEnabled({ timeout: 8_000 });
+  await expect(page.locator(".dup-status")).toContainText("Fingerprinting pictures");
+  await idle(page);
+});

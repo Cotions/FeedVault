@@ -405,17 +405,20 @@ export default function Duplicates() {
   const reload = useCallback(() => setTick(t => t + 1), []);
 
   // Hashing runs in the background after every scan: follow it, and reload
-  // the groups when a pass ends.
+  // the groups when a pass ends, and when it goes on to its next phase:
+  // copies and same-content groups are settled once the byte hashes are
+  // (partial, then full), not at the end of the fingerprints after them,
+  // which kept Keep this disabled for the rest of a long pass (#149).
   const hashing = !!status?.running;
   useEffect(() => {
     let alive = true;
-    let wasRunning = null;
+    let was = null;
     function poll() {
       getDuplicatesStatus().then(s => {
         if (!alive) return;
         setStatus(s);
-        if (wasRunning && !s.running) reload();
-        wasRunning = s.running;
+        if (was?.running && (!s.running || s.phase !== was.phase)) reload();
+        was = s;
       }, () => {});
     }
     poll();

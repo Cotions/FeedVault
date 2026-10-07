@@ -13,6 +13,7 @@ import {
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
 import ConfirmDialog from "./ConfirmDialog";
+import DiscardDialog from "./DiscardDialog";
 
 /* Where a source stands: its sync now (queued, waiting out the pause,
    running), else how its last one went. */
@@ -197,10 +198,18 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
   const set = patch => onChange({ ...form, ...patch });
   const login = needsLogin(form, choices, session);
   const toggle = k => onChange(toggleKind(form, k));
+  // A script runs instead of the tool's command: the choices before the
+  // picker are not used (its note says so), so they are dimmed and
+  // disabled while one is picked; the schedule still is (#149). Download
+  // stays open while it needs a login the sync lacks: that is refused
+  // either way, and unticking is the way out.
+  const unused = form.script
+    ? { disabled: true, className: "source-opt is-unused", title: "Not used: the script runs instead" }
+    : { className: "source-opt" };
   return (
     <div className="source-options">
       {choices.content.length > 0 && (
-        <fieldset className="source-opt">
+        <fieldset {...(login.length ? { className: "source-opt" } : unused)}>
           <legend>Download</legend>
           {choices.content.map(k => (
             <label key={k} className="source-opt-line">
@@ -218,7 +227,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
         </fieldset>
       )}
       {choices.media && (
-        <fieldset className="source-opt">
+        <fieldset {...unused}>
           <legend>Media</legend>
           {MEDIA.map(([v, label]) => (
             <label key={v} className="source-opt-line">
@@ -228,7 +237,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
           ))}
         </fieldset>
       )}
-      <fieldset className="source-opt">
+      <fieldset {...unused}>
         <legend>Not older than</legend>
         <label className="source-opt-line">
           <input type="date" min="1970-01-01" max={today()} value={form.since} aria-label="Not older than"
@@ -237,7 +246,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
           {form.since && <button type="button" className="btn-link" onClick={() => set({ since: "" })}>Clear</button>}
         </label>
       </fieldset>
-      <fieldset className="source-opt">
+      <fieldset {...unused}>
         <legend>{firstSync ? "First sync" : "Next sync"}</legend>
         <label className="source-opt-line">
           <input type="radio" name={`${id}-first`} checked={form.first === "new"} onChange={() => set({ first: "new" })} />
@@ -356,7 +365,7 @@ function ScriptPicker({ tool, value, onChange }) {
    refused, gone, or running another tool; with the reason (the chmod fix
    in it) and a link to its entry on the Scripts page. */
 const SCRIPT_STATES = { refused: "refused", missing: "not found", other_tool: "runs another tool" };
-export function ScriptWarning({ source: s }) {
+export function ScriptWarning({ source: s, name = null }) {
   const w = s.script_warning;
   if (!w) return null;
   const id = s.options.script;
@@ -364,7 +373,7 @@ export function ScriptWarning({ source: s }) {
     <span className="source-script-warn" role="note">
       <Icon name="warn" size={12} />
       <span>
-        <b>script {id}: {SCRIPT_STATES[w.state] || w.state}</b>
+        <b>{name && `${name}: `}script {id}: {SCRIPT_STATES[w.state] || w.state}</b>
         {" "}<span className="source-script-why">({w.reason})</span>. Its syncs fail.{" "}
         <Link to={scriptHref(id)} className="text-link">See Scripts</Link>
       </span>
@@ -383,6 +392,13 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   const firstSync = !s.last_sync_at || s.options.first_posts != null;
   const problem = formError(form, s.choices);
   const focus = useRef(null);
+  // Esc, Cancel or a click outside ask before changed choices go, as
+  // every other form does since #125/#132 (#149). Compared as they would
+  // be saved, so ticking a box off and on again is no change.
+  const [asking, setAsking] = useState(false);
+  const changed = JSON.stringify(optionsOf(form, s.choices, firstSync))
+    !== JSON.stringify(optionsOf(formOf(s.options, s.choices), s.choices, firstSync));
+  const cancel = () => (changed ? setAsking(true) : onClose());
 
   async function save() {
     setBusy(true);
@@ -401,22 +417,27 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   }
 
   return (
-    <ConfirmDialog
-      open
-      title={`What ${sourceName(s)} downloads`}
-      confirmLabel="Save"
-      busy={busy}
-      error={error || problem}
-      confirmDisabled={!!problem || needsLogin(form, s.choices, s.session).length > 0}
-      onConfirm={save}
-      onCancel={onClose}
-      initialFocus={focus}
-    >
-      <div ref={focus} tabIndex={-1}>
-        <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
-                       onChange={setForm} firstSync={firstSync} />
-      </div>
-    </ConfirmDialog>
+    <>
+      <ConfirmDialog
+        open
+        title={`What ${sourceName(s)} downloads`}
+        confirmLabel="Save"
+        busy={busy}
+        error={error || problem}
+        confirmDisabled={!!problem || needsLogin(form, s.choices, s.session).length > 0}
+        onConfirm={save}
+        onCancel={cancel}
+        initialFocus={focus}
+      >
+        <div ref={focus} tabIndex={-1}>
+          <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
+                         onChange={setForm} firstSync={firstSync} />
+        </div>
+      </ConfirmDialog>
+      <DiscardDialog open={asking} onDiscard={onClose} onKeep={() => setAsking(false)}>
+        The changed choices for {sourceName(s)} are not saved.
+      </DiscardDialog>
+    </>
   );
 }
 

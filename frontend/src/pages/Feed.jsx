@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigationType, useSearchParams } from "react-router-dom";
+import { focusLost, restoreFocus } from "../lib/layout";
 import { getPosts, getPostsSummary, getAuthors, getPeople, getTags, getCollections, deleteItems, setDecision, markSeen } from "../lib/api";
 import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
@@ -26,6 +27,9 @@ const PAGE = 60;
 const MAX_LIMIT = 200;
 const FILTERS = ["platform", "kind", "author", "person", "collection", "review", "tag", "untagged", "new", "notification", "sort"];
 const SUMMARY_DELAY = 250;
+// The post opened from each Feed history entry (location.key → post id):
+// Back focuses its card again (#149).
+const OPENED = new Map();
 
 export default function Feed() {
   const { refreshKey, running, start } = useScan();
@@ -103,6 +107,25 @@ export default function Feed() {
   const posts   = result.posts;
   const hasMore = current && !result.error && posts.length < result.total;
 
+  // Back from a post: focus goes to the card that was opened once it is
+  // rendered again, not to <body>, so the next Tab goes on from there
+  // (#149). The scroll position is ScrollManager's. Kept by history entry,
+  // as ScrollManager keeps its positions; dropped once anything else has
+  // focus. A click (or Enter) on a card's link notes the card.
+  const location = useLocation();
+  const navType = useNavigationType();
+  const refocus = useRef(navType === "POP" ? OPENED.get(location.key) ?? null : null);
+  useEffect(() => {
+    const id = refocus.current;
+    if (id == null || !current) return;
+    if (!focusLost()) { refocus.current = null; return; }
+    const card = document.querySelector(`.masonry .post-card[data-post-id="${CSS.escape(String(id))}"]`);
+    const link = card?.querySelector("a.post-cover, a.post-textbody");
+    if (!link) return;
+    refocus.current = null;
+    restoreFocus(link);
+  }, [posts, current]);
+
   const loadMore = useCallback(async () => {
     if (busy.current || !hasMore) return;
     busy.current = true;
@@ -134,6 +157,11 @@ export default function Feed() {
   const sel = useSelection(posts, { resetKey: filterKey, escapeBlocked: confirmDel || tagging || collecting });
   const selectedPosts = sel.selectedItems;
   const selectedCount = sel.count;
+  function noteOpened(e) {
+    if (sel.active) return;
+    const card = e.target.closest?.(":is(a.post-cover, a.post-textbody, a.post-excerpt)")?.closest(".post-card");
+    if (card) OPENED.set(location.key, card.dataset.postId);
+  }
   const selectedBytes = selectedPosts.reduce((n, p) => n + (p.bytes || 0), 0);
   // Text-only posts have none: their dialog says no "(0 media, 0 B)".
   const selectedMedia = selectedPosts.reduce((n, p) => n + (p.media_count || 0), 0);
@@ -520,7 +548,7 @@ export default function Feed() {
           )
         ) : (
           <>
-            <div className={`masonry${current ? "" : " is-stale"}`} aria-busy={!current}>
+            <div className={`masonry${current ? "" : " is-stale"}`} aria-busy={!current} onClick={noteOpened}>
               {posts.map((p, i) => (
                 <PostCard
                   key={p.id}

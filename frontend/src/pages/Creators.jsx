@@ -15,7 +15,8 @@ import SelectionBar from "../components/SelectionBar";
 import Suggestions from "../components/Suggestions";
 import MuteButton from "../components/MuteButton";
 import {
-  AddSource, RemoveSourceDialog, ScheduleLine, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar, SyncButton,
+  AddSource, RemoveSourceDialog, ScheduleLine, ScriptWarning, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar,
+  SyncButton,
 } from "../components/Sources";
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
 import { optionsSummary } from "../lib/sourceOptions";
@@ -103,6 +104,20 @@ function WarnBadge({ sync }) {
   );
 }
 
+// A source of the card whose script would fail its next sync: the same
+// line as on a source's row, its See Scripts link with it, under the card's
+// name (#149: only the badge's title said why). Outside the card's link:
+// a link in a link is not allowed. Named when the card has several sources.
+function CardScriptWarnings({ sync }) {
+  const bad = (sync?.sources || []).filter(s => s.script_warning);
+  if (!bad.length) return null;
+  return (
+    <span className="creator-card-warn">
+      {bad.map(s => <ScriptWarning key={s.id} source={s} name={sync.sources.length > 1 ? sourceName(s) : null} />)}
+    </span>
+  );
+}
+
 function PersonCard({ person: p, index, settled, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted, flash }) {
   const body = (
     <>
@@ -143,6 +158,7 @@ function PersonCard({ person: p, index, settled, selectMode, selected, onToggle,
       {!selectMode && <SeenButton fresh={fresh} name={p.name} onSeen={onSeen} />}
       {!selectMode && muted != null && <MuteButton compact muted={muted} whom={{ person: p.id }} name={p.name} onDone={onMuted} />}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
+      <CardScriptWarnings sync={sync} />
     </div>
   );
 }
@@ -248,6 +264,7 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
         <MuteButton compact muted={muted} whom={{ account: accountRef(a) }} name={`@${a.handle || a.id}`} onDone={onMuted} />
       )}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
+      <CardScriptWarnings sync={sync} />
     </div>
   );
 }

@@ -256,6 +256,8 @@ input[type="text"].header-search:focus {
   pointer-events: none;
 }
 .header-search-wrap:focus-within .search-kbd { opacity: 0; }
+/* No keyboard to press "/" on: a touch screen without hover (#149). */
+@media (hover: none) { .search-kbd { display: none; } }
 .search-clear {
   position: absolute;
   right: 8px;
@@ -1754,7 +1756,9 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 }
 
 /* ── Settings ───────────────────────────────────────────── */
-.settings-page { display: flex; flex-direction: column; gap: 20px; max-width: 1090px; }
+/* The width of every other page: its header rule no longer jumps in length
+   on coming to Settings (#149). */
+.settings-page { display: flex; flex-direction: column; gap: 20px; }
 /* Tab rail on the left, the cards of one tab on the right. */
 .settings-layout { display: flex; align-items: flex-start; gap: 20px; }
 .settings-tabs {
@@ -3147,6 +3151,12 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-opt-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; color: var(--text); cursor: pointer; }
 .source-opt-line b { font-weight: 600; }
 .source-opt-line .dim { font-size: 12px; color: var(--text-dim); }
+/* A choice's description, last on its line, stays beside it and wraps under
+   itself, however long: "new posts" kept its own on a line below (#149). */
+.source-opt-line > .dim:last-child { flex: 1 1 14em; min-width: 0; }
+/* Not used while a script runs instead of the tool's command (#149). */
+.source-opt.is-unused { opacity: 0.45; }
+.source-opt.is-unused .source-opt-line { cursor: default; }
 .source-opt-line input[type="date"], .source-opt-count {
   font: inherit; font-size: 12px; color: var(--text); background: var(--bg);
   border: 1px solid var(--border); border-radius: 7px; padding: 3px 7px; color-scheme: dark;
@@ -3189,6 +3199,9 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 }
 .source-script-warn svg { flex: none; align-self: center; }
 .source-script-warn > span { min-width: 0; }
+/* The same line on a Creators card, under its name and buttons (#149). */
+.creator-card:has(> .creator-card-warn) { flex-wrap: wrap; }
+.creator-card-warn { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 0 14px 10px; }
 .source-folder {
   font-size: 11px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;

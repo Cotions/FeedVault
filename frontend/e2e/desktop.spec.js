@@ -37,6 +37,28 @@ test("Feed: Back from a post returns to where the Feed was scrolled", async ({ p
   await idle(page);
 });
 
+// #149: Back from a post opened from the keyboard left focus on <body>, so
+// the next Tab started from the header. The card that was opened has it.
+test("Feed: Back from a post focuses the card that was opened", async ({ page }) => {
+  await openPage(page, PAGES[0]);
+  const cards = page.locator("a.post-cover");
+  expect(await cards.count()).toBeGreaterThan(14);
+  const card = cards.nth(14);
+  const href = await card.getAttribute("href");
+  await card.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/p\//);
+  await idle(page);
+  await page.goBack();
+  const again = page.locator(`a.post-cover[href="${href}"]`);
+  await expect(again).toBeFocused();
+  await expect(again).toBeInViewport();
+  // The next Tab goes on from there, not from the header.
+  await page.keyboard.press("Tab");
+  expect(await page.evaluate(() => !!document.activeElement.closest(".masonry"))).toBe(true);
+  await idle(page);
+});
+
 test("Review: K keeps, D trashes, Z undoes", async ({ page }) => {
   await openPage(page, { name: "Review", path: "/review" });
   await keepTrashUndo(page, {
