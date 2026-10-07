@@ -1449,8 +1449,8 @@ no person yet.
     error lines the same way (gallery-dl's `AuthRequired`, `NotFoundError`,
     "Tweets are protected"; yt-dlp's "Sign in to confirm", "Private video",
     "Video unavailable"). `missing`: the tool was not found (no output);
-    the dashboard links `missing` and `login_required` to Settings →
-    Downloaders
+    the dashboard links `missing` to Settings → Downloaders and
+    `login_required` to Settings → Sync, where logins and cookies are set
   - `message`: one line for people; `line`: the tool's last line of output
     behind it, or `null`. When the latest-version check is on (see
     [Downloaders](#downloaders)) and the tool is older than PyPI's latest

@@ -201,7 +201,7 @@ def test_failures(env, client, fake, fail, error):
     assert (job["state"], job["result"]["error"]) == ("failed", error)
     assert job["result"]["post"] is None
     if error == "login_required":
-        assert "Settings → Downloaders" in job["message"]
+        assert "Settings → Sync" in job["message"]
 
 
 def test_private_message_follows_the_session_in_use(env, client, fake):

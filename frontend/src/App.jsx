@@ -605,7 +605,7 @@ function saveToast(toast, j) {
   if (j.state === "done" && j.result?.post) {
     toast(`Saved post ${code}`, "ok", { to: `/p/${encodeURIComponent(platform)}/${encodeURIComponent(code)}`, label: "Show" });
   } else if (j.state === "failed" && SETUP_ERRORS.has(j.result?.error)) {
-    toast(`Saving ${code} failed: ${j.message}`, "err", { to: "/settings#downloaders", label: "Settings" });
+    toast(`Saving ${code} failed: ${j.message}`, "err", { to: j.result.error === "login_required" ? "/settings#sync" : "/settings#downloaders", label: "Settings" });
   } else {
     toast(`${j.label}: ${j.message}`, j.state === "failed" ? "err" : undefined);
   }

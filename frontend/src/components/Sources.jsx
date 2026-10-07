@@ -45,7 +45,9 @@ export function SourceStatus({ source: s, job, compact = false }) {
       {!compact && r.state === "done" && <span className="source-note">{r.message}</span>}
       {!compact && failed && <span className="source-message">{r.message}</span>}
       {!compact && failed && (SETUP_ERRORS.has(r.error) || r.outdated) && (
-        <Link to="/settings#downloaders" className="text-link source-setup">Settings → Downloaders</Link>
+        r.error === "login_required" && !r.outdated
+          ? <Link to="/settings#sync" className="text-link source-setup">Settings → Sync</Link>
+          : <Link to="/settings#downloaders" className="text-link source-setup">Settings → Downloaders</Link>
       )}
       {s.last_sync_at && <span className="dim">{compact ? "synced " : " · "}{fmtAgo(s.last_sync_at)}</span>}
     </span>

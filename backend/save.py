@@ -300,7 +300,7 @@ MESSAGES = {
     "rate_limited": "Instagram is limiting requests: wait a while before saving again",
     "not_found": "Post not found: removed, or only visible to a logged-in session",
     "private": "Private post: the session in use does not follow its account",
-    "login_required": "Instagram wants a logged-in session for this post; see Settings → Downloaders",
+    "login_required": "Instagram wants a logged-in session for this post; see Settings → Sync",
     "generic": "instaloader failed",
 }
 # A private post when the save used no login (mode "none", #124).
