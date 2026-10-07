@@ -923,6 +923,10 @@ def _purge(roots, keys, data_dir):
         if not any(_line_key(root, e) in wanted for e in lines):
             continue
         keep, failed, done, posts = [], set(), set(), {}
+        # A stale line (its file put back by hand, or by a restore cut short
+        # before the manifest was rewritten) can name the same trash path as
+        # a later deletion: that file is the later entry's, never removed here.
+        claimed = {e.get("to") for e in lines if _line_key(root, e) not in wanted}
         for e in lines:
             key = _line_key(root, e)
             if key not in wanted:
@@ -931,7 +935,7 @@ def _purge(roots, keys, data_dir):
             posts[key] = e.get("post")
             path = e["to"]
             try:
-                if not os.path.lexists(path):
+                if path in claimed or not os.path.lexists(path):
                     report["dropped"] += 1
                     done.add(key)
                     continue

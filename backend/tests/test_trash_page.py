@@ -632,3 +632,29 @@ def test_a_trash_moved_with_its_media_root_still_restores_and_purges(env, client
     assert items(client)["total"] == 0
     left = [n for _, _, names in os.walk(moved / ".feedvault-trash") for n in names]
     assert left == [".manifest.jsonl"]
+
+
+def test_purging_a_stale_entry_leaves_the_later_deletions_files(env, client):
+    # QA pass 4: a restore cut short (files back, manifest not yet rewritten)
+    # leaves lines whose trash paths are free again. Deleting the post again
+    # reused those paths, and purging the old entry removed the new one's
+    # files: the later deletion could no longer be restored.
+    write_post(env["media"] / "alice", "P1", 1717243200, ALICE, "image")
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    first = manifest(env)
+    for line in first:
+        os.rename(line["to"], line["from"])                           # put back, manifest untouched
+    scan(env)
+    client.post("/api/delete", json={"posts": ["instagram:P1"]}, headers=H)
+    lines = manifest(env)
+    assert {line["to"] for line in lines} == {line["to"] for line in first}   # the same trash paths, twice
+    by_batch = {e["batch"]: e["key"] for e in items(client)["entries"]}
+    stale = by_batch.pop(first[0]["batch"])
+    [later] = by_batch.values()
+    r = client.post("/api/trash/purge", json={"keys": [stale]}, headers=H).get_json()
+    assert r["ok"] and r["entries"] == 1 and r["files"] == 0
+    assert all(os.path.lexists(line["to"]) for line in manifest(env))
+    r = client.post("/api/trash/restore", json={"keys": [later]}, headers=H).get_json()
+    assert r["errors"] == [] and r["files"] == len(first)
+    assert client.get("/api/posts/instagram/P1", headers=H).status_code == 200
