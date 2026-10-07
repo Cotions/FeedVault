@@ -30,8 +30,6 @@ SOCIAL_HOSTS = frozenset({
     "beacons.ai", "vk.com", "weibo.com",
 })
 
-# Prefixes that name the same site (www.patreon.com is patreon.com).
-_PREFIXES = ("www.", "m.", "mobile.")
 # Second-level labels under a country code that are not a site of their own
 # (bbc.co.uk is "bbc.co.uk", not "co.uk").
 _SECOND_LEVEL = {"co", "com", "net", "org", "gov", "ac", "edu", "ne", "or"}
@@ -80,8 +78,8 @@ def clean_url(value):
 
 
 def site(url):
-    """The site a URL is on, its host without www., m. or mobile. and cut to
-    the registrable part: "patreon.com" for https://www.patreon.com/x,
+    """The site a URL is on, its host cut to the registrable part (which
+    drops www., m. and the like): "patreon.com" for https://www.patreon.com/x,
     "substack.com" for https://someone.substack.com, "bbc.co.uk" for
     https://www.bbc.co.uk/news. An IP address stays whole."""
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
@@ -90,10 +88,6 @@ def site(url):
         return host
     except ValueError:
         pass
-    for p in _PREFIXES:
-        if host.startswith(p):
-            host = host[len(p):]
-            break
     labels = host.split(".")
     keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL else 2
     return ".".join(labels[-keep:])
@@ -101,7 +95,11 @@ def site(url):
 
 def kind(url):
     """"social" for a link to a site in SOCIAL_HOSTS, else "other"."""
-    return "social" if site(url) in SOCIAL_HOSTS else "other"
+    return _kind_of(site(url))
+
+
+def _kind_of(site_):
+    return "social" if site_ in SOCIAL_HOSTS else "other"
 
 
 def clean_title(value):
@@ -129,9 +127,10 @@ _SELECT = ("SELECT l.id, l.url, l.title, l.notes, l.person_id, p.name AS person_
 
 
 def _link(row):
+    s = site(row["url"])
     return {
         "id": row["id"], "url": row["url"], "title": row["title"], "notes": row["notes"],
-        "site": site(row["url"]), "kind": kind(row["url"]),
+        "site": s, "kind": _kind_of(s),
         "person": {"id": row["person_id"], "name": row["person_name"]} if row["person_id"] is not None else None,
         "position": row["position"], "created_at": row["created_at"],
     }
@@ -161,9 +160,11 @@ def listing(conn, person=None, no_person=False, kind_=None, site_=None, q=None):
            if (kind_ is None or x["kind"] == kind_) and (site_ is None or x["site"] == site_)]
     if person is not None and not no_person:
         out = _order(out)
+    # The sites of every link: the rows just read when nothing narrowed them.
+    every = (x["site"] for x in out) if not where and kind_ is None and site_ is None \
+        else (site(url) for (url,) in conn.execute("SELECT url FROM links"))
     counts = {}
-    for (url,) in conn.execute("SELECT url FROM links"):
-        s = site(url)
+    for s in every:
         counts[s] = counts.get(s, 0) + 1
     sites = [{"site": s, "count": n} for s, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
     return {"links": out, "sites": sites}
@@ -233,14 +234,30 @@ def reorder(conn, pid, ids):
     collection's posts). Ids not of this person are ignored."""
     held = dict(conn.execute("SELECT id, position FROM links WHERE person_id = ?", (pid,)))
     ids = [i for i in dict.fromkeys(ids) if i in held]
-    places = sorted(held[i] or 0 for i in ids)
-    if len(set(places)) < len(places):         # equal places (an old restore): number them all first
+    if None in held.values() or len(set(held.values())) < len(held):
+        # No place or equal places (a hand-edited restore): number them all
+        # first, in the order the page shows them (no place last).
         with conn:
-            for n, i in enumerate(sorted(held, key=lambda i: (held[i] or 0, i)), 1):
+            for n, i in enumerate(sorted(held, key=lambda i: (held[i] is None, held[i] or 0, i)), 1):
                 conn.execute("UPDATE links SET position = ? WHERE id = ?", (n, i))
         return reorder(conn, pid, ids)
+    places = sorted(held[i] for i in ids)
     with conn:
         conn.executemany("UPDATE links SET position = ? WHERE id = ?", list(zip(places, ids)))
+
+
+def restore_row(row):
+    """A links.json row as the API would have saved it (URL, title and notes
+    cleaned, a whole-number position), or None to skip it: the file may have
+    been edited by hand, and a link is rendered as a link."""
+    url = clean_url(row.get("url"))
+    title, notes = clean_title(row.get("title")), clean_notes(row.get("notes"))
+    if url is None or title is None or notes is None:
+        return None
+    position = row.get("position")
+    if isinstance(position, bool) or not isinstance(position, int) or not 0 < position < 2**53:
+        position = None
+    return {**row, "url": url, "title": title, "notes": notes, "position": position}
 
 
 def merge_into(conn, keep, others):

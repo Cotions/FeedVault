@@ -74,7 +74,8 @@ export default function Links() {
     try {
       const r = await updateLink(id, body);
       if (!r?.ok) {
-        if (r?.id != null) { setEditing(null); showTaken(r.id); return "That address is saved already, as another link."; }
+        // The form stays open, with the edits and this message in view.
+        if (r?.id != null) return "That address is saved already, as another link.";
         return r?.error || "Could not save the link.";
       }
       setEditing(null);

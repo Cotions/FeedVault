@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 import config
 import db
+import links
 
 FORMAT_VERSION = 1
 DELAY = 2.0                     # seconds of quiet before a change is written
@@ -40,14 +41,16 @@ class Table:
     # put one row back, with :column parameters.
     select: str = None
     insert: tuple = ()
+    # A row as read from the file, cleaned, or None to skip it.
+    clean: object = None
 
 
 REGISTRY = {}
 
 
-def register(name, table, columns, key, legacy=None, legacy_rows="rows", select=None, insert=()):
+def register(name, table, columns, key, legacy=None, legacy_rows="rows", select=None, insert=(), clean=None):
     key = (key,) if isinstance(key, str) else tuple(key)
-    REGISTRY[name] = Table(name, table, tuple(columns), key, legacy, legacy_rows, select, tuple(insert))
+    REGISTRY[name] = Table(name, table, tuple(columns), key, legacy, legacy_rows, select, tuple(insert), clean)
 
 
 register("decisions", "decisions", ("post_id", "decision", "at"), "post_id",
@@ -106,10 +109,10 @@ register("sources", "sources", ("tool", "target", "platform", "author_id", "pers
                  ":folder, COALESCE(:options, '{}'), COALESCE(:created_at, 0), :last_sync_at, :last_result "
                  "WHERE :platform IS NOT NULL AND :folder IS NOT NULL",))
 
-# New handles the user accepted for a source's account (sources.rename).
 # Links (links.py) by URL, their person by name (after people; one missing
-# from people.json is created again). Only an http(s) URL is put back: the
-# file may have been edited by hand, and a link is rendered as a link.
+# from people.json is created again). Each row is cleaned as the API would
+# (links.restore_row): the file may have been edited by hand, and a link is
+# rendered as a link. A URL the API would refuse is not put back.
 register("links", "links", ("url", "title", "notes", "person", "position", "created_at"), "url",
          select="SELECT l.url, l.title, l.notes, p.name, l.position, l.created_at FROM links l "
                 "LEFT JOIN people p ON p.id = l.person_id ORDER BY l.url",
@@ -119,8 +122,10 @@ register("links", "links", ("url", "title", "notes", "person", "position", "crea
                  "SELECT :url, COALESCE(:title, ''), COALESCE(:notes, ''), p.id, "
                  "CASE WHEN p.id IS NULL THEN NULL ELSE :position END, COALESCE(:created_at, 0) "
                  "FROM (SELECT 1) LEFT JOIN people p ON p.name = :person "
-                 "WHERE :url LIKE 'http://%' OR :url LIKE 'https://%'"))
+                 "WHERE :url LIKE 'http://%' OR :url LIKE 'https://%'"),
+         clean=links.restore_row)
 
+# New handles the user accepted for a source's account (sources.rename).
 register("handle_renames", "handle_renames", ("platform", "author_id", "old", "new", "at"),
          ("platform", "author_id", "old", "new"))
 
@@ -171,6 +176,8 @@ def load(conn, name, data_dir):
     if not isinstance(rows, list):
         raise ValueError(f"no {rows_key!r} list")
     rows = [r for r in rows if isinstance(r, dict) and all(r.get(k) is not None for k in t.key)]
+    if t.clean:
+        rows = [r for r in map(t.clean, rows) if r is not None]
     with conn:
         if t.insert:
             for r in rows:

@@ -1067,8 +1067,9 @@ def create_link():
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
-    if links.find(conn, url) is not None:
-        return _taken(links.find(conn, url))
+    taken = links.find(conn, url)
+    if taken is not None:
+        return _taken(taken)
     try:
         link = links.create(conn, url, title or "", notes or "", pid, int(time.time()))
     except sqlite3.IntegrityError:             # saved by another request in between

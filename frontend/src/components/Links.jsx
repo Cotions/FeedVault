@@ -27,7 +27,7 @@ export function LinkForm({
     const body = { url: url.trim(), title, notes, ...(people ? { person } : {}) };
     const problem = await onSubmit(body);
     if (problem) { setError(problem); return; }
-    if (!link) { setUrl(""); setTitle(""); setNotes(""); }
+    if (!link) { setUrl(""); setTitle(""); setNotes(""); setPerson(null); }
   }
 
   return (

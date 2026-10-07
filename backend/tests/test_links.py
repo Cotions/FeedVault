@@ -97,6 +97,8 @@ def test_clean_url_refuses(raw):
     ("https://www.bbc.co.uk/news/1", "bbc.co.uk", "other"),
     ("https://somebody.example", "somebody.example", "other"),
     ("http://192.168.1.2:8080/", "192.168.1.2", "other"),
+    ("https://m.co/a", "m.co", "other"),                     # a short host keeps its name
+    ("https://www.example/a", "www.example", "other"),
 ])
 def test_site_and_kind(url, site, kind):
     assert (links.site(url), links.kind(url)) == (site, kind)
@@ -229,6 +231,19 @@ def test_reorder_numbers_equal_places_first(env, client):
     assert sorted(x["position"] for x in r["links"]) == [1, 2, 3]
 
 
+def test_reorder_keeps_links_with_no_place_last(env, client):
+    alice = person(client, "Alice")
+    a, b, c, d = (add(client, f"https://{n}.example", person=alice)["link"]["id"] for n in "abcd")
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE links SET position = NULL WHERE id IN (?, ?)", (c, d))   # as a hand-edited file could leave
+    assert [x["id"] for x in get(client, f"/api/people/{alice}")["links"]] == [a, b, c, d]
+    r = post(client, f"/api/people/{alice}/links/order", {"ids": [d, c]})             # "move d up"
+    assert [x["id"] for x in r["links"]] == [a, b, d, c]
+    r = post(client, f"/api/people/{alice}/links/order", {"ids": [d, b]})
+    assert [x["id"] for x in r["links"]] == [a, d, b, c]
+
+
 def test_a_link_given_to_another_person_goes_last(client):
     alice, bob = person(client, "Alice"), person(client, "Bob")
     add(client, "https://b1.example", person=bob)
@@ -310,6 +325,24 @@ def test_restore_skips_a_url_that_is_not_http(env):
     conn = db.connect()
     assert userdata.load(conn, "links", data) == 1
     assert [r[0] for r in conn.execute("SELECT url FROM links")] == ["https://ok.example"]
+
+
+def test_restore_cleans_a_row_as_the_api_would(env):
+    data = str(env["tmp"] / "data")
+    (env["tmp"] / "data" / "userdata").mkdir(parents=True, exist_ok=True)
+    with open(userdata.path(data, "links"), "w") as f:
+        json.dump({"version": 1, "rows": [
+            {"url": "HTTPS://X.COM/a", "title": "  An   x  ", "position": "2", "person": None},
+            {"url": "https://user@evil.example/", "title": "credentials"},
+            {"url": "https://exa mple.com", "title": "a space"},
+            {"url": "https://ok.example", "title": "t" * (links.MAX_TITLE + 1)},
+            {"url": "https://notes.example", "notes": ["not", "text"]},
+            {"url": "https://alice.example", "person": "Alice", "position": True},
+        ]}, f)
+    conn = db.connect()
+    assert userdata.load(conn, "links", data) == 2
+    assert [tuple(r) for r in conn.execute("SELECT url, title, position FROM links ORDER BY url")] == [
+        ("https://alice.example", "", None), ("https://x.com/a", "An x", None)]
 
 
 def test_changes_mark_links_for_export(client, monkeypatch):
