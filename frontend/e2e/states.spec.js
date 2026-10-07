@@ -382,3 +382,43 @@ test.describe("jumps land below the header", () => {
     }
   });
 });
+
+// A dialog the selection bar opens, closed with Cancel (Close) or Esc,
+// gives focus back to its button and leaves the page where it was, and so
+// does Tab along the bar (#119: the button sits in the room scroll-padding
+// keeps for the bar, and each close scrolled the Feed down by that room).
+test.describe("closing a selection bar dialog leaves the Feed where it was", () => {
+  for (const name of ["Tag…", "Collection…", "Delete…"]) {
+    test(name, async ({ page }) => {
+      await atSize(page, SIZES[1]);
+      await open(page, "Feed");
+      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator("article.post-card").first().click();
+      const button = page.locator(".select-bar").getByRole("button", { name, exact: true });
+      await expect(button).toBeEnabled();
+      await settle(page);
+      const before = await page.evaluate(() => scrollY);
+      // Clicked where it is, as a mouse does: Playwright's click() scrolls
+      // its target into view first, and that is the very scroll measured.
+      const box = await button.boundingBox();
+      for (const close of ["Escape", "Cancel", "Escape"]) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        const dialog = page.locator(".modal-overlay .modal");
+        await expect(dialog).toBeVisible();
+        if (close === "Escape") await page.keyboard.press("Escape");
+        else await dialog.getByRole("button", { name: /^(Cancel|Close)$/ }).click();
+        await expect(dialog).toHaveCount(0);
+        await expect(button).toBeFocused();
+        await settle(page);
+        expect(await page.evaluate(() => scrollY), `${name} closed with ${close}: the Feed did not scroll`).toBe(before);
+      }
+      // Nor does Tab along the bar, either way.
+      for (const key of ["Shift+Tab", "Tab"]) {
+        await page.keyboard.press(key);
+        await settle(page);
+        expect(await page.evaluate(() => scrollY), `${key} from ${name}: the Feed did not scroll`).toBe(before);
+      }
+      await expect(button).toBeFocused();
+    });
+  }
+});

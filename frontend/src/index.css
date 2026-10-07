@@ -57,7 +57,13 @@ html {
 }
 /* In select mode, clear of the selection bar too: its height (set by
    SelectionBar.jsx), the 16px under it and 8px above. */
-html:has(.select-bar) { scroll-padding-bottom: calc(var(--select-bar-h, 60px) + 24px + env(safe-area-inset-bottom)); }
+:root { --select-bar-room: calc(var(--select-bar-h, 60px) + 24px + env(safe-area-inset-bottom)); }
+html:has(.select-bar) { scroll-padding-bottom: var(--select-bar-room); }
+/* Except for the bar's own controls: pinned inside that room, no scroll can
+   ever bring them out of it, and Tab onto one scrolled the page down by
+   the room every time (#119). Their scroll target is their box moved up by
+   the room (a margin out at the top, in at the bottom): already in view. */
+.select-bar * { scroll-margin-block: var(--select-bar-room) calc(-1 * var(--select-bar-room)); }
 
 body {
   color: var(--text);
