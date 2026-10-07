@@ -19,6 +19,7 @@ from werkzeug.security import safe_join
 from zlib import adler32
 
 import archives
+import biofetch
 import config
 import db
 import downloaders
@@ -1225,7 +1226,8 @@ def _public_config(cfg):
             "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg),
             "check_updates": cfg.get("check_updates") is True,
             "schedules_paused": cfg.get("schedules_paused") is True,
-            "desktop_notifications": notify.enabled(cfg)}
+            "desktop_notifications": notify.enabled(cfg),
+            "bio_import": biofetch.enabled(cfg)}
 
 
 @app.get("/api/config")
@@ -1271,6 +1273,10 @@ def _set_config(body):
         if not isinstance(body["desktop_notifications"], bool):
             return jsonify({"ok": False, "error": "desktop_notifications must be true or false"})
         changes["desktop_notifications"] = body["desktop_notifications"]
+    if "bio_import" in body:
+        if not isinstance(body["bio_import"], bool):
+            return jsonify({"ok": False, "error": "bio_import must be true or false"})
+        changes["bio_import"] = body["bio_import"]
     sessions = {t: sync.session_of(t, {"session": None}, cfg) for t in sync.KINDS if t in body}
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)
