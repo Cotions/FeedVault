@@ -3965,3 +3965,17 @@ def test_the_userscripts_origin_cannot_schedule_a_script(client, folder, runner,
     other = add_source(client, "dana.draws").get_json()["source"]
     r = client.post(f"/api/sources/{other['id']}", json={"options": {"schedule": "daily"}}, headers={**H, **headers})
     assert r.status_code == 200 and r.get_json()["source"]["options"]["schedule"] == "daily"
+
+
+@pytest.mark.parametrize("headers", FOREIGN)
+def test_the_userscripts_origin_cannot_rename_or_delete_a_script_source(client, folder, runner, source, headers):
+    """Review of audit 3: a rename changes the target the script gets (and
+    drops the scheduler's hold); a delete removes it. Dashboard only."""
+    attach(client, source["id"], "mine")
+    for method, url in (("post", f"/api/sources/{source['id']}/rename"), ("delete", f"/api/sources/{source['id']}/rename"),
+                        ("delete", f"/api/sources/{source['id']}")):
+        r = getattr(client, method)(url, json={"to": "x"}, headers={**H, **headers})
+        assert r.status_code == 403 and "own dashboard" in r.get_json()["error"], url
+    assert client.get(f"/api/sources/{source['id']}", headers=H).status_code == 200
+    other = add_source(client, "dana.draws").get_json()["source"]
+    assert client.delete(f"/api/sources/{other['id']}", headers={**H, **headers}).get_json()["ok"]

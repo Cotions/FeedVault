@@ -89,8 +89,19 @@ export function portBusy(port) {
 }
 
 // FEEDVAULT_E2E_PORT when set (checked, never ignored), else a free port.
-export async function pickPort(env = process.env) {
-  if (env.FEEDVAULT_E2E_PORT === undefined || env.FEEDVAULT_E2E_PORT === "") return freePort();
+export async function pickPort(env = process.env, free = freePort) {
+  if (env.FEEDVAULT_E2E_PORT === undefined || env.FEEDVAULT_E2E_PORT === "") {
+    // The OS's pick may be a reserved port (FEEDVAULT_PORT in the ephemeral
+    // range, its app down): another one, a few times.
+    for (let i = 0; i < 20; i++) {
+      const port = await free();
+      try {
+        checkSafe({ port }, env);
+        return port;
+      } catch { /* reserved: next */ }
+    }
+    throw new Error("e2e: no free port that is not reserved");
+  }
   const port = /^\d+$/.test(env.FEEDVAULT_E2E_PORT) ? Number(env.FEEDVAULT_E2E_PORT) : NaN;
   checkSafe({ port }, env);
   return port;

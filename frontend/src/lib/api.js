@@ -36,13 +36,16 @@ export class ApiError extends Error {
 // page's own URL, which any site can link to: /people/..%2Fbrowse gives the id
 // "../browse", and /api/people/../browse would go out as GET /api/browse, with
 // the header above. A path with a "." or ".." segment (or %2e forms) is refused.
+// An id as one path segment: "/", "?" and "#" in it stay in it.
+const seg = id => encodeURIComponent(String(id));
+
 export function sentAsIs(path) {
   const raw = path.split(/[?#]/, 1)[0];
   return new URL(raw, "http://feedvault.invalid").pathname === raw;
 }
 
 async function request(method, path, body, { signal } = {}) {
-  if (!sentAsIs(path)) throw new ApiError("no such page", 404, null);
+  if (!sentAsIs(path)) throw new ApiError("no such page", 404, { ok: false, error: "no such page" });
   const opts = { method, headers: { ...CSRF_HEADERS }, signal };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
@@ -215,35 +218,35 @@ export function reorderCollections(ids) { return post("/api/collections/reorder"
 // → { ok, collection } or { ok: false, error } (bad or taken name)
 export function createCollection(name) { return post("/api/collections", { name }); }
 // → { collection, total, posts: [summary] }, in the collection's order
-export function getCollection(id, params = {}) { return get(`/api/collections/${id}${qs(params)}`); }
-export function renameCollection(id, name) { return post(`/api/collections/${id}/rename`, { name }); }
-export function deleteCollection(id) { return post(`/api/collections/${id}/delete`); }
+export function getCollection(id, params = {}) { return get(`/api/collections/${seg(id)}${qs(params)}`); }
+export function renameCollection(id, name) { return post(`/api/collections/${seg(id)}/rename`, { name }); }
+export function deleteCollection(id) { return post(`/api/collections/${seg(id)}/delete`); }
 // → { ok, added: [ids] }
-export function addToCollection(id, posts) { return post(`/api/collections/${id}/add`, { posts }); }
-export function removeFromCollection(id, posts) { return post(`/api/collections/${id}/remove`, { posts }); }
+export function addToCollection(id, posts) { return post(`/api/collections/${seg(id)}/add`, { posts }); }
+export function removeFromCollection(id, posts) { return post(`/api/collections/${seg(id)}/remove`, { posts }); }
 // The given posts take the places they held, in this order.
-export function orderCollection(id, posts) { return post(`/api/collections/${id}/order`, { posts }); }
+export function orderCollection(id, posts) { return post(`/api/collections/${seg(id)}/order`, { posts }); }
 // post: an id in the collection, or null for the first post
-export function setCollectionCover(id, postId) { return post(`/api/collections/${id}/cover`, { post: postId }); }
+export function setCollectionCover(id, postId) { return post(`/api/collections/${seg(id)}/cover`, { post: postId }); }
 
 /* ── People (see docs/API.md "People") ───────────────────── */
 
 // [{ id, name, notes, created_at, accounts: [account], platforms, count, bytes, newest }], by name
 export function getPeople() { return get("/api/people"); }
 // Throws ApiError with status 404 for an unknown id.
-export function getPerson(id) { return get(`/api/people/${id}`); }
+export function getPerson(id) { return get(`/api/people/${seg(id)}`); }
 // accounts: [{ platform, id }] → { ok, person } or { ok: false, error }
 export function createPerson(name, accounts = [], profiles) {
   return post("/api/people", profiles ? { name, accounts, profiles } : { name, accounts });
 }
-export function syncPerson(id) { return post(`/api/people/${id}/sync`); }
+export function syncPerson(id) { return post(`/api/people/${seg(id)}/sync`); }
 // changes: { name } and/or { notes } → { ok, person }
-export function updatePerson(id, changes) { return post(`/api/people/${id}`, changes); }
+export function updatePerson(id, changes) { return post(`/api/people/${seg(id)}`, changes); }
 // Unlinks every account; posts are never touched → { ok, unlinked }
-export function deletePerson(id) { return del(`/api/people/${id}`); }
+export function deletePerson(id) { return del(`/api/people/${seg(id)}`); }
 // { add: [{ platform, id }], remove: [...] } → { ok, added, removed, person }
 export function linkAccounts(id, { add = [], remove = [] } = {}) {
-  return post(`/api/people/${id}/accounts`, { add, remove });
+  return post(`/api/people/${seg(id)}/accounts`, { add, remove });
 }
 // Folds ids[1..] (and accounts) into ids[0] → { ok, person }
 export function mergePeople(ids, { name, accounts = [] } = {}) {
@@ -253,7 +256,7 @@ export function mergePeople(ids, { name, accounts = [] } = {}) {
 export function getSuggestions() { return get("/api/people/suggestions"); }
 // Fetches that one link-in-bio page (when Settings allows it) and lists the accounts it links to;
 // adds nothing → { ok, url, accounts: [{ platform, handle, url, profile_url, status, account, person, source }], other }
-export function bioImport(id, url) { return post(`/api/people/${id}/bio-import`, { url }); }
+export function bioImport(id, url) { return post(`/api/people/${seg(id)}/bio-import`, { url }); }
 export function dismissSuggestion(id) { return post("/api/people/suggestions/dismiss", { id }); }
 
 /* ── Jobs (see docs/API.md "Jobs") ───────────────────────── */
@@ -263,13 +266,13 @@ export function dismissSuggestion(id) { return post("/api/people/suggestions/dis
 export function getJobs(desktop = false) { return get(`/api/jobs${desktop ? "?desktop=1" : ""}`); }
 // [{ kind, label, params }]
 export function getJobKinds() { return get("/api/jobs/kinds"); }
-export function getJob(id) { return get(`/api/jobs/${id}`); }
+export function getJob(id) { return get(`/api/jobs/${seg(id)}`); }
 // → { ok, job } or { ok: false, error }
 export function startJob(kind, params = {}) { return post("/api/jobs", { kind, params }); }
 // Lines numbered above `after` → { state, first, next, more, lines: [{ n, text }] }
-export function getJobLog(id, after = 0, opts) { return get(`/api/jobs/${id}/log${qs({ after })}`, opts); }
+export function getJobLog(id, after = 0, opts) { return get(`/api/jobs/${seg(id)}/log${qs({ after })}`, opts); }
 // → { ok, job }; 409 { ok: false } once it has ended
-export function cancelJob(id) { return post(`/api/jobs/${id}/cancel`); }
+export function cancelJob(id) { return post(`/api/jobs/${seg(id)}/cancel`); }
 // { tool: "/abs/path" or "" for PATH } → { ok, config } or { ok: false, error }
 export function saveToolPaths(tools) { return post("/api/config", { tools }); }
 
@@ -299,15 +302,15 @@ export function resolveSource(url, opts, tool) { return get(`/api/sources/resolv
 //   account?, options? } → { ok, source }
 export function createSource(body) { return post("/api/sources", body); }
 // options: { full_history?, session?, content?, media?, since?, first_posts? } → { ok, source }
-export function updateSource(id, options) { return post(`/api/sources/${id}`, { options }); }
+export function updateSource(id, options) { return post(`/api/sources/${seg(id)}`, { options }); }
 // The folder, files and posts stay → { ok }; 409 while its sync is queued or running
-export function deleteSource(id) { return del(`/api/sources/${id}`); }
+export function deleteSource(id) { return del(`/api/sources/${seg(id)}`); }
 // → { ok, job } or { ok: false, error } (already queued, cannot be synced)
-export function syncSource(id) { return post(`/api/sources/${id}/sync`); }
+export function syncSource(id) { return post(`/api/sources/${seg(id)}/sync`); }
 // Accept the new name its tool reported (the target changes, never the folder) → { ok, source }
-export function acceptRename(id, to) { return post(`/api/sources/${id}/rename`, { to }); }
+export function acceptRename(id, to) { return post(`/api/sources/${seg(id)}/rename`, { to }); }
 // Forget that suggestion → { ok, source }
-export function dismissRename(id) { return del(`/api/sources/${id}/rename`); }
+export function dismissRename(id) { return del(`/api/sources/${seg(id)}/rename`); }
 // → { ok, jobs, skipped, errors: [{ source, error }] }
 export function syncAllSources() { return post("/api/sources/sync-all"); }
 // { session?, pause? } → { ok, config } or { ok: false, error }

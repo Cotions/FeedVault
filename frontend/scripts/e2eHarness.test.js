@@ -24,6 +24,12 @@ test("the live app's and testapp.sh's moved ports are refused too", () => {
   checkSafe({ ...ok, port: 4300 }, env, HOME);
 });
 
+test("a free port that is a reserved one is passed over", async () => {
+  const picks = [4100, 3380, 4200];
+  const port = await pickPort({ FEEDVAULT_PORT: "4100" }, async () => picks.shift());
+  assert.equal(port, 4200);
+});
+
 test("a bad port is refused", () => {
   for (const port of [0, -1, 70000, 1.5, NaN, undefined]) {
     assert.throws(() => checkSafe({ ...ok, port }, ENV, HOME), /bad port/);

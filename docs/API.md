@@ -47,13 +47,12 @@ browser from reading or changing the library; they are not a login.
   `Sec-Fetch-Site` other than `same-origin` or `none`.
 - **Scripts from other sites.** The same test refuses (403) listing, reading
   or running a script, setting a source's `script`, changing a source that
-  has one (a schedule would run it) and syncing it; Sync all and a person's
-  Sync skip such sources with an error.
+  has one (a schedule, a rename or a delete) and syncing it; Sync all and a
+  person's Sync skip such sources with an error. The userscript's requests
+  from instagram.com are "another site" here. See [Who can run one](#scripts).
 - **Settings from other sites.** `POST /api/config` answers 403 to the same
   test: tool paths, media roots, the schedules' pause and the link-in-bio
-  switch are the dashboard's alone. The
-  userscript's requests from instagram.com are "another site" here. See
-  [Who can run one](#scripts).
+  switch are the dashboard's alone.
 - **No framing.** Every response carries `X-Frame-Options: DENY` and a
   `Content-Security-Policy` with `frame-ancestors 'none'`, so no page can put
   the dashboard under its own and steer clicks into it.
@@ -1388,9 +1387,9 @@ no person yet.
 | POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, and for an `options.script` that does not exist or is refused; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site when the source runs a script |
-| DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running |
-| POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile |
-| DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back) |
+| DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site when the source runs a script |
+| POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site when the source runs a script |
+| DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site when the source runs a script |
 | POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }`; 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script and the request comes from another site; 404 for an unknown id |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root, or a source that runs a script when the request comes from another site) listed in `errors` |
 

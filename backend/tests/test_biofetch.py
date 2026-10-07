@@ -831,10 +831,10 @@ def test_only_web_charsets_decode_the_page(charset):
 
 
 @pytest.mark.parametrize("charset, text", [
-    ("Shift_JIS", "リンク"), ("windows-1251", "ссылка"), ("gb18030", "链接"), ("latin-1", "café"), ("us-ascii", "ok"),
+    ("Shift_JIS", "リンク"), ("windows-1251", "ссылка"), ("utf-16", "<a href='x'>"), ("windows-874", "ลิงก์"), ("gb18030", "链接"), ("latin-1", "café"), ("us-ascii", "ok"),
 ])
 def test_web_charsets_still_decode(charset, text):
-    net = Net(pages={("linktr.ee", "/a"): html_answer(text.encode(charset), headers={
+    net = Net(pages={("linktr.ee", "/a"): html_answer(text.encode(biofetch._CHARSET_ALIASES.get(charset, charset)), headers={
         "Content-Type": f"text/html; charset={charset}"})})
     assert net.get("https://linktr.ee/a").text == text
 
@@ -897,6 +897,8 @@ def test_web_charsets_are_codec_names():
     import codecs
     for name in biofetch.WEB_CHARSETS:
         assert codecs.lookup(name).name == name
+    for alias, name in biofetch._CHARSET_ALIASES.items():
+        assert codecs.lookup(name).name in biofetch.WEB_CHARSETS
 
 
 @pytest.mark.parametrize("foreign", [{"Origin": "https://www.instagram.com"}, {"Sec-Fetch-Site": "cross-site"}])
