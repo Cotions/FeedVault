@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { safeUrl } from "../lib/fmt";
 import { personPath } from "../lib/people";
@@ -10,15 +10,23 @@ import CreatorPicker from "./CreatorPicker";
    given (the person page presets its own and leaves the picker out).
    onSubmit({ url, title, notes, person? }) resolves to an error message, or
    null when it went through (a new link's form then empties; the caller
-   closes an edit). */
+   closes an edit). onDirty(bool) hears whether the fields differ from the
+   link's (false again when the form goes). */
 export function LinkForm({
-  link = null, people = null, onSubmit, onCancel, busy = false, submitLabel = "Add link", idPrefix = "link",
+  link = null, people = null, onSubmit, onCancel, onDirty, busy = false, submitLabel = "Add link", idPrefix = "link",
 }) {
   const [url,    setUrl]    = useState(link?.url || "");
   const [title,  setTitle]  = useState(link?.title || "");
   const [notes,  setNotes]  = useState(link?.notes || "");
   const [person, setPerson] = useState(link?.person?.id ?? null);
   const [error,  setError]  = useState(null);
+  const dirty = url !== (link?.url || "") || title !== (link?.title || "") || notes !== (link?.notes || "")
+    || (!!people && person !== (link?.person?.id ?? null));
+
+  useEffect(() => {
+    onDirty?.(dirty);
+    return () => onDirty?.(false);
+  }, [dirty, onDirty]);
 
   async function submit(e) {
     e.preventDefault();

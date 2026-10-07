@@ -5,9 +5,11 @@ import { getCollection, renameCollection, deleteCollection, removeFromCollection
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { cleanName } from "../lib/tags";
+import { useUnsaved } from "../lib/unsaved";
 import { excerpt, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DiscardDialog from "../components/DiscardDialog";
 import PageHeader from "../components/PageHeader";
 
 const PAGE = 60;
@@ -39,6 +41,8 @@ export default function CollectionView() {
 
   const { collection, posts, total, error } = state;
   const current = state.id === id;
+  // A new name typed and not saved: asked about before the app leaves the page.
+  const unsaved = useUnsaved(renaming != null && !!collection && renaming !== collection.name);
 
   async function loadMore() {
     setLoadingMore(true);
@@ -112,7 +116,7 @@ export default function CollectionView() {
     if (!r?.ok) { toast(r?.error || "Could not delete.", "err"); return; }
     setConfirmDel(false);
     toast(`Deleted “${collection.name}”. Its posts stay.`);
-    navigate("/collections");
+    unsaved.leave(() => navigate("/collections"));
   });
 
   // Before the collection loads, or when it cannot: the same head, with a
@@ -232,6 +236,9 @@ export default function CollectionView() {
         >
           <p>The {total} post{total === 1 ? "" : "s"} in it stay where they are; only the collection goes.</p>
         </ConfirmDialog>
+        <DiscardDialog open={unsaved.asking} onDiscard={unsaved.discard} onKeep={unsaved.keep}>
+          <p>The new name for “{collection.name}” is not saved.</p>
+        </DiscardDialog>
       </div>
     </>
   );
