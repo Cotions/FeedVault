@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Link, NavLink, useLocation, useNavigate, useParams } from "react-router-dom";
 import { getScan, startScan, getJobs, getNotifications, quitApp, onConnectionChange } from "./lib/api";
 import { ScanContext } from "./lib/scan";
-import { JobsContext, ENDED, SAVE_KINDS, shownParams } from "./lib/jobs";
+import { JobsContext, ENDED, SAVE_KINDS, endTone, shownParams } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
 import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
@@ -34,10 +34,13 @@ import Scripts         from "./pages/Scripts";
 const SCAN_POLL_MS    = 1500;
 const OFFLINE_POLL_MS = 4000;
 // Jobs: fast while one is queued or running, slow otherwise (a job may be
-// started from elsewhere), and slower again in a hidden tab.
+// started from elsewhere), and slower again in a hidden tab. With the Jobs
+// page open, a job started elsewhere (the scheduler, another tab) shows
+// within a few seconds, not on the idle poll (#139).
 const JOBS_POLL_MS        = 1000;
 const JOBS_HIDDEN_POLL_MS = 5000;
 const JOBS_IDLE_POLL_MS   = 15000;
+const JOBS_PAGE_POLL_MS   = 3000;
 // Desktop notifications on: a hidden tab still polls, now and then.
 const DESKTOP_POLL_MS     = 60000;
 const DESKTOP_MAX         = 5;               // notifications shown at once; the bell lists the rest
@@ -251,7 +254,7 @@ export default function App() {
       const head = what ? `, ${what}` : "";
       if (j.state === "done") toast(`Done${head}: ${j.message}`);
       else if (j.state === "failed") toast(`Failed${head}: ${j.message}`, "err");
-      else toast(`${j.label}: ${j.message}`);
+      else toast(`${j.label}: ${j.message}`, endTone(j));
     }
     if (batch?.done && !batches.has(batchKey(batch))) {
       batches.add(batchKey(batch));
@@ -279,14 +282,17 @@ export default function App() {
   const jobsRunning = jobList?.running ?? 0;
   const jobsActive  = jobsRunning + (jobList?.queued ?? 0);
   const desktopOn   = !!jobList?.notifications?.desktop;
+  const onJobsPage  = location.pathname === "/jobs";
   useEffect(() => {
     if (quit || online === false) return;
     const ms = jobsActive ? (visible ? JOBS_POLL_MS : JOBS_HIDDEN_POLL_MS)
-      : visible ? JOBS_IDLE_POLL_MS : desktopOn ? DESKTOP_POLL_MS : null;
+      : visible ? (onJobsPage ? JOBS_PAGE_POLL_MS : JOBS_IDLE_POLL_MS) : desktopOn ? DESKTOP_POLL_MS : null;
     if (!ms) return;
     const t = setInterval(pollJobs, ms);
     return () => clearInterval(t);
-  }, [jobsActive, visible, desktopOn, online, quit, pollJobs]);
+  }, [jobsActive, visible, onJobsPage, desktopOn, online, quit, pollJobs]);
+  // Opening Jobs reads the list at once: what it shows is never 15 s old.
+  useEffect(() => { if (onJobsPage) pollJobs(); }, [onJobsPage, pollJobs]);
 
   const jobsCtx = useMemo(
     () => ({ list: jobList, running: jobsRunning, active: jobsActive, newCount: jobList?.new ?? 0, newUntil: jobList?.new_until ?? null, started: jobStarted }),
@@ -387,7 +393,7 @@ export default function App() {
           {jobsActive > 0 && (
             <Link to="/jobs" className="nav-jobs-live" title={`${jobsRunning} running, ${jobsActive - jobsRunning} queued`}
                   aria-label={`Jobs: ${jobsActive} active`}>
-              <Icon name="refresh" size={13} className="spin" />{jobsActive}
+              <JobsIcon running={jobsRunning} size={13} />{jobsActive}
             </Link>
           )}
           <span
@@ -435,7 +441,7 @@ export default function App() {
             <Icon name="terminal" />Jobs
             {jobsActive > 0 && (
               <span className="side-badge" aria-label={`${jobsActive} job${jobsActive === 1 ? "" : "s"} active`}>
-                <Icon name="refresh" size={11} className="spin" />{jobsActive}
+                <JobsIcon running={jobsRunning} size={11} />{jobsActive}
               </span>
             )}
           </NavLink>
@@ -530,7 +536,7 @@ export default function App() {
       <div className="toasts" role="status" aria-live="polite">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.kind}`}>
-            <Icon name={t.kind === "err" ? "warn" : "check"} size={15} />
+            <Icon name={t.kind === "err" ? "warn" : t.kind === "info" ? "info" : "check"} size={15} />
             <span>{t.text}</span>
             {t.link?.onClick ? (
               <button type="button" className="toast-link"
@@ -557,6 +563,14 @@ export default function App() {
     </JobsContext.Provider>
     </ScanContext.Provider>
   );
+}
+
+/* The active jobs' icon: turning while one runs, a still clock while they
+   only wait (queued, or pausing between downloads) (#139). */
+function JobsIcon({ running, size }) {
+  return running > 0
+    ? <Icon name="refresh" size={size} className="spin jobs-icon is-running" />
+    : <Icon name="clock" size={size} className="jobs-icon" />;
 }
 
 /* The menu button's name says what waits behind it, since on a phone its
@@ -594,7 +608,7 @@ function syncToast(toast, j) {
   } else if (j.state === "done") {
     toast(`${who}: no new posts`);
   } else {
-    toast(`${j.label}: ${j.message}`);
+    toast(`${j.label}: ${j.message}`, endTone(j));
   }
 }
 
@@ -607,7 +621,7 @@ function saveToast(toast, j) {
   } else if (j.state === "failed" && SETUP_ERRORS.has(j.result?.error)) {
     toast(`Saving ${code} failed: ${j.message}`, "err", { to: j.result.error === "login_required" ? "/settings#sync" : "/settings#downloaders", label: "Settings" });
   } else {
-    toast(`${j.label}: ${j.message}`, j.state === "failed" ? "err" : undefined);
+    toast(`${j.label}: ${j.message}`, endTone(j));
   }
 }
 

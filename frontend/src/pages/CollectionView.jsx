@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getCollection, renameCollection, deleteCollection, removeFromCollection,
          orderCollection, setCollectionCover } from "../lib/api";
@@ -7,7 +7,7 @@ import { useToast } from "../lib/toast";
 import { cleanName } from "../lib/tags";
 import { useUnsaved } from "../lib/unsaved";
 import { excerpt, postPath } from "../lib/fmt";
-import { useFollowFocus } from "../lib/layout";
+import { focusLost, restoreFocus, useFollowFocus, useKeepFocus } from "../lib/layout";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
@@ -29,6 +29,18 @@ export default function CollectionView() {
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(null);               // { from, over }
   const { listRef, follow } = useFollowFocus();
+  // A tile's Use as cover goes once used, its Remove takes the tile: focus
+  // follows to that tile's picture, or to the next tile's Remove (cover,
+  // remove below), else to the card, never onto <body> (#139).
+  const cardRef = useRef(null);
+  const { onFocus, onBlur } = useKeepFocus(cardRef);
+  // The rename form shut (saved, cancelled, Esc): focus on it goes back to Rename.
+  const renameRef = useRef(null);
+  const wasRenaming = useRef(false);
+  useEffect(() => {
+    if (wasRenaming.current && renaming == null && focusLost()) restoreFocus(renameRef.current);
+    wasRenaming.current = renaming != null;
+  }, [renaming]);
 
   const load = useCallback((offset, limit) => getCollection(id, { offset, limit }), [id]);
 
@@ -91,9 +103,13 @@ export default function CollectionView() {
     });
   };
 
-  const remove = p => act(async () => {
+  // Off while busy, but never disabled (aria-disabled): a disabled button
+  // drops the focus it has.
+  const remove = (p, i) => !busy && act(async () => {
     const r = await removeFromCollection(id, [p.id]);
     if (!r?.ok) { toast(r?.error || "Could not remove.", "err"); return; }
+    const next = posts[i + 1] ?? posts[i - 1];
+    if (next) follow(next.id, "remove");
     setState(s => ({
       ...s,
       posts: s.posts.filter(x => x.id !== p.id),
@@ -102,9 +118,10 @@ export default function CollectionView() {
     }));
   });
 
-  const cover = p => act(async () => {
+  const cover = p => !busy && act(async () => {
     const r = await setCollectionCover(id, p.id);
     if (!r?.ok) { toast(r?.error || "Could not set the cover.", "err"); return; }
+    follow(p.id, "open");
     setState(s => ({ ...s, collection: r.collection }));
     toast("Cover set.");
   });
@@ -169,14 +186,15 @@ export default function CollectionView() {
         back={back}
         actions={<>
           {renaming == null && (
-            <button type="button" className="btn-ghost" onClick={() => setRenaming(collection.name)}>Rename</button>
+            <button type="button" ref={renameRef} className="btn-ghost" onClick={() => setRenaming(collection.name)}>Rename</button>
           )}
           <button type="button" className="btn-danger-soft" onClick={() => setConfirmDel(true)}>
             <Icon name="trash" size={14} />Delete collection
           </button>
         </>}
       />
-      <div className="card">
+      <div className="card" ref={cardRef} tabIndex={-1} role="region" aria-label="Posts in this collection"
+           onFocus={onFocus} onBlur={onBlur}>
         {posts.length === 0 ? (
           <div className="empty">
             Nothing here yet. Add posts from the <Link to="/" className="text-link">Feed</Link> (Select, then
@@ -184,7 +202,7 @@ export default function CollectionView() {
           </div>
         ) : (
           <>
-            <p className="dim collection-hint">Drag a post onto another to move it there.</p>
+            <p className="dim collection-hint">Drag a post onto another to move it there, or use its arrows.</p>
             <ol className="collection-posts" ref={listRef}>
               {posts.map((p, i) => {
                 const alt = excerpt(p.text, 100) || `Post by @${p.author?.handle || "unknown"}`;
@@ -200,7 +218,7 @@ export default function CollectionView() {
                     onDrop={e => { e.preventDefault(); if (drag) move(drag.from, i); setDrag(null); }}
                     onDragEnd={() => setDrag(null)}
                   >
-                    <Link to={postPath(p)} className="collection-tile-media" draggable={false} title={alt}>
+                    <Link to={postPath(p)} className="collection-tile-media" draggable={false} title={alt} data-move="open">
                       {p.cover && p.cover.poster !== false
                         ? <img src={p.cover.url} alt={alt} loading="lazy" decoding="async" draggable={false} />
                         : <span className="collection-tile-text">{excerpt(p.text, 120) || "(no text)"}</span>}
@@ -216,10 +234,11 @@ export default function CollectionView() {
                               title="Move later" aria-label="Move later"><Icon name="chevRight" size={14} /></button>
                       <div className="page-head-spacer" />
                       {!isCover && (
-                        <button type="button" className="del-btn" onClick={() => cover(p)} disabled={busy}
+                        <button type="button" className="del-btn" onClick={() => cover(p)} aria-disabled={busy || undefined}
                                 title="Use as cover" aria-label="Use as cover"><Icon name="image" size={14} /></button>
                       )}
-                      <button type="button" className="del-btn" onClick={() => remove(p)} disabled={busy}
+                      <button type="button" className="del-btn" onClick={() => remove(p, i)} aria-disabled={busy || undefined}
+                              data-move="remove"
                               title="Remove from this collection (the post stays)" aria-label="Remove from collection">
                         <Icon name="close" size={14} />
                       </button>

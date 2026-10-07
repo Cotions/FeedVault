@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { getNotifications, readNotifications } from "../lib/api";
 import { fmtAgo, fmtInt } from "../lib/fmt";
 import { notificationPath } from "../lib/notify";
-import { focusLost, restoreFocus } from "../lib/layout";
+import { focusLost, focusMain, restoreFocus } from "../lib/layout";
 import Icon from "./Icon";
 
 /* The sidebar's bell: the unread count, and the list of syncs that brought
@@ -25,6 +25,17 @@ export default function Notifications({ unread, latest, onRead }) {
     if (focusLost() || (root.current?.contains(a) && a !== button.current)) restoreFocus(button.current);
     setOpen(false);
   }, []);
+
+  // A followed entry's link goes with the panel: focus goes to the page it
+  // opened (its <main>), not onto <body> (#139). Once the route changed;
+  // a link to the page already shown changes it too (a new search).
+  const follow = useRef(false);
+  const { key } = useLocation();
+  useEffect(() => {
+    if (!follow.current) return;
+    follow.current = false;
+    if (focusLost()) focusMain();
+  }, [key]);
 
   useEffect(() => {
     if (!open) return;
@@ -81,7 +92,7 @@ export default function Notifications({ unread, latest, onRead }) {
                 {list.entries.map(e => (
                   <li key={e.id}>
                     <Link to={notificationPath(e)} className={`notif-entry notif-${e.kind}${e.read ? "" : " is-unread"}`}
-                          onClick={() => setOpen(false)}>
+                          onClick={() => { setOpen(false); follow.current = true; }}>
                       <Icon name={e.kind === "new" ? "download" : "warn"} size={14} />
                       <span className="notif-text">{e.text}</span>
                       <span className="notif-when" title={new Date(e.at * 1000).toLocaleString()}>

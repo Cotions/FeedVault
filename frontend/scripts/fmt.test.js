@@ -2,7 +2,19 @@
 // `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { distinctTail, plural } from "../src/lib/fmt.js";
+import { distinctTail, fmtIn, plural } from "../src/lib/fmt.js";
+
+// #139: a job waiting out the pause reads the same on Jobs as on Creators.
+test("how long until a time: seconds under a minute, else minutes rounded up", () => {
+  const now = 1_000_000_000_000;
+  const at = s => now / 1000 + s;
+  assert.equal(fmtIn(at(13), now), "in 13 s");
+  assert.equal(fmtIn(at(0), now), "in 0 s");
+  assert.equal(fmtIn(at(-5), now), "in 0 s");
+  assert.equal(fmtIn(at(59.4), now), "in 59 s");
+  assert.equal(fmtIn(at(60), now), "in 1 min");
+  assert.equal(fmtIn(at(61), now), "in 2 min");
+});
 
 test("one is singular, any other count plural", () => {
   assert.equal(plural(1, "account"), "1 account");

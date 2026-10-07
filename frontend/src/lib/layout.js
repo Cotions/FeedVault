@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 // The phone breakpoint, the same as the CSS's max-width: 640px rules.
 export const PHONE = "(max-width: 640px)";
@@ -41,6 +41,40 @@ export function useFollowFocus() {
   });
   const follow = useCallback((key, move) => { pending.current = { key, move }; }, []);
   return { listRef, follow };
+}
+
+// Keeps focus off <body> when the control that has it goes away (a row
+// that ends, a button that is no longer offered): focus then goes to
+// ``fallback`` (a ref to an element with tabIndex -1 that stays, or a
+// function that returns the element to use at that time). Spread
+// the handlers it returns on the part of the page to watch. After every
+// render, and after a dialog opened from there gave focus back (its
+// effect's cleanup runs before this). As Jobs did first (#136, #139).
+export function useKeepFocus(fallback) {
+  const last = useRef(null);                   // what last had focus in the part
+  useEffect(() => {
+    const el = last.current;
+    if (el && !document.contains(el) && focusLost()) {
+      restoreFocus(typeof fallback === "function" ? fallback() : fallback.current);
+    }
+  });
+  const onFocus = useCallback(e => { last.current = e.target; }, []);
+  // Into a dialog it is still the part's: the dialog gives it back.
+  const onBlur = useCallback(e => {
+    if (e.relatedTarget && !e.relatedTarget.closest(".modal-overlay")) last.current = null;
+  }, []);
+  return { onFocus, onBlur };
+}
+
+// Moves focus onto <main> (made focusable for it, without a ring) after
+// the app went to another page from something that then went away, as a
+// link in the Notifications panel (#139): the next Tab starts at the new
+// page's top, not at the document's start.
+export function focusMain() {
+  const main = document.querySelector("main");
+  if (!main) return;
+  if (!main.hasAttribute("tabindex")) main.setAttribute("tabindex", "-1");
+  main.focus({ preventScroll: true });
 }
 
 // Keeps the toasts above the controls of ``ref`` (the selection bar,

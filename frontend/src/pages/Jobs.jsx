@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cancelJob, getJobLog } from "../lib/api";
-import { useJobs, ENDED, SAVE_KINDS, jobDuration, shownParams } from "../lib/jobs";
-import { fmtAgo, fmtFullDate, fmtStamp } from "../lib/fmt";
+import { useJobs, ENDED, SAVE_KINDS, jobDuration, jobExit, shownParams } from "../lib/jobs";
+import { fmtAgo, fmtFullDate, fmtIn, fmtStamp } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import PageHeader from "../components/PageHeader";
-import { focusLost, restoreFocus } from "../lib/layout";
+import { useKeepFocus } from "../lib/layout";
 
 const LOG_POLL_MS = 1000;
 const LOG_KEPT    = 5000;          // lines kept on screen, as many as the backend keeps
@@ -99,28 +99,63 @@ function JobTitle({ job }) {
   );
 }
 
+/* Cancel… on a job, asked first: the Jobs page's rows and the Scripts
+   page's log (#139). ``job``: the job to cancel, null while shut. */
+export function CancelJobDialog({ job, onClose }) {
+  const [busy,  setBusy]  = useState(false);
+  const [error, setError] = useState(null);
+  const [asked, setAsked] = useState(job);
+  if (job !== asked) { setAsked(job); setError(null); }
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await cancelJob(job.id);
+      if (!r?.ok) { setError(r?.error || "Could not cancel the job."); return; }
+      onClose();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <ConfirmDialog
+      open={!!job}
+      danger
+      busy={busy}
+      error={error}
+      title="Cancel this job?"
+      confirmLabel="Cancel job"
+      cancelLabel="Keep it"
+      onConfirm={run}
+      onCancel={onClose}
+    >
+      {job && (
+        <p>
+          <strong>{job.label}</strong> (#{job.id}) {job.state === "running"
+            ? "is stopped: the tool and everything it started get SIGTERM, then SIGKILL after 10 seconds. Files it already wrote stay, so a later run can resume."
+            : "leaves the queue without running."}
+        </p>
+      )}
+    </ConfirmDialog>
+  );
+}
+
 export default function Jobs() {
   const { list } = useJobs();
   const [picked,   setPicked]   = useState(null);   // a job clicked in the history
   const [closed,   setClosed]   = useState(null);   // the log closed by the user, not shown again
   const [confirm,  setConfirm]  = useState(null);   // job to cancel
-  const [busy,     setBusy]     = useState(false);
-  const [dlgErr,   setDlgErr]   = useState(null);
   const listRef   = useRef(null);
-  const lastFocus = useRef(null);                   // what last had focus on the page
 
   // A job that ends (or is cancelled) takes its row away, with its Cancel…
   // and Show log; Show log and the log's Close go once clicked. Focus that
   // was on one would fall onto <body> (#136): it goes to the list of jobs
-  // instead. After every render, and after the cancel dialog gave focus
-  // back (its effect's cleanup runs before this).
-  useEffect(() => {
-    const el = lastFocus.current;
-    if (el && !document.contains(el) && focusLost()) restoreFocus(listRef.current);
-  });
-  const onFocus = e => { lastFocus.current = e.target; };
-  // Into the cancel dialog it is still the page's: the dialog gives it back.
-  const onBlur = e => { if (e.relatedTarget && !e.relatedTarget.closest(".modal-overlay")) lastFocus.current = null; };
+  // instead.
+  const { onFocus, onBlur } = useKeepFocus(listRef);
 
   const jobs    = list?.jobs || [];
   const running = jobs.filter(j => j.state === "running");
@@ -136,20 +171,6 @@ export default function Jobs() {
   const shown = shownId === closed ? null : jobs.find(j => j.id === shownId) || null;
   function pick(id) { setPicked(id); setClosed(null); }
 
-  async function runCancel() {
-    setBusy(true);
-    setDlgErr(null);
-    try {
-      const r = await cancelJob(confirm.id);
-      if (!r?.ok) { setDlgErr(r?.error || "Could not cancel the job."); return; }
-      setConfirm(null);
-    } catch (e) {
-      setDlgErr(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function activeRow(j) {
     return (
       <li key={j.id} className="job-row">
@@ -157,15 +178,16 @@ export default function Jobs() {
         {j.state === "running" && <Icon name="refresh" size={13} className="spin job-spin" />}
         <JobTitle job={j} />
         <code className="job-argv" title={j.argv.join(" ")}>{j.argv.join(" ")}</code>
-        <span className="dim mono job-when" title={fmtFullDate(j.started_at ?? j.created_at)}>
+        <span className="dim mono job-when"
+              title={j.state !== "running" && j.waits_until ? `Starts at ${fmtFullDate(j.waits_until)}` : fmtFullDate(j.started_at ?? j.created_at)}>
           {j.state === "running" ? `started ${fmtAgo(j.started_at)}`
-            : j.waits_until ? `pausing between downloads, starts at ${new Date(j.waits_until * 1000).toLocaleTimeString()}`
+            : j.waits_until ? `pausing between downloads, starts ${fmtIn(j.waits_until)}`
             : `queued ${fmtAgo(j.created_at)}`}
         </span>
         {j.id !== shown?.id && (
           <button type="button" className="btn-ghost" onClick={() => pick(j.id)}>Show log</button>
         )}
-        <button type="button" className="btn-danger-soft job-cancel" onClick={() => { setDlgErr(null); setConfirm(j); }}>
+        <button type="button" className="btn-danger-soft job-cancel" onClick={() => setConfirm(j)}>
           <Icon name="close" size={13} />Cancel…
         </button>
       </li>
@@ -244,7 +266,7 @@ export default function Jobs() {
                     </td>
                     <td role="cell" className="num" data-label="Started" title={fmtFullDate(j.started_at ?? j.created_at)}>{fmtStamp(j.started_at ?? j.created_at)}</td>
                     <td role="cell" className="num" data-label="Took">{jobDuration(j) ?? "—"}</td>
-                    <td role="cell" className="num" data-label="Exit">{j.exit_code ?? "—"}</td>
+                    <td role="cell" className="num" data-label="Exit" title={jobExit(j).title}>{jobExit(j).text}</td>
                     <td role="cell" className={j.state === "failed" ? "job-message is-err" : "job-message"} data-label="Result">{j.message || "—"}</td>
                   </tr>
                 ))}
@@ -254,25 +276,7 @@ export default function Jobs() {
         )}
       </div>
 
-      <ConfirmDialog
-        open={!!confirm}
-        danger
-        busy={busy}
-        error={dlgErr}
-        title="Cancel this job?"
-        confirmLabel="Cancel job"
-        cancelLabel="Keep it"
-        onConfirm={runCancel}
-        onCancel={() => setConfirm(null)}
-      >
-        {confirm && (
-          <p>
-            <strong>{confirm.label}</strong> (#{confirm.id}) {confirm.state === "running"
-              ? "is stopped: the tool and everything it started get SIGTERM, then SIGKILL after 10 seconds. Files it already wrote stay, so a later run can resume."
-              : "leaves the queue without running."}
-          </p>
-        )}
-      </ConfirmDialog>
+      <CancelJobDialog job={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

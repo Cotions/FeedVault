@@ -74,6 +74,13 @@ export function fmtAgo(ts, now = Date.now()) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+// How long until ``ts`` (Unix seconds): "in 40 s", "in 2 min". Used for a
+// job waiting out the pause between downloads, the same on every page (#139).
+export function fmtIn(ts, now = Date.now()) {
+  const s = Math.max(0, Math.round(ts - now / 1000));
+  return s < 60 ? `in ${s} s` : `in ${Math.ceil(s / 60)} min`;
+}
+
 /* Post URLs come from downloader metadata, i.e. from the platform. React
    renders a javascript: href as-is, so only web schemes get through. */
 export function safeUrl(url, schemes = ["http:", "https:"]) {

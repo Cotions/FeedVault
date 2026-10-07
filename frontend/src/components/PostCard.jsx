@@ -27,11 +27,21 @@ export default function PostCard({ post, index = 0, selectMode = false, selected
     onToggle?.(index, e.shiftKey);
   }
 
+  // Space toggles a focused card too, as it does its checkbox (a button):
+  // on its links it would scroll the page instead (#136, #139). Enter
+  // already does, through the click.
+  function onKeyDown(e) {
+    if (!selectMode || e.key !== " " || e.target.tagName !== "A" || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    if (!e.repeat) onToggle?.(index, e.shiftKey);
+  }
+
   return (
     <article
       className={`post-card${post.missing ? " is-missing" : ""}${cover ? "" : " is-text"}${selectMode ? " is-selecting" : ""}${selected ? " is-selected" : ""}`}
       style={{ animationDelay: `${Math.min(index % 60, 24) * 30}ms` }}
       onClickCapture={onClickCapture}
+      onKeyDown={onKeyDown}
     >
       {selectMode && (
         <button
