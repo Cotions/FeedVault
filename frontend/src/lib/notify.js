@@ -1,10 +1,12 @@
-import { personPath } from "./people";
+import { personPath } from "./people.js";
 
 /* Where a notifications entry leads: the posts its sync brought, or the
-   source that failed (its person's page, else Creators). */
+   source that failed (its person's page, else that source on Creators,
+   which scrolls to it and lights it up). */
 export function notificationPath(e) {
   if (e.kind === "new") return `/?notification=${e.id}`;
-  return e.person_id ? personPath(e.person_id) : "/creators";
+  if (e.person_id) return personPath(e.person_id);
+  return e.source_id != null ? `/creators?${new URLSearchParams({ source: e.source_id })}` : "/creators";
 }
 
 /* Whether this tab can show desktop notifications: the browser has the

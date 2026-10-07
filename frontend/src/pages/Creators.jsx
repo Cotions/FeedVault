@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getAuthors, getPeople, getSuggestions, getNew, markSeen, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
@@ -99,7 +99,7 @@ function WarnBadge({ sync }) {
   );
 }
 
-function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted }) {
+function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted, flash }) {
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
@@ -125,7 +125,7 @@ function PersonCard({ person: p, index, selectMode, selected, onToggle, sync, on
   );
   return (
     <div
-      className={`creator-card person-card${selected ? " is-selected" : ""}`}
+      className={`creator-card person-card${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
       style={{ animationDelay: `${Math.min(index, 30) * 25}ms` }}
     >
       {selectMode ? (
@@ -192,7 +192,7 @@ function CardOptionsButton({ sync, onEdit }) {
   );
 }
 
-function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted }) {
+function AccountCard({ account: a, index, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted, flash }) {
   const former = matchedFormer(a, query);
   const sub = `${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}${former ? ` · was @${former}` : ""}`;
   const body = (
@@ -213,7 +213,7 @@ function AccountCard({ account: a, index, query, selectMode, selected, onToggle,
   const selectable = selectMode && a.id != null;
   return (
     <div
-      className={`creator-card${selected ? " is-selected" : ""}`}
+      className={`creator-card${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
       style={{ animationDelay: `${Math.min(index, 30) * 25}ms` }}
     >
       {selectable ? (
@@ -361,6 +361,22 @@ export default function Creators() {
     ...unlinked.map(a => ({ id: a.id != null ? `account:${accountKey(a)}` : null, account: a })),
   ], [people, unlinked]);
   const sel = useSelection(items, { resetKey: `${filter}|${key}`, escapeBlocked: !!merge });
+
+  // ?source=<id>, from a failed sync's notification (#123): that source's
+  // row or card in view, and lit for a moment, as Links does a link saved
+  // already. Nothing filtered or in select mode hides it.
+  const [params, setParams] = useSearchParams();
+  const asked = params.get("source");
+  const [flash, setFlash] = useState(null);                  // the id of the source to point at
+  const [askedSeen, setAskedSeen] = useState(null);
+  if (asked !== askedSeen) {                                 // adjusting state during render, not in an effect
+    setAskedSeen(asked);
+    if (asked != null) {
+      setFlash(Number(asked));
+      setFilter("");
+      if (sel.active) sel.exit();
+    }
+  }
   const index = id => items.findIndex(i => i.id === id);
   const chosen = sel.selectedItems;
   const chosenPeople = chosen.filter(i => i.person).map(i => i.person);
@@ -386,6 +402,12 @@ export default function Creators() {
   const loose = sourceList.filter(src => src.health?.rename
     || (!src.person && !(src.account && shownAccounts.has(accountKey(src.account)))));
   const syncOf = k => cardSync(cardSources.get(k), sources.jobOf);
+  // Where the source asked for is shown: its own row, else its card.
+  const flashSource = flash == null ? null : sourceList.find(src => src.id === flash);
+  const flashKey = !flashSource ? null
+    : loose.includes(flashSource) ? `source:${flashSource.id}`
+    : flashSource.person ? `person:${flashSource.person.id}`
+    : flashSource.account ? `account:${accountKey(flashSource.account)}` : null;
 
   async function addSuggested(list) {
     setBusy(true);
@@ -483,6 +505,21 @@ export default function Creators() {
   const loading = !data || !peopleApi.data;
   const empty = !people.length && !unlinked.length;
 
+  // Once the sources and the cards are in: scroll to it, light it, then
+  // drop ?source= so the same notification can point at it again.
+  const ready = !!sources.data && !loading;
+  useEffect(() => {
+    if (flash == null || !ready) return undefined;
+    const el = flashKey && document.querySelector(".source-row.is-flash, .creator-card.is-flash");
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (!flashKey) toast("That source is not there any more.", "err");
+    const t = setTimeout(() => {
+      setFlash(null);
+      setParams(p => { const next = new URLSearchParams(p); next.delete("source"); return next; }, { replace: true });
+    }, flashKey ? 2400 : 0);
+    return () => clearTimeout(t);
+  }, [flash, flashKey, ready, setParams, toast]);
+
   return (
     <>
       <PageHeader
@@ -530,7 +567,7 @@ export default function Creators() {
               <ul className="source-list">
                 {loose.map(src => (
                   <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
-                             onSaved={sources.reload} />
+                             onSaved={sources.reload} flash={flashKey === `source:${src.id}`} />
                 ))}
               </ul>
             )}
@@ -576,6 +613,7 @@ export default function Creators() {
                       onSeen={() => markCardSeen(fresh.get(`person:${p.id}`), { person: p.id }, p.name)}
                       muted={mutedSet && mutedSet.has(`person:${p.id}`)}
                       onMuted={onMuted}
+                      flash={flashKey === `person:${p.id}`}
                     />
                   ))}
                 </div>
@@ -604,6 +642,7 @@ export default function Creators() {
                                                  `@${a.handle || a.id}`)}
                       muted={mutedSet && mutedSet.has(`account:${accountKey(a)}`)}
                       onMuted={onMuted}
+                      flash={a.id != null && flashKey === `account:${accountKey(a)}`}
                     />
                   ))}
                 </div>
