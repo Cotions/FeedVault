@@ -16,12 +16,15 @@ export const UNSORTED_PATH = "/links?person=none";
    to the highlighted choice. A URL saved already says whose it is, with a
    link there, instead of failing silently.
 
-   Props: url (to start with), clipboard (read the clipboard for an address
-   when ``url`` is empty), onSaved(link), onLeave() (a link in the form was
-   followed, or Cancel) */
-export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, onLeave }) {
+   Props: url and title (to start with), clipboard (read the clipboard for
+   an address when ``url`` is empty), onSaved(link), onLeave() (a link in
+   the form was followed, or Cancel), onCancel() (Cancel, when it is not
+   onLeave), escape (whether the hint tells of Esc: what is around the form
+   closes on it) */
+export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipboard = false, onSaved, onLeave, onCancel = onLeave,
+                               escape = true }) {
   const [url,    setUrl]    = useState(startUrl);
-  const [title,  setTitle]  = useState("");
+  const [title,  setTitle]  = useState(startTitle);
   const [notes,  setNotes]  = useState("");
   const [active, setActive] = useState(NO_PERSON);
   const [people, setPeople] = useState(null);
@@ -112,7 +115,7 @@ export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, o
         <span>Person</span>
         <PersonPicker people={people} recent={recent} active={active} onActive={setActive} onPick={o => { setActive(o); save(o); }}
                       inputRef={personRef} label="Person" />
-        <div className="quick-add-hint dim"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> save · <kbd>Esc</kbd> close</div>
+        <div className="quick-add-hint dim"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> save{escape && <> · <kbd>Esc</kbd> close</>}</div>
       </div>
       {taken && (
         <div className="msg err quick-add-taken" role="alert">
@@ -122,7 +125,7 @@ export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, o
       )}
       {error && <div className="msg err" role="alert">{error}</div>}
       <div className="modal-actions quick-add-actions">
-        <button type="button" className="btn-secondary" onClick={onLeave}>Cancel</button>
+        <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
         <button type="submit" className="btn-primary quick-add-save" aria-disabled={busy || undefined} title={`Save to ${to}`}>
           <Icon name="plus" size={14} /><span className="quick-add-to">{busy ? "Saving…" : `Save to ${to}`}</span>
         </button>

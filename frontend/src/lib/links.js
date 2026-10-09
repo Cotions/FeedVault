@@ -76,3 +76,14 @@ export function droppedUrl(get) {
   const first = (get("text/uri-list") || "").split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith("#"));
   return externalUrl(first) || externalUrl(get("text/plain"));
 }
+
+/* A page's title as given to /links/add (the bookmarklet's document.title):
+   plain text, its whitespace and control characters collapsed to single
+   spaces, at most MAX_TITLE characters (never half of a surrogate pair). */
+export function sharedTitle(text) {
+  if (typeof text !== "string") return "";
+  // eslint-disable-next-line no-control-regex
+  let title = text.replace(/[\s\x00-\x1f\x7f]+/g, " ").trim();
+  if (title.length > MAX_TITLE) title = title.slice(0, MAX_TITLE).replace(/[\uD800-\uDBFF]$/, "").trimEnd();
+  return title;
+}
