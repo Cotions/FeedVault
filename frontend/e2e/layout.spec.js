@@ -25,10 +25,10 @@ const sizesFor = testInfo => (testInfo.project.name === "layout-zoom" ? ZOOMED :
 // outline, for before / after comparisons (a page in full, a dialog as seen).
 const SHOTS = process.env.FEEDVAULT_E2E_SHOTS;
 
-// Checks the view at every size of the project; fails once, with every finding.
-async function checkSizes(page, testInfo, view, { scope = null } = {}) {
+// Checks the view at every size of the project (or at ``sizes``); fails once, with every finding.
+async function checkSizes(page, testInfo, view, { scope = null, sizes = sizesFor(testInfo) } = {}) {
   const found = [];
-  for (const s of sizesFor(testInfo)) {
+  for (const s of sizes) {
     await page.setViewportSize({ width: s.width, height: s.height });
     await settle(page);
     if (SHOTS && s.label === "1440x900") {
@@ -238,6 +238,32 @@ test.describe("dialogs", () => {
       await expect(page.locator(d.scope).first()).toBeVisible();
       await checkSizes(page, testInfo, d.name, { scope: d.scope });
     });
+  }
+});
+
+// /links/add (#165 C) in the bookmarklet's 480x640 window and in a whole
+// one, prefilled with a long address and title (the stress person is a
+// recent one, with a long name), then saved.
+const ADD_SIZES = [{ label: "480x640", width: 480, height: 640 }, SIZES[1]];
+
+test("/links/add, popup and window", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "layout-zoom", "the popup's own size");
+  const url = `https://e2e-layout-${Date.now()}.example/${"long-path/".repeat(12)}?q=${"x".repeat(60)}`;
+  await openUrl(page, `/links/add?${new URLSearchParams({ url, title: "A long page title ".repeat(10) })}`,
+    pg => pg.getByRole("combobox", { name: "Person" }));
+  await stillPage(page);
+  await checkSizes(page, testInfo, "/links/add", { sizes: ADD_SIZES });
+  await page.setViewportSize({ width: 480, height: 640 });
+  const save = page.locator(".quick-add-save");
+  await expect(save).toBeInViewport();
+  await save.click();
+  await expect(page.getByRole("status")).toBeVisible();
+  try {
+    await stillPage(page);
+    await checkSizes(page, testInfo, "/links/add, saved", { sizes: ADD_SIZES });
+  } finally {
+    const { links } = await (await page.request.get(`/api/links?q=${new URL(url).host}`, { headers: { "X-FeedVault": "1" } })).json();
+    for (const l of links) await page.request.delete(`/api/links/${l.id}`, { headers: { "X-FeedVault": "1" } });
   }
 });
 

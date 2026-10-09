@@ -1,7 +1,7 @@
 // Checks for lib/links.js: the address a link form sends (#126). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { droppedUrl, externalUrl, mayCarryUrl, urlLines, withScheme } from "../src/lib/links.js";
+import { MAX_TITLE, droppedUrl, externalUrl, mayCarryUrl, sharedTitle, urlLines, withScheme } from "../src/lib/links.js";
 import { NO_PERSON, personOptions } from "../src/lib/people.js";
 
 test("an address with no scheme gets https://", () => {
@@ -85,4 +85,15 @@ test("a drop gives its first link, else its text, if it is an address", () => {
   assert.equal(mayCarryUrl(["text/plain", "text/html"]), true);
   assert.equal(mayCarryUrl(["Files"]), false);
   assert.equal(mayCarryUrl([]), false);
+});
+
+test("a shared page title: plain text on one line, cut at the cap", () => {
+  assert.equal(sharedTitle("  A \n\t page\u0000 title  "), "A page title");
+  assert.equal(sharedTitle("<b>bold</b> & co"), "<b>bold</b> & co");
+  assert.equal(sharedTitle(null), "");
+  assert.equal(sharedTitle(undefined), "");
+  assert.equal(sharedTitle("x".repeat(MAX_TITLE + 50)), "x".repeat(MAX_TITLE));
+  // An emoji across the cap is dropped whole, not cut in half.
+  const cut = sharedTitle(`${"x".repeat(MAX_TITLE - 1)}😀 more`);
+  assert.equal(cut, "x".repeat(MAX_TITLE - 1));
 });

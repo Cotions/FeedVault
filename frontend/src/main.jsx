@@ -4,6 +4,7 @@ import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import './fonts.css'
 import './index.css'
 import App from './App.jsx'
+import LinksAdd from './pages/LinksAdd.jsx'
 import UnsavedProvider from './components/UnsavedProvider.jsx'
 import { applyTheme, getActiveTheme } from './lib/theme.js'
 
@@ -13,7 +14,11 @@ applyTheme(getActiveTheme())
 // A data router (App's <Routes> under one catch-all route) for useBlocker:
 // a page or dialog with unsaved edits asks before the app leaves it
 // (lib/unsaved.js: UnsavedProvider holds the one blocker for all of them).
-const router = createBrowserRouter([{ path: '*', element: <UnsavedProvider><App /></UnsavedProvider> }])
+// /links/add is the bookmarklet's small window: its form alone, no app around it.
+const router = createBrowserRouter([
+  { path: '/links/add', element: <LinksAdd /> },
+  { path: '*', element: <UnsavedProvider><App /></UnsavedProvider> },
+])
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

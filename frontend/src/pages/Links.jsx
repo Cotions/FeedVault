@@ -15,6 +15,7 @@ import CreatorPicker from "../components/CreatorPicker";
 import PageHeader from "../components/PageHeader";
 import SelectionBar from "../components/SelectionBar";
 import Icon from "../components/Icon";
+import Bookmarklet from "../components/Bookmarklet";
 import { AssignDialog, AssignPicker, LinkForm, LinkRow } from "../components/Links";
 import { KIND_LABEL, copyUrls, linkLabel } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
@@ -328,6 +329,7 @@ export default function Links() {
           address. FeedVault keeps the text only; it never opens the link itself.
         </p>
         <LinkForm people={people || []} busy={busy} onSubmit={add} idPrefix="links-add" onDirty={setAdding} />
+        <Bookmarklet />
       </div>
       <div className="card">
         <div className="links-tabs" role="group" aria-label="Show" ref={tabsRef}>

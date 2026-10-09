@@ -3158,6 +3158,48 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .quick-add-row { grid-template-columns: minmax(0, 1fr); }
 }
+/* /links/add (#165 C): the quick-add form alone, in the bookmarklet's
+   480x640 window or a whole one, where it sits as the dialog would. */
+.links-add-page {
+  min-height: 100vh;
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: clamp(12px, 6vh, 64px) 12px 24px;
+}
+.links-add-box {
+  width: 540px; max-width: 100%; min-width: 0;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 20px 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 140px), var(--surface);
+  border: 1px solid var(--border); border-radius: 14px;
+}
+.links-add-head { display: flex; align-items: center; gap: 10px; }
+.links-add-head .brand-mark { width: 26px; height: 26px; }
+/* In the small window the people list gives way, so Save stays in sight. */
+.links-add-page .person-pick-list { max-height: clamp(116px, calc(100vh - 430px), 228px); }
+.links-add-done { display: flex; flex-direction: column; gap: 12px; }
+.links-add-done .msg { margin-top: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.links-add-done .msg a { color: inherit; font-weight: 700; text-decoration: underline; }
+@media (max-width: 520px) {
+  .links-add-page { padding: 0; }
+  .links-add-box { min-height: 100vh; border: 0; border-radius: 0; padding: 16px; }
+}
+/* The bookmarklet on the Links page: a chip to drag, and how it is used. */
+.links-bookmarklet {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft);
+  font-size: 12px; line-height: 1.5;
+}
+.links-bookmarklet-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted);
+}
+.links-bookmarklet-btn {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 26px;
+  padding: 3px 10px; border-radius: 999px; cursor: grab;
+  font-weight: 700; color: var(--text);
+  background: rgba(var(--accent-rgb), 0.16); border: 1px dashed rgba(var(--accent-rgb), 0.6);
+}
+.links-bookmarklet-btn:hover { background: rgba(var(--accent-rgb), 0.26); }
+.links-bookmarklet .dim { flex: 1 1 320px; min-width: 0; }
 /* A URL dragged over the window. It takes no events: the drop lands on
    what is under it, so a text field there still takes the text itself. */
 .drop-overlay {

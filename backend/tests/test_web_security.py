@@ -134,6 +134,29 @@ def test_media_refused_to_other_sites(env, client):
     assert client.get("/trash/x", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
 
 
+def test_the_bookmarklet_page_opens_from_anywhere_but_saves_only_from_feedvault(env, client, monkeypatch):
+    # #165 C: the bookmarklet opens /links/add from any site, in a window of
+    # its own. The page is the dashboard (never framed); the save is its own
+    # same-origin call, which another site still cannot make.
+    import config
+    static = env["tmp"] / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<p>dashboard</p>")
+    monkeypatch.setattr(config, "static_dir", lambda: str(static))
+    page = client.get("/links/add?popup=1&url=https%3A%2F%2Fexample.org%2F&title=x",
+                      headers={"Sec-Fetch-Site": "cross-site"})
+    assert (page.status_code, page.data) == (200, b"<p>dashboard</p>")
+    assert page.headers["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in page.headers["Content-Security-Policy"]
+    body = {"url": "https://example.org/", "title": "x", "person": None}
+    for headers in ({"Sec-Fetch-Site": "cross-site"}, {"Origin": "https://example.org"}):
+        assert client.post("/api/links", json=body, headers={**H, **headers}).status_code == 403
+        assert client.get("/api/people", headers={**H, **headers}).status_code == 403
+    assert client.get("/api/links", headers=H).get_json()["links"] == []
+    saved = client.post("/api/links", json=body, headers={**H, "Sec-Fetch-Site": "same-origin"})
+    assert saved.status_code == 200 and saved.get_json()["ok"]
+
+
 def test_restore_moves_nothing_a_manifest_line_points_outside(env):
     # A manifest line is only read back, never trusted: restore moves a file
     # from inside the root's trash to a place inside the root, or not at all.
