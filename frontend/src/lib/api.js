@@ -275,6 +275,11 @@ export function createLink(body) { return post("/api/links", body); }
 export function getRecentLinkPeople(limit = 10) { return get(`/api/people/recent-links${qs({ limit })}`); }
 export function updateLink(id, changes) { return post(`/api/links/${id}`, changes); }
 export function deleteLink(id) { return del(`/api/links/${id}`); }
+// Many links to one person (null: no one), all or none → { ok, moved, links };
+// an id no link has is { ok: false, error, missing } (404).
+export function assignLinks(ids, person) { return post("/api/links/assign", { ids, person }); }
+// → { ok, deleted }; ids no link has are passed over.
+export function deleteLinks(ids) { return post("/api/links/delete", { ids }); }
 // The ids take the places they held among the person's links → { ok, links }.
 export function orderPersonLinks(personId, ids) { return post(`/api/people/${personId}/links/order`, { ids }); }
 

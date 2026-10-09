@@ -1,7 +1,7 @@
 // Checks for lib/links.js: the address a link form sends (#126). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { droppedUrl, externalUrl, mayCarryUrl, withScheme } from "../src/lib/links.js";
+import { droppedUrl, externalUrl, mayCarryUrl, urlLines, withScheme } from "../src/lib/links.js";
 import { NO_PERSON, personOptions } from "../src/lib/people.js";
 
 test("an address with no scheme gets https://", () => {
@@ -57,6 +57,21 @@ test("the person picker: no person and the recent ones on top, typing searches e
   // The full list not loaded yet: the recent people by their name.
   assert.deepEqual(personOptions(null, recent, "").map(o => o.person?.name ?? null), [null, "Dana", "Cleo"]);
   assert.equal(personOptions(people, [], "")[0], NO_PERSON);
+
+  // Assigning an Unsorted link: no "No person", typed or not.
+  const none = { none: false };
+  assert.deepEqual(keys(personOptions(people, recent, "", none)), ["person:4", "person:1", "person:2", "person:3"]);
+  assert.deepEqual(keys(personOptions(people, recent, "a", none)), ["person:4", "person:2"]);
+  assert.deepEqual(personOptions(people, recent, "zzz", none), []);
+  assert.deepEqual(personOptions(null, [], "", none), []);
+});
+
+test("Copy URLs: one address per line, in the order given", () => {
+  assert.equal(urlLines([{ url: "https://a.example" }, { url: "https://b.example/x?y=1" }]),
+    "https://a.example\nhttps://b.example/x?y=1");
+  assert.equal(urlLines([{ url: "https://a.example" }]), "https://a.example");
+  assert.equal(urlLines([]), "");
+  assert.equal(urlLines(null), "");
 });
 
 test("a drop gives its first link, else its text, if it is an address", () => {

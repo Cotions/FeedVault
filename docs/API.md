@@ -1365,6 +1365,8 @@ A **link**:
 | POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` (all but `url` may be omitted; `person` `null` for no one) → `{ "ok": true, "link": {…} }` |
 | POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person` (`null` unties it; none is a 400) → `{ "ok": true, "link": {…} }` |
 | DELETE | `/api/links/<id>` | → `{ "ok": true }` |
+| POST | `/api/links/assign` | body `{ "ids": [12, 9], "person": 3 }` (1 to 5000 ids; `person` `null` unties them) → `{ "ok": true, "moved": 2, "links": [link, …] }`, see below |
+| POST | `/api/links/delete` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "deleted": 2 }`; ids no link has are passed over |
 | POST | `/api/people/<id>/links/order` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "links": [link, …] }`, the person's links in their new order |
 | GET | `/api/people/recent-links?limit=10` | `{ "people": [{ "id": 3, "name": "Some Body", "at": 1727500000 }, …] }`: the people most recently given a link, latest first, see below |
 
@@ -1386,6 +1388,17 @@ A **link**:
   `limit` is 10 by default, kept between 1 and 50. The tie time is kept per
   link (`tied_at`, in `links.json` too; a link restored from an older file
   counts from `created_at`).
+- `/api/links/assign` (the Links page's Unsorted queue and its selection)
+  gives every link listed to one person, or to no one, in one transaction:
+  each as `POST /api/links/<id>` with `person` would (last in the person's
+  order, in the order of `ids`; `tied_at` now, so the person comes first in
+  `recent-links`). A link that is theirs already does not move and is not
+  counted in `moved`; `links` are the links listed, as they are now. `person`
+  must be in the body. An id no link has is a 404
+  `{ "ok": false, "error": "no such link", "missing": [7] }`, and nothing
+  moves.
+- The links tied to no one (`?person=none`, the Links page's **Unsorted**)
+  are counted in `unsorted_links` of `GET /api/jobs`, for the sidebar's badge.
 - A person's links (`GET /api/people/<id>`, `/links/order`) come socials
   first, then the others, each in the person's order. A new link, or one
   given to another person, goes last in its person's order; one untied
@@ -2433,7 +2446,7 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "notifications": { "unread": 1, "latest": 42, "desktop": false } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "unsorted_links": 3, "notifications": { "unread": 1, "latest": 42, "desktop": false } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `unsorted_links` the number of links tied to no one, see [Links](#links); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object, a `kind` that is not text, and a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync) |
 | GET | `/api/jobs/<id>` | job, or 404 |

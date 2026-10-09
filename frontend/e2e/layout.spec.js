@@ -63,6 +63,7 @@ const VIEWS = [
     pg => pg.locator("article.post-card").first()) },
   { name: "Person", open: page => openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title")) },
   { name: "Collection", open: page => openUrl(page, `/collections/${S.collection}`, pg => pg.locator("h2.page-title")) },
+  { name: "Links, Unsorted", open: page => openUrl(page, "/links?person=none", pg => pg.locator(".link-assign").first()) },
   ...["downloads", "sync", "appearance", "about"].map(tab => ({
     name: `Settings › ${tab}`,
     open: page => openUrl(page, `/settings#${tab}`, pg => pg.locator(`.settings-tab[aria-current="page"][href$="#${tab}"]`)),
@@ -158,6 +159,38 @@ const DIALOGS = [
       await openPage(page, { name: "Links", path: "/links" });
       await page.locator("body").press("Alt+l");
       await expect(page.locator(".person-pick-option").nth(1)).toBeVisible();
+      await idle(page);
+    },
+    scope: ".modal-overlay",
+  },
+  {
+    // #165 B: a row's picker, open inside the row, under the demo's Unsorted links.
+    name: "Links › Assign an Unsorted link",
+    open: async page => {
+      await openUrl(page, "/links?person=none", pg => pg.locator(".link-assign").first());
+      await page.locator(".link-assign").first().click();
+      await expect(page.locator(".link-row.is-assigning .person-pick-option").first()).toBeVisible();
+      await idle(page);
+    },
+    scope: ".link-list",
+  },
+  {
+    name: "Links › Selection bar",
+    open: async page => {
+      await openUrl(page, "/links?person=none", pg => pg.locator(".link-check").first());
+      await page.locator(".link-check input").first().click();
+      await page.locator(".link-check input").nth(2).click({ modifiers: ["Shift"] });
+      await expect(page.locator(".select-bar .select-count")).toHaveText("3 selected");
+    },
+    scope: ".select-bar",
+  },
+  {
+    name: "Links › Assign the selected links",
+    open: async page => {
+      await openUrl(page, "/links?person=none", pg => pg.locator(".link-check").first());
+      await page.locator(".link-check input").first().click();
+      await page.locator(".select-bar").getByRole("button", { name: /^Assign 1 to/ }).click();
+      await expect(page.locator(".assign-modal .person-pick-option").first()).toBeVisible();
       await idle(page);
     },
     scope: ".modal-overlay",

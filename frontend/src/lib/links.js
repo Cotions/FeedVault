@@ -1,10 +1,15 @@
 // Saved links (docs/API.md "Links"): the backend's caps (links.py), so a
 // field stops where the server would refuse, and the kinds' labels.
+import { plural } from "./fmt.js";
+
 export const MAX_URL = 2048;
 export const MAX_TITLE = 300;
 export const MAX_NOTES = 5000;
 
 export const KIND_LABEL = { social: "Social", other: "Other" };
+
+// What a link is called in a row and in the buttons' names: its title, else its address without the scheme.
+export const linkLabel = l => l.title || l.url.replace(/^https?:\/\//, "");
 
 /* The address to send for what was typed: "example.org/x" (no scheme) is
    https://example.org/x, as a browser's address bar reads it. A typed
@@ -39,6 +44,22 @@ export function externalUrl(text) {
   try { parsed = new URL(url); } catch { return null; }
   if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) return null;
   return url;
+}
+
+/* The links' addresses, one per line, in the order given: what "Copy URLs"
+   puts on the clipboard, to paste into another app. */
+export function urlLines(links) {
+  return (links || []).map(l => l.url).join("\n");
+}
+
+// Copy URLs: the addresses on the clipboard, and a toast that says so (or why not).
+export async function copyUrls(links, toast) {
+  try {
+    await navigator.clipboard.writeText(urlLines(links));
+    toast(`Copied ${plural(links.length, "link")}`);
+  } catch (e) {
+    toast(`Could not copy the links: ${e.message}`, "err");
+  }
 }
 
 // Whether a drag may carry a web address, from its types alone (its data

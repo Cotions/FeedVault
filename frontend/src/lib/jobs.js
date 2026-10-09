@@ -18,7 +18,9 @@ export const JobsContext = createContext({
   active: 0,
   newCount: 0,
   newUntil: null,
+  unsortedLinks: 0,
   started: () => {},
+  refresh: () => {},
 });
 
 export function useJobs() {

@@ -223,26 +223,62 @@ def create(conn, url, title, notes, pid, now):
 _UNSET = object()
 
 
+def _give(conn, lid, pid, now):
+    """Inside a transaction: the link to ``pid`` (or no one), unless it is
+    theirs already (or gone). Given to a person, it goes last in their
+    order, tied to them at ``now``; given to no one, it loses its place.
+    Whether it moved."""
+    row = conn.execute("SELECT person_id FROM links WHERE id = ?", (lid,)).fetchone()
+    if row is None or row[0] == pid:
+        return False
+    conn.execute("UPDATE links SET person_id = ?, position = ?, tied_at = ? WHERE id = ?",
+                 (pid, None if pid is None else _next_position(conn, pid), None if pid is None else now, lid))
+    return True
+
+
 def update(conn, lid, url=None, title=None, notes=None, pid=_UNSET, now=None):
-    """Change what is given. A link given to another person goes last in
-    their order, tied to them at ``now``; one given to no one loses its
-    place."""
+    """Change what is given; a new person as _give."""
     with conn:
         for column, value in (("url", url), ("title", title), ("notes", notes)):
             if value is not None:
                 conn.execute(f"UPDATE links SET {column} = ? WHERE id = ?", (value, lid))
         if pid is not _UNSET:
-            row = conn.execute("SELECT person_id FROM links WHERE id = ?", (lid,)).fetchone()
-            if row[0] != pid:
-                conn.execute("UPDATE links SET person_id = ?, position = ?, tied_at = ? WHERE id = ?",
-                             (pid, None if pid is None else _next_position(conn, pid),
-                              None if pid is None else now, lid))
+            _give(conn, lid, pid, now)
     return get(conn, lid)
+
+
+def missing(conn, ids):
+    """The ids no link has, in the order given."""
+    have = set()
+    for n in range(0, len(ids), 500):              # well under SQLite's limit of variables
+        part = ids[n:n + 500]
+        have.update(i for (i,) in conn.execute(f"SELECT id FROM links WHERE id IN ({','.join('?' * len(part))})", part))
+    return [i for i in ids if i not in have]
+
+
+def assign(conn, ids, pid, now):
+    """Give these links to ``pid`` (or no one) in one transaction, each as
+    _give: given to a person, they go last in their order, in the order of
+    ``ids``. How many moved."""
+    with conn:
+        return sum(_give(conn, lid, pid, now) for lid in dict.fromkeys(ids))
 
 
 def delete(conn, lid):
     with conn:
         return conn.execute("DELETE FROM links WHERE id = ?", (lid,)).rowcount > 0
+
+
+def delete_many(conn, ids):
+    """Delete these links in one transaction, passing over ids no link has.
+    How many went."""
+    with conn:
+        return sum(conn.execute("DELETE FROM links WHERE id = ?", (lid,)).rowcount for lid in dict.fromkeys(ids))
+
+
+def unsorted(conn):
+    """How many links are tied to no one: the Links page's Unsorted."""
+    return conn.execute("SELECT COUNT(*) FROM links WHERE person_id IS NULL").fetchone()[0]
 
 
 def reorder(conn, pid, ids):

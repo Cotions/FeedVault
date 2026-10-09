@@ -19,6 +19,7 @@ import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources"
 import { useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
 import { LinkForm, LinkRow } from "../components/Links";
+import { copyUrls } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
 
 function AccountRow({ account: a, busy, onUnlink }) {
@@ -76,6 +77,7 @@ function AccountRow({ account: a, busy, onUnlink }) {
    new link's form has something typed. */
 function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
   const toast = useToast();
+  const { refresh } = useJobs();
   const [busy,     setBusy]     = useState(false);
   const edit = useOneEdit();                          // the link being edited, and whether it has changes
   const [removing, setRemoving] = useState(null);
@@ -90,6 +92,7 @@ function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
       const r = await fn();
       if (!r?.ok) return r?.id != null ? "That address is saved already, as another link (see Links)." : r?.error || failed;
       onChanged();
+      refresh();                                      // the nav's Unsorted count
       return null;
     } catch (err) {
       return err.message;
@@ -115,7 +118,15 @@ function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
 
   return (
     <section className="person-section person-links-section">
-      <h3 className="card-title">Links <span className="page-count">{links.length}</span></h3>
+      <div className="person-section-head">
+        <h3 className="card-title">Links <span className="page-count">{links.length}</span></h3>
+        {links.length > 0 && (
+          <button type="button" className="btn-secondary" onClick={() => copyUrls(links, toast)}
+                  title="Their links' addresses, one per line, to paste into another app">
+            <Icon name="copy" size={14} />Copy URLs
+          </button>
+        )}
+      </div>
       {links.length === 0 && <div className="empty">No link saved for them yet: a Linktree, a Patreon, their site, an interview…</div>}
       {groups.map(([name, group]) => group.length > 0 && (
         <div key={name} className="person-link-group">
@@ -236,6 +247,7 @@ export default function PersonPage() {
       const r = await deletePerson(p.id);
       if (!r?.ok) { setDlgError(r?.error || "Could not delete."); return; }
       toast(`${p.name} deleted; ${r.unlinked} account${r.unlinked === 1 ? "" : "s"} unlinked.`);
+      if (p.links?.length) started();                 // their links are Unsorted now: the nav's count
       unsaved.leave(() => navigate("/creators"));
     } catch (err) {
       setDlgError(err.message);

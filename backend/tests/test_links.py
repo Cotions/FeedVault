@@ -155,7 +155,8 @@ def test_bad_bodies(client):
 def test_a_body_that_is_not_an_object_is_a_400(client, raw):
     pid = person(client, "Alice")
     lid = add(client, "https://x.com/a", person=pid)["link"]["id"]
-    for url in ("/api/links", f"/api/links/{lid}", f"/api/people/{pid}/links/order"):
+    for url in ("/api/links", f"/api/links/{lid}", f"/api/people/{pid}/links/order", "/api/links/assign",
+                "/api/links/delete"):
         r = client.post(url, data=raw, headers={**H, "Content-Type": "application/json"})
         assert r.status_code == 400, (url, raw, r.status_code)
         body = r.get_json()
@@ -399,6 +400,123 @@ def test_merging_people_moves_links_to_the_kept_one(client):
     assert [x["id"] for x in got] == [a1, b2, b1]
     assert [x["position"] for x in got] == [1, 2, 3]
     assert [x["id"] for x in get(client, f"/api/people/{other}")["links"]] == [o1]
+
+
+# ---------------------------------------------------------------------------
+# Unsorted: bulk assign and delete, the count
+# ---------------------------------------------------------------------------
+
+def tied(lid):
+    return tuple(db.connect().execute("SELECT person_id, position, tied_at FROM links WHERE id = ?", (lid,)).fetchone())
+
+
+def test_assign_many_to_a_person(client, clock):
+    alice, bob = person(client, "Alice"), person(client, "Bob")
+    own = add(client, "https://a0.example", person=alice)["link"]["id"]
+    a, b, c = (add(client, f"https://{n}.example")["link"]["id"] for n in "abc")
+    clock[0] += 50
+    r = post(client, "/api/links/assign", {"ids": [c, a, c], "person": alice})
+    assert r["ok"] is True and r["moved"] == 2
+    assert [(x["id"], x["person"]["name"]) for x in r["links"]] == [(c, "Alice"), (a, "Alice")]
+    # Last in her order, in the order given, tied to her now: she is the most recent.
+    assert [tied(i) for i in (own, c, a, b)] == [(alice, 1, 1_000_000), (alice, 2, 1_000_050),
+                                                 (alice, 3, 1_000_050), (None, None, None)]
+    assert recent(client)[0] == ("Alice", 1_000_050)
+    assert urls(client, "?person=none") == ["https://b.example"]
+
+    # One of hers already does not move (nor count); another person's does.
+    clock[0] += 10
+    bob_link = add(client, "https://b0.example", person=bob)["link"]["id"]
+    r = post(client, "/api/links/assign", {"ids": [a, bob_link, b], "person": alice})
+    assert r["moved"] == 2
+    assert tied(a) == (alice, 3, 1_000_050)
+    assert [tied(i) for i in (bob_link, b)] == [(alice, 4, 1_000_060), (alice, 5, 1_000_060)]
+
+
+def test_assign_to_no_one_unties(client, clock):
+    alice = person(client, "Alice")
+    a, b = (add(client, f"https://{n}.example", person=alice)["link"]["id"] for n in "ab")
+    r = post(client, "/api/links/assign", {"ids": [a, b], "person": None})
+    assert r["moved"] == 2 and all(x["person"] is None for x in r["links"])
+    assert tied(a) == tied(b) == (None, None, None)
+    assert recent(client) == []
+    # Untied already: nothing moves, nothing to export.
+    assert post(client, "/api/links/assign", {"ids": [a], "person": None})["moved"] == 0
+
+
+def test_assign_is_all_or_nothing(client):
+    alice = person(client, "Alice")
+    a = add(client, "https://a.example")["link"]["id"]
+    r = post(client, "/api/links/assign", {"ids": [a, a + 100, a + 7], "person": alice}, 404)
+    assert r == {"ok": False, "error": "no such link", "missing": [a + 100, a + 7]}
+    assert tied(a) == (None, None, None)
+
+
+def test_assign_fails_whole_in_its_transaction(client, monkeypatch):
+    """A failure partway (here, the second link's update) leaves the first untouched."""
+    alice = person(client, "Alice")
+    a, b = (add(client, f"https://{n}.example")["link"]["id"] for n in "ab")
+    real, calls = links._next_position, []
+
+    def failing(conn, pid):
+        calls.append(pid)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real(conn, pid)
+    monkeypatch.setattr(links, "_next_position", failing)
+    with pytest.raises(sqlite3.OperationalError):
+        links.assign(db.connect(), [a, b], alice, 5)
+    assert tied(a) == tied(b) == (None, None, None)
+
+
+@pytest.mark.parametrize("body", [
+    {"person": None}, {"ids": [], "person": None}, {"ids": "1", "person": None}, {"ids": [1.5], "person": None},
+    {"ids": [-1], "person": None}, {"ids": [True], "person": None}, {"ids": [2**53], "person": None},
+    {"ids": list(range(1, links.MAX_IDS + 2)), "person": None},
+    {"ids": [1]}, {"ids": [1], "person": "1"}, {"ids": [1], "person": True}, {"ids": [1], "person": 999},
+])
+def test_assign_bad_bodies(client, body):
+    lid = add(client, "https://a.example")["link"]["id"]
+    assert lid == 1
+    assert post(client, "/api/links/assign", body, 400)["ok"] is False
+    assert tied(lid) == (None, None, None)
+
+
+def test_delete_many(client):
+    a, b, c = (add(client, f"https://{n}.example")["link"]["id"] for n in "abc")
+    assert post(client, "/api/links/delete", {"ids": [a, c, a, c + 50]}) == {"ok": True, "deleted": 2}
+    assert urls(client) == ["https://b.example"]
+    for body in ({}, {"ids": []}, {"ids": ["1"]}, {"ids": list(range(1, links.MAX_IDS + 2))}):
+        post(client, "/api/links/delete", body, 400)
+    assert urls(client) == ["https://b.example"]
+
+
+def test_jobs_poll_counts_unsorted_links(client):
+    def count():
+        return get(client, "/api/jobs")["unsorted_links"]
+    assert count() == 0
+    alice = person(client, "Alice")
+    a, b = (add(client, f"https://{n}.example")["link"]["id"] for n in "ab")
+    add(client, "https://c.example", person=alice)
+    assert count() == 2
+    post(client, "/api/links/assign", {"ids": [a], "person": alice})
+    assert count() == 1
+    post(client, "/api/links/delete", {"ids": [b]})
+    assert count() == 0
+    delete(client, f"/api/people/{alice}")                 # her links are tied to no one again
+    assert count() == 2
+
+
+def test_bulk_changes_mark_links_for_export(client, monkeypatch):
+    alice = person(client, "Alice")
+    a = add(client, "https://a.example")["link"]["id"]
+    seen = []
+    monkeypatch.setattr(userdata, "changed", seen.append)
+    post(client, "/api/links/assign", {"ids": [a], "person": alice})
+    post(client, "/api/links/assign", {"ids": [a], "person": alice})     # nothing moved
+    post(client, "/api/links/delete", {"ids": [a + 1]})                  # nothing deleted
+    post(client, "/api/links/delete", {"ids": [a]})
+    assert seen == ["links", "links"]
 
 
 # ---------------------------------------------------------------------------

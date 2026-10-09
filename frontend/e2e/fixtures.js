@@ -234,6 +234,8 @@ export const LAYOUT_ALLOW = [
     reason: "the Feed link's \"N new\" badge is a link of its own laid on the Feed row's right end, past the label (index.css, .side-row)" },
   { rule: "overlap", a: ".side-row > a.side-link", b: "button.side-add",
     reason: "the Links row's \"+ Link\" (quick-add, #165) is a button of its own laid on the row's right end, past the label, as Feed's \"N new\" (index.css, .side-row)" },
+  { rule: "overlap", a: ".side-row > a.side-link", b: "a.side-unsorted",
+    reason: "the Links row's Unsorted count (#165 B) is a link of its own to the Unsorted queue, laid on the row's right end before \"+ Link\", past the label (index.css, .side-row-end)" },
 ];
 
 // Animations and transitions end at once: boxes are measured where they
