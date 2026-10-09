@@ -3095,10 +3095,14 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .link-row.is-editing { display: block; padding: 12px; }
 
 /* ── Quick-add a link (#165): Alt+L, the nav's + Link, a dropped URL ── */
-/* The nav's + Link sits on the Links row's right end, as Feed's "N new",
-   after the Unsorted count (#165 B), a link to the Unsorted queue. */
+/* The nav's + Link sits on the Links row's right end, after the Unsorted
+   count (#165 B), a link to the Unsorted queue. Both beside the Links link,
+   not on it as Feed's "N new": together they are too wide to leave the
+   link's middle free for a click. */
+.side-row-split { flex-direction: row; align-items: center; gap: 4px; }
+.side-row-split > .side-link { flex: 1; min-width: 0; width: auto; }
 .side-row-end {
-  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  flex: none; margin-right: 10px;
   display: flex; align-items: center; gap: 4px;
 }
 .side-row-end .side-badge { margin-left: 0; }
@@ -3187,6 +3191,7 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 }
 .links-tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
 .links-tab.is-on { color: var(--text); background: rgba(var(--accent-rgb), 0.14); box-shadow: inset 0 0 0 1px rgba(var(--glow-rgb), 0.3); }
+.links-tab.is-on:focus-visible { box-shadow: var(--ring); }
 .links-tab-count {
   font-family: var(--mono); font-size: 10.5px; font-weight: 700; line-height: 1.4;
   color: var(--accent-hover); background: rgba(var(--accent-rgb), 0.14);

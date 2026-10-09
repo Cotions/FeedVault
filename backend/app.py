@@ -1241,24 +1241,30 @@ def _link_ids(body):
 
 @app.post("/api/links/assign")
 def assign_links():
-    """Many links to one person (``person`` null: to no one), all or none,
-    in one transaction (links.assign). An id no link has is a 404 and
-    nothing moves."""
+    """Many links to one person (``person`` null: to no one), in one
+    transaction (links.assign). All or none: an id no link has is a 404 and
+    nothing moves. With ``if_person`` (an id or null: an Undo), only the
+    links that are that person's now move, the others are passed over."""
     body = _body()
     ids, error = _link_ids(body)
     if not error and "person" not in body:
         error = "send person: the id of a person, or null"
     pid, error = (None, error) if error else _link_person(body)
+    only = body.get("if_person", links.UNSET)
+    if not error and only is not links.UNSET and only is not None and not (
+            isinstance(only, int) and not isinstance(only, bool) and 0 <= only < 2**53):
+        error = "if_person must be the id of a person, or null"
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
-    gone = links.missing(conn, ids)
-    if gone:
+    moved, gone, skipped = links.assign(conn, ids, pid, _link_now(), only_from=only)
+    if gone and only is links.UNSET:
         return jsonify({"ok": False, "error": "no such link", "missing": gone}), 404
-    moved = links.assign(conn, ids, pid, _link_now())
     if moved:
         userdata.changed("links")
-    return jsonify({"ok": True, "moved": moved, "links": [links.get(conn, i) for i in dict.fromkeys(ids)]})
+    # A link deleted right after is left out, not given as null.
+    out = [x for x in (links.get(conn, i) for i in dict.fromkeys(ids)) if x is not None]
+    return jsonify({"ok": True, "moved": moved, "skipped": skipped, "links": out})
 
 
 @app.post("/api/links/delete")

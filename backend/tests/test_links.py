@@ -469,6 +469,57 @@ def test_assign_fails_whole_in_its_transaction(client, monkeypatch):
     assert tied(a) == tied(b) == (None, None, None)
 
 
+def test_assign_takes_the_write_lock_before_reading(client):
+    """The existence check and the next places are read under the write
+    lock: while another connection is writing, the batch waits (here: gives
+    up at once) instead of reading places that write is about to take."""
+    alice = person(client, "Alice")
+    a, b = (add(client, f"https://{n}.example")["link"]["id"] for n in "ab")
+    path = db.connect().execute("PRAGMA database_list").fetchone()[2]
+    other, mine = sqlite3.connect(path), sqlite3.connect(path, timeout=0)
+    try:
+        other.execute("BEGIN IMMEDIATE")
+        other.execute("INSERT INTO links(url, title, notes, person_id, position, created_at, tied_at) "
+                      "VALUES ('https://other.example', '', '', ?, 1, 1, 1)", (alice,))
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            links.assign(mine, [a, b], alice, 5)
+        assert not mine.in_transaction
+        other.commit()
+        assert links.assign(mine, [a, b], alice, 5) == (2, [], [])
+    finally:
+        other.close()
+        mine.close()
+    places = [r[0] for r in db.connect().execute("SELECT position FROM links WHERE person_id = ? ORDER BY position", (alice,))]
+    assert places == [1, 2, 3]
+
+
+def test_assign_if_person_is_an_undo(client, clock):
+    """if_person: only the links that are still that person's move back;
+    one changed since, or deleted, is passed over, and nothing is a 404."""
+    alice, bob, cleo = person(client, "Alice"), person(client, "Bob"), person(client, "Cleo")
+    a, b, c = (add(client, f"https://{n}.example")["link"]["id"] for n in "abc")
+    post(client, "/api/links/assign", {"ids": [a, b, c], "person": alice})
+    post(client, f"/api/links/{b}", {"person": cleo})           # changed since
+    delete(client, f"/api/links/{c}")                           # gone since
+    r = post(client, "/api/links/assign", {"ids": [a, b, c], "person": None, "if_person": alice})
+    assert (r["moved"], r["skipped"], [x["id"] for x in r["links"]]) == (1, [b, c], [a, b])
+    assert tied(a) == (None, None, None) and tied(b)[0] == cleo
+    # Back to someone else, as it was: only if still Cleo's.
+    r = post(client, "/api/links/assign", {"ids": [b], "person": bob, "if_person": cleo})
+    assert r["moved"] == 1 and tied(b)[0] == bob
+    for bad in ("3", True, -1, 2**53):
+        post(client, "/api/links/assign", {"ids": [a], "person": None, "if_person": bad}, 400)
+
+
+def test_assign_leaves_out_a_link_gone_right_after(client, monkeypatch):
+    alice = person(client, "Alice")
+    a, b = (add(client, f"https://{n}.example")["link"]["id"] for n in "ab")
+    real = links.get
+    monkeypatch.setattr(links, "get", lambda conn, lid: None if lid == b else real(conn, lid))
+    r = post(client, "/api/links/assign", {"ids": [a, b], "person": alice})
+    assert r["moved"] == 2 and [x["id"] for x in r["links"]] == [a]
+
+
 @pytest.mark.parametrize("body", [
     {"person": None}, {"ids": [], "person": None}, {"ids": "1", "person": None}, {"ids": [1.5], "person": None},
     {"ids": [-1], "person": None}, {"ids": [True], "person": None}, {"ids": [2**53], "person": None},

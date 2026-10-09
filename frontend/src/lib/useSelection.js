@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { pruned, toggled } from "./selection.js";
 
 /* Select mode over a list shown in order (Feed now; Trash, Duplicates, Tags
    later). Click toggles one item, shift-click adds the range from the last
@@ -9,7 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 export function useSelection(items, { resetKey, escapeBlocked = false } = {}) {
   const [active,   setActive]   = useState(false);
   const [selected, setSelected] = useState(() => new Set());
-  const [anchor,   setAnchor]   = useState(null);   // last clicked index, for shift ranges
+  const [anchor,   setAnchor]   = useState(null);   // last clicked id, for shift ranges
 
   // Adjusting state during render, not in an effect.
   const [seenKey, setSeenKey] = useState(resetKey);
@@ -18,6 +19,10 @@ export function useSelection(items, { resetKey, escapeBlocked = false } = {}) {
     if (selected.size) setSelected(new Set());
     setAnchor(null);
   }
+  // Ids that left the list are forgotten, so one given to a new item later
+  // does not come in checked.
+  const kept = pruned(selected, items);
+  if (kept) setSelected(kept);
 
   const clear = useCallback(() => {
     setSelected(new Set());
@@ -41,19 +46,8 @@ export function useSelection(items, { resetKey, escapeBlocked = false } = {}) {
   function toggle(index, shift) {
     const id = items[index]?.id;
     if (!id) return;
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (shift && anchor != null && anchor < items.length) {
-        const [a, b] = anchor < index ? [anchor, index] : [index, anchor];
-        for (let i = a; i <= b; i++) next.add(items[i].id);
-      } else if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-    setAnchor(index);
+    setSelected(prev => toggled(prev, items, id, shift, anchor));
+    setAnchor(id);
   }
 
   // After items left the list (deleted): forget them, keep the rest.

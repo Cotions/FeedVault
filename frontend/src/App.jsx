@@ -511,7 +511,7 @@ export default function App() {
           <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
           <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
           <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
-          <div className="side-row">
+          <div className="side-row side-row-split">
             <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
             <span className="side-row-end">
               {unsorted > 0 && (

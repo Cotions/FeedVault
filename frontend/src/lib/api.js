@@ -277,7 +277,11 @@ export function updateLink(id, changes) { return post(`/api/links/${id}`, change
 export function deleteLink(id) { return del(`/api/links/${id}`); }
 // Many links to one person (null: no one), all or none → { ok, moved, links };
 // an id no link has is { ok: false, error, missing } (404).
-export function assignLinks(ids, person) { return post("/api/links/assign", { ids, person }); }
+// `ifPerson` (an id or null; for Undo): only the links that are that person's
+// now move, the others come back in `skipped`.
+export function assignLinks(ids, person, ifPerson) {
+  return post("/api/links/assign", ifPerson === undefined ? { ids, person } : { ids, person, if_person: ifPerson });
+}
 // → { ok, deleted }; ids no link has are passed over.
 export function deleteLinks(ids) { return post("/api/links/delete", { ids }); }
 // The ids take the places they held among the person's links → { ok, links }.

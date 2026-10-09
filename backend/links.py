@@ -220,7 +220,7 @@ def create(conn, url, title, notes, pid, now):
     return get(conn, lid)
 
 
-_UNSET = object()
+UNSET = _UNSET = object()                  # an argument not given (None means no one)
 
 
 def _give(conn, lid, pid, now):
@@ -256,12 +256,40 @@ def missing(conn, ids):
     return [i for i in ids if i not in have]
 
 
-def assign(conn, ids, pid, now):
+def assign(conn, ids, pid, now, only_from=_UNSET):
     """Give these links to ``pid`` (or no one) in one transaction, each as
     _give: given to a person, they go last in their order, in the order of
-    ``ids``. How many moved."""
-    with conn:
-        return sum(_give(conn, lid, pid, now) for lid in dict.fromkeys(ids))
+    ``ids``. The write lock is taken first (BEGIN IMMEDIATE), so what is
+    read (which links exist, the next places) is what is written over: no
+    other write comes in between.
+
+    With ``only_from`` (a person id, or None), only the links that are that
+    person's now move; the others, and ids no link has, are passed over (an
+    Undo: a link changed since is left as it is). Without it, it is all or
+    none: an id no link has changes nothing.
+
+    (moved, missing, skipped): how many moved, the ids no link has, and the
+    ids passed over (with ``only_from``)."""
+    ids = list(dict.fromkeys(ids))
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        gone = missing(conn, ids)
+        if gone and only_from is _UNSET:
+            conn.execute("ROLLBACK")
+            return 0, gone, []
+        moved, skipped, absent = 0, [], set(gone)
+        for lid in ids:
+            if lid in absent or (only_from is not _UNSET and conn.execute(
+                    "SELECT person_id FROM links WHERE id = ?", (lid,)).fetchone()[0] != only_from):
+                skipped.append(lid)
+            else:
+                moved += _give(conn, lid, pid, now)
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    return moved, gone, skipped
 
 
 def delete(conn, lid):

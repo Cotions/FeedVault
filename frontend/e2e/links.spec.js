@@ -706,3 +706,57 @@ test("Links: select with shift-click, copy the URLs, assign them all, delete", a
     await cleanUp(request, host, pid);
   }
 });
+
+test("Links: a shift range holds after a row comes in; Undo gives each link back to whom it had", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-undo-${stamp}.example`;
+  const people = {};
+  for (const who of ["P", "Q", "R"]) {
+    people[who] = (await (await request.post("/api/people", { headers: H, data: { name: `E2E ${who} ${stamp}` } })).json()).person.id;
+  }
+  const url = x => `https://${host}/${x}`;
+  try {
+    await makeLinks(request, [url("a")]);
+    await request.post("/api/links", { headers: H, data: { url: url("b"), title: `${host}/b`, person: people.Q } });
+    await makeLinks(request, [url("c")]);
+    await stubClipboard(page, null);
+    await page.goto(`/links?q=${host}`);
+    const rows = page.locator(".link-list > li");
+    await expect(rows).toHaveCount(3);                      // newest first: c, b, a
+    await idle(page);
+
+    // The anchor is c; a quick-add then puts d on top. The shift range is still c to a.
+    await rows.nth(0).getByRole("checkbox").click();
+    await page.locator("#main-nav").getByRole("button", { name: "Add a link" }).click();
+    const add = page.getByRole("dialog", { name: "Add a link" });
+    await add.getByLabel("Address").fill(url("d"));
+    await add.getByLabel("Address").press("Enter");
+    await expect(add).toBeHidden();
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(1).getByRole("checkbox")).toBeChecked();   // c, moved down one
+    await rows.nth(3).getByRole("checkbox").click({ modifiers: ["Shift"] });
+    const bar = page.getByRole("toolbar", { name: "Selection" });
+    await expect(bar.locator(".select-count")).toHaveText("3 selected");
+    await expect(rows.nth(0).getByRole("checkbox")).not.toBeChecked();
+
+    // c and a had no one, b had Q: all to P.
+    await bar.getByRole("button", { name: "Assign 3 to…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Assign 3 links to…" });
+    await dialog.getByRole("combobox", { name: "Person" }).fill(`E2E P ${stamp}`);
+    await dialog.getByRole("combobox", { name: "Person" }).press("Enter");
+    const toast = page.locator(".toast", { hasText: `3 links assigned to E2E P ${stamp}` });
+    await expect(toast).toBeVisible();
+
+    // a moves on to R meanwhile: Undo leaves it there, the others go back.
+    await request.post(`/api/links/${(await linkByUrl(request, url("a"))).id}`, { headers: H, data: { person: people.R } });
+    await toast.getByRole("button", { name: "Undo" }).click();
+    await expect(page.locator(".toast", { hasText: "1 link changed since: left as it is." })).toBeVisible();
+    expect((await linkByUrl(request, url("a"))).person?.id).toBe(people.R);
+    expect((await linkByUrl(request, url("b"))).person?.id).toBe(people.Q);
+    expect((await linkByUrl(request, url("c"))).person).toBeNull();
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, null);
+    for (const pid of Object.values(people)) await request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});

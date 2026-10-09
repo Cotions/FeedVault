@@ -213,11 +213,20 @@ export default function Links() {
     }
   }
 
-  // Back to no one (the toast's Undo): links that came from Unsorted.
-  async function unassign(ids) {
+  // The toast's Undo: each link back to the person it had before (or to no
+  // one), but only if it is still with ``now``, the one just given; a link
+  // moved or deleted since stays as it is.
+  async function undoAssign(before, now) {
+    const groups = new Map();
+    for (const [id, prev] of before) groups.set(prev, [...(groups.get(prev) || []), id]);
+    let skipped = 0;
     try {
-      const r = await assignLinks(ids, null);
-      if (!r?.ok) toast(r?.error || "Could not undo.", "err");
+      for (const [prev, ids] of groups) {
+        const r = await assignLinks(ids, prev, now);
+        if (!r?.ok) { toast(r?.error || "Could not undo.", "err"); break; }
+        skipped += r.skipped.length;
+      }
+      if (skipped) toast(`${plural(skipped, "link")} changed since: left as ${skipped === 1 ? "it is" : "they are"}.`, "ok");
     } catch (err) {
       toast(err.message, "err");
     }
@@ -235,7 +244,7 @@ export default function Links() {
       setAssigning(null);
       if (unsortedView) setGone(g => new Set(g).add(l.id));
       sel.drop([l.id]);
-      toast(`${linkLabel(l)}: assigned to ${p.name}`, "ok", { label: "Undo", onClick: () => unassign([l.id]) });
+      toast(`${linkLabel(l)}: assigned to ${p.name}`, "ok", { label: "Undo", onClick: () => undoAssign([[l.id, null]], p.id) });
       changed();
     } catch (err) {
       toast(err.message, "err");
@@ -261,10 +270,10 @@ export default function Links() {
       setBulk(null);
       sel.exit();
       if (unsortedView) setGone(g => new Set([...g, ...ids]));
-      // Undo puts them back with no one, which is only where they were if none had a person.
-      const undo = chosen.every(l => !l.person);
+      // Undo gives each back to whom it had (no one or someone else).
+      const before = chosen.filter(l => l.person?.id !== p.id).map(l => [l.id, l.person?.id ?? null]);
       toast(`${plural(ids.length, "link")} assigned to ${p.name}`, "ok",
-        undo ? { label: "Undo", onClick: () => unassign(ids) } : { to: personPath(p.id), label: "Show" });
+        before.length ? { label: "Undo", onClick: () => undoAssign(before, p.id) } : { to: personPath(p.id), label: "Show" });
       changed();
     } catch (err) {
       setDlgError(err.message);

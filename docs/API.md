@@ -1365,7 +1365,7 @@ A **link**:
 | POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` (all but `url` may be omitted; `person` `null` for no one) → `{ "ok": true, "link": {…} }` |
 | POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person` (`null` unties it; none is a 400) → `{ "ok": true, "link": {…} }` |
 | DELETE | `/api/links/<id>` | → `{ "ok": true }` |
-| POST | `/api/links/assign` | body `{ "ids": [12, 9], "person": 3 }` (1 to 5000 ids; `person` `null` unties them) → `{ "ok": true, "moved": 2, "links": [link, …] }`, see below |
+| POST | `/api/links/assign` | body `{ "ids": [12, 9], "person": 3 }` (1 to 5000 ids; `person` `null` unties them; optional `if_person`) → `{ "ok": true, "moved": 2, "skipped": [], "links": [link, …] }`, see below |
 | POST | `/api/links/delete` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "deleted": 2 }`; ids no link has are passed over |
 | POST | `/api/people/<id>/links/order` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "links": [link, …] }`, the person's links in their new order |
 | GET | `/api/people/recent-links?limit=10` | `{ "people": [{ "id": 3, "name": "Some Body", "at": 1727500000 }, …] }`: the people most recently given a link, latest first, see below |
@@ -1393,10 +1393,13 @@ A **link**:
   each as `POST /api/links/<id>` with `person` would (last in the person's
   order, in the order of `ids`; `tied_at` now, so the person comes first in
   `recent-links`). A link that is theirs already does not move and is not
-  counted in `moved`; `links` are the links listed, as they are now. `person`
-  must be in the body. An id no link has is a 404
+  counted in `moved`; `links` are the links listed that still exist, as they
+  are now. `person` must be in the body. An id no link has is a 404
   `{ "ok": false, "error": "no such link", "missing": [7] }`, and nothing
-  moves.
+  moves. With `"if_person": 3` (or `null`; the page's Undo), only the links
+  that are that person's right now move; the others, and ids no link has,
+  are passed over and listed in `skipped` (no 404). Without it `skipped` is
+  `[]`. The batch holds the database's write lock from the check to the end.
 - The links tied to no one (`?person=none`, the Links page's **Unsorted**)
   are counted in `unsorted_links` of `GET /api/jobs`, for the sidebar's badge.
 - A person's links (`GET /api/people/<id>`, `/links/order`) come socials

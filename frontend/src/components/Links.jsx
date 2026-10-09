@@ -47,7 +47,7 @@ export function LinkForm({
 
   return (
     <form className={`link-form${link ? " is-edit" : ""}`} onSubmit={submit}
-          onKeyDown={e => { if (e.key === "Escape" && onCancel) { e.stopPropagation(); onCancel(); } }}>
+          onKeyDown={e => { if (e.key === "Escape" && onCancel && !e.nativeEvent.isComposing) { e.stopPropagation(); onCancel(); } }}>
       <label className="filter link-form-url">
         <span>Address</span>
         <input type="text" inputMode="url" autoComplete="off" spellCheck={false} placeholder="https://…"
@@ -174,7 +174,7 @@ export function AssignPicker({ people, label, onPick, onCancel, busy = false }) 
   }, []);
   return (
     <div className="link-assign-pick" aria-busy={busy || undefined}
-         onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); onCancel(); } }}>
+         onKeyDown={e => { if (e.key === "Escape" && !e.nativeEvent.isComposing) { e.stopPropagation(); e.preventDefault(); onCancel(); } }}>
       <PersonPicker people={people} recent={recent} active={active} onActive={setActive} label={label} none={false} autoFocus
                     onPick={o => { if (!busy && o?.person) onPick(o.person); }} />
       <div className="link-assign-foot">
@@ -210,7 +210,7 @@ export function AssignDialog({ count, people, onPick, onClose, busy = false, err
   return createPortal(
     <div className="modal-overlay"
          onKeyDown={e => {
-           if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); onClose(); return; }
+           if (e.key === "Escape" && !e.nativeEvent.isComposing) { e.stopPropagation(); e.preventDefault(); onClose(); return; }
            trapTab(e, boxRef.current);
          }}
          onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
