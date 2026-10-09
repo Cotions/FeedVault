@@ -3096,7 +3096,12 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 
 /* ── Quick-add a link (#165): Alt+L, the nav's + Link, a dropped URL ── */
 /* The nav's + Link sits on the Links row's right end, as Feed's "N new". */
-button.side-add { font-family: var(--mono); cursor: pointer; }
+button.side-add {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  min-height: 24px;                 /* a button of its own: a 24px target */
+  font-family: var(--mono); cursor: pointer;
+}
+button.side-add:hover { background: rgba(var(--accent-rgb), 0.26); }
 .quick-add-modal { width: 540px; }
 .quick-add-modal .modal-title { display: flex; align-items: center; gap: 8px; }
 .quick-add-modal .modal-title .icon { color: var(--accent-hover); }

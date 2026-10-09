@@ -492,7 +492,7 @@ export default function App() {
           <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
           <div className="side-row">
             <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
-            <button type="button" className="side-badge side-new side-add" onClick={() => openQuickAdd()}
+            <button type="button" className="side-badge side-add" onClick={() => openQuickAdd()}
                     title="Add a link (Alt+L)" aria-label="Add a link" aria-keyshortcuts="Alt+L">
               <Icon name="plus" size={11} />Link
             </button>
