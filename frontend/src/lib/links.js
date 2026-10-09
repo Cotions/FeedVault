@@ -22,3 +22,36 @@ export function withScheme(text) {
   if (/\s/.test(url) || !named) return url;
   return `https://${url}`;
 }
+
+/* The web address in text from outside the app (the clipboard, a drop), or
+   null: one http(s) address with a host and nothing else, as the server
+   would take it (links.clean_url: no user name, backslash, space or control
+   character inside, at most MAX_URL characters). Text that only looks like
+   a host ("notes.txt") is not one: nothing is guessed from what was not
+   typed. */
+export function externalUrl(text) {
+  if (typeof text !== "string") return null;
+  const url = text.trim();
+  if (!url || url.length > MAX_URL || !/^https?:\/\//i.test(url)) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\s\\\x00-\x1f\x7f]/.test(url)) return null;
+  let parsed;
+  try { parsed = new URL(url); } catch { return null; }
+  if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) return null;
+  return url;
+}
+
+// Whether a drag may carry a web address, from its types alone (its data
+// is only readable on drop): a link (text/uri-list) or text.
+export function mayCarryUrl(types) {
+  const list = [...(types || [])];
+  return list.includes("text/uri-list") || list.includes("text/plain");
+}
+
+/* The address a drop carries, or null: the first entry of its text/uri-list
+   (lines starting with # are comments), else its text, if either is one
+   web address (externalUrl). ``get(type)`` reads the drop's data. */
+export function droppedUrl(get) {
+  const first = (get("text/uri-list") || "").split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith("#"));
+  return externalUrl(first) || externalUrl(get("text/plain"));
+}

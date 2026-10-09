@@ -275,3 +275,189 @@ test("Links: an address with no scheme is added as https://", async ({ page, req
     for (const l of links) await request.delete(`/api/links/${l.id}`, { headers: H });
   }
 });
+
+/* ── Quick-add (#165 A): Alt+L, the nav's + Link, a dropped URL ── */
+
+// The clipboard as the quick-add reads it: this text, or a refusal (as a
+// browser that was not given the permission). No real clipboard is touched.
+async function stubClipboard(page, text) {
+  await page.addInitScript(t => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: () => (t == null ? Promise.reject(new DOMException("denied", "NotAllowedError")) : Promise.resolve(t)) },
+    });
+  }, text);
+}
+
+// A drag from outside the page carrying ``url``, over the page; then
+// dropped on the drop overlay, once it shows.
+async function dragUrlIn(page, url) {
+  await page.evaluate(u => {
+    const dt = new DataTransfer();
+    dt.setData("text/uri-list", u);
+    dt.setData("text/plain", u);
+    window.__fvDrop = dt;
+    const main = document.querySelector("main");
+    for (const type of ["dragenter", "dragover"]) {
+      main.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+    }
+  }, url);
+}
+async function dropOnOverlay(page) {
+  await page.evaluate(() => {
+    const el = document.querySelector(".drop-overlay");
+    el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: window.__fvDrop }));
+  });
+}
+
+async function linkByUrl(request, url) {
+  const { links } = await (await request.get(`/api/links?q=${encodeURIComponent(new URL(url).host)}`, { headers: H })).json();
+  return links.find(l => l.url === url) || null;
+}
+
+async function cleanUp(request, host, pid) {
+  const { links } = await (await request.get(`/api/links?q=${encodeURIComponent(host)}`, { headers: H })).json();
+  for (const l of links) await request.delete(`/api/links/${l.id}`, { headers: H });
+  if (pid != null) await request.delete(`/api/people/${pid}`, { headers: H });
+}
+
+test("quick-add: Alt+L prefills the clipboard's address, Enter saves to a recent person", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-quick-${stamp}.example`;
+  const name = `E2E recent ${stamp}`;
+  const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  try {
+    // Given a link just now: the most recent person, first under "No person".
+    await request.post("/api/links", { headers: H, data: { url: `https://${host}/older`, person: pid } });
+    await stubClipboard(page, `  https://${host}/from-clipboard \n`);
+    await openPage(page, { name: "Links", path: "/links" });
+    await page.locator("body").press("Alt+l");
+    const dialog = page.getByRole("dialog", { name: "Add a link" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel("Address")).toHaveValue(`https://${host}/from-clipboard`);
+    const picker = dialog.getByRole("combobox", { name: "Person" });
+    await expect(picker).toBeFocused();
+    const options = dialog.getByRole("option");
+    await expect(options.first()).toHaveText("No person (Unsorted)");
+    await expect(options.nth(1)).toHaveText(name);
+    await expect(dialog.locator(".person-pick-head").first()).toHaveText("Recent");
+    await expect(options.first()).toHaveAttribute("aria-selected", "true");
+
+    await picker.press("ArrowDown");
+    await expect(options.nth(1)).toHaveAttribute("aria-selected", "true");
+    await expect(dialog.getByRole("button", { name: `Save to ${name}` })).toBeVisible();
+    await dialog.getByLabel("Title").fill("From the clipboard");
+    await picker.press("Enter");
+    await expect(dialog).toBeHidden();
+    const toast = page.locator(".toast", { hasText: `Link saved to ${name}` });
+    await expect(toast).toBeVisible();
+    await expect(toast.getByRole("link", { name: "Show" })).toHaveAttribute("href", `/people/${pid}`);
+    const saved = await linkByUrl(request, `https://${host}/from-clipboard`);
+    expect(saved.person).toEqual({ id: pid, name });
+    expect(saved.title).toBe("From the clipboard");
+    // The Links page lists it without a reload.
+    await expect(page.locator(".link-row", { hasText: "From the clipboard" })).toHaveCount(1);
+
+    // Typing searches everyone; Escape closes.
+    await page.locator("body").press("Alt+l");
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("combobox", { name: "Person" }).fill(`recent ${stamp}`);
+    await expect(options).toHaveText([name, "No person (Unsorted)"]);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, pid);
+  }
+});
+
+test("quick-add: the nav's + Link saves a typed address to no one; no clipboard is fine", async ({ page, request }) => {
+  const host = `e2e-quick-untied-${Date.now()}.example`;
+  try {
+    await stubClipboard(page, null);                 // the permission refused: nothing shows, nothing fails
+    await openPage(page, { name: "Feed", path: "/" });
+    await page.locator("#main-nav").getByRole("button", { name: "Add a link" }).click();
+    const dialog = page.getByRole("dialog", { name: "Add a link" });
+    const address = dialog.getByLabel("Address");
+    await expect(address).toBeFocused();
+    await expect(address).toHaveValue("");
+    await address.fill(`${host}/typed`);
+    await expect(dialog.getByRole("button", { name: "Save to Unsorted" })).toBeVisible();
+    await address.press("Enter");
+    await expect(dialog).toBeHidden();
+    const toast = page.locator(".toast", { hasText: "Link saved to Unsorted" });
+    await expect(toast.getByRole("link", { name: "Show" })).toHaveAttribute("href", "/links?person=none");
+    const saved = await linkByUrl(request, `https://${host}/typed`);
+    expect(saved.person).toBeNull();
+    await idle(page);
+  } finally {
+    await cleanUp(request, host);
+  }
+});
+
+test("quick-add: Alt+L while typing types, it does not open", async ({ page }) => {
+  await stubClipboard(page, null);
+  await openPage(page, { name: "Links", path: "/links" });
+  await page.getByRole("textbox", { name: "Search posts" }).press("Alt+l");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await idle(page);
+});
+
+test("quick-add: a dropped URL opens it; one saved already says whose it is", async ({ page, request, pageErrors }) => {
+  const stamp = Date.now();
+  const host = `e2e-quick-drop-${stamp}.example`;
+  const name = `E2E dropped ${stamp}`;
+  const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  // The server's answer to the address saved already: a 409, which the test is about.
+  pageErrors.allow(/^api: POST \S+\/api\/links → 409$/);
+  pageErrors.allow(/^console: .*status of 409 .*\/api\/links\)$/);
+  try {
+    await openPage(page, { name: "Collections", path: "/collections" });
+    await dragUrlIn(page, `https://${host}/dropped`);
+    await expect(page.locator(".drop-overlay")).toBeVisible();
+    await expect(page.locator(".drop-overlay")).toHaveText("Drop to add the link");
+    await dropOnOverlay(page);
+    await expect(page.locator(".drop-overlay")).toHaveCount(0);
+    const dialog = page.getByRole("dialog", { name: "Add a link" });
+    await expect(dialog.getByLabel("Address")).toHaveValue(`https://${host}/dropped`);
+    const picker = dialog.getByRole("combobox", { name: "Person" });
+    await expect(picker).toBeFocused();
+    await picker.fill(name);
+    await picker.press("Enter");                      // the one match, highlighted
+    await expect(page.locator(".toast", { hasText: `Link saved to ${name}` })).toBeVisible();
+
+    // The same address again: not saved twice, and the message leads to its person.
+    await dragUrlIn(page, `https://${host}/dropped`);
+    await dropOnOverlay(page);
+    await expect(dialog.getByLabel("Address")).toHaveValue(`https://${host}/dropped`);
+    await dialog.getByRole("combobox", { name: "Person" }).press("Enter");    // to no one
+    const alert = dialog.locator(".quick-add-taken");
+    await expect(alert).toHaveText(`Already saved, tied to ${name}.`);
+    await alert.getByRole("link", { name }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page).toHaveURL(`/people/${pid}`);
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, pid);
+  }
+});
+
+test("quick-add: a drag that starts in the page is left to the page", async ({ page }) => {
+  await openPage(page, { name: "Collections", path: "/collections" });
+  // As a collection card's reorder, or an image dragged: dragstart comes first.
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/uri-list", "https://inside.example/");
+    const main = document.querySelector("main");
+    main.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+    main.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  await expect(page.locator(".drop-overlay")).toHaveCount(0);
+  await page.evaluate(() => {
+    const main = document.querySelector("main");
+    main.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }));
+    main.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
+  });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await idle(page);
+});

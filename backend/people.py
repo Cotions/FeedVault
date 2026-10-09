@@ -329,7 +329,7 @@ def delete(conn, pid):
     unlinked."""
     with conn:
         n = conn.execute("DELETE FROM person_accounts WHERE person_id = ?", (pid,)).rowcount
-        conn.execute("UPDATE links SET person_id = NULL, position = NULL WHERE person_id = ?", (pid,))
+        conn.execute("UPDATE links SET person_id = NULL, position = NULL, tied_at = NULL WHERE person_id = ?", (pid,))
         conn.execute("DELETE FROM people WHERE id = ?", (pid,))
     return n
 

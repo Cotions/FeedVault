@@ -1149,7 +1149,10 @@ def _link_text(body):
 
 
 def _taken(lid):
-    return jsonify({"ok": False, "error": "that link is saved already", "id": lid}), 409
+    """The 409 for a URL saved already: the link that has it, with its
+    person, so the page can say whose it is."""
+    return jsonify({"ok": False, "error": "that link is saved already", "id": lid,
+                    "link": None if lid is None else links.get(db.connect(), lid)}), 409
 
 
 @app.get("/api/links")
@@ -1204,7 +1207,7 @@ def update_link(lid):
     other = links.find(conn, url) if url is not None else None
     if other is not None and other != lid:
         return _taken(other)
-    kw = {"pid": pid} if "person" in body else {}
+    kw = {"pid": pid, "now": int(time.time())} if "person" in body else {}
     try:
         link = links.update(conn, lid, url=url, title=title, notes=notes, **kw)
     except sqlite3.IntegrityError:
@@ -1220,6 +1223,13 @@ def delete_link(lid):
         return jsonify({"ok": False, "error": "no such link"}), 404
     userdata.changed("links")
     return jsonify({"ok": True})
+
+
+@app.get("/api/people/recent-links")
+def recent_link_people():
+    """The people most recently given a link (links.recent_people), for the
+    quick-add's picker. ``limit`` is kept between 1 and links.MAX_RECENT."""
+    return jsonify({"people": links.recent_people(db.connect(), _int_arg("limit", 10, 1, links.MAX_RECENT))})
 
 
 @app.post("/api/people/<int:pid>/links/order")

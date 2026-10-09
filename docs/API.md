@@ -1366,6 +1366,7 @@ A **link**:
 | POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person` (`null` unties it; none is a 400) → `{ "ok": true, "link": {…} }` |
 | DELETE | `/api/links/<id>` | → `{ "ok": true }` |
 | POST | `/api/people/<id>/links/order` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "links": [link, …] }`, the person's links in their new order |
+| GET | `/api/people/recent-links?limit=10` | `{ "people": [{ "id": 3, "name": "Some Body", "at": 1727500000 }, …] }`: the people most recently given a link, latest first, see below |
 
 - `GET /api/links`: newest first; with `person`, in that person's order.
   `person` is a person id (one that is not an id matches nothing) or `none`
@@ -1375,8 +1376,16 @@ A **link**:
   `sites` counts every link by site, whatever the filters, for a site
   picker, most links first.
 - A URL saved already (once cleaned) is a 409
-  `{ "ok": false, "error": "that link is saved already", "id": 12 }` with
-  the saved link's id, on create and on edit.
+  `{ "ok": false, "error": "that link is saved already", "id": 12, "link": {…} }`
+  with the saved link's id and the link itself (its `person` says whose it
+  is, `null` for no one), on create and on edit.
+- `/api/people/recent-links` (the quick-add's picker): each person who has a
+  link, by `at`, when a link was last given to them: created with them, or
+  moved to them from no one or from someone else (an edit that keeps the
+  person does not count). A person with no link left is not listed.
+  `limit` is 10 by default, kept between 1 and 50. The tie time is kept per
+  link (`tied_at`, in `links.json` too; a link restored from an older file
+  counts from `created_at`).
 - A person's links (`GET /api/people/<id>`, `/links/order`) come socials
   first, then the others, each in the person's order. A new link, or one
   given to another person, goes last in its person's order; one untied

@@ -3093,6 +3093,74 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 /* The title runs to the form's right edge, over the button: both lines end at the same x. */
 .link-form:not(:has(.link-form-person)) .link-form-title { grid-column: 2 / -1; }
 .link-row.is-editing { display: block; padding: 12px; }
+
+/* ── Quick-add a link (#165): Alt+L, the nav's + Link, a dropped URL ── */
+/* The nav's + Link sits on the Links row's right end, as Feed's "N new". */
+button.side-add { font-family: var(--mono); cursor: pointer; }
+.quick-add-modal { width: 540px; }
+.quick-add-modal .modal-title { display: flex; align-items: center; gap: 8px; }
+.quick-add-modal .modal-title .icon { color: var(--accent-hover); }
+.quick-add { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.quick-add .filter { min-width: 0; }
+.quick-add input[type="text"] { width: 100%; min-width: 0; padding: 7px 11px; height: 34px; }
+.quick-add .link-input-text { font-family: var(--body); }
+.quick-add-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.quick-add-row .person-notes {
+  min-height: 34px; padding: 6px 11px; display: block;
+  field-sizing: content; max-height: 120px; overflow-y: auto;
+}
+.person-pick { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.person-pick-list {
+  list-style: none; margin: 0; padding: 4px;
+  max-height: 228px; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 10px;
+}
+.person-pick-head {
+  padding: 8px 10px 3px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted);
+}
+.person-pick-option {
+  padding: 6px 10px; border-radius: 7px; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.person-pick-option:hover { background: rgba(255, 255, 255, 0.04); }
+.person-pick-option.is-active { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--accent); }
+.person-pick-option.is-none { color: var(--text-dim); font-weight: 500; }
+.quick-add-taken a { color: inherit; font-weight: 700; text-decoration: underline; }
+.quick-add-actions { align-items: center; }
+.quick-add-hint { font-size: 11.5px; }
+.quick-add-hint kbd {
+  font-family: var(--mono); font-size: 10.5px; line-height: 1;
+  padding: 2px 5px; margin-right: 3px;
+  color: var(--text-dim); background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px;
+}
+/* No keyboard: no keys to tell of. */
+@media (hover: none) { .quick-add-hint { display: none; } }
+/* "Save to <a long name>" stops at the dialog's edge. */
+.quick-add-save { min-width: 0; max-width: 340px; }
+.quick-add-to { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  .quick-add-row { grid-template-columns: minmax(0, 1fr); }
+}
+/* A URL dragged over the window: the whole window takes the drop. */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 150;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(5, 7, 11, 0.6);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  outline: 2px dashed rgba(var(--glow-rgb), 0.7); outline-offset: -14px;
+}
+.drop-overlay-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 22px;
+  font-family: var(--display); font-size: 16px; font-weight: 800; color: var(--text);
+  background: var(--surface); border: 1px solid rgba(var(--glow-rgb), 0.45); border-radius: 12px;
+  box-shadow: var(--lift);
+  pointer-events: none;
+}
+.drop-overlay-card .icon { color: var(--glow); }
 .links-add .page-lede { margin-top: -8px; }
 .links-filters { align-items: flex-end; margin-bottom: 16px; }
 .links-filters .links-none { height: 34px; }

@@ -268,8 +268,11 @@ export function dismissSuggestion(id) { return post("/api/people/suggestions/dis
 // { links: [link], sites: [{ site, count }] }. params: person (an id, or
 // "none"), kind ("social" | "other"), site, q.
 export function getLinks(params = {}, opts) { return get(`/api/links${qs(params)}`, opts); }
-// body { url, title, notes, person } → { ok, link }; a saved URL is { ok: false, error, id } (409).
+// body { url, title, notes, person } → { ok, link }; a saved URL is { ok: false, error, id, link } (409),
+// ``link`` the saved one, with its person.
 export function createLink(body) { return post("/api/links", body); }
+// The people most recently given a link, latest first → { people: [{ id, name, at }] }.
+export function getRecentLinkPeople(limit = 10) { return get(`/api/people/recent-links${qs({ limit })}`); }
 export function updateLink(id, changes) { return post(`/api/links/${id}`, changes); }
 export function deleteLink(id) { return del(`/api/links/${id}`); }
 // The ids take the places they held among the person's links → { ok, links }.

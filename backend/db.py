@@ -515,12 +515,21 @@ def _migrate_22(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS media_hash_full ON media_hash(full, size) WHERE full IS NOT NULL")
 
 
+def _migrate_23(conn):
+    """When a link was last given to its person (links.recent_people: the
+    quick-add's "recent" people): set as it is created with one, or moved to
+    another; NULL for a link of no one. A link already tied counts from
+    when it was saved."""
+    conn.execute("ALTER TABLE links ADD COLUMN tied_at INTEGER")
+    conn.execute("UPDATE links SET tied_at = created_at WHERE person_id IS NOT NULL")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
-              _migrate_19, _migrate_20, _migrate_21, _migrate_22]
+              _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23]
 
 BACKUPS_KEPT = 3
 
