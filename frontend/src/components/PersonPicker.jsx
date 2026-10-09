@@ -82,6 +82,7 @@ function PickRow({ o, i, listId, active, onPick, disabled, head }) {
         aria-selected={active}
         aria-disabled={disabled || undefined}
         className={`person-pick-option${active ? " is-active" : ""}${o.person ? "" : " is-none"}`}
+        title={o.person ? o.person.name : undefined}
         onMouseDown={e => e.preventDefault()}
         onClick={() => { if (!disabled) onPick(o); }}
       >
