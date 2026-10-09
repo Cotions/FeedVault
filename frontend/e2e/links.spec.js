@@ -358,11 +358,16 @@ test("quick-add: Alt+L prefills the clipboard's address, Enter saves to a recent
     // The Links page lists it without a reload.
     await expect(page.locator(".link-row", { hasText: "From the clipboard" })).toHaveCount(1);
 
-    // Typing searches everyone; Escape closes.
+    // Typing searches everyone; Alt+L again (from a button) keeps what was typed; Escape closes.
     await page.locator("body").press("Alt+l");
     await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Title").fill("typed, kept");
     await dialog.getByRole("combobox", { name: "Person" }).fill(`recent ${stamp}`);
     await expect(options).toHaveText([name, "No person (Unsorted)"]);
+    await dialog.getByRole("button", { name: "Cancel" }).focus();
+    await page.keyboard.press("Alt+l");
+    await expect(dialog.getByLabel("Title")).toHaveValue("typed, kept");
+    await expect(dialog.getByRole("combobox", { name: "Person" })).toHaveValue(`recent ${stamp}`);
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await idle(page);
@@ -459,5 +464,57 @@ test("quick-add: a drag that starts in the page is left to the page", async ({ p
     main.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
   });
   await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Its dragend never came (the dragged node went away): a drag from
+  // outside, once the page's drag events have stopped, is taken again.
+  await page.evaluate(() => document.querySelector("main")
+    .dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: new DataTransfer() })));
+  await page.waitForTimeout(800);
+  await dragUrlIn(page, "https://outside.example/");
+  await expect(page.locator(".drop-overlay")).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new DragEvent("dragleave", { relatedTarget: null })));
+  await expect(page.locator(".drop-overlay")).toHaveCount(0);
+  await idle(page);
+});
+
+test("quick-add: text dragged into a text field is left to the field; plain words open nothing", async ({ page }) => {
+  await openPage(page, { name: "Links", path: "/links" });
+  const notes = page.locator(".links-add .link-form").getByLabel("Notes");
+  // Over and onto the notes field: not taken (the browser types it there), no overlay, even for a link.
+  const taken = await notes.evaluate(el => {
+    const out = [];
+    for (const [type, text] of [["text/plain", "some words"], ["text/uri-list", "https://a.example/"]]) {
+      const dt = new DataTransfer();
+      dt.setData(type, text);
+      for (const ev of ["dragenter", "dragover", "drop"]) {
+        out.push(!el.dispatchEvent(new DragEvent(ev, { bubbles: true, cancelable: true, dataTransfer: dt })));
+      }
+    }
+    return out;
+  });
+  expect(taken, "no drag event on the field was cancelled").toEqual([false, false, false, false, false, false]);
+  await expect(page.locator(".drop-overlay")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Plain words dropped on the page: no overlay while dragged, no dialog, no error.
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "just some words");
+    const main = document.querySelector("main");
+    for (const ev of ["dragenter", "dragover", "drop"]) main.dispatchEvent(new DragEvent(ev, { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  await expect(page.locator(".drop-overlay")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator(".toast")).toHaveCount(0);
+
+  // A plain-text address dropped on the page opens the quick-add with it.
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "https://plain.example/x");
+    const main = document.querySelector("main");
+    for (const ev of ["dragenter", "dragover", "drop"]) main.dispatchEvent(new DragEvent(ev, { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+  await expect(page.getByRole("dialog", { name: "Add a link" }).getByLabel("Address")).toHaveValue("https://plain.example/x");
+  await page.keyboard.press("Escape");
   await idle(page);
 });

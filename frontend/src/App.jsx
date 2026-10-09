@@ -132,9 +132,11 @@ export default function App() {
   }, [query, urlQ, onFeed, location.search, navigate]);
 
   // The phone's drawer closes first: it traps Tab and makes the rest inert.
+  // Opened again while open (Alt+L), it stays as it is, typing and all; a
+  // dropped address starts it afresh with that address.
   const openQuickAdd = useCallback((url = "") => {
     setDrawer(false);
-    setQuickAdd(q => ({ url, clipboard: !url, n: (q?.n ?? 0) + 1 }));
+    setQuickAdd(q => (q && !url ? q : { url, clipboard: !url, n: (q?.n ?? 0) + 1 }));
   }, []);
   const closeQuickAdd = useCallback(() => setQuickAdd(null), []);
 
@@ -171,37 +173,51 @@ export default function App() {
 
   // A web address dropped anywhere opens the quick-add with it. Only a drag
   // from outside the page: one that started here (reordering collections,
-  // an image) fires dragstart first, and is left to the page.
+  // an image) fires dragstart first, and is left to the page. So is a drop
+  // on a text field (it types the text there, as always). A link
+  // (text/uri-list) shows the drop overlay; plain text cannot be read
+  // before the drop, so it shows none, and opens the quick-add only if it
+  // turns out to be an address (anything else is let go, unremarked).
   useEffect(() => {
-    let inside = false, timer = null;
-    const ours = e => !inside && mayCarryUrl(e.dataTransfer?.types);
+    let inside = false, timer = null, insideTimer = null;
+    const editable = t => t instanceof Element && (t.closest("input, textarea, select") || t.isContentEditable);
+    const ours = e => !inside && mayCarryUrl(e.dataTransfer?.types) && !editable(e.target);
+    const isLink = e => [...(e.dataTransfer?.types || [])].includes("text/uri-list");
     const gone = () => { clearTimeout(timer); setDropping(false); };
-    function onStart() { inside = true; }
-    function onEnd() { inside = false; gone(); }
+    // The page's own drag is over at dragend, or, should that never come
+    // (its node went away mid-drag), once its drag events stop.
+    const outside = () => { inside = false; clearTimeout(insideTimer); };
+    const stillInside = () => { clearTimeout(insideTimer); insideTimer = setTimeout(outside, DRAG_GONE_MS); };
+    function onStart() { inside = true; stillInside(); }
+    function onEnd() { outside(); gone(); }
     function onOver(e) {
-      if (!ours(e)) return;
+      if (inside) { stillInside(); return; }
+      if (!ours(e)) { if (editable(e.target)) gone(); return; }
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
+      if (!isLink(e)) return;
       setDropping(true);
       clearTimeout(timer);
       timer = setTimeout(gone, DRAG_GONE_MS);
     }
     function onLeave(e) { if (!e.relatedTarget) gone(); }      // out of the window
     function onDrop(e) {
-      if (!ours(e)) return;
-      e.preventDefault();
+      const mine = ours(e);
+      outside();
       gone();
+      if (!mine) return;
+      e.preventDefault();                       // not a browser's own (Firefox opens a dropped link)
       const url = droppedUrl(type => e.dataTransfer.getData(type));
       if (url) openQuickAdd(url);
-      else toast("Only a web address (http or https) can be dropped here.", "err");
     }
     const on = { dragstart: onStart, dragend: onEnd, dragenter: onOver, dragover: onOver, dragleave: onLeave, drop: onDrop };
     for (const [ev, fn] of Object.entries(on)) window.addEventListener(ev, fn);
     return () => {
       clearTimeout(timer);
+      clearTimeout(insideTimer);
       for (const [ev, fn] of Object.entries(on)) window.removeEventListener(ev, fn);
     };
-  }, [openQuickAdd, toast]);
+  }, [openQuickAdd]);
 
   // The drawer closes when a link in it is followed (onClick on the nav, even
   // to the page already shown), when the page changes (Back), and when the

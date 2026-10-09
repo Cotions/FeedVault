@@ -3148,9 +3148,10 @@ button.side-add:hover { background: rgba(var(--accent-rgb), 0.26); }
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .quick-add-row { grid-template-columns: minmax(0, 1fr); }
 }
-/* A URL dragged over the window: the whole window takes the drop. */
+/* A URL dragged over the window. It takes no events: the drop lands on
+   what is under it, so a text field there still takes the text itself. */
 .drop-overlay {
-  position: fixed; inset: 0; z-index: 150;
+  position: fixed; inset: 0; z-index: 150; pointer-events: none;
   display: flex; align-items: center; justify-content: center;
   background: rgba(5, 7, 11, 0.6);
   backdrop-filter: blur(3px);

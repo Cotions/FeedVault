@@ -195,10 +195,10 @@ def test_duplicate_409_names_the_person_it_is_tied_to(client):
 
 @pytest.fixture
 def clock(monkeypatch):
-    """time.time() as the routes read it, moved by hand."""
+    """The links routes' clock (app._link_now), moved by hand."""
     import app
     now = [1_000_000]
-    monkeypatch.setattr(app.time, "time", lambda: float(now[0]))
+    monkeypatch.setattr(app, "_link_now", lambda: now[0])
     return now
 
 

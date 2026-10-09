@@ -88,7 +88,8 @@ export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, o
 
   const to = active.person ? active.person.name : "Unsorted";
   return (
-    <form className="quick-add" onSubmit={e => { e.preventDefault(); save(active); }} aria-busy={busy}>
+    <form className="quick-add" onSubmit={e => { e.preventDefault(); save(active); }} aria-busy={busy}
+          onKeyDown={e => { if (e.key === "Enter" && e.nativeEvent.isComposing) e.preventDefault(); }}>
       <label className="filter quick-add-url">
         <span>Address</span>
         <input ref={urlRef} type="text" inputMode="url" autoComplete="off" spellCheck={false} placeholder="https://…"

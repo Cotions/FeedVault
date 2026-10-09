@@ -27,6 +27,7 @@ export default function PersonPicker({ people, recent, active, onActive, onPick,
   }
 
   function onKeyDown(e) {
+    if (e.nativeEvent.isComposing) return;      // an input method's own keys
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const next = e.key === "ArrowDown" ? Math.min(options.length - 1, at + 1) : Math.max(0, at - 1);
