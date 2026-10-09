@@ -18,6 +18,7 @@ MAX_TITLE = 300
 MAX_NOTES = 5000                # as people.MAX_NOTES
 MAX_QUERY = 200
 MAX_IDS = 5000                  # links per reorder
+MAX_RECENT = 50                 # people per recent_people
 
 # The hosts (as site() gives them) that make a link "social". The only
 # source of truth for it: the API, the filters and the page's groups all
@@ -188,6 +189,18 @@ def find(conn, url):
     return row[0] if row else None
 
 
+def recent_people(conn, limit):
+    """[{"id", "name", "at"}]: the people most recently given a link, the
+    latest first. ``at`` is when the last of their links was given to them
+    (``tied_at``: created with them, or moved to them later), not when it
+    was saved: a link sorted out of the untied ones counts as recent."""
+    rows = conn.execute(
+        "SELECT p.id, p.name, MAX(COALESCE(l.tied_at, l.created_at)) AS at "
+        "FROM links l JOIN people p ON p.id = l.person_id "
+        "GROUP BY p.id ORDER BY at DESC, p.id DESC LIMIT ?", (limit,)).fetchall()
+    return [{"id": r["id"], "name": r["name"], "at": r["at"]} for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Changes (each returns what the API answers; the caller notes userdata)
 # ---------------------------------------------------------------------------
@@ -200,17 +213,20 @@ def create(conn, url, title, notes, pid, now):
     """A new link (``url`` cleaned and not saved yet), last in its person's order."""
     with conn:
         lid = conn.execute(
-            "INSERT INTO links(url, title, notes, person_id, position, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (url, title, notes, pid, None if pid is None else _next_position(conn, pid), now)).lastrowid
+            "INSERT INTO links(url, title, notes, person_id, position, created_at, tied_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (url, title, notes, pid, None if pid is None else _next_position(conn, pid), now,
+             None if pid is None else now)).lastrowid
     return get(conn, lid)
 
 
 _UNSET = object()
 
 
-def update(conn, lid, url=None, title=None, notes=None, pid=_UNSET):
+def update(conn, lid, url=None, title=None, notes=None, pid=_UNSET, now=None):
     """Change what is given. A link given to another person goes last in
-    their order; one given to no one loses its place."""
+    their order, tied to them at ``now``; one given to no one loses its
+    place."""
     with conn:
         for column, value in (("url", url), ("title", title), ("notes", notes)):
             if value is not None:
@@ -218,8 +234,9 @@ def update(conn, lid, url=None, title=None, notes=None, pid=_UNSET):
         if pid is not _UNSET:
             row = conn.execute("SELECT person_id FROM links WHERE id = ?", (lid,)).fetchone()
             if row[0] != pid:
-                conn.execute("UPDATE links SET person_id = ?, position = ? WHERE id = ?",
-                             (pid, None if pid is None else _next_position(conn, pid), lid))
+                conn.execute("UPDATE links SET person_id = ?, position = ?, tied_at = ? WHERE id = ?",
+                             (pid, None if pid is None else _next_position(conn, pid),
+                              None if pid is None else now, lid))
     return get(conn, lid)
 
 
@@ -254,10 +271,12 @@ def restore_row(row):
     title, notes = clean_title(row.get("title")), clean_notes(row.get("notes"))
     if url is None or title is None or notes is None:
         return None
-    position = row.get("position")
+    position, tied_at = row.get("position"), row.get("tied_at")
     if isinstance(position, bool) or not isinstance(position, int) or not 0 < position < 2**53:
         position = None
-    return {**row, "url": url, "title": title, "notes": notes, "position": position}
+    if isinstance(tied_at, bool) or not isinstance(tied_at, int) or not 0 <= tied_at < 2**53:
+        tied_at = None                         # a file from before it was kept: from created_at
+    return {**row, "url": url, "title": title, "notes": notes, "position": position, "tied_at": tied_at}
 
 
 def merge_into(conn, keep, others):

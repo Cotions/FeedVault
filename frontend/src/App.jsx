@@ -7,12 +7,14 @@ import { ToastContext } from "./lib/toast";
 import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
+import { droppedUrl, mayCarryUrl } from "./lib/links";
 import { desktopAllowed, notificationPath } from "./lib/notify";
 import { FOCUSABLE, PHONE } from "./lib/layout";
 import Icon            from "./components/Icon";
 import CyberBackground from "./components/CyberBackground";
 import Notifications   from "./components/Notifications";
 import ScrollManager   from "./components/ScrollManager";
+import QuickAddLink, { UNSORTED_PATH } from "./components/QuickAddLink";
 import Feed            from "./pages/Feed";
 import PostPage        from "./pages/PostPage";
 import Review          from "./pages/Review";
@@ -41,6 +43,10 @@ const JOBS_POLL_MS        = 1000;
 const JOBS_HIDDEN_POLL_MS = 5000;
 const JOBS_IDLE_POLL_MS   = 15000;
 const JOBS_PAGE_POLL_MS   = 3000;
+// A URL dragged over the window: the drop overlay goes when the drag leaves,
+// ends, or (a drag cancelled outside the window tells nothing) when no
+// dragover came for this long.
+const DRAG_GONE_MS        = 600;
 // Desktop notifications on: a hidden tab still polls, now and then.
 const DESKTOP_POLL_MS     = 60000;
 const DESKTOP_MAX         = 5;               // notifications shown at once; the bell lists the rest
@@ -85,6 +91,9 @@ export default function App() {
   const navRef    = useRef(null);
   const headerRef = useRef(null);
   const mainRef   = useRef(null);
+  // Quick-add a link (#165): { url, clipboard, n } while open; n remounts it for another drop.
+  const [quickAdd, setQuickAdd] = useState(null);
+  const [dropping, setDropping] = useState(false);   // a URL is dragged over the window
 
   const toast = useCallback((text, kind = "ok", link) => {
     const id = ++toastId.current;
@@ -122,12 +131,35 @@ export default function App() {
     return () => clearTimeout(t);
   }, [query, urlQ, onFeed, location.search, navigate]);
 
+  // The phone's drawer closes first: it traps Tab and makes the rest inert.
+  // Opened again while open (Alt+L), it stays as it is, typing and all; a
+  // dropped address starts it afresh with that address.
+  const openQuickAdd = useCallback((url = "") => {
+    setDrawer(false);
+    setQuickAdd(q => (q && !url ? q : { url, clipboard: !url, n: (q?.n ?? 0) + 1 }));
+  }, []);
+  const closeQuickAdd = useCallback(() => setQuickAdd(null), []);
+
+  // Saved: a toast one click from where it went. A page that lists links
+  // (Links, a person's) loads them again.
+  const quickSaved = useCallback(link => {
+    setQuickAdd(null);
+    const p = link.person;
+    toast(p ? `Link saved to ${p.name}` : "Link saved to Unsorted", "ok",
+      { to: p ? personPath(p.id) : UNSORTED_PATH, label: "Show" });
+    if (/^\/(links|people\/)/.test(window.location.pathname)) setRefreshKey(k => k + 1);
+  }, [toast]);
+
   // "/" and Ctrl/Cmd-K jump to search from anywhere, Esc drops focus.
+  // Alt+L opens the quick-add, but not while typing (Alt+L may type a character).
   useEffect(() => {
     function onKey(e) {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
       const hot = e.key === "k" && (e.metaKey || e.ctrlKey);
-      if (hot || (e.key === "/" && !typing)) {
+      if (e.code === "KeyL" && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !typing && !e.repeat) {
+        e.preventDefault();
+        openQuickAdd();
+      } else if (hot || (e.key === "/" && !typing)) {
         e.preventDefault();
         searchRef.current?.focus();
         searchRef.current?.select();
@@ -137,7 +169,55 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [openQuickAdd]);
+
+  // A web address dropped anywhere opens the quick-add with it. Only a drag
+  // from outside the page: one that started here (reordering collections,
+  // an image) fires dragstart first, and is left to the page. So is a drop
+  // on a text field (it types the text there, as always). A link
+  // (text/uri-list) shows the drop overlay; plain text cannot be read
+  // before the drop, so it shows none, and opens the quick-add only if it
+  // turns out to be an address (anything else is let go, unremarked).
+  useEffect(() => {
+    let inside = false, timer = null, insideTimer = null;
+    const editable = t => t instanceof Element && (t.closest("input, textarea, select") || t.isContentEditable);
+    const ours = e => !inside && mayCarryUrl(e.dataTransfer?.types) && !editable(e.target);
+    const isLink = e => [...(e.dataTransfer?.types || [])].includes("text/uri-list");
+    const gone = () => { clearTimeout(timer); setDropping(false); };
+    // The page's own drag is over at dragend, or, should that never come
+    // (its node went away mid-drag), once its drag events stop.
+    const outside = () => { inside = false; clearTimeout(insideTimer); };
+    const stillInside = () => { clearTimeout(insideTimer); insideTimer = setTimeout(outside, DRAG_GONE_MS); };
+    function onStart() { inside = true; stillInside(); }
+    function onEnd() { outside(); gone(); }
+    function onOver(e) {
+      if (inside) { stillInside(); return; }
+      if (!ours(e)) { if (editable(e.target)) gone(); return; }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      if (!isLink(e)) return;
+      setDropping(true);
+      clearTimeout(timer);
+      timer = setTimeout(gone, DRAG_GONE_MS);
+    }
+    function onLeave(e) { if (!e.relatedTarget) gone(); }      // out of the window
+    function onDrop(e) {
+      const mine = ours(e);
+      outside();
+      gone();
+      if (!mine) return;
+      e.preventDefault();                       // not a browser's own (Firefox opens a dropped link)
+      const url = droppedUrl(type => e.dataTransfer.getData(type));
+      if (url) openQuickAdd(url);
+    }
+    const on = { dragstart: onStart, dragend: onEnd, dragenter: onOver, dragover: onOver, dragleave: onLeave, drop: onDrop };
+    for (const [ev, fn] of Object.entries(on)) window.addEventListener(ev, fn);
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(insideTimer);
+      for (const [ev, fn] of Object.entries(on)) window.removeEventListener(ev, fn);
+    };
+  }, [openQuickAdd]);
 
   // The drawer closes when a link in it is followed (onClick on the nav, even
   // to the page already shown), when the page changes (Back), and when the
@@ -426,7 +506,13 @@ export default function App() {
           <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
           <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
           <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
-          <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
+          <div className="side-row">
+            <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
+            <button type="button" className="side-badge side-add" onClick={() => openQuickAdd()}
+                    title="Add a link (Alt+L)" aria-label="Add a link" aria-keyshortcuts="Alt+L">
+              <Icon name="plus" size={11} />Link
+            </button>
+          </div>
           <NavLink to="/collections" className="side-link"><Icon name="bookmark" />Collections</NavLink>
           <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
           <NavLink to="/storage" className="side-link"><Icon name="disk" />Storage</NavLink>
@@ -532,6 +618,16 @@ export default function App() {
           </Routes>
         </main>
       </div>
+
+      {quickAdd && (
+        <QuickAddLink key={quickAdd.n} url={quickAdd.url} clipboard={quickAdd.clipboard}
+                      onSaved={quickSaved} onClose={closeQuickAdd} />
+      )}
+      {dropping && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-overlay-card"><Icon name="link" size={22} />Drop to add the link</div>
+        </div>
+      )}
 
       <div className="toasts" role="status" aria-live="polite">
         {toasts.map(t => (

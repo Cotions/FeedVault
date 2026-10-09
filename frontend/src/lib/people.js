@@ -51,3 +51,27 @@ export const REASONS = {
 };
 
 export function personPath(id) { return `/people/${id}`; }
+
+/* A link's person picker (components/PersonPicker.jsx). */
+const MAX_PICK = 200;
+export const NO_PERSON = { key: "none", person: null };
+
+/* The options for ``query``: with none typed, "No person" first, then the
+   people most recently given a link (``recent``, [{ id, name }]), then
+   everyone else by name; typed, the people it matches (the recent ones
+   first), and "No person" last, so it is always there. */
+export function personOptions(people, recent, query) {
+  const all = people || [];
+  const byId = new Map(all.map(p => [p.id, p]));
+  // A recent person the full list does not have yet (still loading): the name is enough.
+  const top = (recent || []).map(r => byId.get(r.id) || { id: r.id, name: r.name, accounts: [] });
+  const topIds = new Set(top.map(p => p.id));
+  const rest = all.filter(p => !topIds.has(p.id)).sort((a, b) => a.name.localeCompare(b.name));
+  const opt = (p, recentOne) => ({ key: `person:${p.id}`, person: p, recent: recentOne });
+  if (!query.trim()) {
+    return [NO_PERSON, ...top.map(p => opt(p, true)), ...rest.map(p => opt(p, false))].slice(0, MAX_PICK);
+  }
+  const hit = p => matches(personText(p), query);
+  return [...top.filter(hit).map(p => opt(p, true)), ...rest.filter(hit).map(p => opt(p, false))]
+    .slice(0, MAX_PICK - 1).concat(NO_PERSON);
+}

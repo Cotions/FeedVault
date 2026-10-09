@@ -131,14 +131,15 @@ register("sources", "sources", ("tool", "target", "platform", "author_id", "pers
 # from people.json is created again). Each row is cleaned as the API would
 # (links.restore_row): the file may have been edited by hand, and a link is
 # rendered as a link. A URL the API would refuse is not put back.
-register("links", "links", ("url", "title", "notes", "person", "position", "created_at"), "url",
-         select="SELECT l.url, l.title, l.notes, p.name, l.position, l.created_at, l.id FROM links l "
+register("links", "links", ("url", "title", "notes", "person", "position", "created_at", "tied_at"), "url",
+         select="SELECT l.url, l.title, l.notes, p.name, l.position, l.created_at, l.tied_at, l.id FROM links l "
                 "LEFT JOIN people p ON p.id = l.person_id ORDER BY l.url",
          insert=("INSERT OR IGNORE INTO people(name, created_at) SELECT :person, COALESCE(:created_at, 0) "
                  "WHERE :person IS NOT NULL",
-                 "INSERT OR IGNORE INTO links(id, url, title, notes, person_id, position, created_at) "
+                 "INSERT OR IGNORE INTO links(id, url, title, notes, person_id, position, created_at, tied_at) "
                  "SELECT :id, :url, COALESCE(:title, ''), COALESCE(:notes, ''), p.id, "
-                 "CASE WHEN p.id IS NULL THEN NULL ELSE :position END, COALESCE(:created_at, 0) "
+                 "CASE WHEN p.id IS NULL THEN NULL ELSE :position END, COALESCE(:created_at, 0), "
+                 "CASE WHEN p.id IS NULL THEN NULL ELSE COALESCE(:tied_at, :created_at, 0) END "
                  "FROM (SELECT 1) LEFT JOIN people p ON p.name = :person "
                  "WHERE :url LIKE 'http://%' OR :url LIKE 'https://%'"),
          clean=links.restore_row, ids=True)

@@ -1,6 +1,7 @@
 """Links (links.py): any web address, optionally tied to a person, never fetched."""
 import json
 import socket
+import sqlite3
 import urllib.request
 
 import pytest
@@ -106,7 +107,7 @@ def test_site_and_kind(url, site, kind):
 
 def test_kind_is_never_stored(env):
     cols = [r[1] for r in db.connect().execute("PRAGMA table_info(links)")]
-    assert cols == ["id", "url", "title", "notes", "person_id", "position", "created_at"]
+    assert cols == ["id", "url", "title", "notes", "person_id", "position", "created_at", "tied_at"]
 
 
 # ---------------------------------------------------------------------------
@@ -168,11 +169,136 @@ def test_a_body_that_is_not_an_object_is_a_400(client, raw):
 def test_duplicate_url_is_a_409_with_the_existing_id(client):
     first = add(client, "https://linktr.ee/alice")["link"]["id"]
     r = add(client, "HTTPS://LINKTR.EE/alice", 409)
-    assert r == {"ok": False, "error": "that link is saved already", "id": first}
+    assert r == {"ok": False, "error": "that link is saved already", "id": first,
+                 "link": get(client, "/api/links")["links"][0]}
+    assert r["link"]["id"] == first and r["link"]["person"] is None
     other = add(client, "https://linktr.ee/bob")["link"]["id"]
     assert post(client, f"/api/links/{other}", {"url": "https://linktr.ee/alice"}, 409)["id"] == first
     post(client, f"/api/links/{first}", {"url": "https://linktr.ee/alice/"})       # its own URL, changed
     post(client, f"/api/links/{first}", {"url": "https://linktr.ee/alice/"})       # unchanged: fine
+
+
+def test_duplicate_409_names_the_person_it_is_tied_to(client):
+    alice = person(client, "Alice")
+    first = add(client, "https://alice.example/shop", person=alice, title="Shop")["link"]
+    r = add(client, "https://alice.example/shop", 409, person=None, title="again")
+    assert r["link"] == first
+    assert r["link"]["person"] == {"id": alice, "name": "Alice"}
+    other = add(client, "https://bob.example")["link"]["id"]
+    r = post(client, f"/api/links/{other}", {"url": "https://alice.example/shop"}, 409)
+    assert (r["id"], r["link"]["person"]["name"]) == (first["id"], "Alice")
+
+
+# ---------------------------------------------------------------------------
+# Recent people (the quick-add's picker)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def clock(monkeypatch):
+    """The links routes' clock (app._link_now), moved by hand."""
+    import app
+    now = [1_000_000]
+    monkeypatch.setattr(app, "_link_now", lambda: now[0])
+    return now
+
+
+def recent(client, query=""):
+    return [(x["name"], x["at"]) for x in get(client, f"/api/people/recent-links{query}")["people"]]
+
+
+def test_recent_people_by_when_a_link_was_given(client, clock):
+    alice, bob, cleo = person(client, "Alice"), person(client, "Bob"), person(client, "Cleo")
+    person(client, "Dan")                                   # no link: never listed
+    assert recent(client) == []
+    add(client, "https://alice.example/1", person=alice)
+    clock[0] += 10
+    add(client, "https://bob.example", person=bob)
+    clock[0] += 10
+    add(client, "https://untied.example")                   # no one: counts for no one
+    loose = add(client, "https://loose.example")["link"]["id"]
+    clock[0] += 10
+    add(client, "https://alice.example/2", person=alice)    # Alice again: her latest counts
+    assert recent(client) == [("Alice", 1_000_030), ("Bob", 1_000_010)]
+
+    # A link given later counts from then, not from when it was saved.
+    clock[0] += 10
+    post(client, f"/api/links/{loose}", {"person": cleo})
+    assert recent(client)[0] == ("Cleo", 1_000_040)
+    # An edit that keeps its person changes nothing.
+    clock[0] += 10
+    post(client, f"/api/links/{loose}", {"person": cleo, "title": "renamed"})
+    assert recent(client)[0] == ("Cleo", 1_000_040)
+    # Untied again: Cleo has no link left, so she is gone from the list.
+    post(client, f"/api/links/{loose}", {"person": None})
+    assert recent(client) == [("Alice", 1_000_030), ("Bob", 1_000_010)]
+    assert db.connect().execute("SELECT tied_at FROM links WHERE id = ?", (loose,)).fetchone()[0] is None
+
+    assert recent(client, "?limit=1") == [("Alice", 1_000_030)]
+    # A limit out of range is kept in it, one that is not a number is the default.
+    assert len(recent(client, "?limit=0")) == 1
+    assert len(recent(client, "?limit=999")) == 2
+    assert len(recent(client, "?limit=x")) == 2
+
+
+def test_recent_people_default_is_ten(client, clock):
+    for n in range(12):
+        clock[0] += 1
+        add(client, f"https://p{n}.example", person=person(client, f"P{n}"))
+    assert [name for name, _ in recent(client)] == [f"P{n}" for n in range(11, 1, -1)]
+
+
+def test_recent_people_forget_a_deleted_person(client, clock):
+    alice, bob = person(client, "Alice"), person(client, "Bob")
+    add(client, "https://alice.example", person=alice)
+    clock[0] += 1
+    lid = add(client, "https://bob.example", person=bob)["link"]["id"]
+    delete(client, f"/api/people/{bob}")
+    assert recent(client) == [("Alice", 1_000_000)]
+    assert tuple(db.connect().execute("SELECT person_id, tied_at FROM links WHERE id = ?", (lid,)).fetchone()) \
+        == (None, None)
+
+
+def test_tied_at_survives_a_restore(env, client, clock):
+    data = str(env["tmp"] / "data")
+    alice, bob = person(client, "Alice"), person(client, "Bob")
+    lid = add(client, "https://a.example")["link"]["id"]
+    add(client, "https://b.example", person=bob)
+    clock[0] += 100
+    post(client, f"/api/links/{lid}", {"person": alice})
+    conn = db.connect()
+    for name in ("people", "links"):
+        userdata.export(conn, name, data)
+    with conn:
+        conn.execute("DELETE FROM links")
+    assert userdata.load(conn, "links", data) == 2
+    assert recent(client) == [("Alice", 1_000_100), ("Bob", 1_000_000)]
+
+
+def test_restore_from_a_file_without_tied_at(env, client):
+    data = str(env["tmp"] / "data")
+    (env["tmp"] / "data" / "userdata").mkdir(parents=True, exist_ok=True)
+    with open(userdata.path(data, "links"), "w") as f:
+        json.dump({"version": 1, "rows": [
+            {"url": "https://a.example", "person": "Alice", "created_at": 50},
+            {"url": "https://b.example", "person": "Bob", "created_at": 70, "tied_at": "soon"},
+            {"url": "https://c.example", "person": None, "created_at": 90, "tied_at": 95},
+        ]}, f)
+    conn = db.connect()
+    assert userdata.load(conn, "links", data) == 3
+    assert recent(client) == [("Bob", 70), ("Alice", 50)]
+    assert conn.execute("SELECT tied_at FROM links WHERE url = 'https://c.example'").fetchone()[0] is None
+
+
+def test_migration_counts_a_tied_link_from_when_it_was_saved(tmp_path):
+    conn = sqlite3.connect(str(tmp_path / "old.db"))
+    for migrate in db.MIGRATIONS[:22]:
+        migrate(conn)
+    conn.execute("INSERT INTO people(id, name, created_at) VALUES (1, 'Alice', 0)")
+    conn.execute("INSERT INTO links(url, person_id, position, created_at) VALUES ('https://a.example', 1, 1, 42)")
+    conn.execute("INSERT INTO links(url, created_at) VALUES ('https://b.example', 43)")
+    db.MIGRATIONS[22](conn)
+    assert conn.execute("SELECT url, tied_at FROM links ORDER BY id").fetchall() == [
+        ("https://a.example", 42), ("https://b.example", None)]
 
 
 def test_filters(client):
@@ -294,11 +420,11 @@ def test_userdata_round_trip_by_person_name(env, client):
         rows = json.load(f)["rows"]
     assert rows == [
         {"url": "https://alice.example", "title": "", "notes": "", "person": "Alice", "position": 1,
-         "created_at": rows[0]["created_at"], "id": 2},
+         "created_at": rows[0]["created_at"], "tied_at": rows[0]["created_at"], "id": 2},
         {"url": "https://news.example/a", "title": "An article", "notes": "", "person": None, "position": None,
-         "created_at": rows[1]["created_at"], "id": 3},
+         "created_at": rows[1]["created_at"], "tied_at": None, "id": 3},
         {"url": "https://www.patreon.com/alice", "title": "Patreon", "notes": "tiers", "person": "Alice",
-         "position": 2, "created_at": rows[2]["created_at"], "id": 1},
+         "position": 2, "created_at": rows[2]["created_at"], "tied_at": rows[2]["created_at"], "id": 1},
     ]
 
     # A rebuilt index: each link gets its id back, the person is found again by name.

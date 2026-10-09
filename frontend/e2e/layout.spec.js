@@ -149,6 +149,36 @@ const DIALOGS = [
     scope: ".bio-import",
   },
   {
+    // The demo's people (the stress person's long name among them) under
+    // "Recent" and "Everyone else"; the clipboard is not read (refused).
+    name: "Quick-add a link",
+    open: async page => {
+      await page.addInitScript(() => Object.defineProperty(navigator, "clipboard",
+        { configurable: true, value: { readText: () => Promise.reject(new Error("refused")) } }));
+      await openPage(page, { name: "Links", path: "/links" });
+      await page.locator("body").press("Alt+l");
+      await expect(page.locator(".person-pick-option").nth(1)).toBeVisible();
+      await idle(page);
+    },
+    scope: ".modal-overlay",
+  },
+  {
+    // A URL dragged in from another window, not dropped yet.
+    name: "Drop a URL overlay",
+    open: async page => {
+      await openPage(page, { name: "Collections", path: "/collections" });
+      await page.evaluate(() => {
+        const dt = new DataTransfer();
+        dt.setData("text/uri-list", "https://example.org/");
+        document.querySelector("main").dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+        // Kept up while it is measured: no dragover follows to keep it.
+        setInterval(() => document.querySelector("main")
+          .dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt })), 100);
+      });
+    },
+    scope: ".drop-overlay",
+  },
+  {
     name: "Notifications panel",
     open: async page => {
       await openPage(page, PAGES[0]);
