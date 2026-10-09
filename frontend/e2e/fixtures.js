@@ -232,8 +232,6 @@ export const LAYOUT_ALLOW = [
     reason: "the / shortcut hint sits inside the search field by design: the field's 44px right padding keeps typed text clear of it, and it takes no clicks" },
   { rule: "overlap", a: ".side-row > a.side-link", b: "a.side-new",
     reason: "the Feed link's \"N new\" badge is a link of its own laid on the Feed row's right end, past the label (index.css, .side-row)" },
-  { rule: "overlap", a: ".side-row > a.side-link", b: "button.side-add",
-    reason: "the Links row's \"+ Link\" (quick-add, #165) is a button of its own laid on the row's right end, past the label, as Feed's \"N new\" (index.css, .side-row)" },
 ];
 
 // Animations and transitions end at once: boxes are measured where they

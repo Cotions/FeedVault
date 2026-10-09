@@ -59,8 +59,15 @@ export const NO_PERSON = { key: "none", person: null };
 /* The options for ``query``: with none typed, "No person" first, then the
    people most recently given a link (``recent``, [{ id, name }]), then
    everyone else by name; typed, the people it matches (the recent ones
-   first), and "No person" last, so it is always there. */
-export function personOptions(people, recent, query) {
+   first), and "No person" last, so it is always there. With ``none``
+   false (assigning an Unsorted link: no one is where it is already), no
+   "No person" at all. */
+export function personOptions(people, recent, query, { none = true } = {}) {
+  const out = withNone(people, recent, query);
+  return none ? out : out.filter(o => o !== NO_PERSON);
+}
+
+function withNone(people, recent, query) {
   const all = people || [];
   const byId = new Map(all.map(p => [p.id, p]));
   // A recent person the full list does not have yet (still loading): the name is enough.

@@ -7,13 +7,17 @@ import { personOptions } from "../lib/people";
    click picks the one clicked. Escape is left to the dialog around it.
 
    Props: people (as /api/people gives them), recent ([{ id, name }]),
-   active (the highlighted option, { key, person }), onActive(option),
-   onPick(option), inputRef, label, disabled */
-export default function PersonPicker({ people, recent, active, onActive, onPick, inputRef, label = "Person", disabled = false }) {
+   active (the highlighted option, { key, person }; null: the first),
+   onActive(option), onPick(option), inputRef, label, disabled, none
+   (false: no "No person" choice, for links that have none already),
+   autoFocus */
+export default function PersonPicker({
+  people, recent, active, onActive, onPick, inputRef, label = "Person", disabled = false, none = true, autoFocus = false,
+}) {
   const [query, setQuery] = useState("");
   const listRef = useRef(null);
   const listId = useId();
-  const options = personOptions(people, recent, query);
+  const options = personOptions(people, recent, query, { none });
   const at = Math.max(0, options.findIndex(o => o.key === active?.key));
 
   // The highlight stays in view as the arrows move it through a long list.
@@ -23,7 +27,7 @@ export default function PersonPicker({ people, recent, active, onActive, onPick,
 
   function type(value) {
     setQuery(value);
-    onActive(personOptions(people, recent, value)[0]);
+    onActive(personOptions(people, recent, value, { none })[0] ?? null);
   }
 
   function onKeyDown(e) {
@@ -39,7 +43,8 @@ export default function PersonPicker({ people, recent, active, onActive, onPick,
   }
 
   const firstRest = options.findIndex(o => o.person && !o.recent);
-  const anyRecent = options.some(o => o.recent);
+  const firstRecent = options.findIndex(o => o.recent);
+  const matched = options.filter(o => o.person).length;
   return (
     <div className="person-pick">
       <input
@@ -57,14 +62,16 @@ export default function PersonPicker({ people, recent, active, onActive, onPick,
         spellCheck={false}
         value={query}
         disabled={disabled}
+        autoFocus={autoFocus}
         onChange={e => type(e.target.value)}
         onKeyDown={onKeyDown}
       />
       <ul ref={listRef} className="person-pick-list" id={listId} role="listbox" aria-label={label} tabIndex={-1}>
-        {query.trim() && options.length === 1 && <li className="picker-empty" role="presentation">No person matches “{query.trim()}”</li>}
+        {query.trim() && !matched && <li className="picker-empty" role="presentation">No person matches “{query.trim()}”</li>}
+        {!query.trim() && !none && !matched && people && <li className="picker-empty" role="presentation">No people yet</li>}
         {options.map((o, i) => (
           <PickRow key={o.key} o={o} i={i} listId={listId} active={i === at} onPick={onPick} disabled={disabled}
-                   head={!query.trim() && (o.recent && i === 1 ? "Recent" : i === firstRest && i > 0 ? (anyRecent ? "Everyone else" : "Everyone") : null)} />
+                   head={!query.trim() && (i === firstRecent ? "Recent" : i === firstRest && i > 0 ? (firstRecent >= 0 ? "Everyone else" : "Everyone") : null)} />
         ))}
       </ul>
     </div>

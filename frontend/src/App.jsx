@@ -140,16 +140,6 @@ export default function App() {
   }, []);
   const closeQuickAdd = useCallback(() => setQuickAdd(null), []);
 
-  // Saved: a toast one click from where it went. A page that lists links
-  // (Links, a person's) loads them again.
-  const quickSaved = useCallback(link => {
-    setQuickAdd(null);
-    const p = link.person;
-    toast(p ? `Link saved to ${p.name}` : "Link saved to Unsorted", "ok",
-      { to: p ? personPath(p.id) : UNSORTED_PATH, label: "Show" });
-    if (/^\/(links|people\/)/.test(window.location.pathname)) setRefreshKey(k => k + 1);
-  }, [toast]);
-
   // "/" and Ctrl/Cmd-K jump to search from anywhere, Esc drops focus.
   // Alt+L opens the quick-add, but not while typing (Alt+L may type a character).
   useEffect(() => {
@@ -349,6 +339,17 @@ export default function App() {
   // Poll now: the job may be over in less than a second.
   const jobStarted = useCallback(() => { pollJobs(); }, [pollJobs]);
 
+  // Saved: a toast one click from where it went. A page that lists links
+  // (Links, a person's) loads them again; the Unsorted badge is read again.
+  const quickSaved = useCallback(link => {
+    setQuickAdd(null);
+    const p = link.person;
+    toast(p ? `Link saved to ${p.name}` : "Link saved to Unsorted", "ok",
+      { to: p ? personPath(p.id) : UNSORTED_PATH, label: "Show" });
+    if (/^\/(links|people\/)/.test(window.location.pathname)) setRefreshKey(k => k + 1);
+    pollJobs();
+  }, [toast, pollJobs]);
+
   useEffect(() => { pollJobs(); }, [pollJobs]);
   useEffect(() => {
     function onVisibility() {
@@ -374,8 +375,11 @@ export default function App() {
   // Opening Jobs reads the list at once: what it shows is never 15 s old.
   useEffect(() => { if (onJobsPage) pollJobs(); }, [onJobsPage, pollJobs]);
 
+  // refresh(): the counts the poll carries changed here (a link saved,
+  // given to someone, deleted: the Unsorted badge), read them now.
   const jobsCtx = useMemo(
-    () => ({ list: jobList, running: jobsRunning, active: jobsActive, newCount: jobList?.new ?? 0, newUntil: jobList?.new_until ?? null, started: jobStarted }),
+    () => ({ list: jobList, running: jobsRunning, active: jobsActive, newCount: jobList?.new ?? 0, newUntil: jobList?.new_until ?? null,
+             unsortedLinks: jobList?.unsorted_links ?? 0, started: jobStarted, refresh: jobStarted }),
     [jobList, jobsRunning, jobsActive, jobStarted],
   );
 
@@ -423,6 +427,7 @@ export default function App() {
 
   const last = scan?.last;
   const lastErrors = last?.errors?.length || 0;
+  const unsorted = jobList?.unsorted_links ?? 0;
 
   return (
     <ScanContext.Provider value={scanCtx}>
@@ -506,12 +511,21 @@ export default function App() {
           <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
           <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
           <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
-          <div className="side-row">
+          <div className="side-row side-row-split">
             <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
-            <button type="button" className="side-badge side-add" onClick={() => openQuickAdd()}
-                    title="Add a link (Alt+L)" aria-label="Add a link" aria-keyshortcuts="Alt+L">
-              <Icon name="plus" size={11} />Link
-            </button>
+            <span className="side-row-end">
+              {unsorted > 0 && (
+                <Link to={UNSORTED_PATH} className="side-badge side-unsorted"
+                      title={`${plural(unsorted, "link")} tied to no one yet: sort them`}
+                      aria-label={`Unsorted links: ${fmtInt(unsorted)}`}>
+                  {unsorted > 99 ? "99+" : unsorted}
+                </Link>
+              )}
+              <button type="button" className="side-badge side-add" onClick={() => openQuickAdd()}
+                      title="Add a link (Alt+L)" aria-label="Add a link" aria-keyshortcuts="Alt+L">
+                <Icon name="plus" size={11} />Link
+              </button>
+            </span>
           </div>
           <NavLink to="/collections" className="side-link"><Icon name="bookmark" />Collections</NavLink>
           <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>

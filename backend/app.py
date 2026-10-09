@@ -1231,6 +1231,54 @@ def delete_link(lid):
     return jsonify({"ok": True})
 
 
+def _link_ids(body):
+    """(the body's ``ids``, error): 1 to links.MAX_IDS link ids."""
+    ids = body.get("ids")
+    if not _ids(ids) or not ids or len(ids) > links.MAX_IDS:
+        return None, f"ids must be a list of 1 to {links.MAX_IDS} link ids"
+    return ids, None
+
+
+@app.post("/api/links/assign")
+def assign_links():
+    """Many links to one person (``person`` null: to no one), in one
+    transaction (links.assign). All or none: an id no link has is a 404 and
+    nothing moves. With ``if_person`` (an id or null: an Undo), only the
+    links that are that person's now move, the others are passed over."""
+    body = _body()
+    ids, error = _link_ids(body)
+    if not error and "person" not in body:
+        error = "send person: the id of a person, or null"
+    pid, error = (None, error) if error else _link_person(body)
+    only = body.get("if_person", links.UNSET)
+    if not error and only is not links.UNSET and only is not None and not (
+            isinstance(only, int) and not isinstance(only, bool) and 0 <= only < 2**53):
+        error = "if_person must be the id of a person, or null"
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    moved, gone, skipped = links.assign(conn, ids, pid, _link_now(), only_from=only)
+    if gone and only is links.UNSET:
+        return jsonify({"ok": False, "error": "no such link", "missing": gone}), 404
+    if moved:
+        userdata.changed("links")
+    # A link deleted right after is left out, not given as null.
+    out = [x for x in (links.get(conn, i) for i in dict.fromkeys(ids)) if x is not None]
+    return jsonify({"ok": True, "moved": moved, "skipped": skipped, "links": out})
+
+
+@app.post("/api/links/delete")
+def delete_links():
+    body = _body()
+    ids, error = _link_ids(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    deleted = links.delete_many(db.connect(), ids)
+    if deleted:
+        userdata.changed("links")
+    return jsonify({"ok": True, "deleted": deleted})
+
+
 @app.get("/api/people/recent-links")
 def recent_link_people():
     """The people most recently given a link (links.recent_people), for the
@@ -1244,9 +1292,9 @@ def order_person_links(pid):
     conn = db.connect()
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
-    ids = body.get("ids")
-    if not _ids(ids) or not ids or len(ids) > links.MAX_IDS:
-        return jsonify({"ok": False, "error": f"ids must be a list of 1 to {links.MAX_IDS} link ids"}), 400
+    ids, error = _link_ids(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
     links.reorder(conn, pid, ids)
     userdata.changed("links")
     return jsonify({"ok": True, "links": links.of_person(conn, pid)})
@@ -1655,13 +1703,14 @@ def clean_info_json_cookies():
 
 @app.get("/api/jobs")
 def list_jobs():
-    # The sidebar's "New" count rides along with the poll (news.py).
+    # The sidebar's "New" and Unsorted links counts ride along with the poll (news.py, links.py).
     new, new_until = news.count(db.connect())
     unread, latest = notify.unread(db.connect())
     # A tab that shows desktop notifications itself says so: notify-send waits.
     if request.args.get("desktop") == "1":
         notify.tab_shows()
     return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until,
+                    "unsorted_links": links.unsorted(db.connect()),
                     "notifications": {"unread": unread, "latest": latest, "desktop": notify.enabled()}})
 
 

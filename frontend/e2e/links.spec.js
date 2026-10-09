@@ -518,3 +518,245 @@ test("quick-add: text dragged into a text field is left to the field; plain word
   await page.keyboard.press("Escape");
   await idle(page);
 });
+
+/* ── Unsorted (#165 B): the queue, assign, select, Copy URLs ── */
+
+// The clipboard as Copy URLs writes it: kept in window.__fvCopied, never
+// the real one. Reading it is refused (the quick-add then reads nothing).
+async function stubClipboardWrites(page) {
+  await page.addInitScript(() => {
+    window.__fvCopied = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: t => { window.__fvCopied.push(t); return Promise.resolve(); },
+        readText: () => Promise.reject(new DOMException("denied", "NotAllowedError")),
+      },
+    });
+  });
+}
+const copied = page => page.evaluate(() => window.__fvCopied);
+
+async function unsortedCount(request) {
+  return (await (await request.get("/api/jobs", { headers: H })).json()).unsorted_links;
+}
+
+test("Unsorted: the tab, and the nav's count that follows saves, deletes and assigns", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-unsorted-${stamp}.example`;
+  const name = `E2E sorter ${stamp}`;
+  const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  await makeLinks(request, [`https://${host}/a`, `https://${host}/b`]);
+  await request.post("/api/links", { headers: H, data: { url: `https://${host}/tied`, person: pid } });
+  // The demo's own Unsorted links, given back to no one at the end.
+  let parked = [];
+  try {
+    await stubClipboard(page, null);
+    const before = await unsortedCount(request);
+    await openPage(page, { name: "Links", path: "/links" });
+    const badge = page.locator("#main-nav a.side-unsorted");
+    await expect(badge).toHaveText(String(before));
+    await expect(badge).toHaveAttribute("href", "/links?person=none");
+    await expect(badge).toHaveAccessibleName(`Unsorted links: ${before}`);
+
+    // One click to the queue, from the tab: only links of no one.
+    const tab = page.locator(".links-tabs").getByRole("button", { name: /^Unsorted/ });
+    await expect(tab).toHaveText(`Unsorted${before}`);
+    await tab.click();
+    await expect(page).toHaveURL("/links?person=none");
+    await expect(tab).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("textbox", { name: "Search links" }).fill(host);
+    const rows = page.locator(".link-list > li");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.locator(".link-person")).toHaveCount(0);
+
+    // A delete, a quick-add to no one: the count follows at once, not on the next poll.
+    await page.getByRole("button", { name: `Delete ${host}/a` }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete link" }).click();
+    await expect(badge).toHaveText(String(before - 1));
+    await page.locator("#main-nav").getByRole("button", { name: "Add a link" }).click();
+    const dialog = page.getByRole("dialog", { name: "Add a link" });
+    await dialog.getByLabel("Address").fill(`https://${host}/quick`);
+    await dialog.getByLabel("Address").press("Enter");
+    await expect(dialog).toBeHidden();
+    await expect(badge).toHaveText(String(before));
+    await expect(rows).toHaveCount(2);
+
+    // Nothing left to sort: no badge, and the queue says so.
+    parked = (await (await request.get("/api/links?person=none", { headers: H })).json()).links.map(l => l.id);
+    await request.post("/api/links/assign", { headers: H, data: { ids: parked, person: pid } });
+    // (Changed from elsewhere: read on the next poll, or at once on a reload.)
+    await page.goto("/links?person=none");
+    await expect(page.locator(".card .empty")).toHaveText("Nothing to sort: every link has its person.");
+    await expect(badge).toHaveCount(0);
+    await expect(tab).toHaveText("Unsorted");
+    await idle(page);
+  } finally {
+    if (parked.length) await request.post("/api/links/assign", { headers: H, data: { ids: parked, person: null } });
+    await cleanUp(request, host, pid);
+  }
+});
+
+test("Unsorted: Assign… gives a row's link to a recent person by keyboard, with Undo", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-assign-${stamp}.example`;
+  const name = `E2E assignee ${stamp}`;
+  const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  try {
+    await request.post("/api/links", { headers: H, data: { url: `https://${host}/theirs`, person: pid } });   // recent
+    await makeLinks(request, [`https://${host}/one`, `https://${host}/two`]);
+    await page.goto(`/links?person=none&q=${host}`);
+    const rows = page.locator(".link-list > li");
+    await expect(rows).toHaveCount(2);                      // newest first: two, one
+    await idle(page);
+    const badge = page.locator("#main-nav a.side-unsorted");
+    const before = Number(await badge.textContent());
+
+    await page.getByRole("button", { name: `Assign ${host}/two to a person` }).click();
+    const picker = page.getByRole("combobox", { name: `Assign ${host}/two to` });
+    await expect(picker).toBeFocused();
+    const open = page.locator(".link-row.is-assigning");
+    await expect(open.getByRole("option").first()).toHaveText(name);   // the most recent, and no "No person"
+    await expect(open.locator(".person-pick-head").first()).toHaveText("Recent");
+    await expect(open).not.toContainText("No person");
+    await picker.press("Enter");
+    await expect(rows).toHaveCount(1);
+    const toast = page.locator(".toast", { hasText: `${host}/two: assigned to ${name}` });
+    await expect(toast).toBeVisible();
+    await expect(badge).toHaveText(String(before - 1));
+    expect((await linkByUrl(request, `https://${host}/two`)).person).toEqual({ id: pid, name });
+    // Focus went on to the next link's Assign…: Enter opens it, Escape closes it and gives focus back.
+    const next = page.getByRole("button", { name: `Assign ${host}/one to a person` });
+    await expect(next).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("combobox", { name: `Assign ${host}/one to` })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(open).toHaveCount(0);
+    await expect(next).toBeFocused();
+
+    // Undo: back with no one, in the queue again.
+    await toast.getByRole("button", { name: "Undo" }).click();
+    await expect(rows).toHaveCount(2);
+    await expect(badge).toHaveText(String(before));
+    expect((await linkByUrl(request, `https://${host}/two`)).person).toBeNull();
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, pid);
+  }
+});
+
+test("Links: select with shift-click, copy the URLs, assign them all, delete", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-select-${stamp}.example`;
+  const name = `E2E bulk ${stamp}`;
+  const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  const urls = ["a", "b", "c", "d"].map(x => `https://${host}/${x}`);
+  try {
+    await makeLinks(request, urls);
+    await stubClipboardWrites(page);
+    await page.goto(`/links?q=${host}`);
+    const rows = page.locator(".link-list > li");
+    await expect(rows).toHaveCount(4);                      // newest first: d, c, b, a
+    await idle(page);
+    const shown = [...urls].reverse();
+
+    await rows.nth(0).getByRole("checkbox").click();
+    await rows.nth(2).getByRole("checkbox").click({ modifiers: ["Shift"] });
+    const bar = page.getByRole("toolbar", { name: "Selection" });
+    await expect(bar.locator(".select-count")).toHaveText("3 selected");
+    await expect(rows.nth(1).getByRole("checkbox")).toBeChecked();
+    await expect(rows.nth(3).getByRole("checkbox")).not.toBeChecked();
+
+    await bar.getByRole("button", { name: "Copy URLs" }).click();
+    await expect(page.locator(".toast", { hasText: "Copied 3 links" })).toBeVisible();
+    expect(await copied(page)).toEqual([shown.slice(0, 3).join("\n")]);
+
+    await bar.getByRole("button", { name: "Assign 3 to…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Assign 3 links to…" });
+    const picker = dialog.getByRole("combobox", { name: "Person" });
+    await expect(picker).toBeFocused();
+    await picker.fill(name);
+    await picker.press("Enter");
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(".toast", { hasText: `3 links assigned to ${name}` })).toBeVisible();
+    await expect(bar).toHaveCount(0);
+    await expect(rows.locator(".link-person")).toHaveCount(3);
+    const { links } = await (await request.get(`/api/links?person=${pid}`, { headers: H })).json();
+    expect(links.map(l => l.url)).toEqual(shown.slice(0, 3));   // in her order, as selected
+
+    // The person's panel copies all of theirs, in its order.
+    await page.goto(`/people/${pid}`);
+    await page.locator(".person-links-section").getByRole("button", { name: "Copy URLs" }).click();
+    await expect(page.locator(".toast", { hasText: "Copied 3 links" })).toBeVisible();
+    expect((await copied(page)).at(-1)).toBe(shown.slice(0, 3).join("\n"));
+
+    // Delete from the selection, through the confirm dialog.
+    await page.goto(`/links?q=${host}`);
+    await expect(rows).toHaveCount(4);
+    await rows.nth(3).getByRole("checkbox").click();
+    await bar.getByRole("button", { name: "Delete 1…" }).click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toContainText("Delete 1 link?");
+    await confirm.getByRole("button", { name: "Delete 1 link" }).click();
+    await expect(rows).toHaveCount(3);
+    await expect(page.locator(".toast", { hasText: "1 link deleted." })).toBeVisible();
+    expect(await linkByUrl(request, urls[0])).toBeNull();
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, pid);
+  }
+});
+
+test("Links: a shift range holds after a row comes in; Undo gives each link back to whom it had", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-undo-${stamp}.example`;
+  const people = {};
+  for (const who of ["P", "Q", "R"]) {
+    people[who] = (await (await request.post("/api/people", { headers: H, data: { name: `E2E ${who} ${stamp}` } })).json()).person.id;
+  }
+  const url = x => `https://${host}/${x}`;
+  try {
+    await makeLinks(request, [url("a")]);
+    await request.post("/api/links", { headers: H, data: { url: url("b"), title: `${host}/b`, person: people.Q } });
+    await makeLinks(request, [url("c")]);
+    await stubClipboard(page, null);
+    await page.goto(`/links?q=${host}`);
+    const rows = page.locator(".link-list > li");
+    await expect(rows).toHaveCount(3);                      // newest first: c, b, a
+    await idle(page);
+
+    // The anchor is c; a quick-add then puts d on top. The shift range is still c to a.
+    await rows.nth(0).getByRole("checkbox").click();
+    await page.locator("#main-nav").getByRole("button", { name: "Add a link" }).click();
+    const add = page.getByRole("dialog", { name: "Add a link" });
+    await add.getByLabel("Address").fill(url("d"));
+    await add.getByLabel("Address").press("Enter");
+    await expect(add).toBeHidden();
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(1).getByRole("checkbox")).toBeChecked();   // c, moved down one
+    await rows.nth(3).getByRole("checkbox").click({ modifiers: ["Shift"] });
+    const bar = page.getByRole("toolbar", { name: "Selection" });
+    await expect(bar.locator(".select-count")).toHaveText("3 selected");
+    await expect(rows.nth(0).getByRole("checkbox")).not.toBeChecked();
+
+    // c and a had no one, b had Q: all to P.
+    await bar.getByRole("button", { name: "Assign 3 to…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Assign 3 links to…" });
+    await dialog.getByRole("combobox", { name: "Person" }).fill(`E2E P ${stamp}`);
+    await dialog.getByRole("combobox", { name: "Person" }).press("Enter");
+    const toast = page.locator(".toast", { hasText: `3 links assigned to E2E P ${stamp}` });
+    await expect(toast).toBeVisible();
+
+    // a moves on to R meanwhile: Undo leaves it there, the others go back.
+    await request.post(`/api/links/${(await linkByUrl(request, url("a"))).id}`, { headers: H, data: { person: people.R } });
+    await toast.getByRole("button", { name: "Undo" }).click();
+    await expect(page.locator(".toast", { hasText: "1 link changed since: left as it is." })).toBeVisible();
+    expect((await linkByUrl(request, url("a"))).person?.id).toBe(people.R);
+    expect((await linkByUrl(request, url("b"))).person?.id).toBe(people.Q);
+    expect((await linkByUrl(request, url("c"))).person).toBeNull();
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, null);
+    for (const pid of Object.values(people)) await request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});

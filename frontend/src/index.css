@@ -3095,13 +3095,23 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .link-row.is-editing { display: block; padding: 12px; }
 
 /* ── Quick-add a link (#165): Alt+L, the nav's + Link, a dropped URL ── */
-/* The nav's + Link sits on the Links row's right end, as Feed's "N new". */
+/* The nav's + Link sits on the Links row's right end, after the Unsorted
+   count (#165 B), a link to the Unsorted queue. Both beside the Links link,
+   not on it as Feed's "N new": together they are too wide to leave the
+   link's middle free for a click. */
+.side-row-split { flex-direction: row; align-items: center; gap: 4px; }
+.side-row-split > .side-link { flex: 1; min-width: 0; width: auto; }
+.side-row-end {
+  flex: none; margin-right: 10px;
+  display: flex; align-items: center; gap: 4px;
+}
+.side-row-end .side-badge { margin-left: 0; }
 button.side-add {
-  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
   min-height: 24px;                 /* a button of its own: a 24px target */
   font-family: var(--mono); cursor: pointer;
 }
-button.side-add:hover { background: rgba(var(--accent-rgb), 0.26); }
+a.side-unsorted { min-height: 24px; min-width: 24px; justify-content: center; text-decoration: none; }
+button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb), 0.26); }
 .quick-add-modal { width: 540px; }
 .quick-add-modal .modal-title { display: flex; align-items: center; gap: 8px; }
 .quick-add-modal .modal-title .icon { color: var(--accent-hover); }
@@ -3169,8 +3179,42 @@ button.side-add:hover { background: rgba(var(--accent-rgb), 0.26); }
 .drop-overlay-card .icon { color: var(--glow); }
 .links-add .page-lede { margin-top: -8px; }
 .links-filters { align-items: flex-end; margin-bottom: 16px; }
-.links-filters .links-none { height: 34px; }
-.links-none.is-on { color: var(--accent-text); border-color: rgba(var(--glow-rgb), 0.45); background: rgba(var(--accent-rgb), 0.14); }
+/* All links | Unsorted (#165 B): a two-way switch over the list. */
+.links-tabs {
+  display: flex; gap: 3px; width: fit-content; margin-bottom: 14px; padding: 3px;
+  background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 10px;
+}
+.links-tab {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 30px; padding: 5px 14px; border-radius: 7px;
+  background: transparent; color: var(--text-dim);
+}
+.links-tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+.links-tab.is-on { color: var(--text); background: rgba(var(--accent-rgb), 0.14); box-shadow: inset 0 0 0 1px rgba(var(--glow-rgb), 0.3); }
+.links-tab.is-on:focus-visible { box-shadow: var(--ring); }
+.links-tab-count {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700; line-height: 1.4;
+  color: var(--accent-hover); background: rgba(var(--accent-rgb), 0.14);
+  border: 1px solid rgba(var(--glow-rgb), 0.3); border-radius: 999px; padding: 1px 7px;
+}
+/* A row's checkbox, where the link icon is elsewhere: the label is the 24px target. */
+.link-check { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; margin-left: -4px; cursor: pointer; user-select: none; }
+.link-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--glow); cursor: pointer; }
+.link-row.is-selected { border-color: rgba(var(--glow-rgb), 0.55); background: rgba(var(--accent-rgb), 0.07); }
+.link-assign { padding: 5px 10px; font-size: 12px; margin-right: 4px; }
+.link-assign .icon { color: var(--accent-hover); }
+/* The row's picker opens under it, full width, inside the row: nothing overlaps the rows below. */
+.link-row.is-assigning { flex-wrap: wrap; border-color: rgba(var(--glow-rgb), 0.45); }
+.link-assign-pick { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 4px 0 2px 34px; }
+.link-assign-pick .person-pick-input { width: 100%; max-width: 420px; padding: 7px 11px; height: 34px; }
+.link-assign-pick .person-pick-list { max-width: 420px; max-height: 196px; }
+.link-assign-foot { display: flex; align-items: center; gap: 10px; max-width: 420px; }
+.link-assign-foot .btn-ghost { margin-left: auto; }
+.assign-modal { width: 460px; }
+.assign-modal .modal-title { display: flex; align-items: center; gap: 8px; }
+.assign-modal .modal-title .icon { color: var(--accent-hover); }
+.assign-modal .link-assign-pick { padding: 0; }
+.assign-modal .person-pick-input, .assign-modal .person-pick-list, .assign-modal .link-assign-foot { max-width: none; }
 .link-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .link-row {
   display: flex; align-items: center; gap: 10px; padding: 9px 8px 9px 12px; min-width: 0;

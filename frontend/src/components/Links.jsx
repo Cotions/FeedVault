@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { safeUrl } from "../lib/fmt";
+import { getRecentLinkPeople } from "../lib/api";
+import { plural, safeUrl } from "../lib/fmt";
 import { personPath } from "../lib/people";
-import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, withScheme } from "../lib/links";
+import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, linkLabel, withScheme } from "../lib/links";
+import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 import Icon from "./Icon";
 import CreatorPicker from "./CreatorPicker";
+import PersonPicker from "./PersonPicker";
 
 /* A link's fields: URL, title, notes, and its person when ``people`` is
    given (the person page presets its own and leaves the picker out).
@@ -43,7 +47,7 @@ export function LinkForm({
 
   return (
     <form className={`link-form${link ? " is-edit" : ""}`} onSubmit={submit}
-          onKeyDown={e => { if (e.key === "Escape" && onCancel) { e.stopPropagation(); onCancel(); } }}>
+          onKeyDown={e => { if (e.key === "Escape" && onCancel && !e.nativeEvent.isComposing) { e.stopPropagation(); onCancel(); } }}>
       <label className="filter link-form-url">
         <span>Address</span>
         <input type="text" inputMode="url" autoComplete="off" spellCheck={false} placeholder="https://…"
@@ -87,13 +91,24 @@ export function LinkForm({
 
 /* One link: its title (or address) opening the site in a new tab, the
    site and kind, its person (``showPerson``), notes, and the row's actions.
-   Only an http(s) address is ever a link (safeUrl); anything else is text. */
-export function LinkRow({ link: l, showPerson = true, busy = false, onEdit, onDelete, onUp, onDown, flash = false, index }) {
+   Only an http(s) address is ever a link (safeUrl); anything else is text.
+   On the Links page: ``select`` ({ checked, onClick(event) }) puts a
+   checkbox first (shift-click for a range), ``onAssign`` an "Assign…" on a
+   link of no one, and ``children`` (the open assign picker) go under it. */
+export function LinkRow({
+  link: l, showPerson = true, busy = false, onEdit, onDelete, onUp, onDown, flash = false, index, select, onAssign, children,
+}) {
   const href = safeUrl(l.url);
-  const label = l.title || l.url.replace(/^https?:\/\//, "");
+  const label = linkLabel(l);
   return (
-    <li className={`link-row${flash ? " is-flash" : ""}`} data-link-id={l.id} data-index={index}>
-      <span className="link-row-icon" aria-hidden="true"><Icon name="link" size={15} /></span>
+    <li className={`link-row${flash ? " is-flash" : ""}${select?.checked ? " is-selected" : ""}${children ? " is-assigning" : ""}`}
+        data-link-id={l.id} data-index={index}>
+      {select ? (
+        <label className="link-check" title="Select (shift-click: a range)">
+          <input type="checkbox" checked={select.checked} onChange={() => {}} onClick={select.onClick}
+                 aria-label={`Select ${label}`} />
+        </label>
+      ) : <span className="link-row-icon" aria-hidden="true"><Icon name="link" size={15} /></span>}
       <span className="link-row-main">
         <span className="link-row-head">
           {href ? (
@@ -117,6 +132,12 @@ export function LinkRow({ link: l, showPerson = true, busy = false, onEdit, onDe
         </Link>
       )}
       <span className="link-row-actions">
+        {onAssign && !l.person && (
+          <button type="button" className="btn-secondary link-assign" disabled={busy} aria-expanded={!!children}
+                  onClick={() => onAssign(l)} aria-label={`Assign ${label} to a person`} title="Give it to a person">
+            <Icon name="users" size={13} />Assign…
+          </button>
+        )}
         {onUp && (
           <button type="button" className="del-btn" disabled={busy || !onUp.ok} onClick={onUp.run}
                   title="Move up" aria-label={`Move ${label} up`}>
@@ -132,6 +153,73 @@ export function LinkRow({ link: l, showPerson = true, busy = false, onEdit, onDe
         <button type="button" className="btn-ghost" disabled={busy} onClick={() => onEdit(l)} aria-label={`Edit ${label}`}>Edit</button>
         <button type="button" className="btn-ghost" disabled={busy} onClick={() => onDelete(l)} aria-label={`Delete ${label}`}>Delete</button>
       </span>
+      {children}
     </li>
+  );
+}
+
+/* Who to give links to (#165 B): PersonPicker with no "No person" (the
+   links have none already), the recent people on top, read afresh each
+   time it opens, so the one just used comes first. Focus starts in its
+   search field; Escape cancels. A pick while ``busy`` is ignored.
+
+   Props: people, label (the field's name), onPick(person), onCancel, busy */
+export function AssignPicker({ people, label, onPick, onCancel, busy = false }) {
+  const [recent, setRecent] = useState(null);
+  const [active, setActive] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    getRecentLinkPeople(10).then(r => { if (alive) setRecent(r.people); }, () => { if (alive) setRecent([]); });
+    return () => { alive = false; };
+  }, []);
+  return (
+    <div className="link-assign-pick" aria-busy={busy || undefined}
+         onKeyDown={e => { if (e.key === "Escape" && !e.nativeEvent.isComposing) { e.stopPropagation(); e.preventDefault(); onCancel(); } }}>
+      <PersonPicker people={people} recent={recent} active={active} onActive={setActive} label={label} none={false} autoFocus
+                    onPick={o => { if (!busy && o?.person) onPick(o.person); }} />
+      <div className="link-assign-foot">
+        <span className="quick-add-hint dim"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> assign · <kbd>Esc</kbd> cancel</span>
+        <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/* AssignPicker in a dialog, for the selection's "Assign N to…": Escape or
+   a click beside it closes it, Tab stays inside, focus goes back where it
+   was.
+
+   Props: count, people, onPick(person), onClose, busy, error */
+export function AssignDialog({ count, people, onPick, onClose, busy = false, error = null }) {
+  const boxRef = useRef(null);
+  const titleId = useId();
+  useEffect(() => {
+    const prev = document.activeElement;
+    return () => restoreFocus(prev);
+  }, []);
+  useEffect(() => {
+    function onKey(e) {
+      if (!focusLost()) return;
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+      else trapTab(e, boxRef.current);
+    }
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  const what = plural(count, "link");
+  return createPortal(
+    <div className="modal-overlay"
+         onKeyDown={e => {
+           if (e.key === "Escape" && !e.nativeEvent.isComposing) { e.stopPropagation(); e.preventDefault(); onClose(); return; }
+           trapTab(e, boxRef.current);
+         }}
+         onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={boxRef} className="modal assign-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <h2 id={titleId} className="modal-title"><Icon name="users" size={16} />Assign {what} to…</h2>
+        <AssignPicker people={people} label="Person" onPick={onPick} onCancel={onClose} busy={busy} />
+        {error && <div className="msg err" role="alert">{error}</div>}
+      </div>
+    </div>,
+    document.body,
   );
 }
