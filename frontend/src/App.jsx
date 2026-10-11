@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Link, NavLink, useLocation, useNavigate, useParams } from "react-router-dom";
-import { getScan, startScan, getJobs, getNotifications, quitApp, onConnectionChange } from "./lib/api";
+import { getScan, startScan, getJobs, getNotifications, getProfiles, quitApp, onConnectionChange } from "./lib/api";
 import { ScanContext } from "./lib/scan";
 import { JobsContext, ENDED, SAVE_KINDS, endTone, shownParams } from "./lib/jobs";
 import { ToastContext } from "./lib/toast";
+import { ProfilesContext } from "./lib/profiles";
 import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
@@ -13,6 +14,7 @@ import { FOCUSABLE, PHONE } from "./lib/layout";
 import Icon            from "./components/Icon";
 import CyberBackground from "./components/CyberBackground";
 import Notifications   from "./components/Notifications";
+import ProfileSwitch   from "./components/ProfileSwitch";
 import ScrollManager   from "./components/ScrollManager";
 import QuickAddLink, { UNSORTED_PATH } from "./components/QuickAddLink";
 import Feed            from "./pages/Feed";
@@ -74,6 +76,7 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const toastId = useRef(0);
   const [jobList, setJobList] = useState(null);
+  const [profiles, setProfiles] = useState([]);
   const [visible, setVisible] = useState(() => !document.hidden);
   // Jobs already ended when the dashboard first loaded are not news: only
   // those above that first answer's newest id get a toast, once each, and
@@ -401,6 +404,14 @@ export default function App() {
     return r;
   }, []);
 
+  // The profiles, for the header's switcher and Settings; the answer also
+  // tells api.js which one this page was loaded in.
+  const loadProfiles = useCallback(() => {
+    getProfiles().then(r => setProfiles(r?.profiles || []), () => { /* offline: the status dot says so */ });
+  }, []);
+  useEffect(() => { loadProfiles(); }, [loadProfiles]);
+  const profilesCtx = useMemo(() => ({ profiles, reload: loadProfiles }), [profiles, loadProfiles]);
+
   const scanCtx = useMemo(
     () => ({ status: scan, running, start, refreshKey }),
     [scan, running, start, refreshKey],
@@ -433,6 +444,7 @@ export default function App() {
     <ScanContext.Provider value={scanCtx}>
     <JobsContext.Provider value={jobsCtx}>
     <ToastContext.Provider value={toast}>
+    <ProfilesContext.Provider value={profilesCtx}>
       <CyberBackground />
       <ScrollManager />
       <header ref={headerRef}>
@@ -475,6 +487,7 @@ export default function App() {
           )}
         </div>
         <div className="header-right">
+          <ProfileSwitch />
           {jobsActive > 0 && (
             <Link to="/jobs" className="nav-jobs-live" title={`${jobsRunning} running, ${jobsActive - jobsRunning} queued`}
                   aria-label={`Jobs: ${jobsActive} active`}>
@@ -669,6 +682,7 @@ export default function App() {
           </div>
         ))}
       </div>
+    </ProfilesContext.Provider>
     </ToastContext.Provider>
     </JobsContext.Provider>
     </ScanContext.Provider>

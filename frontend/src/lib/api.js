@@ -9,6 +9,18 @@ const BASE = "";
 // via src and the backend exempts them.
 const CSRF_HEADERS = { "X-FeedVault": "1" };
 
+// The profile (a library of its own, docs/API.md "Profiles") this page was
+// loaded in, sent with every request once known. The backend refuses a
+// change from a tab left open across a profile switch (409,
+// profile_switched): every id on the page is the other library's, so the
+// page starts again from the feed. The first id told stays: a later one
+// would be the new profile's, and would let the old page write into it.
+export function setPageProfile(id) {
+  if (id && !CSRF_HEADERS["X-FeedVault-Profile"]) CSRF_HEADERS["X-FeedVault-Profile"] = String(id);
+}
+// Replaced by the tests; a page has window.
+export const page = { restart: () => globalThis.window?.location.assign("/") };
+
 /* Connection state, shared by every call. A fetch that never reaches the
    backend (network error, or the dev proxy answering 5xx with a non-JSON body
    because the backend is down) flips it offline; any answer flips it back. */
@@ -66,6 +78,7 @@ async function request(method, path, body, { signal } = {}) {
   }
   setOnline(true);
   const data = isJson ? await r.json() : null;
+  if (r.status === 409 && data?.profile_switched) page.restart();
   if (!r.ok) {
     throw new ApiError((data && data.error) || `${method} ${path} → ${r.status}`, r.status, data);
   }
@@ -142,12 +155,32 @@ export function getStorage(person) { return get(`/api/storage${qs({ person })}`)
 export function getUnmatched() { return get("/api/unmatched"); }
 export function getScan()      { return get("/api/scan"); }
 export function startScan()    { return post("/api/scan"); }
-export function getConfig()    { return get("/api/config"); }
+export async function getConfig() {
+  const c = await get("/api/config");
+  setPageProfile(c?.profile?.id);
+  return c;
+}
 export function saveConfig(mediaRoots) { return post("/api/config", { media_roots: mediaRoots }); }
 // Opens a native folder picker on the backend machine; { path } or { path: null }.
 export function browse()       { return get("/api/browse"); }
 export function getSaved(ids)  { return post("/api/saved", { ids }); }
 export function quitApp()      { return post("/api/quit"); }
+
+/* ── Profiles (see docs/API.md "Profiles") ───────────────── */
+
+// { active, profiles: [{ id, name, data_directory, media_roots, active, posts, people }] }
+export async function getProfiles() {
+  const r = await get("/api/profiles");
+  setPageProfile(r?.active);
+  return r;
+}
+// { name, data_directory, media_roots } → { ok, profile, active, profiles } or { ok: false, error }
+export function createProfile(body) { return post("/api/profiles", body); }
+export function renameProfile(id, name) { return post(`/api/profiles/${seg(id)}`, { name }); }
+// Forgets the profile; its files stay on disk.
+export function deleteProfile(id) { return del(`/api/profiles/${seg(id)}`); }
+// → { ok, active, profiles }, or { ok: false, error, busy } (409) while a job or a scan runs.
+export function activateProfile(id) { return post(`/api/profiles/${seg(id)}/activate`); }
 
 /* ── Deleting (files move to <root>/.feedvault-trash/) ───── */
 

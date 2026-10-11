@@ -270,6 +270,55 @@ input[type="text"].header-search:focus {
 .search-clear:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
 
 .header-right { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+
+/* The profile switcher (only with two profiles or more). The search field
+   is centred on the main column and 440px wide: what is left on its right
+   is half the column less 220px, less the header's padding and the status
+   dot, so the button takes that at most and its name is cut, never laid
+   over the field. */
+.profile-switch { position: relative; display: inline-flex; min-width: 0; }
+.profile-switch-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 32px; padding: 0 10px;
+  max-width: clamp(60px, calc(50vw - 385px), 220px);
+  font-family: var(--body); font-size: 12.5px; font-weight: 600;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  transition: border-color 0.18s, color 0.18s, background 0.18s;
+}
+.profile-switch-btn:hover, .profile-switch-btn.is-open {
+  color: var(--text); border-color: rgba(var(--glow-rgb), 0.45); background: var(--surface-2);
+}
+.profile-switch-btn > svg { flex-shrink: 0; color: var(--accent-hover); }
+.profile-switch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-switch-caret {
+  flex-shrink: 0; width: 6px; height: 6px; margin: -3px 1px 0 1px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.profile-menu {
+  position: absolute; top: 100%; right: 0; z-index: 60; margin-top: 6px;
+  width: max-content; min-width: 220px; max-width: min(340px, calc(100vw - 24px));
+  display: flex; flex-direction: column; gap: 1px; padding: 4px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+}
+.profile-option, .profile-menu-manage {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 32px; padding: 6px 10px;
+  font-family: var(--body); font-size: 12.5px; text-align: left;
+  color: var(--text-dim); background: none; border-radius: 7px;
+}
+.profile-option:hover:not(:disabled), .profile-menu-manage:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.profile-option.is-on { color: var(--text); font-weight: 700; }
+.profile-option:disabled { opacity: 0.6; }
+.profile-option-mark { flex-shrink: 0; display: inline-flex; width: 12px; color: var(--accent-hover); }
+.profile-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-option-n { flex-shrink: 0; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.profile-menu-manage { margin-top: 3px; border-top: 1px solid var(--border-soft); border-radius: 0 0 7px 7px; }
+.profile-menu-err { padding: 6px 10px; font-size: 12px; line-height: 1.45; color: #ffb3b5; }
 .header-count {
   font-family: var(--mono);
   font-size: 13px;
@@ -291,6 +340,9 @@ input[type="text"].header-search:focus {
   }
   .brand { width: auto; }
   .header-count { display: none; }
+  /* The search field takes the room: the switcher is its icon. */
+  .profile-switch-btn { max-width: none; padding: 0 9px; }
+  .profile-switch-name { display: none; }
 }
 
 .status-dot {
@@ -1822,6 +1874,28 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   text-align: center;
 }
 .folder-row .btn-secondary { white-space: nowrap; }
+
+/* Settings → Profiles */
+.profile-row { align-items: flex-start; padding: 10px 8px 10px 12px; }
+.profile-row.is-active { border-color: rgba(var(--glow-rgb), 0.35); }
+.profile-row > .root-icon { margin-top: 2px; flex-shrink: 0; }
+.profile-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.profile-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.profile-row-name { min-width: 0; overflow-wrap: anywhere; font-size: 13.5px; }
+.profile-row-count { flex-shrink: 0; font-size: 12px; }
+.profile-row-path { font-size: 12px; overflow-wrap: anywhere; }
+code.profile-row-path:not(.dim) { color: var(--text-dim); }
+.profile-row-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.profile-row-actions .btn-secondary { padding: 6px 12px; font-size: 12.5px; }
+.profile-form { display: flex; flex-direction: column; gap: 14px; max-width: 760px; }
+.profile-field { display: flex; flex-direction: column; gap: 6px; }
+.profile-field > span:first-child { font-size: 12px; font-weight: 700; color: var(--text-dim); }
+.profile-field > input[type="text"] { max-width: 360px; }
+.profile-field .roots-list { margin-bottom: 2px; }
+@media (max-width: 640px) {
+  .profile-row { flex-wrap: wrap; }
+  .profile-row-actions { flex-basis: 100%; justify-content: flex-end; }
+}
 .settings-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .info-cookies { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
 .info-cookies .page-lede { margin-bottom: 0; }

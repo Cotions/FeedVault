@@ -68,3 +68,44 @@ test("a DELETE can carry a JSON body (restoring a dismissed duplicate)", async (
   assert.deepEqual(sent, [["/api/duplicates/dismiss", "DELETE", "application/json", '{"group":"4c1d"}'],
                           ["/api/duplicates/dismissed?kind=copies", "GET", undefined, undefined]]);
 });
+
+// Last: the profile this page was loaded in stays for the rest of the file.
+test("the page's profile is sent once known, and a switch elsewhere restarts the page", async () => {
+  const sent = [];
+  let answer = () => new Response("{}", { headers: { "content-type": "application/json" } });
+  globalThis.fetch = async (url, opts) => {
+    sent.push([opts.method, url, opts.headers["X-FeedVault-Profile"]]);
+    return answer(url);
+  };
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  let restarts = 0;
+  api.page.restart = () => { restarts += 1; };
+
+  await api.getTags();                                         // not known yet: no header
+  answer = () => json({ active: "work", profiles: [{ id: "work", name: "Work", active: true }] });
+  assert.equal((await api.getProfiles()).active, "work");
+  // The first id told stays: after a switch in another tab, /api/config names the new profile.
+  answer = () => json({ profile: { id: "home", name: "Home" }, media_roots: [] });
+  assert.equal((await api.getConfig()).profile.id, "home");
+  answer = () => json({ ok: true });
+  await api.activateProfile("home");
+  assert.deepEqual(sent, [["GET", "/api/tags", undefined], ["GET", "/api/profiles", undefined],
+                          ["GET", "/api/config", "work"], ["POST", "/api/profiles/home/activate", "work"]]);
+  assert.equal(restarts, 0);
+
+  // Refused as a stale tab: the answer still reaches the caller, and the page starts again.
+  const refusal = { ok: false, error: "another profile is active now; reload the page", profile_switched: true };
+  answer = () => json(refusal, 409);
+  assert.deepEqual(await api.renameProfile("work", "Job"), refusal);
+  assert.equal(restarts, 1);
+  // Any other 409 (a switch refused while a job runs) is only an answer.
+  answer = () => json({ ok: false, error: "a scan is running; try again when it is done", busy: true }, 409);
+  assert.equal((await api.activateProfile("home")).busy, true);
+  assert.equal(restarts, 1);
+
+  // A profile's id cannot reach another endpoint either.
+  sent.length = 0;
+  assert.deepEqual(await api.deleteProfile(".."), { ok: false, error: "no such page" });
+  await api.deleteProfile("a/b");
+  assert.deepEqual(sent, [["DELETE", "/api/profiles/a%2Fb", "work"]]);
+});
