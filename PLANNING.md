@@ -123,6 +123,10 @@ once the rescan picks the post up. Profile pages get a "Sync profile" button.
   kind and year (Storage, #15). Saves over time: **open**
 - **Unmatched**: files the parsers could not attach to a post, so nothing goes
   missing silently
+- **Profiles**: separate libraries (a data directory and media roots each),
+  one active at a time, switched from the header as in ChannelVault. Tools
+  and their settings are shared; a switch is refused while a job or a scan
+  runs, and schedules run for the active profile only
 
 ## Keeping what disappears
 

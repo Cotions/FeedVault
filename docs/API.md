@@ -83,6 +83,13 @@ browser from reading or changing the library; they are not a login.
   collections, the other job and source routes and Quit are the
   dashboard's alone. `backend/tests/test_foreign_origin.py` checks the list
   against the userscript's calls. See [Who can run one](#scripts).
+- **The page's profile.** The dashboard sends the id of the
+  [profile](#profiles) it was loaded in as `X-FeedVault-Profile`. A request
+  that is not a `GET` and names another profile than the active one is
+  answered 409 `{ "ok": false, "error": "another profile is active now;
+  reload the page", "profile_switched": true }` before the route runs: a
+  tab left open across a switch never writes into the other library. See
+  [Profiles](#profiles).
 - **Media from other sites.** `/media/*` and `/trash/<key>/thumb` answer 403
   before doing any work when the request comes from another site. The
   dashboard's pages and `/userscript/feedvault.user.js` still open from a
@@ -205,8 +212,13 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false }` |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false }` |
 | POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/profiles` | `{ "active": "default", "profiles": [profile, …] }`, see [Profiles](#profiles) |
+| POST | `/api/profiles` | body `{ "name", "data_directory", "media_roots": [...] }` → `{ "ok": true, "profile": profile, "active", "profiles" }`: a new profile, not switched to; see [Profiles](#profiles) |
+| POST | `/api/profiles/<id>` | body `{ "name" }` → `{ "ok": true, "active", "profiles" }`: renames it |
+| DELETE | `/api/profiles/<id>` | forgets it (its files stay on disk) → `{ "ok": true, "active", "profiles" }` |
+| POST | `/api/profiles/<id>/activate` | switches to it → `{ "ok": true, "active", "profiles" }`, or 409 `{ "ok": false, "error", "busy": true }` while a job or a scan runs; see [Profiles](#profiles) |
 | POST | `/api/yt-dlp/info-json-cookies` | body `{ "apply": false }` (default: only counts) or `{ "apply": true }`; see [Cookies in info JSONs](#cookies-in-info-jsons) |
 | GET | `/api/browse` | native folder picker (zenity): `{ "path": "/abs" }` or `{ "path": null }` if cancelled; `{ "ok": false, "error": "zenity is not installed", "path": null }` without zenity |
 | POST | `/api/saved` | body `{ "ids": ["instagram:C8x…"] }` (the first 500 are looked up) → `{ "saved": ["instagram:C8x…"] }` (used by the userscript) |
@@ -228,6 +240,99 @@ never indexes a symlink that leads out of every media root or into a trash;
 it is listed as unmatched ("a symlink that leads out of the media roots (or
 into a trash): not indexed"). A symlink that stays inside a media root (its
 own or another) is indexed and served as any file.
+
+## Profiles
+
+A profile is a whole separate library: its own data directory (its
+`feedvault.db`, thumbnails, `userdata/*.json`, the downloaders' archives and
+stamps, so its own posts, tags, people, collections, links, sources and
+jobs) and its own media roots (each with its own `.feedvault-trash`).
+Exactly one is active, and every other route of this file reads and writes
+the active one. The rest of the config is shared by all profiles: tool
+paths, the instaloader, gallery-dl and yt-dlp settings, link routing,
+`check_updates`, `desktop_notifications`, `bio_import` and
+`schedules_paused` (one switch for all: only the active profile's schedules
+run anyway). So is the scripts folder.
+
+`config.json` keeps them as `"profiles": [{ "id", "name", "data_directory",
+"media_roots" }]` and `"active_profile": "<id>"`. A config from before
+profiles (`data_directory` and `media_roots` at the top level) is read as
+one profile, `{ "id": "default", "name": "Default" }`, on the same data
+directory and roots: nothing is moved, and the file is only rewritten in
+the new shape the next time something is saved (Settings, or a route
+below). With one profile the dashboard looks as it did before (the header's
+switcher is not shown).
+
+`profile`:
+
+```json
+{
+  "id": "3f9a1c2e", "name": "Work", "active": false,
+  "data_directory": "/home/me/.local/share/feedvault-work",
+  "media_roots": ["/mnt/archive/work"],
+  "posts": 1204, "people": 37
+}
+```
+
+`posts` and `people` are counted in that profile's database, opened
+read-only for the ones that are not active: 0 when it has no database yet,
+`null` when it cannot be read (an unmounted disk).
+
+- **Create** (`POST /api/profiles`). `name`: 1 to 60 characters, not
+  another profile's (case aside). `data_directory`: a folder's path, made
+  (0700) when it is not there; never the data directory of another
+  profile, however it is written (symlinks followed). One that already
+  holds a library (a removed profile's) opens as it was left.
+  `media_roots`: as `POST /api/config`'s, and it may be empty. A media root
+  may not be, hold or sit inside a media root of another profile (the same
+  files would be indexed into two libraries, and a delete in one would
+  empty the other's); `POST /api/config` refuses that for the active
+  profile's roots too. A refusal is a 400 `{ "ok": false, "error" }` and
+  nothing is made. The new profile is not switched to, and gets no
+  database until it is.
+- **Rename** (`POST /api/profiles/<id>`): the name only; 404 for an unknown
+  id, 400 for a bad or taken name.
+- **Remove** (`DELETE /api/profiles/<id>`): the profile is forgotten, and
+  **nothing on disk is touched**: its data directory and its media stay as
+  they are, and a new profile on that data directory has it all back. 400
+  for the active profile ("switch to another profile before removing this
+  one") and for the last one; 404 for an unknown id.
+- **Switch** (`POST /api/profiles/<id>/activate`). The backend points
+  everything at the other library, as a start does: its database is opened
+  (made or migrated), its user data read back into empty tables, the jobs
+  a stopped FeedVault left in it are marked interrupted, a scan of its
+  media roots starts. Before that, the user data changes not yet written
+  are written into the library being left. The hashing pass is stopped
+  (what it had read is kept) and starts again in the new library. Notes of
+  skipped schedules and the last "Sync all" are forgotten.
+
+  Refused with 409 `{ "ok": false, "error": "…", "busy": true }`, and
+  nothing changes, while a job is queued or running ("2 jobs are queued or
+  running; wait for them to end, or cancel them on the Jobs page") or a
+  scan runs ("a scan is running; try again when it is done"): what a job
+  downloads and what a scan reads belong to the library they started in.
+  Requests being answered are waited for (up to 10 s, then the same 409),
+  and those that arrive during the switch wait for it. 404 for an unknown
+  id; the active one is a 200 that changes nothing. A library that cannot
+  be opened (a database from a newer FeedVault, a disk that is not
+  mounted) is a 500 `{ "ok": false, "error": "cannot open that profile: …"
+  }`, and the profile that was active stays active.
+- **A tab left open across a switch.** Every id on its pages is the other
+  library's. The dashboard sends the profile it was loaded in as
+  `X-FeedVault-Profile: <id>` (the first `GET /api/profiles` or `GET
+  /api/config` tells it); a request that is not a `GET`, carries that
+  header and names another profile than the active one gets 409 `{ "ok":
+  false, "error": "another profile is active now; reload the page",
+  "profile_switched": true }`, and the dashboard reloads at `/`.
+  `POST /api/profiles/<id>/activate` and `POST /api/quit` are not checked.
+  A caller that sends no such header is not checked either.
+- **Background work is the active profile's only.** Scheduled syncs run
+  for the active profile's sources; the others' wait until theirs is
+  active again (a schedule long overdue then runs once, as after a start).
+  The [userscript](#save-from-the-browser-userscript) sends no profile:
+  what it saves, and the sources it adds, go to the active profile.
+
+All five routes are the dashboard's alone (403 from another site).
 
 ## New posts
 
@@ -2083,6 +2188,8 @@ running is never queued again).
 - `GET /api/config` has `"schedules_paused": false`; `POST /api/config`
   with `{ "schedules_paused": true }` (a boolean, else an error) pauses
   every schedule (Settings → Sync), the syncs already queued go on.
+- With several [profiles](#profiles), only the active one's sources are
+  looked at; `schedules_paused` is one setting for all of them.
 
 ### gallery-dl and yt-dlp settings
 
