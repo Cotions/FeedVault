@@ -53,7 +53,20 @@ if command -v bun &>/dev/null; then PM=bun
 elif command -v npm &>/dev/null; then PM=npm
 else die "Need bun or npm to build the UI"; fi
 
-[ -d "$ROOT/frontend/node_modules" ] || { say "Installing UI dependencies ($PM)"; (cd "$ROOT/frontend" && "$PM" install); }
+# Installed again when package.json or the lockfile is newer than the last
+# install, as ./run.sh does: a dependency added since fails the build otherwise.
+STAMP="$ROOT/frontend/node_modules/.deps-ok"
+if [ ! -f "$STAMP" ] || [ "$ROOT/frontend/package.json" -nt "$STAMP" ] \
+   || [ "$ROOT/frontend/package-lock.json" -nt "$STAMP" ]; then
+  if command -v npm &>/dev/null; then
+    say "Installing UI dependencies (npm)"
+    (cd "$ROOT/frontend" && npm ci)
+  else
+    say "Installing UI dependencies (bun)"
+    (cd "$ROOT/frontend" && bun install --no-save)
+  fi
+  touch "$STAMP"
+fi
 say "Building UI ($PM)"
 (cd "$ROOT/frontend" && "$PM" run build)
 [ -f "$ROOT/frontend/dist/index.html" ] || die "UI build produced no index.html"
