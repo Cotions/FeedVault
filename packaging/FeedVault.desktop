@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=FeedVault
+Comment=Local catalog of saved social media posts
+Exec=__EXEC__
+Icon=__ICON__
+Terminal=false
+Categories=Graphics;Viewer;
+StartupNotify=true
+Keywords=instagram;tiktok;twitter;posts;vault;library;

@@ -489,6 +489,7 @@ position, and that the spacers add up to the rows they stand for.
 |---|---|
 | `backend` | `pip install -r backend/requirements-dev.txt`, then `python -m pytest -q backend/tests` |
 | `frontend` | `npm ci`, `npm run lint`, `npm test`, `npm run build` |
+| `bundle` | `npm ci`, `./bundle.sh` (PyInstaller, `packaging/feedvault.spec`), then `scripts/smoke_test.sh ./dist/feedvault`: the binary started on a demo vault in a temp dir, with its own `HOME` and no downloader on its `PATH`. The release workflow runs the same two before it publishes |
 | `e2e shard 1/4` … `4/4` | Builds the UI, installs Chromium's headless shell, then `npm run e2e -- $(node e2e/shards.js <n>)` with `FEEDVAULT_E2E_PYTHON` set. Each shard has its own runner and instance; one failing does not stop the others. On failure, the Playwright report, traces and the backend log are uploaded as `playwright-report-shard-<n>` |
 | `e2e` | The one e2e result for the PR: green only if every shard passed |
 

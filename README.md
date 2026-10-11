@@ -20,7 +20,8 @@ end; see [PLANNING.md](PLANNING.md) for what is still open.
 
 ## Start
 
-You need Python 3 (with its `venv` module) and bun or npm. The downloaders
+This runs FeedVault from the source checkout; to have it as an app of its
+own, see [Install](#install). You need Python 3 (with its `venv` module) and bun or npm. The downloaders
 (instaloader, gallery-dl, yt-dlp) and ffmpeg are optional and installed
 separately: Settings shows the install command for each.
 
@@ -87,6 +88,89 @@ and a built UI).
   and the downloaders' own logins (instaloader's session, browser cookies)
   are the real ones. A Sync or a script run from it runs the real tool with
   them. Use `--demo` to try anything that downloads.
+
+## Install
+
+FeedVault can also be one file: its own Python, the backend, the dashboard
+and the userscript in a single executable (Linux x86_64, about 20 MB), which
+needs neither this checkout nor a virtualenv to run. The downloaders and
+ffmpeg are not in it: they stay separate programs, found on your `PATH` or
+set in **Settings**, exactly as from source.
+
+**From a release** (no build):
+
+```bash
+curl -L -o feedvault \
+  https://github.com/Cotions/FeedVault/releases/latest/download/feedvault-linux-x86_64
+chmod +x feedvault
+mkdir -p ~/.local/bin && mv feedvault ~/.local/bin/feedvault
+feedvault            # starts on :3380 and opens the browser
+```
+
+Each release also has `SHA256SUMS.txt` to check the download against, and a
+`.tar.gz` with the same binary, this README, the icon and a desktop entry
+template.
+
+**Built here** (needs what `./run.sh` needs):
+
+```bash
+./bundle.sh             # build ./dist/feedvault
+./bundle.sh --install   # build, then install it
+./bundle.sh --uninstall # remove the installed copy
+./bundle.sh --help
+```
+
+`--install` copies the binary to `~/.local/bin/feedvault` and adds
+**FeedVault** to your app menu (`FeedVault.desktop` in
+`~/.local/share/applications`, its icon in `~/.local/share/icons`;
+`$XDG_DATA_HOME` if set). Run it again after a `git pull` to update the
+installed copy. `--uninstall` removes those three files and nothing else:
+your config, database, scripts and media stay. The build installs PyInstaller
+(`packaging/requirements-build.txt`, pinned) into `backend/venv` and writes
+`build/` and `dist/`, both ignored by git.
+
+The installed app takes the same `FEEDVAULT_PORT`, `FEEDVAULT_CONFIG` and
+`FEEDVAULT_NO_BROWSER` (or `--no-browser`) as `./run.sh`; `feedvault
+--version` prints the release it was built from (`0.0.0-dev` for a build of
+your own). Started from the app menu it has no window of its own: it opens
+the dashboard in your browser, and **Quit** in the dashboard stops it.
+
+### The installed app and this checkout
+
+They are the same program in two places, and both read
+`~/.config/feedvault/config.json`: the installed app opens the same library,
+database and scripts folder as `./run.sh`. So:
+
+- **Run one or the other, never both.** On the same port the second one
+  stops with "Port 3380 already in use"; on another port
+  (`FEEDVAULT_PORT`) it would start, and two FeedVaults would then write
+  one database and one set of `userdata/*.json`. Do not do that.
+- The installed app is a copy made when you ran `./bundle.sh --install` (or
+  downloaded a release): editing the source changes nothing in it until you
+  install again. That is the point: a stable app for daily use while you
+  work on the code.
+- To try a change without touching the library, use
+  [`./testapp.sh`](#a-test-instance): its own port and config, your media
+  read-only, or `--demo` for invented data. It can run beside the installed
+  app.
+- A newer FeedVault may migrate the database; an older one then refuses to
+  open it rather than damage it. If the checkout is ahead of the installed
+  app and you ran it on the real library, install again.
+
+### Releasing
+
+```bash
+./release.sh v0.1.0     # tag this commit and push it
+```
+
+The tag starts `.github/workflows/release.yml`: it writes the tag into
+`backend/config.py` (`__version__`), builds the binary with `./bundle.sh` on
+Ubuntu 22.04 (an old glibc, so the binary runs on older distros too), starts
+it on a demo vault (`scripts/smoke_test.sh`), and only then publishes a
+GitHub release with `feedvault-linux-x86_64`, the `.tar.gz` and
+`SHA256SUMS.txt`. The build job has a read-only token; a second job, which
+runs none of the repo's code, publishes what it made. Only Linux x86_64 is
+built.
 
 ## Profiles
 
@@ -429,6 +513,7 @@ userscript's included, cannot list, run or attach a script.
 | Data | each [profile](#profiles)'s `data_directory` in the config, by default `~/.local/share/feedvault/` (`$XDG_DATA_HOME/feedvault/`): the index `feedvault.db` (rebuilt from your folders by a rescan), `userdata/*.json` (your decisions, tags, people, links, sources and the rest, restored from there after a rebuild), thumbnails, and the downloaders' archives and stamps |
 | Media | wherever your downloader put it; FeedVault only reads it, and trashing moves files to `.feedvault-trash/` inside that media folder |
 | Port | 3380 (`FEEDVAULT_PORT`, 1 to 65535; `./run.sh --dev`'s Vite proxy follows it); `./testapp.sh` uses 3389 |
+| Installed app | `~/.local/bin/feedvault`, `FeedVault.desktop` and its icon under `~/.local/share` (`./bundle.sh --install`); it reads the config above, see [Install](#install) |
 
 `FEEDVAULT_NO_BROWSER=1` (or `--no-browser`) starts without opening the
 browser.
@@ -457,6 +542,7 @@ these). Full details, including what each browser test project checks:
 
 ```bash
 backend/venv/bin/python -m pytest -q backend/tests   # backend, about 5 minutes
+./bundle.sh && scripts/smoke_test.sh ./dist/feedvault   # the binary, on a demo vault
 cd frontend
 npx eslint .                                         # lint (npm run lint)
 npm test                                             # Node unit tests
@@ -483,8 +569,15 @@ projects=$(node e2e/shards.js 2) && npm run e2e -- $projects   # one CI shard (1
   layout and contrast instead of comparing screenshots, because CI's font
   (DejaVu Sans) differs from a desktop's; TESTING.md shows how to run them
   with CI's font.
+- **The binary** is checked by `scripts/smoke_test.sh <binary>`: it starts
+  it on port 3392 (`SMOKE_PORT`; never 3380 or 3389) on a demo vault in a
+  temp dir, with its own `HOME` and a `PATH` that holds a stand-in ffmpeg
+  and nothing else, and asks it for the dashboard, a font, the userscript,
+  a few `/api` routes, a picture and its thumbnail, then quits it. What the
+  frozen app does differently from source is in `backend/tests/test_frozen.py`.
 - **CI** (`.github/workflows/ci.yml`) runs `backend`, `frontend` (lint,
-  `npm test`, build) and the browser tests in four shards, `e2e shard 1/4`
+  `npm test`, build), `bundle` (builds the binary and runs the smoke test
+  on it) and the browser tests in four shards, `e2e shard 1/4`
   to `4/4`. The `e2e` job is the one result for them: green only when every
   shard passed.
 

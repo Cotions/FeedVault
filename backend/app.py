@@ -2245,8 +2245,7 @@ USERSCRIPT_LINES = ("// @updateURL    ", "// @downloadURL  ", 'const API_BASE = 
 
 
 def _userscript_text(port):
-    folder = os.path.join(config.BUNDLE_DIR, "userscript") if config.FROZEN \
-        else os.path.join(config.REPO_DIR, "userscript")
+    folder = config.bundled("userscript")
     try:
         with open(os.path.join(folder, "feedvault.user.js"), encoding="utf-8") as f:
             text = f.read()

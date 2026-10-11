@@ -18,6 +18,32 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR   = os.path.dirname(BASE_DIR)
 
 
+def bundled(name):
+    """A folder that ships with the app: inside the bundle when frozen
+    (packaging/feedvault.spec's datas), in the repo when run from source."""
+    return os.path.join(BUNDLE_DIR if FROZEN else REPO_DIR, name)
+
+
+def restore_library_path(environ=None):
+    """Give LD_LIBRARY_PATH back to the programs a frozen FeedVault starts.
+    PyInstaller's bootloader puts the bundle's folder first in it, for
+    FeedVault's own libraries, and keeps what it was in LD_LIBRARY_PATH_ORIG:
+    left like that, a downloader, ffmpeg, zenity, notify-send or the browser
+    would load the bundle's libssl or libz in place of the system's. This
+    process has loaded its own by then. Nothing to do from source."""
+    environ = os.environ if environ is None else environ
+    if not FROZEN:
+        return
+    before = environ.pop("LD_LIBRARY_PATH_ORIG", None)
+    if before is None:
+        environ.pop("LD_LIBRARY_PATH", None)
+    else:
+        environ["LD_LIBRARY_PATH"] = before
+
+
+# On import, so before any other module can start a program.
+restore_library_path()
+
 
 def _port(value):
     """FEEDVAULT_PORT: unset is 3380; anything but a number from 1 to 65535
