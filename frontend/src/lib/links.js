@@ -46,6 +46,21 @@ export function externalUrl(text) {
   return url;
 }
 
+/* Why externalUrl refuses ``text`` (null: it does not), to say so where
+   an address given from outside was not filled in. */
+export function urlProblem(text) {
+  if (externalUrl(text) || typeof text !== "string" || !text.trim()) return null;
+  const url = text.trim();
+  if (url.length > MAX_URL) return `it is longer than ${MAX_URL} characters`;
+  if (!/^https?:\/\//i.test(url)) return "it is not an http(s) address";
+  // eslint-disable-next-line no-control-regex
+  if (/[\s\\\x00-\x1f\x7f]/.test(url)) return "it has a space, a backslash or a control character in it";
+  let parsed = null;
+  try { parsed = new URL(url); } catch { /* not one address */ }
+  if (parsed && (parsed.username || parsed.password)) return "it has a user name or password in it";
+  return "it is not a web address";
+}
+
 /* The links' addresses, one per line, in the order given: what "Copy URLs"
    puts on the clipboard, to paste into another app. */
 export function urlLines(links) {
@@ -75,4 +90,15 @@ export function mayCarryUrl(types) {
 export function droppedUrl(get) {
   const first = (get("text/uri-list") || "").split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith("#"));
   return externalUrl(first) || externalUrl(get("text/plain"));
+}
+
+/* A page's title as given to /links/add (the bookmarklet's document.title):
+   plain text, its whitespace and control characters collapsed to single
+   spaces, at most MAX_TITLE characters (never half of a surrogate pair). */
+export function sharedTitle(text) {
+  if (typeof text !== "string") return "";
+  // eslint-disable-next-line no-control-regex
+  let title = text.replace(/[\s\x00-\x1f\x7f]+/g, " ").trim();
+  if (title.length > MAX_TITLE) title = title.slice(0, MAX_TITLE).replace(/[\uD800-\uDBFF]$/, "").trimEnd();
+  return title;
 }

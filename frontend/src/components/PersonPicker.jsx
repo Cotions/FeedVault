@@ -10,15 +10,17 @@ import { personOptions } from "../lib/people";
    active (the highlighted option, { key, person }; null: the first),
    onActive(option), onPick(option), inputRef, label, disabled, none
    (false: no "No person" choice, for links that have none already),
-   autoFocus */
+   autoFocus, chosen (false: nothing is highlighted, and Enter picks
+   nothing, until the arrows, typing or a click choose) */
 export default function PersonPicker({
   people, recent, active, onActive, onPick, inputRef, label = "Person", disabled = false, none = true, autoFocus = false,
+  chosen = true,
 }) {
   const [query, setQuery] = useState("");
   const listRef = useRef(null);
   const listId = useId();
   const options = personOptions(people, recent, query, { none });
-  const at = Math.max(0, options.findIndex(o => o.key === active?.key));
+  const at = chosen ? Math.max(0, options.findIndex(o => o.key === active?.key)) : -1;
 
   // The highlight stays in view as the arrows move it through a long list.
   useEffect(() => {
@@ -35,7 +37,7 @@ export default function PersonPicker({
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const next = e.key === "ArrowDown" ? Math.min(options.length - 1, at + 1) : Math.max(0, at - 1);
-      onActive(options[next]);
+      if (options[next]) onActive(options[next]);
     } else if (e.key === "Enter") {
       e.preventDefault();                       // not the form's own submit as well
       if (options[at]) onPick(options[at]);

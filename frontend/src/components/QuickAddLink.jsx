@@ -16,12 +16,17 @@ export const UNSORTED_PATH = "/links?person=none";
    to the highlighted choice. A URL saved already says whose it is, with a
    link there, instead of failing silently.
 
-   Props: url (to start with), clipboard (read the clipboard for an address
-   when ``url`` is empty), onSaved(link), onLeave() (a link in the form was
-   followed, or Cancel) */
-export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, onLeave }) {
+   Props: url and title (to start with), clipboard (read the clipboard for
+   an address when ``url`` is empty), onSaved(link), onLeave() (a link in
+   the form was followed, or Cancel), onCancel() (Cancel, when it is not
+   onLeave), escape (whether the hint tells of Esc: what is around the form
+   closes on it), confirm (the address came from another page: Enter saves
+   only once a person, or no one, has been chosen, so a key pressed by
+   accident as the window opens saves nothing) */
+export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipboard = false, onSaved, onLeave, onCancel = onLeave,
+                               escape = true, confirm = false }) {
   const [url,    setUrl]    = useState(startUrl);
-  const [title,  setTitle]  = useState("");
+  const [title,  setTitle]  = useState(startTitle);
   const [notes,  setNotes]  = useState("");
   const [active, setActive] = useState(NO_PERSON);
   const [people, setPeople] = useState(null);
@@ -29,6 +34,7 @@ export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, o
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState(null);
   const [taken,  setTaken]  = useState(null);     // the link saved with this URL already
+  const [chosen, setChosen] = useState(!confirm);  // a person (or no one) was chosen, or need not be
   const urlRef = useRef(null);
   const personRef = useRef(null);
   const typed = useRef(!!startUrl);               // the address field was given or typed into
@@ -89,7 +95,14 @@ export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, o
   const to = active.person ? active.person.name : "Unsorted";
   return (
     <form className="quick-add" onSubmit={e => { e.preventDefault(); save(active); }} aria-busy={busy}
-          onKeyDown={e => { if (e.key === "Enter" && e.nativeEvent.isComposing) e.preventDefault(); }}>
+          onKeyDown={e => {
+            if (e.key !== "Enter") return;
+            if (e.nativeEvent.isComposing) e.preventDefault();
+            else if (!chosen && e.target.tagName === "INPUT") {
+              e.preventDefault();
+              setError("Choose who it goes to first (↓ or a click), then Enter saves.");
+            }
+          }}>
       <label className="filter quick-add-url">
         <span>Address</span>
         <input ref={urlRef} type="text" inputMode="url" autoComplete="off" spellCheck={false} placeholder="https://…"
@@ -110,9 +123,11 @@ export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, o
       </div>
       <div className="filter quick-add-person">
         <span>Person</span>
-        <PersonPicker people={people} recent={recent} active={active} onActive={setActive} onPick={o => { setActive(o); save(o); }}
+        <PersonPicker people={people} recent={recent} active={active} chosen={chosen}
+                      onActive={o => { setChosen(true); setError(null); setActive(o); }}
+                      onPick={o => { setChosen(true); setActive(o); save(o); }}
                       inputRef={personRef} label="Person" />
-        <div className="quick-add-hint dim"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> save · <kbd>Esc</kbd> close</div>
+        <div className="quick-add-hint dim"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> save{escape && <> · <kbd>Esc</kbd> close</>}</div>
       </div>
       {taken && (
         <div className="msg err quick-add-taken" role="alert">
@@ -122,7 +137,7 @@ export function QuickAddForm({ url: startUrl = "", clipboard = false, onSaved, o
       )}
       {error && <div className="msg err" role="alert">{error}</div>}
       <div className="modal-actions quick-add-actions">
-        <button type="button" className="btn-secondary" onClick={onLeave}>Cancel</button>
+        <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
         <button type="submit" className="btn-primary quick-add-save" aria-disabled={busy || undefined} title={`Save to ${to}`}>
           <Icon name="plus" size={14} /><span className="quick-add-to">{busy ? "Saving…" : `Save to ${to}`}</span>
         </button>

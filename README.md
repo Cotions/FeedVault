@@ -318,6 +318,18 @@ FeedVault never opens or fetches a saved link itself; it only stores the
 text and opens it in a new tab when you click it. (The link-in-bio import
 on a person's page is separate, and adds nothing to Links.) See [docs/API.md](docs/API.md#links).
 
+To save the page you are reading in another tab, drag **Save to FeedVault**
+(under Add a link on the Links page) to your bookmarks bar. Clicked on any
+page, this bookmarklet opens FeedVault's `/links/add` in a small window
+with that page's address and title filled in; choose a person (or no one)
+with the arrows or a click, press Enter, and the window closes. Nothing is
+saved until you choose (Enter alone does nothing at first), and the other
+site is never sent anything: the bookmarklet only opens the window, and the
+save is FeedVault's own page talking to FeedVault. The address and title
+travel in the URL's fragment (`/links/add#url=…&title=…`), so they never
+reach FeedVault's request log. Each click opens its own window. If the
+browser blocks it, the page opens in the same tab instead (Back returns).
+
 ## Scripts
 
 When the built-in commands are not what you want, write your own as files in
