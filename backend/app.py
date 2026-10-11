@@ -30,6 +30,7 @@ import duplicates
 import hashing
 import info_cookies
 import jobs
+import library
 import links
 import news
 import notify
@@ -100,6 +101,16 @@ FOREIGN_ALLOWED = frozenset({
     ("sync_source", "POST"),           # POST /api/sources/<id>/sync (never a script)
 })
 FOREIGN_REFUSED = "this can only be called from FeedVault's own dashboard"
+
+# The profile a page was loaded in (its id). A tab left open across a profile
+# switch must not write into the other library with ids from the old one:
+# a request that changes something and names another profile than the active
+# one is answered 409 with profile_switched, and the dashboard reloads. The
+# userscript sends none: what it saves goes to the active profile.
+PROFILE_HEADER = "X-FeedVault-Profile"
+PROFILE_SWITCHED = "another profile is active now; reload the page"
+# Fine from any tab: the switch itself, and quitting.
+PROFILE_FREE = frozenset({"activate_profile", "quit_app"})
 
 
 def _host_only(host_header):
@@ -172,6 +183,23 @@ def _answering():
 def _answered():
     if g.pop("answering", False):
         hashing.request_finished()
+    if g.pop("in_library", False):
+        library.leave()
+
+
+# Every request is answered inside the library's gate (library.py): a profile
+# switch waits for those under way, and those that arrive wait for it. Only
+# then is the page's profile compared: a write that waited for a switch is
+# refused like one sent after it.
+@app.before_request
+def _in_library():
+    library.enter()
+    g.in_library = True
+    page = request.headers.get(PROFILE_HEADER)
+    if page and request.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS") \
+            and request.endpoint not in PROFILE_FREE and page != config.load()["active_profile"]:
+        return jsonify({"ok": False, "error": PROFILE_SWITCHED, "profile_switched": True}), 409
+    return None
 
 
 @app.after_request
@@ -1572,6 +1600,7 @@ YOUTUBE_MAX = 24 * 3600
 
 def _public_config(cfg):
     return {"media_roots": cfg["media_roots"], "data_directory": cfg["data_directory"],
+            "profile": {"id": cfg["active_profile"], "name": cfg["profile_name"]},
             "version": config.__version__, "tools": cfg.get("tools") or {},
             "instaloader": sync.settings(cfg), "routes": sources.routes(cfg),
             "gallery-dl": sync.tool_settings("gallery-dl", cfg), "yt-dlp": sync.tool_settings("yt-dlp", cfg),
@@ -1642,6 +1671,7 @@ def _set_config(body):
             return jsonify({"ok": False, "error": error})
     if "media_roots" in body:
         roots, error = config.clean_roots(body["media_roots"])
+        error = error or _roots_taken(config.read(), roots, cfg["active_profile"])
         if error:
             return jsonify({"ok": False, "error": error})
     if tools is not None:
@@ -1664,6 +1694,240 @@ def _set_config(body):
     if changed:
         scanner.start(roots)
     return jsonify({"ok": True, "config": _public_config(cfg)})
+
+
+# ---------------------------------------------------------------------------
+# Profiles: separate libraries, one active at a time (config.py)
+# ---------------------------------------------------------------------------
+
+_BAD_PROFILE_NAME = f"name must be 1 to {config.MAX_PROFILE_NAME} characters"
+
+
+def _profile_name(value):
+    """A profile's name as kept (spaces collapsed), or None."""
+    if not isinstance(value, str):
+        return None
+    name = " ".join(value.split())
+    if not name or len(name) > config.MAX_PROFILE_NAME or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return None
+    return name
+
+
+def _name_taken(raw, name, exclude=None):
+    return any(p["id"] != exclude and config.profile_name(p).casefold() == name.casefold() for p in raw["profiles"])
+
+
+def _roots_taken(raw, roots, exclude=None):
+    """Why ``roots`` cannot be a profile's (another one, not ``exclude``,
+    has one of them, or one around or inside it), else None."""
+    owner = config.roots_owner(raw, roots, exclude)
+    if owner is None:
+        return None
+    name, theirs, ours = owner
+    if os.path.realpath(theirs) == os.path.realpath(ours):
+        return f"{ours} is a media root of the profile \"{name}\""
+    return f"{ours} overlaps {theirs}, a media root of the profile \"{name}\""
+
+
+def _profile_counts(data_dir, live=None):
+    """(posts, people) in a profile's database, read-only: 0 when it has
+    none yet, None for what cannot be read (a database from before the
+    table, an unmounted disk). ``live``: the open connection, for the
+    active profile."""
+    path = os.path.join(data_dir, "feedvault.db")
+    if live is None and not os.path.isfile(path):
+        return 0, 0
+    conn, out = None, []
+    try:
+        conn = live or sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        for table in ("posts", "people"):
+            try:
+                out.append(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            except sqlite3.Error:
+                out.append(None)
+        return tuple(out)
+    except (sqlite3.Error, OSError):
+        return None, None
+    finally:
+        if conn is not None and live is None:
+            conn.close()
+
+
+def _public_profile(p, active_id):
+    posts, persons = _profile_counts(config.profile_data(p), db.connect() if p["id"] == active_id else None)
+    return {"id": p["id"], "name": config.profile_name(p), "data_directory": config.profile_data(p),
+            "media_roots": config.profile_roots(p), "active": p["id"] == active_id,
+            "posts": posts, "people": persons}
+
+
+def _profile_list(raw):
+    active = config.active(raw)["id"]
+    return {"active": active, "profiles": [_public_profile(p, active) for p in raw["profiles"]]}
+
+
+@app.get("/api/profiles")
+def list_profiles():
+    return jsonify(_profile_list(config.read()))
+
+
+@app.post("/api/profiles")
+def create_profile():
+    body = _body()
+    with config.editing:
+        return _create_profile(body)
+
+
+def _create_profile(body):
+    name = _profile_name(body.get("name"))
+    if name is None:
+        return jsonify({"ok": False, "error": _BAD_PROFILE_NAME}), 400
+    data = body.get("data_directory")
+    if not isinstance(data, str) or not data.strip() or "\x00" in data:
+        return jsonify({"ok": False, "error": "data_directory must be a folder's path"}), 400
+    data = os.path.abspath(os.path.expanduser(data.strip()))
+    if os.path.lexists(data) and not os.path.isdir(data):
+        return jsonify({"ok": False, "error": f"not a folder: {data}"}), 400
+    roots, error = config.clean_roots(body.get("media_roots", []))
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    raw = config.read()
+    if _name_taken(raw, name):
+        return jsonify({"ok": False, "error": "a profile with that name exists"}), 400
+    owner = config.data_dir_owner(raw, data)
+    if owner:
+        return jsonify({"ok": False, "error": f"the profile \"{owner}\" already uses that data directory"}), 400
+    error = _roots_taken(raw, roots)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    try:
+        config.make_private_dir(data)
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"cannot create {data}: {e.strerror or e}"}), 400
+    ids = {p["id"] for p in raw["profiles"]}
+    pid = next(i for i in iter(lambda: os.urandom(4).hex(), None) if i not in ids)
+    raw["profiles"].append({"id": pid, "name": name, "data_directory": data, "media_roots": roots})
+    config.write(raw)
+    print(f"[profiles] {name} created ({data})")
+    out = _profile_list(raw)
+    return jsonify({"ok": True, "profile": next(p for p in out["profiles"] if p["id"] == pid), **out})
+
+
+@app.post("/api/profiles/<pid>")
+def rename_profile(pid):
+    name = _profile_name(_body().get("name"))
+    if name is None:
+        return jsonify({"ok": False, "error": _BAD_PROFILE_NAME}), 400
+    with config.editing:
+        raw = config.read()
+        profile = next((p for p in raw["profiles"] if p["id"] == pid), None)
+        if profile is None:
+            return jsonify({"ok": False, "error": "no such profile"}), 404
+        if _name_taken(raw, name, exclude=pid):
+            return jsonify({"ok": False, "error": "a profile with that name exists"}), 400
+        profile["name"] = name
+        config.write(raw)
+        return jsonify({"ok": True, **_profile_list(raw)})
+
+
+@app.delete("/api/profiles/<pid>")
+def delete_profile(pid):
+    """Forget a profile. Its data directory and its media stay on disk,
+    untouched: a profile made again on that data directory has it all back."""
+    with config.editing:
+        raw = config.read()
+        profile = next((p for p in raw["profiles"] if p["id"] == pid), None)
+        if profile is None:
+            return jsonify({"ok": False, "error": "no such profile"}), 404
+        if len(raw["profiles"]) == 1:
+            return jsonify({"ok": False, "error": "the last profile cannot be removed"}), 400
+        if config.active(raw)["id"] == pid:
+            return jsonify({"ok": False, "error": "switch to another profile before removing this one"}), 400
+        raw["profiles"].remove(profile)
+        config.write(raw)
+        print(f"[profiles] {config.profile_name(profile)} removed (its files are kept)")
+        return jsonify({"ok": True, **_profile_list(raw)})
+
+
+def _open_library(cfg):
+    """Point the process at ``cfg``'s library (the active profile's), as a
+    start does: its database (made or migrated), the user data read back
+    into its empty tables, the jobs and syncs a stopped FeedVault left."""
+    db.init(config.db_path(cfg))
+    userdata.restore_all(db.connect(), cfg["data_directory"])
+    news.ensure(db.connect())
+    jobs.recover()
+    sync.resume()
+
+
+def _watch_library(cfg):
+    """After _open_library: the scan, and the caches filled in the background."""
+    scanner.start(cfg["media_roots"])
+    archives.warm(db.connect())
+    trash.warm(cfg["media_roots"])
+
+
+def _switch_refused():
+    """Why the library cannot be switched now, else None. What a job
+    downloads, and what a scan reads, belongs to the library it started in."""
+    n = len(jobs.active())
+    if n:
+        return (f"{n} job{' is' if n == 1 else 's are'} queued or running; "
+                "wait for them to end, or cancel them on the Jobs page")
+    if scanner.status()["running"]:
+        return "a scan is running; try again when it is done"
+    return None
+
+
+@app.post("/api/profiles/<pid>/activate")
+def activate_profile(pid):
+    """Switch to another profile: 409 with ``busy`` while a job is queued or
+    running or a scan runs (nothing started in one library may write into
+    another). The hashing pass is stopped instead (it starts again in the
+    new library, and reads what it had left in this one when it is back)."""
+    try:
+        with library.alone(), config.editing:
+            return _activate_profile(pid)
+    except library.Busy as e:
+        return jsonify({"ok": False, "error": str(e), "busy": True}), 409
+
+
+def _activate_profile(pid):
+    raw = config.read()
+    if not any(p["id"] == pid for p in raw["profiles"]):
+        return jsonify({"ok": False, "error": "no such profile"}), 404
+    previous = config.active(raw)["id"]
+    if pid == previous:
+        return jsonify({"ok": True, **_profile_list(raw)})
+    refused = _switch_refused()
+    if refused:
+        return jsonify({"ok": False, "error": refused, "busy": True}), 409
+    if not scanner.claim():                    # claimed: no scan starts until the new library is open
+        return jsonify({"ok": False, "error": "a scan is running; try again when it is done", "busy": True}), 409
+    try:
+        with hashing.paused():
+            userdata.flush()                   # the changes not written yet, into the library they are for
+            raw["active_profile"] = pid
+            config.write(raw)
+            try:
+                _open_library(config.load())
+            except Exception as e:             # an unmounted disk, a newer database: stay on the one that works
+                raw["active_profile"] = previous
+                config.write(raw)
+                try:
+                    _open_library(config.load())
+                except Exception as again:
+                    print(f"[profiles] cannot open {previous} again: {type(again).__name__}: {again}")
+                return jsonify({"ok": False, "error": f"cannot open that profile: {e}"}), 500
+            scheduler.forget_all()
+            sync.forget_batch()
+    except TimeoutError as e:
+        return jsonify({"ok": False, "error": f"{e}; try again in a moment", "busy": True}), 409
+    finally:
+        scanner.release(forget=config.load()["active_profile"] != previous)
+    cfg = config.load()
+    _watch_library(cfg)
+    print(f"[profiles] switched to {cfg['profile_name']} ({config.db_path(cfg)})")
+    return jsonify({"ok": True, **_profile_list(config.read())})
 
 
 @app.get("/api/downloaders")
@@ -2046,14 +2310,10 @@ def main():
     # A umask of 002 (or an older FeedVault) left them group-writable: scripts would be refused.
     scripts.tighten()
     try:
-        db.init(config.db_path(cfg))
+        _open_library(cfg)
     except db.SchemaTooNew as e:
         print(f"[db] {e}")
         sys.exit(1)
-    userdata.restore_all(db.connect(), cfg["data_directory"])
-    news.ensure(db.connect())
-    jobs.recover()
-    sync.resume()
     scheduler.start()
     # Ctrl+C and SIGTERM still write the last few seconds of user data, after
     # stopping the scheduler, then running jobs (atexit runs the last
@@ -2062,14 +2322,14 @@ def main():
     atexit.register(jobs.shutdown)
     atexit.register(scheduler.stop)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    scanner.start(cfg["media_roots"])
-    archives.warm(db.connect())
-    trash.warm(cfg["media_roots"])
+    _watch_library(cfg)
     if "--no-browser" not in sys.argv and os.environ.get("FEEDVAULT_NO_BROWSER") != "1":
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     print(f"[api] FeedVault {config.__version__}")
     print(f"[api] Dashboard → {url}")
     print(f"[api] Config      {config.config_path()}")
+    if len(config.read()["profiles"]) > 1:
+        print(f"[api] Profile     {cfg['profile_name']}")
     print(f"[api] Database    {config.db_path(cfg)}")
     app.run(host="127.0.0.1", port=config.PORT, debug=False, threaded=True)
 

@@ -33,6 +33,7 @@ request answered while the worker decoded pictures took several times as
 long (a feed page: 3 ms idle, 17 ms during a pass, docs/TESTING.md); now
 the files wait for the request instead.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -68,6 +69,8 @@ _requests = 0                                    # being answered now, see reque
 _idle = threading.Condition()
 _lock = threading.Lock()
 _thread = None
+_pass = threading.Lock()                         # held by the pass under way, and by paused()
+_pausing = 0                                     # paused() callers: no pass starts
 _state = {"running": False, "paused": False, "phase": None, "done": 0, "total": 0,
           "bytes": 0, "started_at": None, "finished_at": None, "errors": []}
 
@@ -96,12 +99,53 @@ def _loop():
     _lower_priority()
     while True:
         _wake.wait()
-        _wake.clear()
+        _woken()
+
+
+def _woken():
+    """The loop's turn once woken: a pass, unless paused() holds it."""
+    if _pausing:                                 # still woken: the pass starts once paused() is left
+        time.sleep(0.05)
+        return
+    with _pass:
+        with _lock:                              # one step: paused() wakes before it or after
+            if _pausing:
+                return
+            _wake.clear()
         try:
             run_pass(db.connect(), restart=_wake)
         except Exception as e:                   # keep the thread alive; show it in the status
             _note_error("", f"hashing pass failed: {type(e).__name__}: {e}")
             _set(running=False, paused=False, phase=None)
+
+
+PAUSE_WAIT = 30.0                                # seconds paused() waits for the file being read
+
+
+@contextlib.contextmanager
+def paused():
+    """Stop the pass under way (as kick() restarts one: the rows it read
+    are written, the rest is read by the next pass) and hold the next one
+    until this is left: for a profile switch (app.py), so no pass reads one
+    library and writes another's database. A pass starts when this is
+    left, on the database open then. TimeoutError when the pass is not
+    stopped PAUSE_WAIT seconds on (one file is read to its end)."""
+    global _pausing
+    with _lock:
+        _pausing += 1
+        _wake.set()                              # the pass under way stops at its next file
+    try:
+        if not _pass.acquire(timeout=PAUSE_WAIT):
+            raise TimeoutError("a large file is being hashed")
+        try:
+            with _lock:
+                _state["errors"] = []            # they named the other library's files
+            yield
+        finally:
+            _pass.release()
+    finally:
+        with _lock:
+            _pausing -= 1
 
 
 def request_started():

@@ -62,6 +62,7 @@ import config
 import db
 import health
 import jobs
+import library
 import scanner
 import sources
 import sync
@@ -120,6 +121,15 @@ def status(s, cfg=None):
     shown = note is not None and every in INTERVALS and (synced is None or synced < note[1])
     return {"every": every, "next_at": next_at, "paused": cfg.get("schedules_paused") is True,
             "skipped": note[0] if shown else None, "stopped": stopped, "failures": sources.failures(s["last_result"])}
+
+
+def forget_all():
+    """Every note and hold: after a profile switch, where the source ids
+    are another library's. When each platform was last queued is kept: the
+    sites are the same."""
+    with _lock:
+        _notes.clear()
+        _held.clear()
 
 
 def forget(sid):
@@ -221,7 +231,8 @@ def _loop(stop):
         return
     while True:
         try:
-            tick()
+            with library.shared():             # never across a profile switch
+                tick()
         except Exception as e:                 # the next tick tries again
             print(f"[schedule] {type(e).__name__}: {e}")
         if stop.wait(TICK):

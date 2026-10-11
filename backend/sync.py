@@ -1642,6 +1642,13 @@ _batch = None
 _batch_lock = threading.Lock()
 
 
+def forget_batch():
+    """After a profile switch: the last "Sync all" was another library's."""
+    global _batch
+    with _batch_lock:
+        _batch = None
+
+
 def _ending(job):
     r = job["result"] or {}
     return {"state": job["state"], "added": r.get("added", 0), "source": int(job["params"]["source"]),
