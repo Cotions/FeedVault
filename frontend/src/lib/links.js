@@ -46,6 +46,21 @@ export function externalUrl(text) {
   return url;
 }
 
+/* Why externalUrl refuses ``text`` (null: it does not), to say so where
+   an address given from outside was not filled in. */
+export function urlProblem(text) {
+  if (externalUrl(text) || typeof text !== "string" || !text.trim()) return null;
+  const url = text.trim();
+  if (url.length > MAX_URL) return `it is longer than ${MAX_URL} characters`;
+  if (!/^https?:\/\//i.test(url)) return "it is not an http(s) address";
+  // eslint-disable-next-line no-control-regex
+  if (/[\s\\\x00-\x1f\x7f]/.test(url)) return "it has a space, a backslash or a control character in it";
+  let parsed = null;
+  try { parsed = new URL(url); } catch { /* not one address */ }
+  if (parsed && (parsed.username || parsed.password)) return "it has a user name or password in it";
+  return "it is not a web address";
+}
+
 /* The links' addresses, one per line, in the order given: what "Copy URLs"
    puts on the clipboard, to paste into another app. */
 export function urlLines(links) {

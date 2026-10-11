@@ -249,7 +249,7 @@ const ADD_SIZES = [{ label: "480x640", width: 480, height: 640 }, SIZES[1]];
 test("/links/add, popup and window", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "layout-zoom", "the popup's own size");
   const url = `https://e2e-layout-${Date.now()}.example/${"long-path/".repeat(12)}?q=${"x".repeat(60)}`;
-  await openUrl(page, `/links/add?${new URLSearchParams({ url, title: "A long page title ".repeat(10) })}`,
+  await openUrl(page, `/links/add#${new URLSearchParams({ url, title: "A long page title ".repeat(10) })}`,
     pg => pg.getByRole("combobox", { name: "Person" }));
   await stillPage(page);
   await checkSizes(page, testInfo, "/links/add", { sizes: ADD_SIZES });

@@ -1,7 +1,7 @@
 // Checks for lib/links.js: the address a link form sends (#126). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_TITLE, droppedUrl, externalUrl, mayCarryUrl, sharedTitle, urlLines, withScheme } from "../src/lib/links.js";
+import { MAX_TITLE, droppedUrl, externalUrl, mayCarryUrl, sharedTitle, urlLines, urlProblem, withScheme } from "../src/lib/links.js";
 import { NO_PERSON, personOptions } from "../src/lib/people.js";
 
 test("an address with no scheme gets https://", () => {
@@ -96,4 +96,16 @@ test("a shared page title: plain text on one line, cut at the cap", () => {
   // An emoji across the cap is dropped whole, not cut in half.
   const cut = sharedTitle(`${"x".repeat(MAX_TITLE - 1)}😀 more`);
   assert.equal(cut, "x".repeat(MAX_TITLE - 1));
+});
+
+test("why an outside address is not one: said in a few words", () => {
+  assert.equal(urlProblem("https://example.org/x"), null);
+  assert.equal(urlProblem(""), null);
+  assert.equal(urlProblem(null), null);
+  assert.equal(urlProblem(`https://example.org/${"x".repeat(2048)}`), "it is longer than 2048 characters");
+  assert.equal(urlProblem("javascript:alert(1)"), "it is not an http(s) address");
+  assert.equal(urlProblem("example.org/x"), "it is not an http(s) address");
+  assert.equal(urlProblem("https://user:pw@example.org/"), "it has a user name or password in it");
+  assert.equal(urlProblem("https://example.org/a b"), "it has a space, a backslash or a control character in it");
+  assert.equal(urlProblem("https://"), "it is not a web address");
 });

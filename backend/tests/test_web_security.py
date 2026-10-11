@@ -143,7 +143,7 @@ def test_the_bookmarklet_page_opens_from_anywhere_but_saves_only_from_feedvault(
     static.mkdir()
     (static / "index.html").write_text("<p>dashboard</p>")
     monkeypatch.setattr(config, "static_dir", lambda: str(static))
-    page = client.get("/links/add?popup=1&url=https%3A%2F%2Fexample.org%2F&title=x",
+    page = client.get("/links/add?popup=1",
                       headers={"Sec-Fetch-Site": "cross-site"})
     assert (page.status_code, page.data) == (200, b"<p>dashboard</p>")
     assert page.headers["X-Frame-Options"] == "DENY"

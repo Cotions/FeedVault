@@ -20,9 +20,11 @@ export const UNSORTED_PATH = "/links?person=none";
    an address when ``url`` is empty), onSaved(link), onLeave() (a link in
    the form was followed, or Cancel), onCancel() (Cancel, when it is not
    onLeave), escape (whether the hint tells of Esc: what is around the form
-   closes on it) */
+   closes on it), confirm (the address came from another page: Enter saves
+   only once a person, or no one, has been chosen, so a key pressed by
+   accident as the window opens saves nothing) */
 export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipboard = false, onSaved, onLeave, onCancel = onLeave,
-                               escape = true }) {
+                               escape = true, confirm = false }) {
   const [url,    setUrl]    = useState(startUrl);
   const [title,  setTitle]  = useState(startTitle);
   const [notes,  setNotes]  = useState("");
@@ -32,6 +34,7 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState(null);
   const [taken,  setTaken]  = useState(null);     // the link saved with this URL already
+  const [chosen, setChosen] = useState(!confirm);  // a person (or no one) was chosen, or need not be
   const urlRef = useRef(null);
   const personRef = useRef(null);
   const typed = useRef(!!startUrl);               // the address field was given or typed into
@@ -92,7 +95,14 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
   const to = active.person ? active.person.name : "Unsorted";
   return (
     <form className="quick-add" onSubmit={e => { e.preventDefault(); save(active); }} aria-busy={busy}
-          onKeyDown={e => { if (e.key === "Enter" && e.nativeEvent.isComposing) e.preventDefault(); }}>
+          onKeyDown={e => {
+            if (e.key !== "Enter") return;
+            if (e.nativeEvent.isComposing) e.preventDefault();
+            else if (!chosen && e.target.tagName === "INPUT") {
+              e.preventDefault();
+              setError("Choose who it goes to first (↓ or a click), then Enter saves.");
+            }
+          }}>
       <label className="filter quick-add-url">
         <span>Address</span>
         <input ref={urlRef} type="text" inputMode="url" autoComplete="off" spellCheck={false} placeholder="https://…"
@@ -113,7 +123,9 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
       </div>
       <div className="filter quick-add-person">
         <span>Person</span>
-        <PersonPicker people={people} recent={recent} active={active} onActive={setActive} onPick={o => { setActive(o); save(o); }}
+        <PersonPicker people={people} recent={recent} active={active} chosen={chosen}
+                      onActive={o => { setChosen(true); setError(null); setActive(o); }}
+                      onPick={o => { setChosen(true); setActive(o); save(o); }}
                       inputRef={personRef} label="Person" />
         <div className="quick-add-hint dim"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> save{escape && <> · <kbd>Esc</kbd> close</>}</div>
       </div>

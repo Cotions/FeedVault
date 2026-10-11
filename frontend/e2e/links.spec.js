@@ -763,26 +763,33 @@ test("Links: a shift range holds after a row comes in; Undo gives each link back
 
 /* ── /links/add and the bookmarklet (#165 C) ── */
 
-// /links/add with this query, loaded: the form alone, no app around it.
-async function openAdd(page, query) {
-  await page.goto(`/links/add?${new URLSearchParams(query)}`);
+// /links/add with this fragment, loaded afresh (a new fragment on the page
+// already open would only move the fragment, as in any browser): the form
+// alone, no app around it.
+async function openAdd(page, given, query = "") {
+  await page.goto("about:blank");
+  await page.goto(`/links/add${query}#${new URLSearchParams(given)}`);
   await expect(page.getByRole("heading", { level: 2, name: "Add a link" })).toBeVisible();
   await expect(page.locator("#main-nav")).toHaveCount(0);
   await idle(page);
 }
 
-test("/links/add: prefilled from the query, Enter saves to a recent person; Add another", async ({ page, request }) => {
+test("/links/add: prefilled from the fragment; Enter saves only once a person is chosen; Add another", async ({ page, request }) => {
   const stamp = Date.now();
   const host = `e2e-add-page-${stamp}.example`;
-  const url = `https://${host}/page?a=1&b=2#x`;
+  const url = `https://${host}/page?a=1&token=x#frag`;
   const name = `E2E add page ${stamp}`;
   const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  const sent = [];
+  page.on("request", r => { if (r.isNavigationRequest()) sent.push(r.url()); });
   try {
     await request.post("/api/links", { headers: H, data: { url: `https://${host}/older`, person: pid } });
     await openAdd(page, { url, title: "  A page\n\ttitle  " });
+    expect(sent.some(u => u.includes(host)), "the address never reaches the server").toBe(false);
     await expect(page).toHaveTitle("Add a link · FeedVault");
     await expect(page.getByLabel("Address")).toHaveValue(url);
     await expect(page.getByLabel("Title")).toHaveValue("A page title");
+    await expect(page.locator(".links-add-refused")).toHaveCount(0);
     const picker = page.getByRole("combobox", { name: "Person" });
     await expect(picker).toBeFocused();
     const options = page.getByRole("option");
@@ -790,9 +797,19 @@ test("/links/add: prefilled from the query, Enter saves to a recent person; Add 
     await expect(options.nth(1)).toHaveText(name);
     // Not a popup: Esc closes nothing, so the hint does not offer it.
     await expect(page.locator(".quick-add-hint")).not.toContainText("Esc");
-    expect(await linkByUrl(request, url), "nothing saved before Save").toBeNull();
 
-    await picker.press("ArrowDown");
+    // Nothing is highlighted yet: Enter (by accident, as the window opens) saves nothing, here or in a field.
+    await expect(page.locator('[role="option"][aria-selected="true"]')).toHaveCount(0);
+    await picker.press("Enter");
+    await page.getByLabel("Title").press("Enter");
+    await expect(page.getByRole("alert")).toHaveText("Choose who it goes to first (↓ or a click), then Enter saves.");
+    await idle(page);
+    expect(await linkByUrl(request, url), "nothing saved before a choice").toBeNull();
+
+    await picker.press("ArrowDown");                          // No person
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await picker.press("ArrowDown");                          // the recent one
+    await expect(options.nth(1)).toHaveAttribute("aria-selected", "true");
     await picker.press("Enter");
     const done = page.getByRole("status");
     await expect(done).toHaveText(`Saved to ${name}.`);
@@ -802,10 +819,15 @@ test("/links/add: prefilled from the query, Enter saves to a recent person; Add 
     expect(saved.person).toEqual({ id: pid, name });
     expect(saved.title).toBe("A page title");
 
+    // Typed by hand: Enter saves at once, as in the dialog.
     await page.getByRole("button", { name: "Add another" }).click();
     await expect(page.getByLabel("Address")).toHaveValue("");
     await expect(page.getByLabel("Address")).toBeFocused();
     await expect(page.getByLabel("Title")).toHaveValue("");
+    await page.getByLabel("Address").fill(`https://${host}/typed`);
+    await page.getByLabel("Address").press("Enter");
+    await expect(page.getByRole("status")).toHaveText("Saved to Unsorted.");
+    await page.getByRole("button", { name: "Add another" }).click();
     // Cancel, on a page of its own, goes to Links.
     await page.getByRole("button", { name: "Cancel" }).click();
     await expect(page).toHaveURL("/links");
@@ -816,7 +838,7 @@ test("/links/add: prefilled from the query, Enter saves to a recent person; Add 
   }
 });
 
-test("/links/add: saved to no one; one saved already says whose it is", async ({ page, request, pageErrors }) => {
+test("/links/add: a click on No person saves to no one; one saved already says whose it is", async ({ page, request, pageErrors }) => {
   const stamp = Date.now();
   const host = `e2e-add-untied-${stamp}.example`;
   const name = `E2E add taken ${stamp}`;
@@ -827,7 +849,7 @@ test("/links/add: saved to no one; one saved already says whose it is", async ({
   try {
     await openAdd(page, { url: `https://${host}/untied` });
     await expect(page.getByLabel("Title")).toHaveValue("");
-    await page.getByRole("combobox", { name: "Person" }).press("Enter");
+    await page.getByRole("option", { name: "No person (Unsorted)" }).click();
     const done = page.getByRole("status");
     await expect(done).toHaveText("Saved to Unsorted.");
     await expect(done.getByRole("link", { name: "Unsorted" })).toHaveAttribute("href", "/links?person=none");
@@ -835,7 +857,9 @@ test("/links/add: saved to no one; one saved already says whose it is", async ({
 
     await request.post("/api/links", { headers: H, data: { url: `https://${host}/taken`, person: pid } });
     await openAdd(page, { url: `https://${host}/taken`, title: "Again" });
-    await page.getByRole("combobox", { name: "Person" }).press("Enter");
+    const picker = page.getByRole("combobox", { name: "Person" });
+    await picker.fill(name);                                  // typing chooses: Enter saves
+    await picker.press("Enter");
     const alert = page.locator(".quick-add-taken");
     await expect(alert).toHaveText(`Already saved, tied to ${name}.`);
     await expect(page.getByRole("status")).toHaveCount(0);
@@ -847,18 +871,48 @@ test("/links/add: saved to no one; one saved already says whose it is", async ({
   }
 });
 
-test("/links/add: an address that is not one web address is not filled in", async ({ page }) => {
-  for (const bad of ["javascript:alert(1)", "data:text/html,<b>x</b>", "https://user:pw@e2e.example/x",
-    "e2e.example/no-scheme", "https://e2e.example/a b", "ftp://e2e.example/x"]) {
+test("/links/add: an address that is not one web address is not filled in, and it says why", async ({ page }) => {
+  for (const [bad, why] of [
+    ["javascript:alert(1)", "it is not an http(s) address"],
+    ["data:text/html,<b>x</b>", "it is not an http(s) address"],
+    ["e2e.example/no-scheme", "it is not an http(s) address"],
+    ["https://user:pw@e2e.example/x", "it has a user name or password in it"],
+    ["https://e2e.example/a b", "it has a space, a backslash or a control character in it"],
+    [`https://e2e.example/${"x".repeat(2100)}`, "it is longer than 2048 characters"],
+  ]) {
     await openAdd(page, { url: bad, title: "<b>Bold</b> & more" });
     await expect(page.getByLabel("Address"), bad).toHaveValue("");
     await expect(page.getByLabel("Address"), bad).toBeFocused();
+    await expect(page.locator(".links-add-refused")).toHaveText(`The page's address was not filled in: ${why}.`);
     // The title is text: shown as typed, never as markup.
     await expect(page.getByLabel("Title")).toHaveValue("<b>Bold</b> & more");
     await expect(page.locator(".links-add-page b")).toHaveCount(0);
   }
   await openAdd(page, { url: "https://e2e.example/long", title: "x".repeat(400) });
   await expect(page.getByLabel("Title")).toHaveValue("x".repeat(300));
+  await expect(page.locator(".links-add-refused")).toHaveCount(0);
+  // The address in the query is not read: only the fragment fills the form.
+  await page.goto("about:blank");
+  await page.goto("/links/add?url=https%3A%2F%2Fe2e.example%2Fq&title=Q");
+  await expect(page.getByLabel("Address")).toHaveValue("");
+  await expect(page.getByLabel("Title")).toHaveValue("");
+});
+
+test("/links/add: a link dropped beside the fields leaves the page as it is", async ({ page }) => {
+  await openAdd(page, { url: "https://e2e.example/dropped-on", title: "Kept" });
+  const drop = await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/uri-list", "https://e2e.example/elsewhere");
+    const head = document.querySelector(".links-add-head");
+    const over = new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt });
+    const drop = new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt });
+    head.dispatchEvent(over);
+    head.dispatchEvent(drop);
+    return { over: over.defaultPrevented, drop: drop.defaultPrevented };
+  });
+  expect(drop).toEqual({ over: true, drop: true });
+  await expect(page).toHaveURL(/\/links\/add#/);
+  await expect(page.getByLabel("Title")).toHaveValue("Kept");
 });
 
 test("the bookmarklet opens /links/add in a popup that closes after the save; blocked, it opens in the tab", async ({ page, request }) => {
@@ -869,6 +923,7 @@ test("the bookmarklet opens /links/add in a popup that closes after the save; bl
   await expect(mark).toHaveAttribute("href", /^javascript:/);
   const href = await mark.getAttribute("href");
   expect(decodeURIComponent(href.slice("javascript:".length))).toContain(JSON.stringify(`${origin}/links/add`));
+  await expect(page.locator(".links-bookmarklet")).toContainText("nothing is saved until you choose who it goes to");
   // A click here runs nothing: it says how it is used.
   await mark.click();
   await expect(page.locator(".toast", { hasText: "Drag it to your bookmarks bar" })).toBeVisible();
@@ -878,33 +933,48 @@ test("the bookmarklet opens /links/add in a popup that closes after the save; bl
   // reached): its script, as a browser runs it, on that page.
   const here = `${origin}/links?bookmarklet=${stamp}`;
   const run = h => page.evaluate(code => (0, eval)(code), decodeURIComponent(h.slice("javascript:".length)));
+  const title = "Bookmarklet & 100% #test";
   try {
     await page.goto(here);
-    await page.evaluate(() => { document.title = "Bookmarklet & 100% #test"; });
+    await page.evaluate(t => { document.title = t; }, title);
     const [popup] = await Promise.all([page.waitForEvent("popup"), run(href)]);
     await popup.waitForLoadState();
     const u = new URL(popup.url());
-    expect([u.pathname, u.searchParams.get("popup"), u.searchParams.get("url"), u.searchParams.get("title")])
-      .toEqual(["/links/add", "1", here, "Bookmarklet & 100% #test"]);
+    const frag = new URLSearchParams(u.hash.slice(1));
+    expect([u.pathname, u.search, frag.get("url"), frag.get("title")]).toEqual(["/links/add", "?popup=1", here, title]);
     await expect(popup.getByLabel("Address")).toHaveValue(here);
-    await expect(popup.getByLabel("Title")).toHaveValue("Bookmarklet & 100% #test");
+    await expect(popup.getByLabel("Title")).toHaveValue(title);
     await expect(popup.locator(".quick-add-hint")).toContainText("Esc close");
     const picker = popup.getByRole("combobox", { name: "Person" });
     await expect(picker).toBeFocused();
+
+    // A second click while it is open: a window of its own, the first one keeps its typing.
+    await popup.getByLabel("Notes").fill("typed in the first");
+    const [second] = await Promise.all([page.waitForEvent("popup"), run(href)]);
+    await second.waitForLoadState();
+    await expect(second.getByLabel("Address")).toHaveValue(here);
+    await expect(popup.getByLabel("Notes")).toHaveValue("typed in the first");
+    await second.close();
+
+    // An Enter as the window opens saves nothing; the arrow, then Enter, does.
+    await picker.press("Enter");
+    await expect(popup.getByRole("alert")).toContainText("Choose who it goes to first");
+    expect(await linkByUrl(request, here)).toBeNull();
     const closed = popup.waitForEvent("close");
+    await picker.press("ArrowDown");
     await picker.press("Enter");
     await expect(popup.getByRole("status")).toHaveText("Saved to Unsorted. Closing…");
     await closed;
     const saved = await linkByUrl(request, here);
-    expect(saved).toMatchObject({ title: "Bookmarklet & 100% #test", person: null });
+    expect(saved).toMatchObject({ title, notes: "typed in the first", person: null });
 
     // No window (a popup blocker): the same page, in this tab, ends on links.
     await request.delete(`/api/links/${saved.id}`, { headers: H });
     await page.evaluate(() => { window.open = () => null; });
-    await Promise.all([page.waitForURL(/\/links\/add\?/), run(href)]);
-    expect(new URL(page.url()).searchParams.get("popup")).toBeNull();
+    await Promise.all([page.waitForURL(/\/links\/add#/), run(href)]);
+    expect(new URL(page.url()).search).toBe("");
     await expect(page.getByLabel("Address")).toHaveValue(here);
-    await page.getByRole("combobox", { name: "Person" }).press("Enter");
+    await page.getByRole("option", { name: "No person (Unsorted)" }).click();
     await expect(page.getByRole("status")).toHaveText("Saved to Unsorted.");
     await expect(page.getByRole("button", { name: "Add another" })).toBeVisible();
     await idle(page);

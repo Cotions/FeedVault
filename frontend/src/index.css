@@ -3176,6 +3176,7 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 .links-add-head .brand-mark { width: 26px; height: 26px; }
 /* In the small window the people list gives way, so Save stays in sight. */
 .links-add-page .person-pick-list { max-height: clamp(116px, calc(100vh - 430px), 228px); }
+.links-add-refused { margin-top: 0; }
 .links-add-done { display: flex; flex-direction: column; gap: 12px; }
 .links-add-done .msg { margin-top: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .links-add-done .msg a { color: inherit; font-weight: 700; text-decoration: underline; }

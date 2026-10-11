@@ -26,7 +26,7 @@ export default function Bookmarklet() {
       </a>
       <span className="dim">
         Drag it to your bookmarks bar. Clicked on any page, it opens a small FeedVault window with that page's address and
-        title; nothing is saved until you press Save there.
+        title; nothing is saved until you choose who it goes to (or no one) there.
       </span>
     </div>
   );
