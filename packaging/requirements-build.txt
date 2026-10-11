@@ -1,0 +1,8 @@
+# What bundle.sh needs on top of backend/requirements.txt to freeze the app.
+# Exact pins, for the same reason as there. Bump deliberately.
+pyinstaller==6.22.2
+# PyInstaller's own dependencies.
+altgraph==0.17.5
+packaging==26.3
+pyinstaller-hooks-contrib==2026.6
+setuptools==84.0.0
