@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -242,6 +242,108 @@ test("testapp.sh resets and writes into only a folder it marked (#111)", () => {
     assert.match(got.stdout, /Removing the old copy/);
     assert.deepEqual(tree(made), [".feedvault-test", "feedvault.db"]);
     assert.equal(readFileSync(`${t}/live/data/feedvault.db`, "utf8"), "");
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+// The same blocks with a profiles-shaped live config: a second profile, not
+// the active one, with data and a media root of its own.
+function fakeProfiles() {
+  const config = fakeLive();
+  const t = config.root;
+  for (const d of ["work/data", "work/media"]) mkdirSync(`${t}/${d}`, { recursive: true });
+  writeFileSync(`${t}/work/media/keep`, "mine");
+  const json = {
+    active_profile: "home",
+    profiles: [{ id: "work", name: "Work", data_directory: `${t}/work/data`, media_roots: [`${t}/work/media`] },
+               { id: "home", name: "Home", ...config.json }],
+  };
+  return { root: t, json };
+}
+
+test("testapp.sh copies every profile's database to a marked folder of its own", () => {
+  const config = fakeProfiles();
+  const t = config.root;
+  try {
+    // The active profile's copy is the one FEEDVAULT_TEST_DATA moves; a
+    // profile with no database yet gets an empty, marked folder.
+    let got = testappData({ mode: "start", config });
+    assert.equal(got.status, 0, got.stderr);
+    assert.equal(got.stdout.split("\n").pop(), `${t}/live/data-test`);
+    assert.deepEqual(tree(`${t}/live/data-test`), [".feedvault-test", "feedvault.db"]);
+    assert.deepEqual(tree(`${t}/work/data-test`), [".feedvault-test"]);
+
+    writeFileSync(`${t}/work/data/feedvault.db`, "");
+    writeFileSync(`${t}/work/data-test/scratch`, "");
+    got = testappData({ mode: "start", config });
+    assert.equal(got.status, 0, got.stderr);
+    assert.deepEqual(tree(`${t}/work/data-test`), [".feedvault-test", "feedvault.db", "scratch"]);
+    got = testappData({ mode: "reset", config, testData: `${t}/elsewhere` });
+    assert.equal(got.status, 0, got.stderr);
+    assert.deepEqual(tree(`${t}/elsewhere`), [".feedvault-test", "feedvault.db"]);
+    assert.deepEqual(tree(`${t}/work/data-test`), [".feedvault-test", "feedvault.db"]);
+    assert.deepEqual(tree(`${t}/work/data`), ["feedvault.db"]);
+    assert.deepEqual(tree(`${t}/live/data`), ["feedvault.db"]);
+    assert.equal(readFileSync(`${t}/work/media/keep`, "utf8"), "mine");
+  } finally {
+    rmSync(t, { recursive: true, force: true });
+  }
+});
+
+test("testapp.sh makes every check for every profile's data, media and copy", () => {
+  const config = fakeProfiles();
+  const t = config.root;
+  try {
+    const before = tree(t);
+    // The active profile's copy may not touch another profile's data or media, nor its copy.
+    for (const [dir, why] of [[`${t}/work/data`, /overlaps/], [`${t}/work/data/sub`, /overlaps/],
+                              [`${t}/work`, /overlaps/], [`${t}/work/media/x`, /overlaps/],
+                              [`${t}/media`, /overlaps/], [`${t}/work/data-test`, /two profiles' copies/],
+                              [`${t}/work/data-test/sub`, /two profiles' copies/]]) {
+      for (const mode of ["reset", "start"]) {
+        const got = testappData({ mode, testData: dir, config });
+        assert.notEqual(got.status, 0, `${mode} ${dir}`);
+        assert.match(got.stderr, why, `${mode} ${dir}`);
+        assert.equal(got.stdout, "", `${mode} ${dir}`);
+      }
+    }
+    assert.deepEqual(tree(t), before);
+
+    // Another profile's data directory: absolute, and its -test sibling clear of everything.
+    const [work, home] = config.json.profiles;
+    for (const data of ["", null, "relative/data", undefined]) {
+      const json = { ...config.json, profiles: [{ ...work, data_directory: data }, home] };
+      const got = testappData({ config: { root: t, json }, copy: false });
+      assert.notEqual(got.status, 0, String(data));
+      assert.match(got.stderr, /data_directory of a profile in .* must be an absolute path/, String(data));
+    }
+    mkdirSync(`${t}/media/x-test`);
+    let json = { ...config.json, profiles: [{ ...work, data_directory: `${t}/media/x` }, home] };
+    let got = testappData({ config: { root: t, json } });
+    assert.notEqual(got.status, 0);
+    assert.match(got.stderr, /overlaps/);
+    assert.deepEqual(tree(`${t}/media/x-test`), []);
+
+    // A folder at another profile's copy that this script did not make is left alone.
+    mkdirSync(`${t}/work/data-test`);
+    writeFileSync(`${t}/work/data-test/notes`, "mine");
+    for (const mode of ["reset", "start"]) {
+      got = testappData({ mode, config });
+      assert.notEqual(got.status, 0, mode);
+      assert.match(got.stderr, /no \.feedvault-test marker/, mode);
+      assert.ok(got.stderr.includes(`rm -rf -- '${t}/work/data-test'`), got.stderr);
+    }
+    assert.deepEqual(tree(`${t}/work/data-test`), ["notes"]);
+    assert.equal(existsSync(`${t}/live/data-test`), false);
+
+    // An active_profile that names no profile: the first one, as the app reads it.
+    rmSync(`${t}/work/data-test`, { recursive: true });
+    writeFileSync(`${t}/work/data/feedvault.db`, "");
+    json = { ...config.json, active_profile: "gone" };
+    got = testappData({ mode: "start", config: { root: t, json } });
+    assert.equal(got.status, 0, got.stderr);
+    assert.equal(got.stdout.split("\n").pop(), `${t}/work/data-test`);
   } finally {
     rmSync(t, { recursive: true, force: true });
   }

@@ -70,14 +70,16 @@ and a built UI).
   checked it is the demo.
 - Without `--demo` it copies `feedvault.db` (SQLite's backup, safe while the
   live app runs) into `<data_directory>-test` (or `FEEDVAULT_TEST_DATA`, an
-  absolute path), uses
+  absolute path, for the active profile's), each other
+  [profile](#profiles)'s into its own `<data_directory>-test`, uses
   `config.test.json` in `~/.config/feedvault/` (`$XDG_CONFIG_HOME`;
   `FEEDVAULT_CONFIG` is not read here), and pauses all schedules. With
   [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) installed
-  it runs in a sandbox where your media folders, the live data directory and
-  the live config are read-only; without it, it warns and runs unprotected.
-- The test data folder may not be, hold or sit inside the live data folder
-  or a media folder, nor be or hold `HOME` or `/`. testapp.sh leaves a
+  it runs in a sandbox where your media folders (every profile's), the live
+  data directories and the live config are read-only; without it, it warns
+  and runs unprotected.
+- A test data folder may not be, hold or sit inside a live data folder
+  or a media folder (of any profile), nor be or hold `HOME` or `/`. testapp.sh leaves a
   `.feedvault-test` marker in the folder it makes, and only uses, resets or
   deletes a folder with that marker. A copy made before the marker existed
   is refused with the command to remove it by hand; the next run makes a
@@ -169,6 +171,35 @@ GitHub release with `feedvault-linux-x86_64`, the `.tar.gz` and
 `SHA256SUMS.txt`. The build job has a read-only token; a second job, which
 runs none of the repo's code, publishes what it made. Only Linux x86_64 is
 built.
+
+## Profiles
+
+A profile is a library of its own: its media roots, and a data directory
+with its database, thumbnails, tags, people, collections, links, sources and
+job history. Use them to keep, say, a work archive and a personal one apart.
+**Settings → Profiles** creates one (a name, a data directory, its media
+roots), renames and removes them. With two or more, a menu in the header
+shows the active one and switches; with one, nothing changes from before.
+
+- One profile is active at a time, and switching reloads the dashboard in
+  the other library. A switch is refused while a job is queued or running
+  or a scan is under way (finish or cancel them first), so nothing started
+  in one library ever writes into another.
+- Two profiles never share a data directory, and a folder is a media root
+  of one profile only (nor inside or around another profile's).
+- Removing a profile only forgets it. Its media and its data directory stay
+  on disk untouched; create a profile on the same data directory to have it
+  back.
+- Shared by all profiles: the downloaders, their paths and settings
+  (logins, pauses, link routing), the scripts folder, and the switch that
+  pauses all schedules.
+- **Scheduled syncs run for the active profile only.** The other profiles'
+  sources wait until theirs is active; one that is overdue then syncs once.
+  The browser userscript also saves into whichever profile is active.
+- A config from before profiles is read as a single profile named
+  "Default", with the same data and folders. Nothing is moved.
+
+See [docs/API.md → Profiles](docs/API.md#profiles).
 
 ## Downloading with instaloader
 
@@ -479,7 +510,7 @@ userscript's included, cannot list, run or attach a script.
 |---|---|
 | Config | `~/.config/feedvault/config.json` (`$XDG_CONFIG_HOME/feedvault/`; override with `FEEDVAULT_CONFIG`) |
 | Scripts | `scripts/` beside the config; FeedVault only reads it |
-| Data | `data_directory` in the config, by default `~/.local/share/feedvault/` (`$XDG_DATA_HOME/feedvault/`): the index `feedvault.db` (rebuilt from your folders by a rescan), `userdata/*.json` (your decisions, tags, people, links, sources and the rest, restored from there after a rebuild), thumbnails, and the downloaders' archives and stamps |
+| Data | each [profile](#profiles)'s `data_directory` in the config, by default `~/.local/share/feedvault/` (`$XDG_DATA_HOME/feedvault/`): the index `feedvault.db` (rebuilt from your folders by a rescan), `userdata/*.json` (your decisions, tags, people, links, sources and the rest, restored from there after a rebuild), thumbnails, and the downloaders' archives and stamps |
 | Media | wherever your downloader put it; FeedVault only reads it, and trashing moves files to `.feedvault-trash/` inside that media folder |
 | Port | 3380 (`FEEDVAULT_PORT`, 1 to 65535; `./run.sh --dev`'s Vite proxy follows it); `./testapp.sh` uses 3389 |
 | Installed app | `~/.local/bin/feedvault`, `FeedVault.desktop` and its icon under `~/.local/share` (`./bundle.sh --install`); it reads the config above, see [Install](#install) |

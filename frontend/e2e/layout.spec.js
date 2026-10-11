@@ -64,7 +64,7 @@ const VIEWS = [
   { name: "Person", open: page => openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title")) },
   { name: "Collection", open: page => openUrl(page, `/collections/${S.collection}`, pg => pg.locator("h2.page-title")) },
   { name: "Links, Unsorted", open: page => openUrl(page, "/links?person=none", pg => pg.locator(".link-assign").first()) },
-  ...["downloads", "sync", "appearance", "about"].map(tab => ({
+  ...["profiles", "downloads", "sync", "appearance", "about"].map(tab => ({
     name: `Settings › ${tab}`,
     open: page => openUrl(page, `/settings#${tab}`, pg => pg.locator(`.settings-tab[aria-current="page"][href$="#${tab}"]`)),
   })),

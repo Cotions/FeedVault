@@ -88,23 +88,136 @@ def static_dir():
     return None
 
 
-def load():
-    cfg = {}
+# A profile is a whole separate library: its own data directory (so its own
+# feedvault.db, thumbnails, user data, archives) and its own media roots.
+# One is active at a time. Everything else in the config (tool paths, the
+# downloaders' settings, schedules_paused) is shared by all of them. load()
+# flattens the active profile into the top level, so the rest of the code
+# reads cfg["data_directory"] and cfg["media_roots"] without knowing
+# profiles exist.
+PROFILE_KEYS = ("data_directory", "media_roots")
+DEFAULT_PROFILE = "default"
+MAX_PROFILE_NAME = 60
+# What load() adds for its readers; never saved.
+_DERIVED = ("active_profile", "profile_name")
+
+
+def read():
+    """config.json as it is kept: the shared keys, ``profiles`` (a list of
+    {id, name, data_directory, media_roots}) and ``active_profile``. A file
+    from before profiles (flat: data_directory and media_roots at the top)
+    is read as one "Default" profile; nothing is moved, and the file is
+    only rewritten in the new shape when something is saved."""
+    raw = {}
     path = config_path()
     if os.path.exists(path):
         with open(path) as f:
-            cfg = json.load(f)
-    cfg.setdefault("data_directory", DEFAULT_DATA)
-    cfg.setdefault("media_roots", [])
+            raw = json.load(f)
+    profiles = raw.get("profiles")
+    profiles = [p for p in profiles if isinstance(p, dict) and isinstance(p.get("id"), str) and p["id"]] \
+        if isinstance(profiles, list) else []
+    if not profiles:
+        default = {"id": DEFAULT_PROFILE, "name": "Default"}
+        for k in PROFILE_KEYS:
+            if k in raw:
+                default[k] = raw[k]
+        profiles = [default]
+        raw["active_profile"] = DEFAULT_PROFILE
+    for k in PROFILE_KEYS:
+        raw.pop(k, None)
+    raw["profiles"] = profiles
+    return raw
+
+
+def write(raw):
+    """Write what read() returned (changed) back to config.json."""
+    path = config_path()
+    make_private_dir(os.path.dirname(path))
+    with _lock:
+        write_private(path, lambda f: json.dump(raw, f, indent=2))
+
+
+def active(raw):
+    """The active profile in ``raw`` (read()): the one ``active_profile``
+    names, else the first."""
+    return next((p for p in raw["profiles"] if p["id"] == raw.get("active_profile")), raw["profiles"][0])
+
+
+def profile_name(p):
+    name = p.get("name")
+    return name if isinstance(name, str) and name.strip() else p["id"]
+
+
+def profile_data(p):
+    """A profile's data directory: the default one when it names none (the
+    "Default" profile of a config that never set it)."""
+    d = p.get("data_directory")
+    return d if isinstance(d, str) and d else DEFAULT_DATA
+
+
+def profile_roots(p):
+    roots = p.get("media_roots")
+    return [r for r in roots if isinstance(r, str)] if isinstance(roots, list) else []
+
+
+def load():
+    raw = read()
+    prof = active(raw)
+    cfg = {k: v for k, v in raw.items() if k not in ("profiles", "active_profile")}
+    cfg["data_directory"] = prof.get("data_directory", DEFAULT_DATA)
+    cfg["media_roots"] = prof.get("media_roots", [])
+    cfg["active_profile"] = prof["id"]
+    cfg["profile_name"] = profile_name(prof)
     cfg.setdefault("similar_threshold", 6)        # dHash bits that may differ, see duplicates.py
     return cfg
 
 
 def save(cfg):
-    path = config_path()
-    make_private_dir(os.path.dirname(path))
-    with _lock:
-        write_private(path, lambda f: json.dump(cfg, f, indent=2))
+    """Save what load() returned (changed): data_directory and media_roots
+    go to the active profile, the rest to the shared top level. The other
+    profiles stay as the file has them."""
+    raw = read()
+    prof = active(raw)
+    out = {k: v for k, v in cfg.items()
+           if k not in PROFILE_KEYS and k not in _DERIVED and k not in ("profiles", "active_profile")}
+    for k in PROFILE_KEYS:
+        if k in cfg:
+            prof[k] = cfg[k]
+    out["profiles"], out["active_profile"] = raw["profiles"], prof["id"]
+    write(out)
+
+
+def _real(path):
+    return os.path.realpath(os.path.expanduser(path))
+
+
+def data_dir_owner(raw, data_dir, exclude=None):
+    """The name of a profile in ``raw`` (but ``exclude``, an id) whose data
+    directory is ``data_dir``, else None: two profiles on one data directory
+    would share a database, which is what profiles are there to prevent."""
+    want = _real(data_dir)
+    for p in raw["profiles"]:
+        if p["id"] != exclude and _real(profile_data(p)) == want:
+            return profile_name(p)
+    return None
+
+
+def roots_owner(raw, roots, exclude=None):
+    """(profile name, its root, the one of ``roots``) for the first of
+    ``roots`` that is, holds or is inside a media root of another profile
+    (not ``exclude``, an id), else None: the same files would be indexed
+    into two libraries, and a delete in one would empty the other's."""
+    def norm(p):
+        return _real(p).rstrip(os.sep) + os.sep
+    for p in raw["profiles"]:
+        if p["id"] == exclude:
+            continue
+        for theirs in profile_roots(p):
+            for ours in roots:
+                a, b = norm(theirs), norm(ours)
+                if a.startswith(b) or b.startswith(a):
+                    return profile_name(p), theirs, ours
+    return None
 
 
 def make_private_dir(path):

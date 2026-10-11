@@ -276,10 +276,13 @@ _writing = threading.Lock()     # one export at a time
 
 
 def _write(name):
-    with _lock:
-        _timers.pop(name, None)
     try:
         with _writing:
+            # Forgotten once the write has its turn, not before: flush()
+            # still sees a timer that fired but waits here, and writes it
+            # itself (before a profile switch, into the library it is for).
+            with _lock:
+                _timers.pop(name, None)
             export(db.connect(), name, config.load()["data_directory"])
     except Exception as e:  # on a timer thread: log, keep going
         print(f"[userdata] Could not write {name}.json: {type(e).__name__}: {e}")

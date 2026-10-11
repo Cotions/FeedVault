@@ -12,6 +12,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
 import { useUnsaved } from "../lib/unsaved";
 import AppearanceSettings from "../components/AppearanceSettings";
+import ProfileSettings from "../components/ProfileSettings";
 import PageHeader from "../components/PageHeader";
 
 /* A card tells the page whether it holds unsaved edits (``onDirty(name,
@@ -1020,6 +1021,7 @@ function RoutesCard({ saved, onSaved, msg, setMsg, onDirty }) {
 
 const TABS = [
   { id: "library",    label: "Library",    icon: "folder" },
+  { id: "profiles",   label: "Profiles",   icon: "vault" },
   { id: "downloads",  label: "Downloads",  icon: "download" },
   { id: "sync",       label: "Sync",       icon: "refresh" },
   { id: "appearance", label: "Appearance", icon: "palette" },
@@ -1083,6 +1085,9 @@ export default function Settings() {
                 />
                 <TrashCard />
                 <LastScan />
+              </div>
+              <div className="settings-group" hidden={tab !== "profiles"}>
+                <ProfileSettings onDirty={onDirty} />
               </div>
               <div className="settings-group" hidden={tab !== "downloads"}>
                 <DownloadersCard saved={config.tools || {}} onSaved={reload} onDirty={onDirty} />

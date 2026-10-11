@@ -49,6 +49,25 @@ def start(roots):
     return True
 
 
+def claim():
+    """Take the scan's place without scanning, so none starts (a profile
+    switch, app.py): False when one is running. Given back by release()."""
+    with _lock:
+        if _state["running"]:
+            return False
+        _state["running"] = True
+    return True
+
+
+def release(forget=False):
+    """After claim(). ``forget``: the last report too (it was another
+    library's)."""
+    with _lock:
+        _state["running"] = False
+        if forget:
+            _state["last"] = None
+
+
 def run(roots):
     """Scan now, in the calling thread, as start() would in its own (the
     status and the hashing worker follow); waits for a scan already
