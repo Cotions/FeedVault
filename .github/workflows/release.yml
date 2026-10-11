@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release (e.g. v0.1.0)"
+        required: true
+
+# The token only needs to read the repo; the release job alone may write.
+permissions:
+  contents: read
+
+jobs:
+  # Builds and tests with a read-only token: nothing pip or npm installs
+  # here can publish anything.
+  build:
+    # The same image as CI. 22.04 keeps the glibc the binary needs low, so it
+    # runs on older distros too.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Resolve the version
+        id: v
+        env:
+          # Never ${{ }} inside run: text: an env var cannot break out of quoting.
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: refs/tags/${{ steps.v.outputs.version }}
+          persist-credentials: false
+
+      # No caches: a release is built from what PyPI and npm serve for the pins.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      # backend/config.py: "Release builds rewrite this line with the tag
+      # being built" (backend/tests/test_frozen.py keeps the two in step).
+      - name: Stamp the version
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          sed -i "s|^__version__ = .*|__version__ = \"$V\"|" backend/config.py
+          grep -nx "__version__ = \"$V\"" backend/config.py
+
+      - name: Install UI dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build the binary
+        run: ./bundle.sh
+
+      # On a demo vault, with a HOME of its own and no downloader on its PATH.
+      - name: Smoke test the binary
+        env:
+          SMOKE_VERSION: ${{ steps.v.outputs.version }}
+        run: scripts/smoke_test.sh ./dist/feedvault
+
+      - name: Package
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          NAME="feedvault-${V}-linux-x86_64"
+          mkdir -p "release/$NAME"
+          cp dist/feedvault "release/$NAME/feedvault"
+          cp README.md "release/$NAME/README.md"
+          cp packaging/feedvault.svg "release/$NAME/feedvault.svg"
+          cp packaging/FeedVault.desktop "release/$NAME/FeedVault.desktop.template"
+          tar -czf "release/${NAME}.tar.gz" -C release "$NAME"
+          rm -r "release/$NAME"
+          cp dist/feedvault release/feedvault-linux-x86_64
+          cd release
+          sha256sum feedvault-linux-x86_64 "${NAME}.tar.gz" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Publishes what the build job made, and runs none of the repo's code.
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write        # create the release
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release
+          path: release
+
+      - name: Check the files
+        working-directory: release
+        run: sha256sum -c SHA256SUMS.txt
+
+      - name: Publish the release
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.build.outputs.version }}
+        run: |
+          cat > ../notes.md <<EOF
+          ## Install (Linux x86_64)
+
+          \`\`\`bash
+          curl -L -o feedvault \\
+            https://github.com/${GITHUB_REPOSITORY}/releases/download/${V}/feedvault-linux-x86_64
+          chmod +x feedvault
+          mkdir -p ~/.local/bin && mv feedvault ~/.local/bin/feedvault
+          feedvault
+          \`\`\`
+
+          The dashboard opens at http://localhost:3380. The one file carries its own
+          Python, the backend and the dashboard. The downloaders (instaloader,
+          gallery-dl, yt-dlp) and ffmpeg are not in it: install the ones you use, and
+          Settings finds them on your PATH.
+
+          Config is \`~/.config/feedvault/config.json\`, the same file a source checkout
+          reads: do not run both at once. \`feedvault-${V}-linux-x86_64.tar.gz\` holds the
+          same binary with the README, the icon and a desktop entry template.
+
+          Check your download against \`SHA256SUMS.txt\`:
+
+          \`\`\`bash
+          sha256sum -c --ignore-missing SHA256SUMS.txt
+          \`\`\`
+          EOF
+          gh release create "$V" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "FeedVault $V" --notes-file ../notes.md --generate-notes \
+            feedvault-linux-x86_64 "feedvault-${V}-linux-x86_64.tar.gz" SHA256SUMS.txt

@@ -53,7 +53,7 @@ each now says what was built.
 |---|---|
 | Scope | **Settled.** Catalog first. FeedVault reads folders. It may *launch* a downloader CLI as a subprocess, but never contains download logic, never calls a platform API itself, and never handles cookies (each tool keeps its own session) |
 | Download trigger | **Built, differently** (#24, #26, #28, #58). A job runner (`backend/jobs.py`) starts jobs *by kind*, each kind building its own argv in code from checked parameters, runs them without a shell, and rescans the target folder when a job ends. Commands do **not** live in the config: the API never takes a command. Custom commands are files the user writes in the scripts folder (README, "Scripts") |
-| Stack | Flask + SQLite backend, React + Vite dashboard, Tampermonkey userscript: **built**. PyInstaller single binary: **open** (`config.py` already looks for a frozen bundle, but there is no build spec or release yet) |
+| Stack | Flask + SQLite backend, React + Vite dashboard, Tampermonkey userscript: **built**. PyInstaller single binary: **built** (`bundle.sh`, `packaging/feedvault.spec`; `./bundle.sh --install` puts it in `~/.local/bin` with an app menu entry; the downloaders and ffmpeg stay outside it) |
 | Code vs data | Separate, as in ChannelVault and RecipeVault. The repo holds the app only. Media folders are listed in the config |
 | Source of truth | **Settled.** Files on disk, as the downloaders wrote them. Each tool already writes metadata next to the media: instaloader `.json` / `.json.xz`, gallery-dl `--write-metadata`, yt-dlp `--write-info-json`. FeedVault reads those; it does not write its own sidecars |
 | Index | **Settled.** Its own SQLite file, never shared with ChannelVault. Derived from the folders and regenerable: lose it and it rebuilds from a rescan. FTS5 on post text and author |
@@ -183,7 +183,8 @@ from your own shell with other archives is not covered.
    *Done* (#21, #25, #52; user data export #14).
 5. **Upkeep.** Duplicate media detection: *done* (#18, #20). Test instance
    script: *done* (`testapp.sh`), plus browser tests in CI (#91, #97).
-   Watcher: **open**. Bundle and release: **open**.
+   Watcher: **open**. Bundle and release: *done* (`bundle.sh`,
+   `release.sh`, `.github/workflows/release.yml`; README, "Install").
 
 ## Open questions
 
