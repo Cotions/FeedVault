@@ -90,16 +90,35 @@ ui_is_stale() {
   [ -n "$(find "$ROOT/frontend/src" "$ROOT/frontend/index.html" -newer "$DIST/index.html" -print -quit 2>/dev/null)" ]
 }
 
+# Installed again when package.json or the lockfile is newer than the last
+# install: a dependency added since (the bundled fonts, #148) fails the build
+# otherwise. The lockfile is npm's, so npm installs from it when it is there.
+install_ui() {
+  local stamp="$ROOT/frontend/node_modules/.deps-ok"
+  if [ -f "$stamp" ] && [ ! "$ROOT/frontend/package.json" -nt "$stamp" ] \
+     && [ ! "$ROOT/frontend/package-lock.json" -nt "$stamp" ]; then
+    return 0
+  fi
+  if command -v npm &>/dev/null; then
+    say "Installing UI dependencies (npm)"
+    (cd "$ROOT/frontend" && npm ci)
+  else
+    say "Installing UI dependencies (bun)"
+    (cd "$ROOT/frontend" && bun install --no-save)
+  fi
+  touch "$stamp"
+}
+
 build_ui() {
   local pm; pm="$(pkg_manager)" || die "Need bun or npm to build the UI"
-  [ -d "$ROOT/frontend/node_modules" ] || { say "Installing UI dependencies ($pm)"; (cd "$ROOT/frontend" && "$pm" install); }
+  install_ui
   say "Building UI ($pm)"
   (cd "$ROOT/frontend" && "$pm" run build)
 }
 
 if [ "$MODE" = dev ]; then
   pm="$(pkg_manager)" || die "Need bun or npm for dev mode"
-  [ -d "$ROOT/frontend/node_modules" ] || (cd "$ROOT/frontend" && "$pm" install)
+  install_ui
   say "Starting Vite dev server (proxies /api and /media to :$PORT)"
   (cd "$ROOT/frontend" && "$pm" run dev) &
   VITE_PID=$!

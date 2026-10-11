@@ -38,8 +38,9 @@ reopens itself in a terminal window; `FEEDVAULT_NO_TERMINAL=1` stops that.
 
 On its first run `./run.sh` creates `backend/venv`, installs the Python
 dependencies (`backend/requirements-dev.txt`) into it, installs the UI's
-(`npm install` or `bun install` in `frontend/`) and builds the UI. It
-reinstalls the Python ones when a requirements file changes, and rebuilds
+(`npm ci` in `frontend/`, or `bun install` without npm) and builds the UI. It
+reinstalls the Python ones when a requirements file changes, the UI's when
+`frontend/package.json` or its lockfile does (`./bundle.sh` too), and rebuilds
 the UI when `frontend/src` is newer than the build. If the port is taken,
 it asks before stopping what holds it.
 
