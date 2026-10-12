@@ -52,9 +52,10 @@ class Fake:
         self.data, self.log = tmp / "fake.json", tmp / "fake.log"
         self.set({})
 
-    def set(self, profiles, fail=None, delay=0, gate=None, stall=None):
+    def set(self, profiles, fail=None, delay=0, gate=None, stall=None, browser_cookie3=True):
         self.data.write_text(json.dumps({"profiles": profiles, "fail": fail, "delay": delay,
-                                         "gate": None if gate is None else str(gate), "stall": stall}))
+                                         "gate": None if gate is None else str(gate), "stall": stall,
+                                         "browser_cookie3": browser_cookie3}))
 
     def runs(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []

@@ -213,7 +213,10 @@ instaloader --load-cookies firefox --no-compress-json some_profile    # a whole 
 ```
 
 - `--no-compress-json` writes plain `.json` instead of `.json.xz` (both are read)
-- `--load-cookies <browser>` reuses your browser session instead of a password login
+- `--load-cookies <browser>` reuses your browser session instead of a password login.
+  It needs instaloader's optional `browser_cookie3` module, which a plain
+  install leaves out: `pipx install 'instaloader[browser_cookie3]'`, or
+  `pipx inject instaloader browser_cookie3` for one already installed
 - with metadata JSON, any `--filename-pattern` works as long as a post's media
   and its JSON share the base name (the default does)
 - without metadata (`save_metadata=False`), FeedVault rebuilds posts from file
@@ -351,7 +354,11 @@ left running by a crash is stopped on the next start.
 
 **Settings → Downloads → Downloaders** shows, for instaloader, gallery-dl, yt-dlp and
 ffmpeg, whether each is installed, where, which version, and how (pipx, a
-virtualenv, or the system), with the command to install a missing one.
+virtualenv, or the system), with the command to install a missing one
+(for instaloader, `pipx install 'instaloader[browser_cookie3]'`: the extra
+is what reads a browser's cookies). When Instagram syncs use a browser's
+cookies and instaloader's virtualenv has no `browser_cookie3`, the card says
+so with the command that adds it; a sync that fails for it says the same.
 **Test** runs a tool once on a public item with its sync's login and says
 whether it works (or needs a login, or is rate limited). **Update** upgrades
 a tool installed with pipx or in a virtualenv (`pipx upgrade`, or pip in

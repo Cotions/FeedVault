@@ -38,6 +38,10 @@ instaloadercontext.py, __main__.py)::
     not_found       "Profile <name> does not exist."
     renamed         "Profile <old> has changed its name to <new>." (check_profile_id, after "Trying to
                      find profile <old> using its unique ID <id>.": the profile id --latest-stamps keeps)
+    error           "browser_cookie3 library is needed to load cookies from browsers" (__main__.py:
+                     --load-cookies in an install without its optional browser_cookie3 module). The
+                     site was never asked, so the account's state stays ``error``; setup() knows the
+                     line, and the result says how to add the module (sync._setup)
 
 gallery-dl 1.32.14, read from its source (exception.py, job.py, output.py,
 cookies.py, extractor/common.py, twitter.py, tiktok.py); lines are
@@ -187,6 +191,11 @@ YT_DLP = _table([
     ("not_found", r"YouTube said: This (?:channel does not exist|account has been terminated)"),
 ])
 TABLES = {"instaloader": INSTALOADER, "gallery-dl": GALLERY_DL, "yt-dlp": YT_DLP}
+# What a tool's install lacks to run as it was asked, per tool: (what, pattern).
+# Not a state: the site said nothing, the account is as it was (setup()).
+SETUP = {"instaloader": _table([
+    ("browser_cookie3", r"\bbrowser_cookie3 library is needed to load cookies from browsers\b"),
+])}
 # instaloader's heading of the errors it repeats as it ends: never the line that says what went wrong.
 CLOSING = "Errors or warnings occurred:"
 
@@ -247,6 +256,17 @@ def classify(lines, table):
             if any(p.search(t) for p in patterns):
                 return state, t
     return "error", texts[-1] if texts else None
+
+
+def setup(tool, lines):
+    """(what, line) when the tool said its install lacks something (SETUP:
+    "browser_cookie3"), the latest such line, raw as classify()'s; else None."""
+    texts = _texts(lines)
+    for what, pattern in SETUP.get(tool, ()):
+        for t in reversed(texts):
+            if pattern.search(t):
+                return what, t
+    return None
 
 
 def renamed(tool, lines):

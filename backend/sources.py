@@ -50,7 +50,7 @@ BROWSERS = ("firefox", "chrome", "chromium", "brave", "edge")
 PROFILE_HINT = ', "profile": "<a browser profile\'s name, optional>"'
 SESSION_MODES = ("none", "cookies", "login")
 COOKIE_MODES = ("none", "cookies")             # gallery-dl and yt-dlp: a browser's cookies or nothing
-ERRORS = ("login_required", "private", "not_found", "rate_limited", "missing", "generic")
+ERRORS = ("login_required", "private", "not_found", "rate_limited", "missing", "setup", "generic")
 
 # Under the first media root: posts the Save button got for accounts with no
 # folder (save.py). Never a source's folder: a sync would take them for its

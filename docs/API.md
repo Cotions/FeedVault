@@ -1645,8 +1645,15 @@ no person yet.
     missing. gallery-dl and yt-dlp failures are classified from their
     error lines the same way (gallery-dl's `AuthRequired`, `NotFoundError`,
     "Tweets are protected"; yt-dlp's "Sign in to confirm", "Private video",
-    "Video unavailable"). `missing`: the tool was not found (no output);
-    the dashboard links `missing` to Settings → Downloaders and
+    "Video unavailable"). `missing`: the tool was not found (no output).
+    `setup`: the tool's install lacks something it was asked to use:
+    instaloader's `browser_cookie3 library is needed to load cookies from
+    browsers` (`--load-cookies` without its optional `browser_cookie3`
+    module); `message` then names the command that adds it, from how
+    instaloader is installed (see `browser_cookie3` in
+    [Downloaders](#downloaders)), and `health.state` is `error`: the site
+    was never asked. The dashboard links `missing` and `setup` to
+    Settings → Downloaders and
     `login_required` to Settings → Sync, where logins and cookies are set
   - `message`: one line for people; `line`: the tool's last line of output
     behind it, or `null`. When the latest-version check is on (see
@@ -2166,7 +2173,10 @@ this order:
 | `login_required` | `Login required`, `requires login`, `Redirected to login page`, `Session file does not exist yet`, `Login error:`, `checkpoint_required`, `challenge_required`, `No cookies found for Instagram`, `Not logged in.`, `403 Forbidden` | `AuthRequired:`, `AuthenticationError:`, other `AuthorizationError:`, X `'Could not authenticate you`, TikTok `…: Login required to access this profile` | `Sign in to confirm you're not a bot`, `Sign in to confirm your age`, `TikTok is requiring login`, `Use --cookies-from-browser or --cookies for the authentication` |
 | `not_found` | `Profile … does not exist.` | `NotFoundError:`, TikTok `…: User account could not be found` | `The channel/playlist does not exist`, `HTTP Error 404`, `Video unavailable`, TikTok `Video not available, status code <n>`, `YouTube said: This channel does not exist` / `This account has been terminated` |
 
-Anything else is `error`, with its line. A TikTok user that does not exist
+Anything else is `error`, with its line: also instaloader's
+`browser_cookie3 library is needed to load cookies from browsers`, which
+says nothing of the account (the sync's `last_result.error` is `setup`, and
+its `message` says how to add the module). A TikTok user that does not exist
 only gives yt-dlp's `Unable to extract secondary user ID`, which a private
 account can give too: it stays an `error`. gallery-dl's strings are
 those of its 1.32.14 source.
@@ -2452,7 +2462,7 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
 - `result`: `{ "post": "instagram:C8xYzAbCdEf" | null, "folder", "added",
   "updated", "error", "line", "account", "person" }`: `post` the post's
   FeedVault id once it is indexed; `error` as for a sync (`login_required`,
-  `private`, `not_found`, `rate_limited`, `generic`; `missing` when
+  `private`, `not_found`, `rate_limited`, `setup`, `generic`; `missing` when
   instaloader is not found), with a message for people. The userscript
   says "see Settings → Downloaders" for `missing` and `login_required`.
 - The saving folder is emptied before each run and removed after.
@@ -2777,7 +2787,8 @@ A tool:
   "outdated": true,
   "login": { "mode": "cookies", "browser": "firefox" },
   "update": { "possible": true, "command": "pipx upgrade yt-dlp", "reason": null },
-  "install_hint": null
+  "install_hint": null,
+  "browser_cookie3": null
 }
 ```
 
@@ -2827,8 +2838,23 @@ tools set in Settings (or `PATH`) change, and on `POST /api/downloaders/check`.
   with a copy button), and why it cannot (`reason`, else `null`); see
   **Update** below.
 - `install_hint`: for a missing tool, the command that installs it
-  (`pipx install <name>`, `sudo apt install ffmpeg`), shown with a copy
-  button and never run; else `null`.
+  (`pipx install <name>`, `sudo apt install ffmpeg`; for instaloader
+  `pipx install 'instaloader[browser_cookie3]'`, with the extra that reads
+  a browser's cookies), shown with a copy button and never run; else `null`.
+- `browser_cookie3`: for instaloader when it is found, else `null`:
+  `{ "found": true | false | null, "command": "pipx inject instaloader browser_cookie3" }`.
+  instaloader reads a browser's cookies (`--load-cookies`) with this
+  optional module; without it such a run fails at once. `found`: whether it
+  is in the virtualenv's `lib/python*/site-packages` (a folder or dist-info
+  whose name starts with `browser_cookie3`; looked for, nothing is run or
+  imported); `null` when that cannot be told: a `system` install, or a
+  virtualenv with `include-system-site-packages = true` that has none of
+  its own. `command`: what adds it, shown with a copy button and never run:
+  `pipx inject <the pipx virtualenv's name> browser_cookie3` (`pipx`),
+  `<venv>/bin/python -m pip install browser_cookie3` (`venv`), and for a
+  `system` install, which FeedVault cannot add it to, instaloader's
+  `install_hint` (a copy that has it, its path then set in Settings). The
+  card warns only when `found` is `false` and `login.mode` is `cookies`.
 
 **Latest versions.** Off by default: `POST /api/config` with
 `{ "check_updates": true }` turns it on. Besides a
@@ -2866,7 +2892,8 @@ and yt-dlp download nothing (`--simulate`). `state` `done`, `result`
 `{ "ok": true, "error": null, "line": null }`, `message` `"Works"`; or
 `failed`, `result` `{ "ok": false, "error", "line" }` with `error` read from
 the output as for a sync (`login_required`, `rate_limited`, `private`,
-`not_found`, `generic`) and `message` saying what it means.
+`not_found`, `setup`, `generic`) and `message` saying what it means (for
+`setup`, the command that adds instaloader's `browser_cookie3`).
 
 **Update.** Job kind `tool-update`, params `{ "tool": "instaloader" |
 "gallery-dl" | "yt-dlp" }` and nothing else, group: the tool's name, so an
@@ -2878,7 +2905,7 @@ command picked from how it is installed:
 |---|---|
 | `venv` | `<venv>/bin/python -m pip install --no-input --disable-pip-version-check -U <name>` |
 | `pipx` | `pipx upgrade <name>` (pipx found on `PATH`) |
-| `system`, `missing` | nothing: 400, the error says the command to run instead |
+| `system`, `missing` | nothing: 400, the error says the command to run instead (the tool's `install_hint`) |
 
 `<name>` is the tool's PyPI name, fixed in code. Refused the same way: a
 virtualenv without its `bin/python`, or without pip in its

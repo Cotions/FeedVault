@@ -8,8 +8,9 @@ import { useToast } from "./toast";
 // One sync kind per tool, and a source's script (docs/API.md "Jobs").
 export const SYNC_KINDS = new Set(["instaloader-sync", "gallery-dl-sync", "yt-dlp-sync", "script-sync"]);
 
-// Failures the Downloaders card in Settings can fix: install, log in, update.
-export const SETUP_ERRORS = new Set(["missing", "login_required"]);
+// Failures the Downloaders card in Settings can fix: install, log in, update,
+// or add what the install lacks (setup: instaloader's browser_cookie3).
+export const SETUP_ERRORS = new Set(["missing", "setup", "login_required"]);
 
 // How a source is named: @name for Instagram, else its link without https://.
 export function sourceName(s) {
@@ -23,6 +24,7 @@ export const ERRORS = {
   private: "private",
   not_found: "not found",
   missing: "tool missing",
+  setup: "setup needed",
   generic: "failed",
 };
 

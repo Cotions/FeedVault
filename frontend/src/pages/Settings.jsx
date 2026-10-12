@@ -14,7 +14,7 @@ import { useUnsaved } from "../lib/unsaved";
 import AppearanceSettings from "../components/AppearanceSettings";
 import ProfileSettings from "../components/ProfileSettings";
 import BrowserPick from "../components/BrowserPick";
-import { cookiesSession } from "../lib/browserProfiles";
+import { cookiesFix, cookiesSession } from "../lib/browserProfiles";
 import PageHeader from "../components/PageHeader";
 
 /* A card tells the page whether it holds unsaved edits (``onDirty(name,
@@ -399,6 +399,18 @@ function DownloaderRow({ info, saved, test, update, onSaved, shownLog, showLog, 
         <div className="kv-row">
           <span className="kv-key">login</span>
           <span className="kv-val"><LoginStatus tool={tool} login={info.login} /></span>
+        </div>
+      )}
+      {cookiesFix(info) && (
+        <div className="kv-row">
+          <span className="kv-key">cookies</span>
+          <span className="kv-val dl-update">
+            <span className="dl-warn">
+              browser_cookie3 is not installed: {tool} cannot read {info.login.browser}&rsquo;s cookies without it, and
+              its syncs will fail. Run
+            </span>
+            <CopyCommand command={cookiesFix(info)} />
+          </span>
         </div>
       )}
       {!info.found && info.install_hint && (
