@@ -371,7 +371,7 @@ def test_images_only(env, client, tools):
     job = sync_now(client, s["id"])
     assert job["state"] == "done"
     assert shortcodes(client, "777") == ["COLDPOST001", "CPOSTIMG001", "CPOSTIMG002"]
-    assert not any(n.endswith(".mp4") for n in os.listdir(env["media"] / "carol.cooks"))
+    assert not any(n.endswith(".mp4") for n in os.listdir(env["media"] / "instagram" / "carol.cooks"))
 
 
 def test_videos_only_keeps_a_carousels_videos(env, client, tools):
@@ -385,7 +385,7 @@ def test_videos_only_keeps_a_carousels_videos(env, client, tools):
     assert "--no-pictures" in job["argv"] and "--post-filter" not in job["argv"] and "--fast-update" not in job["argv"]
     # The video post, and the mixed carousel with its one video; image posts and the image carousel are not posts.
     assert shortcodes(client, "777") == ["CCAROMIX001", "CPOSTVID001"]
-    names = sorted(os.listdir(env["media"] / "carol.cooks"))
+    names = sorted(os.listdir(env["media"] / "instagram" / "carol.cooks"))
     mixed = [n for n in names if "CCAROMIX001" in n and not n.endswith((".json", ".txt"))]
     assert mixed == ["carol.cooks-2024-06-05-CCAROMIX001_2.mp4"]
     assert not any(n.endswith(".jpg") for n in names)
@@ -433,12 +433,12 @@ def test_tagged_and_highlights_on_exfat(env, client, tools, monkeypatch):
     assert job["state"] == "done", job["message"]
     assert job["argv"].index("--sanitize-paths") == job["argv"].index(sync.TITLE) + 1
     assert shortcodes(client, "888") == ["CTAGGED0001"]          # the tagged post, read from its metadata
-    sub = env["media"] / "carol.cooks" / "carol.cooks"
+    sub = env["media"] / "instagram" / "carol.cooks" / "carol.cooks"
     assert any(n.startswith("\uff1atagged-") for n in os.listdir(sub))
     assert any(n.startswith("Trips\uff1a 2024-") for n in os.listdir(sub))
     assert shortcodes(client, "777") == ["3200000000000000001", "COLDPOST001", "CPOSTIMG001", "CPOSTIMG002",
                                          "CPOSTVID001"]
-    assert sync.detect_pattern(str(env["media"] / "carol.cooks")) == (sync.DATED, True)
+    assert sync.detect_pattern(str(env["media"] / "instagram" / "carol.cooks")) == (sync.DATED, True)
 
 
 def x_account():

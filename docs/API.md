@@ -1750,15 +1750,17 @@ such source" }` for an unknown id.
   `www.`, a query string or a trailing slash) gives instaloader the profile
   name. Anything else (a post or reel link, a name with other characters, a
   host not in the table) is a 400.
-- `folder`: optional. Absent: `<first media root>/<target>` for
-  instaloader, `<first media root>/<platform>/<name>` for a link, the name
-  being the link's first path part that is not a page kind (`/user/`,
-  `/media`, `/en/`…), lowercase, without `@`. Present: an absolute path
+- `folder`: optional. Absent: `<first media root>/<platform>/<name>`,
+  `<first media root>/instagram/<target>` for instaloader; for a link, the
+  name is its first path part that is not a page kind (`/user/`,
+  `/media`, `/en/`…), lowercase, without `@`. Sources made before this
+  default keep the folder they have (`<first media root>/<target>` for
+  instaloader). Present: an absolute path
   that resolves inside a media root (symlinks followed); anything else is
   a 400. Never a media root's `_saved/` or a folder inside it (where
   [Save](#save-from-the-browser-userscript) keeps posts of accounts with no
   folder), nor a link to it: a 400 that says to pick another folder, also
-  when it is the default (an instaloader target named `_saved`).
+  when the default is there (`<root>/instagram` a link into `_saved`).
   `GET /api/sources/resolve` answers `ok: false` for it, and a sync of a
   stored source whose folder is there (sources.json edited by hand) is
   refused with the same message.
@@ -1766,8 +1768,7 @@ such source" }` for an unknown id.
   names the default folder instead: for a media root itself; for a
   platform's or a tool's folder right under a media root
   (`<root>/instagram`, `<root>/gallery-dl`, `<root>/youtube`…, a name from
-  the routing table's platforms or a tool's), unless it is the source's
-  default folder (an instaloader target named `youtube`); and for a folder
+  the routing table's platforms or a tool's); and for a folder
   that holds another account's own folder, itself included (`… holds other
   accounts' posts (name, …)`). An account's own folder, as for
   suggestions below: posts right in it, most of them that account's, most
@@ -1775,9 +1776,12 @@ such source" }` for an unknown id.
   are 90% or more another account's.
 - `person` (an id) and `account` are optional. With `account`, the source
   belongs to that indexed account (unknown: 400); without, to the account of
-  the folder's posts when there are some, else (a link) to the one account
-  of that platform whose handle, current or old, is the link's profile
-  name, any case.
+  the folder's posts when there are some, else to the one account of that
+  platform whose handle, current or old, is the profile name (the link's,
+  or instaloader's target), any case: its posts are in another folder, and
+  the first sync does not download them again. For instaloader, only an
+  account its posts' metadata names (a numeric id), not one known from file
+  names alone.
 - A second source for the same tool and target is a 400, the target
   compared in any case, and so is one for the same tool and folder (an
   x.com and a twitter.com link to one profile).
@@ -1788,9 +1792,9 @@ such source" }` for an unknown id.
 source (nor are inside a source's folder), for the user to confirm
 (`POST /api/sources` with the suggestion's `tool`, `target`, `folder` and
 `account`). FeedVault never creates a source on its own. One per account:
-its own folder (see `folder` above) wherever the tool laid it out
-(`<root>/<name>` for instaloader, `<root>/instagram/<name>` as gallery-dl
-does), the one with the most of its posts, and the topmost when they nest
+its own folder (see `folder` above) wherever it is
+(`<root>/instagram/<name>`, a new source's, or `<root>/<name>`, an
+instaloader source's before), the one with the most of its posts, and the topmost when they nest
 (highlights in a subfolder). A folder that holds other accounts' folders
 (a platform's folder with one per account) is never suggested, nor
 `_saved/` (its posts are left out). `count` is that account's instaloader
@@ -2374,9 +2378,12 @@ instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/sa
   are those of [instaloader settings](#instaloader-settings).
 - Once it exits (not when cancelled), the post's JSON names its owner, and
   the files move to the owner's folder: the folder of the owner's
-  instaloader source, else the folder right under a media root holding most
-  of the owner's instaloader posts, else `<first media root>/<handle>` when that folder
-  exists, else `<first media root>/_saved`. They are named as that
+  instaloader source, else the folder holding most of the owner's
+  instaloader posts (right under a media root, or right under its
+  `instagram` folder), else `<first media root>/instagram/<handle>` when
+  that folder exists, else `<first media root>/<handle>` when that one does
+  (where instaloader sources went before), else
+  `<first media root>/_saved`. They are named as that
   folder's files are, the layout a sync would detect (see
   [How a sync runs](#how-a-sync-runs)), the handle in place of the target.
   A file already there is never overwritten (the copy downloaded is

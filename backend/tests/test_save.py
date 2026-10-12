@@ -126,7 +126,7 @@ def test_already_have_runs_nothing(env, client, fake):
 def test_saved_into_the_owners_source_folder(env, client, fake):
     """The owner has a source: its folder, named as that folder's files are."""
     folder = carol_archive(env)
-    add_source(client)
+    add_source(client, folder=str(folder))
     fake.set(profile(kind="carousel", slides=2))
     job = save_now(client)
     assert job["state"] == "done", job
@@ -154,10 +154,33 @@ def test_saved_into_the_folder_with_most_of_the_owners_posts(env, client, fake):
 
 
 def test_saved_into_an_existing_handle_folder(env, client, fake):
-    (env["media"] / "dora").mkdir()
+    """No source, no post of the owner's: the folder a source for them would
+    get when it is there, else the one right under the root (older libraries)."""
+    media = env["media"]
+    for folder in (media / "instagram" / "dora", media / "erin", media / "instagram" / "both", media / "both"):
+        folder.mkdir(parents=True)
     fake.set(profile(handle="dora", uid=999))
     job = save_now(client)
-    assert job["result"]["folder"] == str(env["media"] / "dora")
+    assert job["state"] == "done" and job["result"]["folder"] == str(media / "instagram" / "dora")
+    conn = db.connect()
+    assert save.owner_folder(conn, env["roots"], None, "Erin") == str(media / "erin")
+    assert save.owner_folder(conn, env["roots"], None, "both") == str(media / "instagram" / "both")
+    assert save.owner_folder(conn, env["roots"], None, "nobody") == str(media / "_saved")
+    # A profile named as the platform: never the platform's folder itself.
+    assert save.owner_folder(conn, env["roots"], None, "instagram") == str(media / "_saved")
+
+
+def test_saved_into_the_owners_folder_under_the_platforms(env, client, fake):
+    """No source: the owner's posts are in ``<root>/instagram/<name>``, and
+    that folder gets the post, not ``<root>/instagram``."""
+    folder = env["media"] / "instagram" / "Carol (old)"
+    write_post(folder, "COLDPOST001", TS, owner("carol_old_name", "777"))
+    write_post(env["media"] / "instagram" / "someone", "COTHER00001", TS, owner("someone", "778"))
+    scanner.scan(env["roots"])
+    fake.set(profile())
+    job = save_now(client)
+    assert job["state"] == "done" and job["result"]["folder"] == str(folder)
+    assert (folder / "2024-06-11_12-00-00_UTC.jpg").is_file()
 
 
 def test_owner_without_a_folder_goes_to_saved(env, client, fake):
@@ -312,7 +335,7 @@ def test_saved_post_moves_into_the_new_source_before_its_sync(env, client, fake)
     s = add_source(client, target="stranger")
     job = ended(post(client, f"/api/sources/{s['id']}/sync")["job"]["id"])
     assert job["state"] == "done", job
-    folder = env["media"] / "stranger"
+    folder = env["media"] / "instagram" / "stranger"
     # Moved whole, named as the sync names its files (the target), nothing left behind.
     for suffix in ("_1.jpg", "_2.jpg", ".json", ".txt"):
         assert (folder / f"stranger-2024-06-11-{CODE}{suffix}").is_file()
@@ -346,7 +369,7 @@ def test_saved_post_moves_when_the_source_has_older_posts(env, client, fake):
     not the saved one, so the posts between them are still fetched."""
     fake.set(stranger(newer=0))
     save_now(client)                           # no folder yet: into _saved
-    folder = env["media"] / "stranger"
+    folder = env["media"] / "instagram" / "stranger"
     write_post(folder, "COLDER00001", TS + DAY, owner("stranger", "4242"))
     scanner.scan(env["roots"])
     profile = stranger(newer=0)
@@ -366,8 +389,8 @@ def test_saved_post_moves_when_the_source_has_older_posts(env, client, fake):
 def test_saved_post_is_never_moved_over_a_file(env, client, fake):
     fake.set(stranger())
     save_now(client)
-    folder = env["media"] / "stranger"
-    folder.mkdir()
+    folder = env["media"] / "instagram" / "stranger"
+    folder.mkdir(parents=True)
     taken = folder / f"stranger-2024-06-11-{CODE}_1.jpg"
     taken.write_bytes(b"mine")
     s = add_source(client, target="stranger")
@@ -458,7 +481,7 @@ def test_saved_post_moves_once_the_first_sync_finds_the_account(env, client, fak
     s = add_source(client, target="newname")
     job = sync_now(client, s["id"])
     assert job["result"]["added"] == 1
-    folder = env["media"] / "newname"
+    folder = env["media"] / "instagram" / "newname"
     assert (folder / f"newname-2024-06-11-{CODE}.json").is_file()
     assert not [n for n in os.listdir(env["media"] / "_saved") if CODE in n]
     meta = db.connect().execute("SELECT meta_path FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()[0]
@@ -504,7 +527,7 @@ def _first_sync_fetches_between(env, client, fake, sid, folder):
 def test_saved_post_in_an_existing_folder_does_not_seed_the_first_sync(env, client, fake):
     """An old archive folder (no source) with a March post; a September post
     saved into it. The first sync starts after March, not September."""
-    folder = env["media"] / "dora"
+    folder = env["media"] / "instagram" / "dora"
     write_post(folder, "CDORAMAR001", MARCH, owner("dora", "999"))
     scanner.scan(env["roots"])
     _save_september_into(env, client, fake, folder)
@@ -514,7 +537,7 @@ def test_saved_post_in_an_existing_folder_does_not_seed_the_first_sync(env, clie
 
 
 def test_saved_post_in_a_source_never_synced_does_not_seed_it(env, client, fake):
-    folder = env["media"] / "dora"
+    folder = env["media"] / "instagram" / "dora"
     write_post(folder, "CDORAMAR001", MARCH, owner("dora", "999"))
     scanner.scan(env["roots"])
     s = add_source(client, target="dora")
@@ -524,8 +547,8 @@ def test_saved_post_in_a_source_never_synced_does_not_seed_it(env, client, fake)
 
 def test_saved_posts_alone_walk_the_whole_profile(env, client, fake):
     """A handle folder with nothing but a saved post: the stamp goes before every post."""
-    folder = env["media"] / "dora"
-    folder.mkdir()
+    folder = env["media"] / "instagram" / "dora"
+    folder.mkdir(parents=True)
     _save_september_into(env, client, fake, folder)
     s = add_source(client, target="dora")
     job = sync_now(client, s["id"])

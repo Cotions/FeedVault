@@ -94,9 +94,10 @@ def _start(params, note, argv=None):
 
 def owner_folder(conn, roots, author_id, handle):
     """The folder a post of this owner goes to: the folder of the owner's
-    instaloader source, else the folder right under a media root holding most
-    of the owner's posts, else ``<first root>/<handle>`` when it exists, else
-    ``<first root>/_saved``. Always inside a media root."""
+    instaloader source, else the folder holding most of the owner's posts
+    (sources.account_folder), else ``<first root>/instagram/<handle>`` (a new
+    source's) or ``<first root>/<handle>`` (older libraries), the first that
+    exists, else ``<first root>/_saved``. Always inside a media root."""
     handle = handle.lower() if isinstance(handle, str) and sources._HANDLE_RE.fullmatch(handle) else None
     keys = [people.canonical(conn, "instagram", a) for a in (author_id, handle) if a]
     for key in keys:
@@ -114,8 +115,12 @@ def owner_folder(conn, roots, author_id, handle):
             found = sources.account_folder(conn, *key, roots)
             if found:
                 return found
-    if handle and handle.strip(".") and os.path.isdir(os.path.join(roots[0], handle)):
-        return os.path.join(roots[0], handle)
+    if handle and handle.strip("."):
+        new = sources.default_folder("instaloader", "instagram", handle, roots)
+        for folder in (new, os.path.join(roots[0], handle)):
+            # Never the platform's folder, for a profile named as it is.
+            if os.path.isdir(folder) and folder != os.path.dirname(new):
+                return folder
     return os.path.join(roots[0], SAVED)
 
 

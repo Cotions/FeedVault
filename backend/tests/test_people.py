@@ -586,7 +586,8 @@ def test_handles_from_id_files_and_accepted_renames(env, client):
     assert get(client, "/api/authors")[0]["handle"] == "gina.again"
     # a rename refused (the target changed meanwhile) leaves no trace
     import sources
-    src = post(client, "/api/sources", {"target": "https://www.instagram.com/gina.now/"})["source"]
+    src = post(client, "/api/sources", {"target": "https://www.instagram.com/gina.now/",
+                                        "folder": str(env["media"] / "gina.now")})["source"]
     sid = src["id"]
     assert src["account"] == {"platform": "instagram", "id": "555"}
     assert sources.rename(conn, sid, "someone.else", "gina.wrong", TS + 30) is False
@@ -858,8 +859,8 @@ def test_add_a_person_by_hand_with_profile_links(env, client, monkeypatch):
     assert p["accounts"] == [] and calls == []                  # nothing downloaded
     assert set(os.listdir(env["media"])) == before              # nor any folder made
     assert len(post(client, f"/api/people/{p['id']}/sync", {})["jobs"]) == 2
-    # a profile already indexed: its account is theirs too
-    r = post(client, "/api/people", {"name": "Bob", "profiles": ["https://www.instagram.com/bob/"]})
+    # a profile already indexed (by its name, its posts in another folder): its account is theirs too
+    r = post(client, "/api/people", {"name": "Bob", "profiles": ["https://www.instagram.com/bob.example/"]})
     assert [a["id"] for a in r["person"]["accounts"]] == ["222"]
     # a bad link, or one with a source already: nothing is made
     n = len(get(client, "/api/people"))
