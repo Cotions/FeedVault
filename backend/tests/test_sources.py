@@ -222,6 +222,30 @@ def test_suggestions_split_a_shared_platform_folder(env, client):
     # Added, each folder is its account's, and the other one is still offered.
     post(client, "/api/sources", {k: alice[k] for k in ("tool", "target", "folder", "account")})
     assert [s["folder"] for s in get(client, "/api/sources")["suggestions"]] == [str(shared / "bob.example")]
+    # A source by name alone: the same folder is its default, and its posts name the account.
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "Bob.Example"})["source"]
+    assert (s["folder"], s["account"]) == (str(shared / "bob.example"), {"platform": "instagram", "id": "222"})
+    assert get(client, "/api/sources")["suggestions"] == []
+
+
+def test_default_folder():
+    roots = ["/media", "/other"]
+    assert sources.default_folder("instaloader", "instagram", "some.body", roots) == "/media/instagram/some.body"
+    assert sources.default_folder("instaloader", "instagram", "_u.ser_", roots) == "/media/instagram/_u.ser_"
+    assert sources.default_folder("instaloader", "instagram", "media", roots) == "/media/instagram/media"
+    assert sources.default_folder("gallery-dl", "twitter", "https://x.com/Some_One/media", roots) == \
+        "/media/twitter/some_one"
+    assert sources.resolve_name("@Some.Body", roots)["folder"] == "/media/instagram/some.body"
+
+
+def test_a_source_by_name_takes_the_account_with_posts_in_an_older_folder(env, client):
+    """A library laid out ``<root>/<name>``: the new source's folder is the
+    default one, and it is still the account's (no second download)."""
+    write_post(env["media"] / "alice.example", "A1", TS, ALICE, "image")
+    scanner.scan(env["roots"])
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "alice.example"})["source"]
+    assert s["folder"] == str(env["media"] / "instagram" / "alice.example")
+    assert s["account"] == {"platform": "instagram", "id": "111"}
 
 
 def test_a_folder_of_loose_posts_holding_other_accounts_folders_is_not_suggested(env, client):
@@ -253,7 +277,7 @@ def test_a_source_on_a_shared_folder_is_refused(env, client):
     r = post(client, "/api/sources", {"tool": "instaloader", "target": "alice.example",
                                       "folder": str(media / "archive"), "account": alice}, 400)
     assert r["error"] == (f"{media / 'archive'} holds other accounts' posts (bob.example): pick the account's "
-                          f"own folder, such as {media / 'alice.example'}")
+                          f"own folder, such as {media / 'instagram' / 'alice.example'}")
     r = post(client, "/api/sources", {"tool": "instaloader", "target": "bob.example", "account":
                                       {"platform": "instagram", "id": "222"},
                                       "folder": str(media / "archive" / "alice.example")}, 400)
@@ -267,18 +291,20 @@ def test_a_source_on_a_shared_folder_is_refused(env, client):
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "alice.example",
                                       "folder": str(media / "archive" / "alice.example")})["source"]
     assert s["account"] == alice
-    # A platform folder that is an instaloader profile's default folder is that profile's.
+    # A profile named as a platform: its folder is inside instagram's, as any profile's.
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "youtube"})["source"]
-    assert s["folder"] == str(media / "youtube")
+    assert s["folder"] == str(media / "instagram" / "youtube")
 
 
 def test_create_from_a_url(env, client):
     archive(env)
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "https://www.instagram.com/New.Person/"})["source"]
-    assert (s["target"], s["folder"], s["account"]) == ("new.person", str(env["media"] / "new.person"), None)
+    assert (s["target"], s["folder"], s["account"]) == \
+        ("new.person", str(env["media"] / "instagram" / "new.person"), None)
     assert not os.path.exists(s["folder"])                     # made by the first sync
     # The account is found from the folder's posts when none is given.
-    s = post(client, "/api/sources", {"tool": "instaloader", "target": "@alice.example"})["source"]
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "@alice.example",
+                                      "folder": str(env["media"] / "alice.example")})["source"]
     assert s["account"] == {"platform": "instagram", "id": "111"}
 
 
@@ -404,7 +430,8 @@ def test_api_guard(env, client):
 
 def test_source_follows_account_to_person(env, client):
     archive(env)
-    s = post(client, "/api/sources", {"tool": "instaloader", "target": "carol.cooks"})["source"]
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "carol.cooks",
+                                      "folder": str(env["media"] / "carol.cooks")})["source"]
     assert s["person"] is None
     p = post(client, "/api/people", {"name": "Carol", "accounts": [s["account"]]})["person"]
     assert get(client, f"/api/sources/{s['id']}")["person"] == {"id": p["id"], "name": "Carol"}
@@ -435,8 +462,8 @@ def test_adopt_after_the_first_download(env, client):
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer", "person": p["id"]})["source"]
     conn = db.connect()
     assert sources.adopt(conn, s["id"], env["roots"], TS) == []          # nothing downloaded yet
-    write_post(env["media"] / "newcomer", "N1", TS, owner("newcomer", 555), "image")
-    scanner.index_dirs(env["roots"], [str(env["media"] / "newcomer")])
+    write_post(env["media"] / "instagram" / "newcomer", "N1", TS, owner("newcomer", 555), "image")
+    scanner.index_dirs(env["roots"], [str(env["media"] / "instagram" / "newcomer")])
     assert sources.adopt(conn, s["id"], env["roots"], TS) == ["sources", "person_accounts"]
     s = get(client, f"/api/sources/{s['id']}")
     assert s["account"] == {"platform": "instagram", "id": "555"} and s["person"]["id"] == p["id"]
@@ -449,8 +476,8 @@ def test_adopt_never_takes_an_account_from_its_person(env, client):
     other = post(client, "/api/people", {"name": "Other"})["person"]
     p = post(client, "/api/people", {"name": "Newcomer"})["person"]
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer", "person": p["id"]})["source"]
-    write_post(env["media"] / "newcomer", "N1", TS, owner("newcomer", 555), "image")
-    scanner.index_dirs(env["roots"], [str(env["media"] / "newcomer")])
+    write_post(env["media"] / "instagram" / "newcomer", "N1", TS, owner("newcomer", 555), "image")
+    scanner.index_dirs(env["roots"], [str(env["media"] / "instagram" / "newcomer")])
     post(client, f"/api/people/{other['id']}/accounts", {"add": [{"platform": "instagram", "id": "555"}]})
     assert sources.adopt(db.connect(), s["id"], env["roots"], TS) == ["sources"]
     assert get(client, f"/api/sources/{s['id']}")["person"]["id"] == other["id"]      # the account's person wins
@@ -524,13 +551,11 @@ def test_saved_folder_is_refused(env, client, tmp_path):
         assert "_saved" in r["error"] and "pick another folder" in r["error"], folder
         r = post(client, "/api/sources", {"target": "https://x.com/someone", "folder": str(folder)}, 400)
         assert "_saved" in r["error"]
-    # Its default folder: the target _saved itself.
-    r = post(client, "/api/sources", {"tool": "instaloader", "target": "_saved"}, 400)
-    assert "pick another folder" in r["error"]
-    assert get(client, "/api/sources/resolve?url=instagram.com/_saved")["ok"] is False
-    # Named like it elsewhere is fine.
+    # Named like it elsewhere is fine: a profile named _saved has its default folder, inside instagram's.
+    r = get(client, "/api/sources/resolve?url=instagram.com/_saved")
+    assert (r["ok"], r["folder"]) == (True, str(media / "instagram" / "_saved"))
     post(client, "/api/sources", {"tool": "instaloader", "target": "someone", "folder": str(media / "x" / "_saved")})
-    post(client, "/api/sources", {"tool": "instaloader", "target": "_saved", "folder": str(media / "saved-account")})
+    post(client, "/api/sources", {"tool": "instaloader", "target": "_saved"})
     assert get(client, "/api/sources")["sources"] and not sources.in_saved(str(media / "_savedx"), env["roots"])
 
 

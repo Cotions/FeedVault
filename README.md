@@ -316,7 +316,10 @@ Saving… and, when it fails, why; with FeedVault stopped it says "FeedVault is
 not running". Several saves in a row queue up (at most 20 at once,
 `save_queue_max` in the config).
 
-- Instagram: instaloader, into its owner's folder (or `_saved/` in your
+- Instagram: instaloader, into its owner's folder: the one of its source,
+  else the one holding its posts, else `<first media root>/instagram/<name>`
+  (the folder a source for that profile would use) or
+  `<first media root>/<name>` when one is there already (or `_saved/` in your
   first media root, until the owner gets a source: its next sync moves them
   into its folder).
 - X: gallery-dl; TikTok videos: yt-dlp (TikTok photo posts are not saved).

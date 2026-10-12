@@ -138,7 +138,7 @@ def stamps(env):
 
 def test_argv_is_built_from_the_source(env, client, fake):
     carol_archive(env)
-    s = add_source(client)
+    s = add_source(client, folder=str(env["media"] / "carol.cooks"))
     job = post(client, f"/api/sources/{s['id']}/sync")["job"]
     folder = str(env["media"] / "carol.cooks")
     assert job["argv"] == [
@@ -170,7 +170,7 @@ def test_session_flags(env, client, fake):
 
 def test_request_cannot_inject_flags_or_paths(env, client, fake):
     carol_archive(env)
-    s = add_source(client)
+    s = add_source(client, folder=str(env["media"] / "carol.cooks"))
     sid = str(s["id"])
     for params in [{"source": sid, "target": "x"}, {"source": sid, "args": ["--login", "me"]},
                    {"source": f"{sid} --login me"}, {"source": "--login"}, {"source": "../../etc"},
@@ -221,7 +221,7 @@ def test_folder_with_braces_is_escaped(env, client, fake):
 def test_first_sync_starts_after_the_newest_indexed_post(env, client, fake):
     folder = carol_archive(env)
     fake.set(carol_profile(new=2))
-    s = add_source(client)
+    s = add_source(client, folder=str(env["media"] / "carol.cooks"))
     job = sync_now(client, s["id"])
     assert (job["state"], job["message"], job["result"]["added"]) == ("done", "2 new posts", 2)
     log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
@@ -280,7 +280,7 @@ def test_seed_leaves_other_profiles_alone(env, client, fake):
     os.makedirs(os.path.dirname(sync.stamps_path()), exist_ok=True)
     with open(sync.stamps_path(), "w") as f:
         f.write("[someone.else]\nprofile-id = 42\npost-timestamp = 2023-01-01T00:00:00.000000+0000\n")
-    s = add_source(client)
+    s = add_source(client, folder=str(env["media"] / "carol.cooks"))
     sync._start({"source": str(s["id"])}, lambda text: None)
     st = stamps(env)
     assert st.get("someone.else", "post-timestamp") == "2023-01-01T00:00:00.000000+0000"
@@ -297,8 +297,8 @@ def spaced_post(folder, target, shortcode, mtime):
     os.utime(path, (mtime, mtime))
 
 
-def seed_of(client, target):
-    s = add_source(client, target)
+def seed_of(client, target, folder):
+    s = add_source(client, target, folder=str(folder))
     notes = []
     sync._start({"source": str(s["id"])}, notes.append)
     st = stamps(None)
@@ -313,7 +313,7 @@ def test_seed_from_dated_names_ends_with_their_day(env, client, fake):
     copied = folder / "dee.dates-2024-06-02-DDDDDDDDDD1.jpg"
     os.utime(copied, (TS + 400 * DAY, TS + 400 * DAY))
     scanner.scan(env["roots"])
-    stamp, notes = seed_of(client, "dee.dates")
+    stamp, notes = seed_of(client, "dee.dates", folder)
     assert stamp == "2024-06-02T00:00:00.000000+0000"          # the name's day: mtime too far off, midnight
     assert any("starting after its newest indexed post, 2024-06-02 00:00 UTC" in n for n in notes)
 
@@ -325,7 +325,7 @@ def test_undated_names_with_late_mtimes_seed_nothing(env, client, fake):
         spaced_post(folder, "mo.beef", f"MMMMMMMMMM{i}", TS + 365 * DAY)
     scanner.scan(env["roots"])
     assert get(client, "/api/posts?author=mo.beef")["total"] == 3
-    stamp, notes = seed_of(client, "mo.beef")
+    stamp, notes = seed_of(client, "mo.beef", folder)
     assert stamp is None
     assert notes == ["first sync: no reliable date, fetching full history"]
     # So instaloader walks the profile and gets the posts never downloaded.
@@ -341,7 +341,7 @@ def test_mixed_names_seed_from_the_dated_ones(env, client, fake):
     write_filename_post(folder, "mix.ed", "XXXXXXXXXX0", TS)                  # 2024-06-01 12:00, mtime kept
     spaced_post(folder, "mix.ed", "XXXXXXXXXX1", TS + 300 * DAY)            # undated, copied later
     scanner.scan(env["roots"])
-    stamp, _ = seed_of(client, "mix.ed")
+    stamp, _ = seed_of(client, "mix.ed", folder)
     assert stamp == "2024-06-01T12:00:00.000000+0000"
 
 
@@ -359,13 +359,13 @@ def test_new_profile_downloads_everything_and_joins_its_person(env, client, fake
     assert get(client, f"/api/posts?person={p['id']}")["total"] == 3
 
 
-def _saved_between(client, fake, old=None):
+def _saved_between(client, fake, folder, old=None):
     """#38: carol.cooks synced, then posts A and B newer than the stamp, B
     saved on its own (the userscript's Save) into the source's folder.
     ``old``: a monkeypatch, for --fast-update with a stamp as before.
     Returns the next sync."""
     fake.set(carol_profile(new=0))
-    s = add_source(client)
+    s = add_source(client, folder=str(folder))
     sync_now(client, s["id"])
     profile = carol_profile(new=0)
     profile["carol.cooks"]["posts"] += [
@@ -381,7 +381,7 @@ def _saved_between(client, fake, old=None):
 
 def test_a_saved_post_does_not_stop_the_next_sync(env, client, fake):
     folder = carol_archive(env)
-    job = _saved_between(client, fake)
+    job = _saved_between(client, fake, folder)
     assert job["state"] == "done" and "--fast-update" not in job["argv"]
     assert job["result"]["added"] == 1                         # A; B was indexed by the save
     assert (folder / "carol.cooks-2024-06-04-CPOSTA00001.jpg").is_file()
@@ -394,7 +394,7 @@ def test_a_saved_post_does_not_stop_the_next_sync(env, client, fake):
 def test_a_saved_post_stopped_the_next_sync_with_fast_update(env, client, fake, monkeypatch):
     """The behaviour fixed above: --fast-update with a stamp stops at B, and A is never fetched."""
     folder = carol_archive(env)
-    job = _saved_between(client, fake, old=monkeypatch)
+    job = _saved_between(client, fake, folder, old=monkeypatch)
     assert "--fast-update" in job["argv"] and job["result"]["added"] == 0
     assert not any("CPOSTA00001" in n for n in os.listdir(folder))
     assert db.saved_ids(db.connect(), ["instagram:CPOSTA00001"]) == []
@@ -432,7 +432,7 @@ def _trashed_between(env, client, fake, delay=0):
     own then trashed. Returns (source, folder)."""
     folder = carol_archive(env)
     fake.set(carol_profile(new=0))
-    s = add_source(client)
+    s = add_source(client, folder=str(env["media"] / "carol.cooks"))
     sync_now(client, s["id"])
     profile = carol_profile(new=0)
     profile["carol.cooks"]["posts"] += [
@@ -700,7 +700,7 @@ def test_pattern_follows_the_folder(env, client, fake):
     m = env["media"] / "alice.example"
     write_post(m, "A1", TS, owner("alice.example", 111), "image")
     scanner.scan(env["roots"])
-    s = add_source(client, "alice.example")
+    s = add_source(client, "alice.example", folder=str(m))
     fake.set({"alice.example": {"id": 111, "posts": [{"shortcode": "A1", "ts": TS},
                                                      {"shortcode": "A2NEWPOST01", "ts": TS + DAY, "caption": "hi"}]}})
     job = sync_now(client, s["id"])
@@ -1031,7 +1031,7 @@ def test_settings_api(env, client):
 def test_full_history_is_once_and_fills_older_gaps(env, client, fake):
     folder = carol_archive(env)
     fake.set(carol_profile(new=1))
-    s = add_source(client)
+    s = add_source(client, folder=str(env["media"] / "carol.cooks"))
     sync_now(client, s["id"])                                  # seeded: the newest only
     # An old post was never downloaded; ask for the whole profile once.
     profile = carol_profile(new=1)
@@ -1102,7 +1102,7 @@ def test_ended_is_listed_only_once_its_effects_are_in(env, client, fake, monkeyp
 def test_quitting_mid_sync_records_it_once_and_does_not_index(env, client, fake, monkeypatch):
     carol_archive(env)
     fake.set(carol_profile(new=3), delay=1)
-    s = add_source(client)
+    s = add_source(client, folder=str(env["media"] / "carol.cooks"))
     calls = []
     real = sources.record
     monkeypatch.setattr(sources, "record", lambda *a: calls.append(a[-1]["state"]) or real(*a))
@@ -1141,7 +1141,7 @@ def test_symlinked_root_is_rescanned_under_its_own_name(env, client, fake, tmp_p
     write_filename_post(link / "carol.cooks", "carol.cooks", "CCCCCCCCCC0", TS)
     scanner.run([str(link)])
     fake.set(carol_profile(new=1))
-    s = add_source(client)
+    s = add_source(client, folder=str(link / "carol.cooks"))
     job = sync_now(client, s["id"])
     assert job["rescan"] == str(link / "carol.cooks") and job["message"] == "3 new posts"
     scanner.run([str(link)])                                   # the same files, the same posts

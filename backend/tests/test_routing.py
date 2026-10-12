@@ -119,7 +119,8 @@ def test_resolve_endpoint(env, client):
     r = get(client, "/api/sources/resolve?url=x.com/someone/media")
     assert (r["tool"], r["platform"], r["target"]) == ("gallery-dl", "twitter", "https://x.com/someone/media")
     r = get(client, "/api/sources/resolve?url=https://instagram.com/Some.Body/")
-    assert (r["tool"], r["target"], r["folder"]) == ("instaloader", "some.body", str(env["media"] / "some.body"))
+    assert (r["tool"], r["target"], r["folder"]) == ("instaloader", "some.body",
+                                                str(env["media"] / "instagram" / "some.body"))
     assert "routing" in get(client, "/api/sources/resolve?url=https://x.com.evil.example/a")["error"]
     assert get(client, "/api/sources/resolve?url=https://www.instagram.com/p/C8xYzAbCdEf/")["ok"] is False
     assert get(client, "/api/sources/resolve")["ok"] is False

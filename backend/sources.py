@@ -186,8 +186,8 @@ def resolve(text, table, roots):
     """What adding a source for a pasted link would make: {tool, platform,
     target, folder}, or raises Refused. An Instagram link with instaloader
     gives the profile name as target; any other tool, the normalized link.
-    The folder is ``<first media root>/<target>`` for instaloader,
-    ``<first media root>/<platform>/<name>`` for the others."""
+    The folder is ``<first media root>/<platform>/<name>``: the target for
+    instaloader, the link's profile name for the others."""
     parsed, error = parse_url(text, table)
     if parsed is None:
         raise Refused(error)
@@ -210,9 +210,11 @@ def resolve_name(text, roots):
 
 
 def default_folder(tool, platform, target, roots):
-    """Where a new source's posts go unless another folder is picked."""
+    """Where a new source's posts go unless another folder is picked:
+    ``<first media root>/<platform>/<name>``, the name being instaloader's
+    target as it is (a profile name), else the link's (folder_name)."""
     if tool == "instaloader":
-        return os.path.join(roots[0], target)
+        return os.path.join(roots[0], platform, target)
     return os.path.join(roots[0], platform, folder_name(target))
 
 
@@ -554,12 +556,15 @@ def of_person(conn, pid):
 
 
 def account_folder(conn, platform, author_id, roots):
-    """The top folder under a media root holding the account's instaloader
-    posts (aliases included), the one with the most, or None."""
+    """The folder holding the account's instaloader posts (aliases included),
+    the one with the most, or None: a folder right under a media root, or
+    right under the platform's there (``<root>/instagram/<name>``)."""
     clause, args = db.post_filter(platform=platform, author=author_id)
     counts = {}
     for (path,) in conn.execute(f"SELECT p.meta_path {db._FROM} {clause} AND p.tool LIKE 'instaloader%'", args):
         top = _top(path, roots)
+        if top and os.path.basename(top).lower() == platform:
+            top = _top(path, [top]) or top
         if top:
             counts[top] = counts.get(top, 0) + 1
     return max(counts, key=lambda f: (counts[f], f)) if counts else None
@@ -624,8 +629,8 @@ def _main(counts):
 
 def _own_folders(direct, under):
     """{folder: account key} of the folders that are one account's own, as
-    the tools lay them out (instaloader ``<root>/<name>``, gallery-dl and
-    yt-dlp ``<root>/<platform>/<name>``, or wherever a source was pointed):
+    the tools lay them out (``<root>/<platform>/<name>``, instaloader's
+    ``<root>/<name>`` of older libraries, or wherever a source was pointed):
     posts right in it, most of them that account's, most of the posts under
     it that account's, and no folder under it that is nearly all
     (OWN_SHARE) another account's. A platform folder (``<root>/instagram``
@@ -771,7 +776,7 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
     default = os.path.normpath(default_folder(tool, platform, target, roots))
     if any(os.path.realpath(real) == os.path.realpath(r) for r in roots):
         raise Refused(f"{real} is a media root: pick the account's own folder inside it, such as {default}")
-    if platform_folder(real, roots, table) and os.path.realpath(real) != os.path.realpath(default):
+    if platform_folder(real, roots, table):
         raise Refused(f"{real} is a platform's folder, where each account has a folder of its own: "
                       f"pick the account's, such as {default}")
     if existing(conn, tool, target, real) is not None:
@@ -782,8 +787,12 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
             raise Refused(f"unknown account {account[0]}:{account[1]}")
     else:
         key = _folder_account(conn, platform, real, roots)
-        if key is None and tool != "instaloader":
-            key = _handle_account(conn, platform, profile_handle(target))
+        if key is None:
+            key = _handle_account(conn, platform, target if tool == "instaloader" else profile_handle(target))
+            # An account known from file names alone (its id is its folder's
+            # name) is that folder's, not the profile's: the first sync finds it.
+            if key and tool == "instaloader" and not key[1].isdigit():
+                key = None
     others = folder_owners(conn, real, roots) - {key}
     if others:
         accounts = db.accounts(conn)
