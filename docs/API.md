@@ -71,7 +71,8 @@ browser from reading or changing the library; they are not a login.
   - `POST /api/save`
   - `GET /api/jobs/<id>`
   - `GET /api/sources/resolve`
-  - `POST /api/sources` (403 when it sets an `options.script`)
+  - `POST /api/sources` (403 when it sets an `options.script`, or a browser
+    profile in `options.session`)
   - `GET /api/sources/<id>`
   - `POST /api/sources/<id>/sync` (403 when the source runs a script)
 
@@ -1732,7 +1733,7 @@ no person yet.
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or a [browser profile](#browser-profiles) in `options.session`, set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site (see [Security rules](#security-rules)) |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
@@ -1981,8 +1982,10 @@ itself (the most recently used one, in general).
   a save, a tool's test), and the tool is given the folder:
   `--cookies-from-browser firefox:/home/me/.mozilla/firefox/9k879us5.test`
   for gallery-dl and yt-dlp (both read a profile holding a `/` as a path),
-  `--cookiefile <folder>/cookies.sqlite` for instaloader. The folder
-  therefore shows in the job's command line.
+  `--cookiefile <folder>/cookies.sqlite` for instaloader. The folder goes
+  to the tool only: a job's `argv`, as shown and stored, has
+  `<browser profile>` in its place (`firefox:<browser profile>`,
+  `--cookiefile <browser profile>`), for every job kind.
 - A profile that is no longer there (renamed or removed in the browser, an
   unreadable `profiles.ini`, a folder that is gone) refuses the job with a
   message naming it (`the firefox profile "test" was not found …`): a 400
@@ -1992,6 +1995,9 @@ itself (the most recently used one, in general).
   `*`, `?`, `[` or a control character (the tools would read those as something else).
 - FeedVault reads `profiles.ini` (names and paths) and which folders exist.
   It never opens a cookie database: the tool does.
+- The dashboard only: `GET /api/browsers/profiles` answers 403 to another
+  site, as does `POST /api/sources` with a `"profile"` in `options.session`
+  (see [Security rules](#security-rules)).
 
 ### gallery-dl and yt-dlp syncs
 

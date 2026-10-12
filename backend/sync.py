@@ -124,6 +124,7 @@ How they meet the stopping points:
 - a cookies session that names a browser profile (browsers.py) is given
   that profile's folder, found when the job is built; a profile no longer
   there refuses the job (jobs.BadRequest), never another one's cookies.
+  The job shows ``<browser profile>`` in the folder's place.
 
 How it went is read from the output (login required, private, not found,
 rate limited: health.py's tables) and stored on the source. Two syncs of one tool pause between

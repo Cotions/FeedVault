@@ -15,6 +15,10 @@ Read here: ``profiles.ini`` (names and paths), and which folders exist.
 No cookie database is opened or read, by any function of this module: the
 tool that is given the folder does that.
 
+The folder goes to the tool and nowhere else: a job's argument list is
+shown and stored without it (shown(), from jobs.py), as health.scrub keeps
+a browser profile's path out of its output.
+
 Linux locations, the ones gallery-dl 1.32.16 and yt-dlp 2026.08.19 look in
 themselves (their cookies.py): Firefox's in ``$XDG_CONFIG_HOME/mozilla/firefox``,
 ``~/.mozilla/firefox``, the Flatpak's and the Snap's; the others' in
@@ -99,7 +103,7 @@ def _ini(root):
             continue
         if parser.get(section, "IsRelative", fallback="1").strip() == "1":
             folder = os.path.join(root, folder)
-        if os.path.isabs(folder):
+        if os.path.isabs(folder) and "\0" not in folder:
             out.append((name, os.path.normpath(folder)))
     return out
 
@@ -163,6 +167,25 @@ def folder(browser, name):
         raise Unknown(f'the {browser} profile "{name}" is in a folder the tools cannot be given '
                       "(its path holds ::, $, *, ?, [ or a control character)")
     return found[0]
+
+
+HIDDEN = "<browser profile>"
+
+
+def shown(argv):
+    """An argument list as it may be shown and stored: a browser profile's
+    folder (after ``--cookies-from-browser <browser>:``) and a cookie
+    database's path (after ``--cookiefile``) replaced by HIDDEN. The list
+    that runs is the other one."""
+    out = list(argv)
+    for i in range(1, len(out)):
+        if out[i - 1] == "--cookiefile":
+            out[i] = HIDDEN
+        elif out[i - 1] == "--cookies-from-browser":
+            browser, colon, profile = out[i].partition(":")
+            if colon and os.sep in profile:
+                out[i] = f"{browser}:{HIDDEN}"
+    return out
 
 
 def cookie_file(browser, name):

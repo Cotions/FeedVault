@@ -206,8 +206,10 @@ def test_browser_profile_argv(env, fake, client):
     assert sync._build_yt_dlp({"source": str(y["id"])})["args"][-4:] == \
         ["--cookies-from-browser", "firefox:" + firefox["default"], "--", YT]
     job = run_sync(client, x["id"])
-    assert fake.runs("gallery-dl")[-1]["argv"] == job["argv"][1:]
-    assert job["argv"][-3] == "firefox:" + firefox["test"]
+    assert fake.runs("gallery-dl")[-1]["argv"][-3] == "firefox:" + firefox["test"]
+    # Shown and stored without the folder.
+    assert job["argv"][1:] == fake.runs("gallery-dl")[-1]["argv"][:-3] + ["firefox:<browser profile>", "--", X]
+    assert "9k879us5" not in json.dumps(job)
     post(client, f"/api/sources/{x['id']}", {"options": {"session": cookies}})
     assert sync._build_gallery_dl({"source": str(x["id"])})["args"][-4:] == \
         ["--cookies-from-browser", "firefox", "--", X]

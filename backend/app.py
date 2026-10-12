@@ -1413,6 +1413,11 @@ def create_source():
     refused = _script_refused(body.get("options"))
     if refused:
         return jsonify({"ok": False, "error": refused[0]}), refused[1]
+    # Which browser profile's cookies a sync uses is the dashboard's to say:
+    # another site could pick an account, and learn which profiles exist.
+    session = body["options"].get("session") if isinstance(body.get("options"), dict) else None
+    if isinstance(session, dict) and session.get("profile") is not None and _foreign_origin():
+        return jsonify({"ok": False, "error": FOREIGN_REFUSED}), 403
     tool = body.get("tool")
     if tool is not None and tool not in sources.TOOLS:
         return jsonify({"ok": False, "error": f"tool must be one of: {', '.join(sources.TOOLS)}"}), 400

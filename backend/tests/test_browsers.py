@@ -10,6 +10,7 @@ import pytest
 from conftest import H
 from fakes import chromium_profile, firefox_profiles
 
+import app as app_module
 import browsers
 import jobs
 import sources
@@ -123,6 +124,17 @@ def test_unreadable_profiles_ini(firefox, text):
     assert browsers.names("firefox") == []
     with pytest.raises(browsers.Unknown, match="was not found"):
         browsers.folder("firefox", "test")
+
+
+def test_a_path_with_a_nul_is_no_profile(firefox):
+    # os.path would raise on it: the profile is skipped, the others stay.
+    with open(home(".mozilla", "firefox", "profiles.ini"), "a") as f:
+        f.write("\n[Profile9]\nName=nul\nIsRelative=1\nPath=a\x00b\n"
+                "\n[Profile10]\nName=absnul\nIsRelative=0\nPath=/tmp/a\x00b\n")
+    assert browsers.names("firefox") == ["cotions", "default", "test", "TRND"]
+    assert browsers.folder("firefox", "test") == firefox["test"]
+    with pytest.raises(browsers.Unknown, match="was not found"):
+        browsers.folder("firefox", "nul")
 
 
 def test_profiles_ini_too_large_or_not_a_file(firefox):
@@ -260,3 +272,48 @@ def test_settings_take_a_profile(firefox, client):
         assert save({tool: {"session": {**session, "profile": None}}})["config"][tool]["session"] == \
             {"mode": "cookies", "browser": "firefox"}
     assert save({"gallery-dl": {"session": {"mode": "cookies", "browser": "chrome", "profile": "a:b"}}})["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# Kept to the dashboard, and out of what a job shows
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("argv, shown", [
+    (["yt-dlp", "--cookies-from-browser", "firefox:/home/u/.mozilla/firefox/9k879us5.test", "--", "url"],
+     ["yt-dlp", "--cookies-from-browser", "firefox:<browser profile>", "--", "url"]),
+    (["instaloader", "--load-cookies", "chrome", "--cookiefile", "/home/u/.config/google-chrome/Profile 1/Cookies"],
+     ["instaloader", "--load-cookies", "chrome", "--cookiefile", "<browser profile>"]),
+    # No profile: as it is, a keyring or a container too.
+    (["gallery-dl", "--cookies-from-browser", "firefox", "--", "url"], None),
+    (["gallery-dl", "--cookies-from-browser", "chrome+gnomekeyring", "--cookies-from-browser"], None),
+    (["instaloader", "--load-cookies", "firefox", "--", "--cookiefile"], None),
+    (["--cookiefile"], None), ([], None),
+])
+def test_a_job_is_shown_without_the_folder(argv, shown):
+    before = list(argv)
+    assert browsers.shown(argv) == (argv if shown is None else shown)
+    assert argv == before                       # the list that runs is left as it is
+    assert jobs._shown_argv("no such kind", argv) == browsers.shown(argv)
+
+
+FOREIGN = {**H, "Origin": "https://www.instagram.com"}
+
+
+def test_another_site_cannot_name_a_profile(firefox, env, client):
+    """The userscript adds sources (POST /api/sources is its): not with a
+    browser profile, which would say whether one exists and pick an account."""
+    assert client.get("/api/browsers/profiles", headers=FOREIGN).status_code == 403
+    body = {"target": "https://x.com/someone", "folder": str(env["media"] / "x")}
+    cookies = {"mode": "cookies", "browser": "firefox"}
+    for profile in ("test", "nope", "../x", 5):
+        r = client.post("/api/sources", json={**body, "options": {"session": {**cookies, "profile": profile}}},
+                        headers=FOREIGN)
+        assert r.status_code == 403 and r.get_json() == {"ok": False, "error": app_module.FOREIGN_REFUSED}
+    assert client.get("/api/sources", headers=H).get_json()["sources"] == []
+    # Without one it adds as before, and the dashboard may name one.
+    for headers, session in ((FOREIGN, cookies), (FOREIGN, {**cookies, "profile": None}),
+                             (H, {**cookies, "profile": "test"})):
+        r = client.post("/api/sources", json={**body, "options": {"session": session}}, headers=headers)
+        assert r.status_code == 200 and r.get_json()["ok"] is True, r.get_json()
+        sid = r.get_json()["source"]["id"]
+        assert client.delete(f"/api/sources/{sid}", headers=H).status_code == 200

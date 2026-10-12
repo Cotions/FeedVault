@@ -178,12 +178,17 @@ def test_browser_profile(env, client, fake):
     cookies = {"mode": "cookies", "browser": "firefox"}
     set_config(instaloader={"pause": 0, "session": {**cookies, "profile": "test"}})
     job = sync_now(client, s["id"])
-    assert job["argv"][-6:] == ["--load-cookies", "firefox", "--cookiefile",
-                                os.path.join(firefox, "9k879us5.test", "cookies.sqlite"), "--", "carol.cooks"]
-    assert fake.runs()[-1]["argv"] == job["argv"][1:]
+    ran = fake.runs()[-1]["argv"]
+    assert ran[-6:] == ["--load-cookies", "firefox", "--cookiefile",
+                        os.path.join(firefox, "9k879us5.test", "cookies.sqlite"), "--", "carol.cooks"]
+    # Shown and stored without the folder: the job, its row, nothing of it anywhere.
+    assert job["argv"][1:] == ran[:-3] + ["<browser profile>", "--", "carol.cooks"]
+    assert "9k879us5" not in json.dumps(job)
+    assert "9k879us5" not in json.dumps(client.get(f"/api/jobs/{job['id']}", headers=H).get_json())
     # The source's own session wins over the setting's.
     post(client, f"/api/sources/{s['id']}", {"options": {"session": {**cookies, "profile": "default"}}})
-    argv = sync_now(client, s["id"])["argv"]
+    sync_now(client, s["id"])
+    argv = fake.runs()[-1]["argv"]
     assert argv[argv.index("--cookiefile") + 1] == os.path.join(folders["default"], "cookies.sqlite")
     post(client, f"/api/sources/{s['id']}", {"options": {"session": cookies}})
     assert sync_now(client, s["id"])["argv"][-4:] == ["--load-cookies", "firefox", "--", "carol.cooks"]
