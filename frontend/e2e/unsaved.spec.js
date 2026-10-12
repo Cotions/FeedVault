@@ -501,3 +501,23 @@ test("Settings: leaving asks before dropping unsaved edits; its tabs keep them",
   await arrived(page, "Links");
   await expect(dialog).toHaveCount(0);
 });
+
+// The API sends a session's keys sorted (browser before mode), the form
+// builds them mode first: a saved browser login read as an unsaved edit for
+// good, and leaving Settings asked about cards nobody had touched.
+test("Settings: a saved browser login is not an unsaved edit", async ({ page, request }) => {
+  const before = await (await request.get("/api/config", { headers: H })).json();
+  const cookies = { mode: "cookies", browser: "firefox" };
+  try {
+    const set = await request.post("/api/config", { headers: H, data: { instaloader: { session: cookies }, "gallery-dl": { session: cookies } } });
+    expect((await set.json()).ok).toBe(true);
+    await page.goto("/settings#sync");
+    await expect(page.getByRole("combobox", { name: "Browser", exact: true })).toHaveCount(2);
+    await idle(page);
+    await nav(page, "/links");
+    await arrived(page, "Links");
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  } finally {
+    await request.post("/api/config", { headers: H, data: { instaloader: { session: before.instaloader.session }, "gallery-dl": { session: before["gallery-dl"].session } } });
+  }
+});

@@ -36,6 +36,15 @@ done
 
 refresh_menu() {
   command -v update-desktop-database &>/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
+  # An icon-theme.cache left there by another app's installer lists the icons
+  # it knew then, and GTK believes it for as long as it is not older than the
+  # theme directory: the menu entry shows with no icon. The touch outdates the
+  # cache, the rebuild (where the tool exists) puts the new icon in it.
+  local theme="${ICON_DIR%/scalable/apps}"
+  [ -d "$theme" ] || return 0
+  touch "$theme"
+  command -v gtk-update-icon-cache &>/dev/null \
+    && gtk-update-icon-cache -q -t -f "$theme" 2>/dev/null || true
 }
 
 # --- uninstall ------------------------------------------------------------
