@@ -71,7 +71,8 @@ browser from reading or changing the library; they are not a login.
   - `POST /api/save`
   - `GET /api/jobs/<id>`
   - `GET /api/sources/resolve`
-  - `POST /api/sources` (403 when it sets an `options.script`)
+  - `POST /api/sources` (403 when it sets an `options.script`, or a browser
+    profile in `options.session`)
   - `GET /api/sources/<id>`
   - `POST /api/sources/<id>/sync` (403 when the source runs a script)
 
@@ -1589,7 +1590,8 @@ no person yet.
   - `session`: `null` to use the global setting (see
     [instaloader settings](#instaloader-settings) and
     [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings)), or
-    one of the session values (gallery-dl and yt-dlp: none or cookies).
+    one of the session values (gallery-dl and yt-dlp: none or cookies); a
+    cookies one may name a [browser profile](#browser-profiles).
   - `content`: `null` (default: what `choices.content_default` names), or
     a non-empty list of what to fetch, from `choices.content`; sent in any
     order, stored in that order, and the default alone is stored as `null`.
@@ -1731,7 +1733,7 @@ no person yet.
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script` set from another site (see [Security rules](#security-rules)) |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or a [browser profile](#browser-profiles) in `options.session`, set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site (see [Security rules](#security-rules)) |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
@@ -1913,7 +1915,8 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   folder), `{target} - {shortcode}` (the older layout), or
   `{date_utc}_UTC` (instaloader's own default, in folders it wrote with
   metadata). A folder path holding `{` or `}` is escaped for instaloader.
-- **Session**: none (default), or `--load-cookies <browser>`, or
+- **Session**: none (default), or `--load-cookies <browser>` (with
+  `--cookiefile <file>` for a [browser profile](#browser-profiles)), or
   `--login <user>`; see [instaloader settings](#instaloader-settings).
 - **Pause.** After an `instaloader-sync` job ends, the next one waits the
   configured pause (default 60 s) before it starts, so several profiles
@@ -1941,12 +1944,60 @@ A refused value answers `{ "ok": false, "error" }` with a 200, as every
 | `session` | Flags | What it means |
 |---|---|---|
 | `{ "mode": "none" }` (default) | none | Anonymous: public profiles only, and Instagram rate-limits sooner |
-| `{ "mode": "cookies", "browser": "firefox" }` | `--load-cookies firefox` | instaloader reads that browser's Instagram cookies itself. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
+| `{ "mode": "cookies", "browser": "firefox" }` | `--load-cookies firefox` | instaloader reads that browser's Instagram cookies itself, from the profile it picks. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
+| `{ "mode": "cookies", "browser": "firefox", "profile": "test" }` | `--load-cookies firefox --cookiefile <profile folder>/cookies.sqlite` | The same from one [browser profile](#browser-profiles); `Cookies` instead of `cookies.sqlite` for the other browsers |
 | `{ "mode": "login", "user": "name" }` (1 to 30 of `A-Z a-z 0-9 . _`) | `--login name` | instaloader uses the session file it saved after a `instaloader --login name` run in a terminal. Without one, the sync fails (`login_required`); it never asks for a password |
 
-FeedVault only passes the browser's name or the user name on. It never
-stores, reads or sends cookies, passwords or session files. `pause`: whole
-seconds from 0 to 3600.
+FeedVault only passes on the browser's name, the path of the browser
+profile named, or the user name. It never stores, opens, reads or sends
+cookies, passwords or session files. `pause`: whole seconds from 0 to 3600.
+
+### Browser profiles
+
+A cookies session (the three tools' settings, and a source's own
+`options.session`) may name which of the browser's profiles the cookies
+come from: `"profile"`, left out or `null` for the profile the tool picks
+itself (the most recently used one, in general).
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/browsers/profiles` | `{ "profiles": { "firefox": ["default", "test"], "chrome": ["Default", "Profile 1"], "chromium": [], "brave": [], "edge": [] } }`: per browser, the names `"profile"` can take on this machine, sorted; names only, no path |
+
+- **Firefox**: the profile's name as Firefox shows it (`about:profiles`),
+  which is `Name=` of a `[ProfileN]` section of its `profiles.ini`. The
+  folder comes from that section's `Path` (under the `profiles.ini`'s folder
+  when `IsRelative=1`), never from a folder's name: `xxxxxxxx.test` may be
+  there twice, one a leftover no profile uses. Looked for in
+  `$XDG_CONFIG_HOME/mozilla/firefox`, `~/.mozilla/firefox`, the Flatpak's
+  (`~/.var/app/org.mozilla.firefox/…`) and the Snap's
+  (`~/snap/firefox/common/.mozilla/firefox`).
+- **chrome, chromium, brave, edge**: the profile's folder name in the
+  browser's folder under `$XDG_CONFIG_HOME` (`Default`, `Profile 1`):
+  letters, digits, spaces, `.`, `_` and `-`. Listed when the folder holds a
+  `Preferences` file.
+- A name is 1 to 100 characters, with no `/`, `\` or control character, no
+  leading `-` and no space at either end; anything else is refused where
+  the session is saved.
+- The name is resolved to its folder each time a command is built (a sync,
+  a save, a tool's test), and the tool is given the folder:
+  `--cookies-from-browser firefox:/home/me/.mozilla/firefox/9k879us5.test`
+  for gallery-dl and yt-dlp (both read a profile holding a `/` as a path),
+  `--cookiefile <folder>/cookies.sqlite` for instaloader. The folder goes
+  to the tool only: a job's `argv`, as shown and stored, has
+  `<browser profile>` in its place (`firefox:<browser profile>`,
+  `--cookiefile <browser profile>`), for every job kind.
+- A profile that is no longer there (renamed or removed in the browser, an
+  unreadable `profiles.ini`, a folder that is gone) refuses the job with a
+  message naming it (`the firefox profile "test" was not found …`): a 400
+  for a sync or a test asked by hand, a skipped run for a scheduled sync.
+  FeedVault never falls back to another profile. Refused too: a name two
+  Firefox installations both have, and a folder whose path holds `::`, `$`,
+  `*`, `?`, `[` or a control character (the tools would read those as something else).
+- FeedVault reads `profiles.ini` (names and paths) and which folders exist.
+  It never opens a cookie database: the tool does.
+- The dashboard only: `GET /api/browsers/profiles` answers 403 to another
+  site, as does `POST /api/sources` with a `"profile"` in `options.session`
+  (see [Security rules](#security-rules)).
 
 ### gallery-dl and yt-dlp syncs
 
@@ -2205,10 +2256,11 @@ running is never queued again).
 | `session` | Flags | What it means |
 |---|---|---|
 | `{ "mode": "none" }` (default) | none | Anonymous: public profiles only |
-| `{ "mode": "cookies", "browser": "firefox" }` | `--cookies-from-browser firefox` | The tool reads that browser's cookies itself. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
+| `{ "mode": "cookies", "browser": "firefox" }` | `--cookies-from-browser firefox` | The tool reads that browser's cookies itself, from the profile it picks. `browser`: `firefox`, `chrome`, `chromium`, `brave`, `edge` |
+| `{ "mode": "cookies", "browser": "firefox", "profile": "test" }` | `--cookies-from-browser firefox:<profile folder>` | The same from one [browser profile](#browser-profiles) |
 
-FeedVault only passes the browser's name on. It never stores, reads or
-sends cookies.
+FeedVault only passes on the browser's name and the path of the browser
+profile named. It never stores, opens, reads or sends cookies.
 
 `pause`: whole seconds from 0 to 3600 (default 30). As for instaloader,
 after a `gallery-dl-sync` job ends the next one waits that long before it
@@ -2761,7 +2813,8 @@ tools set in Settings (or `PATH`) change, and on `POST /api/downloaders/check`.
 - `login`: the session a sync of the tool uses, from its settings (see
   [instaloader settings](#instaloader-settings) and [gallery-dl and yt-dlp
   settings](#gallery-dl-and-yt-dlp-settings)): `{ "mode": "none" }`,
-  `{ "mode": "cookies", "browser": "firefox" }`, or for instaloader
+  `{ "mode": "cookies", "browser": "firefox" }` (with `"profile"` when a
+  [browser profile](#browser-profiles) is set), or for instaloader
   `{ "mode": "login", "user": "name", "session_file": true }`, where
   `session_file` says whether instaloader's session file for that user
   exists (`$XDG_CONFIG_HOME/instaloader/session-<user>`, else
@@ -2800,10 +2853,13 @@ fixed public item with the session flags its syncs use, in
 
 ```
 instaloader --no-posts --no-profile-pic --no-metadata-json --dirname-pattern <data_directory>/downloaders/test
-            [--load-cookies <browser> | --login <user>] -- instagram
-gallery-dl [--config-ignore] --simulate [--cookies-from-browser <browser>] -- https://x.com/jack/status/20
-yt-dlp [--ignore-config] --simulate --no-playlist [--cookies-from-browser <browser>] -- https://www.youtube.com/watch?v=jNQXAC9IVRw
+            [--load-cookies <browser> [--cookiefile <file>] | --login <user>] -- instagram
+gallery-dl [--config-ignore] --simulate [--cookies-from-browser <browser>[:<profile folder>]] -- https://x.com/jack/status/20
+yt-dlp [--ignore-config] --simulate --no-playlist [--cookies-from-browser <browser>[:<profile folder>]] -- https://www.youtube.com/watch?v=jNQXAC9IVRw
 ```
+
+`<file>` and `<profile folder>` are there when the session names a
+[browser profile](#browser-profiles).
 
 instaloader fetches the profile's metadata and nothing else; gallery-dl
 and yt-dlp download nothing (`--simulate`). `state` `done`, `result`

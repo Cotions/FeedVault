@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from conftest import H
+from fakes import firefox_profiles
 from test_sync_tools import (DAY, TS, USER, add, ended, fake, get, post, run_sync, set_config,  # noqa: F401
                              tt_account, x_account)
 
@@ -254,6 +255,16 @@ def test_tiktok_video_saved_without_its_cookies(env, client, fake):
     assert job["state"] == "done", job
     argv = fake.runs("yt-dlp")[0]["argv"]
     assert argv[argv.index("--cookies-from-browser") + 1] == "firefox"
+    # The setting's browser profile, as a sync: its folder, or no job.
+    firefox = firefox_profiles(os.path.join(os.path.expanduser("~"), ".mozilla", "firefox"), [("test", "9k879us5.test")])
+    for tool, params in (("yt-dlp", {"platform": "tiktok", "id": "7100000000000000099", "handle": "someone"}),
+                         ("gallery-dl", {"platform": "twitter", "id": "1800000000000000099"})):
+        set_config(**{tool: {"pause": 0, "session": {"mode": "cookies", "browser": "firefox", "profile": "test"}}})
+        args = save_tools._build(params, params["platform"])["args"]
+        assert args[-4:-2] == ["--cookies-from-browser", "firefox:" + firefox["test"]]
+    os.rmdir(firefox["test"])
+    with pytest.raises(jobs.BadRequest, match='the firefox profile "test" was not found'):
+        save_tools._build(params, "twitter")
     folder = os.path.join(env["roots"][0], "tiktok", "someone")
     base = f"6800000000000000009-20240602-{TT_ID}"
     assert sorted(os.listdir(folder)) == [f"{base}.image", f"{base}.info.json", f"{base}.mp4"]

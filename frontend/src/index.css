@@ -3509,6 +3509,16 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .insta-mode > span { display: flex; flex-direction: column; gap: 2px; }
 .insta-mode .creator-sub { white-space: normal; font-size: 12px; }
 .insta-input { flex: none; align-self: flex-start; margin-left: 26px; font-size: 12.5px; padding: 6px 10px; min-width: 200px; }
+/* The browser and its profile, side by side under "Use my browser's login";
+   they wrap, and a note takes its own line. */
+.browser-pick { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-left: 26px; min-width: 0; }
+.browser-pick .insta-input { margin-left: 0; align-self: auto; min-width: 0; max-width: 100%; }
+.browser-pick > .insta-input { min-width: 130px; }
+.browser-pick-profile { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.browser-pick-profile .dim { white-space: nowrap; }
+.browser-pick-profile select { min-width: 200px; max-width: 320px; text-overflow: ellipsis; }
+.browser-pick-note { flex-basis: 100%; font-size: 12px; overflow-wrap: anywhere; }
+.source-opt .browser-pick { margin-left: 0; }
 .insta-pause { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--text); }
 .insta-pause .insta-input { flex: none; margin-left: 0; min-width: 0; width: 80px; }
 .insta-pause .dim { font-size: 12px; }

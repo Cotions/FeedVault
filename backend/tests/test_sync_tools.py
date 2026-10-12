@@ -11,7 +11,7 @@ import time
 import pytest
 
 from conftest import H
-from fakes import gallery_dl_case, yt_dlp_case
+from fakes import chromium_profile, firefox_profiles, gallery_dl_case, yt_dlp_case
 
 import archives
 import config
@@ -183,6 +183,45 @@ def test_yt_dlp_argv(env, fake, client):
     assert args[args.index("--match-filters") + 1] == "duration <= 90"
     set_config(**{"yt-dlp": {"session": {"mode": "cookies", "browser": "chromium"}}})
     assert sync._build_yt_dlp({"source": str(y["id"])})["args"][-4:] == ["--cookies-from-browser", "chromium", "--", YT]
+
+
+def test_browser_profile_argv(env, fake, client):
+    """--cookies-from-browser <browser>:<the profile's folder>, both tools; gone: refused."""
+    home = os.path.expanduser("~")
+    firefox = firefox_profiles(os.path.join(home, ".mozilla", "firefox"),
+                               [("default", "ef56gh78.default"), ("test", "9k879us5.test")])
+    os.makedirs(os.path.join(home, ".mozilla", "firefox", "itxwkwwt.test"))  # a leftover: never picked
+    chrome = chromium_profile(os.path.join(home, ".config", "google-chrome"), "Profile 1")
+    x, y = add(client, X), add(client, YT)
+    cookies = {"mode": "cookies", "browser": "firefox"}
+    set_config(**{"gallery-dl": {"pause": 0, "session": {**cookies, "profile": "test"}},
+                  "yt-dlp": {"pause": 0, "session": {"mode": "cookies", "browser": "chrome", "profile": "Profile 1"}}})
+    assert sync._build_gallery_dl({"source": str(x["id"])})["args"][-4:] == \
+        ["--cookies-from-browser", "firefox:" + firefox["test"], "--", X]
+    assert firefox["test"] == os.path.join(home, ".mozilla", "firefox", "9k879us5.test")
+    assert sync._build_yt_dlp({"source": str(y["id"])})["args"][-4:] == \
+        ["--cookies-from-browser", "chrome:" + chrome, "--", YT]
+    # A source's own session, and it run: the fake is given the same.
+    post(client, f"/api/sources/{y['id']}", {"options": {"session": {**cookies, "profile": "default"}}})
+    assert sync._build_yt_dlp({"source": str(y["id"])})["args"][-4:] == \
+        ["--cookies-from-browser", "firefox:" + firefox["default"], "--", YT]
+    job = run_sync(client, x["id"])
+    assert fake.runs("gallery-dl")[-1]["argv"][-3] == "firefox:" + firefox["test"]
+    # Shown and stored without the folder.
+    assert job["argv"][1:] == fake.runs("gallery-dl")[-1]["argv"][:-3] + ["firefox:<browser profile>", "--", X]
+    assert "9k879us5" not in json.dumps(job)
+    post(client, f"/api/sources/{x['id']}", {"options": {"session": cookies}})
+    assert sync._build_gallery_dl({"source": str(x["id"])})["args"][-4:] == \
+        ["--cookies-from-browser", "firefox", "--", X]
+    # Gone since: refused before anything runs.
+    post(client, f"/api/sources/{x['id']}", {"options": {"session": None}})
+    os.rmdir(firefox["test"])
+    ran = len(fake.runs())
+    r = post(client, f"/api/sources/{x['id']}/sync", {}, 400)
+    assert r["error"].startswith('the firefox profile "test" was not found')
+    with pytest.raises(jobs.BadRequest, match='the firefox profile "test" was not found'):
+        sync._build_gallery_dl({"source": str(x["id"])})
+    assert len(fake.runs()) == ran
 
 
 def test_youtube_channel_page_does_not_stop_at_the_first_tab(env, fake, client):
@@ -923,6 +962,12 @@ def test_source_session_is_cookies_or_none(env, client):
         assert post(client, "/api/sources", {"target": X, "options": {"session": session}}, 400)["ok"] is False
     s = add(client, X, options={"session": {"mode": "cookies", "browser": "brave"}})
     assert s["options"]["session"] == {"mode": "cookies", "browser": "brave"}
+    profile = {"mode": "cookies", "browser": "brave", "profile": "Profile 2"}
+    assert post(client, f"/api/sources/{s['id']}", {"options": {"session": profile}})["source"]["options"]["session"] \
+        == profile
+    for bad in ("../Default", "-x", "a::b", ""):
+        r = post(client, f"/api/sources/{s['id']}", {"options": {"session": {**profile, "profile": bad}}}, 400)
+        assert '"profile": "<a browser profile\'s name, optional>"' in r["error"]
 
 
 # ---------------------------------------------------------------------------

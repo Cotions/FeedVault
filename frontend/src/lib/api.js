@@ -340,6 +340,8 @@ export function saveToolPaths(tools) { return post("/api/config", { tools }); }
 // Downloaders (docs/API.md "Downloaders"): found, version, latest, login, update.
 export function getDownloaders()   { return get("/api/downloaders"); }
 export function checkDownloaders() { return post("/api/downloaders/check"); }
+// { profiles: { firefox: [names], chrome: [...], … } }: what a cookies session's "profile" can be.
+export function getBrowserProfiles() { return get("/api/browsers/profiles"); }
 
 /* ── Scripts (see docs/API.md "Scripts") ─────────────────── */
 

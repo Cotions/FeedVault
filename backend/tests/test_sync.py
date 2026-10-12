@@ -9,7 +9,7 @@ import time
 import pytest
 
 from conftest import H
-from fakes import owner, write_filename_post, write_post
+from fakes import firefox_profiles, owner, write_filename_post, write_post
 
 import config
 import db
@@ -166,6 +166,43 @@ def test_session_flags(env, client, fake):
     assert (job["state"], job["result"]["error"]) == ("failed", "login_required")
     post(client, f"/api/sources/{s['id']}", {"options": {"session": {"mode": "none"}}})
     assert "--load-cookies" not in sync_now(client, s["id"])["argv"]
+
+
+def test_browser_profile(env, client, fake):
+    """The profile named in profiles.ini, by its folder's cookie database; gone: refused, nothing run."""
+    firefox = os.path.join(os.path.expanduser("~"), ".mozilla", "firefox")
+    folders = firefox_profiles(firefox, [("default", "ef56gh78.default"), ("test", "9k879us5.test")])
+    os.makedirs(os.path.join(firefox, "itxwkwwt.test"))                     # a leftover: never picked
+    carol_archive(env)
+    s = add_source(client)
+    cookies = {"mode": "cookies", "browser": "firefox"}
+    set_config(instaloader={"pause": 0, "session": {**cookies, "profile": "test"}})
+    job = sync_now(client, s["id"])
+    ran = fake.runs()[-1]["argv"]
+    assert ran[-6:] == ["--load-cookies", "firefox", "--cookiefile",
+                        os.path.join(firefox, "9k879us5.test", "cookies.sqlite"), "--", "carol.cooks"]
+    # Shown and stored without the folder: the job, its row, nothing of it anywhere.
+    assert job["argv"][1:] == ran[:-3] + ["<browser profile>", "--", "carol.cooks"]
+    assert "9k879us5" not in json.dumps(job)
+    assert "9k879us5" not in json.dumps(client.get(f"/api/jobs/{job['id']}", headers=H).get_json())
+    # The source's own session wins over the setting's.
+    post(client, f"/api/sources/{s['id']}", {"options": {"session": {**cookies, "profile": "default"}}})
+    sync_now(client, s["id"])
+    argv = fake.runs()[-1]["argv"]
+    assert argv[argv.index("--cookiefile") + 1] == os.path.join(folders["default"], "cookies.sqlite")
+    post(client, f"/api/sources/{s['id']}", {"options": {"session": cookies}})
+    assert sync_now(client, s["id"])["argv"][-4:] == ["--load-cookies", "firefox", "--", "carol.cooks"]
+    post(client, f"/api/sources/{s['id']}", {"options": {"session": {**cookies, "profile": "../x"}}}, 400)
+    # Renamed in Firefox since: no job, and never the setting's or another profile instead.
+    post(client, f"/api/sources/{s['id']}", {"options": {"session": {**cookies, "profile": "default"}}})
+    firefox_profiles(firefox, [("main", "ef56gh78.default"), ("test", "9k879us5.test")])
+    ran = len(fake.runs())
+    r = post(client, f"/api/sources/{s['id']}/sync", status=400)
+    assert r["ok"] is False and r["error"].startswith('the firefox profile "default" was not found')
+    os.remove(os.path.join(firefox, "profiles.ini"))
+    r = post(client, f"/api/sources/{s['id']}/sync", status=400)
+    assert r["error"].startswith('the firefox profile "default" was not found')
+    assert len(fake.runs()) == ran and not jobs._active
 
 
 def test_request_cannot_inject_flags_or_paths(env, client, fake):

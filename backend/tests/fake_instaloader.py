@@ -359,7 +359,7 @@ def run(argv):
             f.write(json.dumps({"argv": argv, "at": time.time()}) + "\n")
     ap = argparse.ArgumentParser(add_help=False)
     for flag in ("--latest-stamps", "--dirname-pattern", "--filename-pattern", "--title-pattern",
-                 "--load-cookies", "--login", "--post-filter", "--storyitem-filter"):
+                 "--load-cookies", "--cookiefile", "--login", "--post-filter", "--storyitem-filter"):
         ap.add_argument(flag)
     for flag in ("--fast-update", "--no-compress-json", "--no-posts", "--reels", "--tagged", "--stories",
                  "--highlights", "--no-videos", "--no-video-thumbnails", "--no-pictures", "--sanitize-paths"):

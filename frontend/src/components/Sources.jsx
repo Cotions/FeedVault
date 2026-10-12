@@ -12,6 +12,8 @@ import {
   optionsOf, optionsSummary, scheduleShort, scheduleText, scriptHref, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
+import BrowserPick from "./BrowserPick";
+import { cookiesSession } from "../lib/browserProfiles";
 import ConfirmDialog from "./ConfirmDialog";
 import DiscardDialog from "./DiscardDialog";
 import { useUnsaved } from "../lib/unsaved";
@@ -274,6 +276,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
           </label>
         )}
       </fieldset>
+      <SessionPicker value={form.session} onChange={session => set({ session })} unused={unused} />
       <ScriptPicker tool={tool} value={form.script} onChange={script => set({ script })} />
       <fieldset className="source-opt">
         <legend>Schedule</legend>
@@ -285,6 +288,39 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
         ))}
       </fieldset>
     </div>
+  );
+}
+
+/* The login a sync of this source uses: the tool's, from Settings → Sync
+   (null), or the source's own: none, or a browser's cookies, with the
+   browser profile they come from. One made elsewhere (a saved instaloader
+   session, through the API) stays as it is until another is picked. */
+const SESSION_EFFECT = {
+  "": "the tool\u2019s, set in Settings \u2192 Sync",
+  none: "public posts only, whatever Settings says",
+  cookies: "this source\u2019s own: the tool reads that browser\u2019s cookies itself",
+  login: "this source\u2019s own saved instaloader session",
+};
+function SessionPicker({ value, onChange, unused }) {
+  const mode = value?.mode || "";
+  const pick = m => onChange(m === "" ? null : m === "cookies" ? cookiesSession("firefox", "") : m === "none" ? { mode: m } : value);
+  return (
+    <fieldset {...unused}>
+      <legend>Login</legend>
+      <label className="source-opt-line">
+        <select className="sort-select" aria-label="Login a sync uses" value={mode} onChange={e => pick(e.target.value)}>
+          <option value="">as in Settings</option>
+          <option value="none">no login</option>
+          <option value="cookies">my browser&rsquo;s login</option>
+          {mode === "login" && <option value="login">instaloader session of {value.user}</option>}
+        </select>
+        <span className="dim">{SESSION_EFFECT[mode]}</span>
+      </label>
+      {mode === "cookies" && (
+        <BrowserPick className="sort-select" browser={value.browser} profile={value.profile || ""} disabled={!!unused.disabled}
+                     onChange={p => onChange(cookiesSession(p.browser, p.profile))} />
+      )}
+    </fieldset>
   );
 }
 

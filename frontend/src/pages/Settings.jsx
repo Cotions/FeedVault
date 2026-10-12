@@ -13,6 +13,8 @@ import DiscardDialog from "../components/DiscardDialog";
 import { useUnsaved } from "../lib/unsaved";
 import AppearanceSettings from "../components/AppearanceSettings";
 import ProfileSettings from "../components/ProfileSettings";
+import BrowserPick from "../components/BrowserPick";
+import { cookiesSession } from "../lib/browserProfiles";
 import PageHeader from "../components/PageHeader";
 
 /* A card tells the page whether it holds unsaved edits (``onDirty(name,
@@ -518,8 +520,6 @@ function DownloadersCard({ saved, onSaved, onDirty }) {
   );
 }
 
-const BROWSERS = ["firefox", "chrome", "chromium", "brave", "edge"];
-
 /* Settings → Downloads: the one page FeedVault fetches itself, off by
    default (backend/biofetch.py, docs/API.md "Link-in-bio import"). */
 function BioImportCard({ on, onSaved }) {
@@ -649,16 +649,19 @@ function DesktopCard({ on, onSaved }) {
 }
 
 /* How instaloader reaches Instagram when FeedVault syncs a source. FeedVault
-   only passes a browser's name or a user name on; instaloader does the rest. */
+   only passes a browser's name, a browser profile's folder or a user name on;
+   instaloader does the rest. */
 function InstaloaderCard({ saved, onSaved, onDirty }) {
   const [mode,    setMode]    = useState(saved.session?.mode || "none");
   const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
+  const [profile, setProfile] = useState(saved.session?.profile || "");
   const [user,    setUser]    = useState(saved.session?.user || "");
   const [pause,   setPause]   = useState(String(saved.pause ?? 60));
   const [saving,  setSaving]  = useState(false);
   const [msg,     setMsg]     = useState(null);
 
-  const session = mode === "cookies" ? { mode, browser } : mode === "login" ? { mode, user: user.trim() } : { mode };
+  const session = mode === "cookies" ? cookiesSession(browser, profile)
+    : mode === "login" ? { mode, user: user.trim() } : { mode };
   const dirty = JSON.stringify(session) !== JSON.stringify(saved.session || { mode: "none" })
     || pause.trim() !== String(saved.pause ?? 60);
   useReportDirty(onDirty, "Instagram sync", dirty);
@@ -688,7 +691,8 @@ function InstaloaderCard({ saved, onSaved, onDirty }) {
       <div className="card-title">Instagram sync (instaloader)</div>
       <p className="page-lede">
         How instaloader signs in when you click Sync on a source. FeedVault only passes on the browser's
-        name or your user name: it never sees, reads or stores your cookies, password or session file.
+        name, the folder of the browser profile you pick, or your user name: it never sees, reads or stores
+        your cookies, password or session file.
       </p>
       <form className="insta-form" onSubmit={save}>
         <fieldset className="insta-modes">
@@ -708,9 +712,8 @@ function InstaloaderCard({ saved, onSaved, onDirty }) {
             </span>
           </label>
           {mode === "cookies" && (
-            <select className="insta-input" aria-label="Browser" value={browser} onChange={e => setBrowser(e.target.value)}>
-              {BROWSERS.map(b => <option key={b} value={b}>{b}</option>)}
-            </select>
+            <BrowserPick browser={browser} profile={profile}
+                         onChange={p => { setBrowser(p.browser); setProfile(p.profile); }} />
           )}
           <label className="insta-mode">
             <input type="radio" name="insta-mode" value="login" checked={mode === "login"} onChange={() => setMode("login")} />
@@ -760,12 +763,13 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg, onDirty })
   const { title, sites } = COOKIE_TOOLS[tool];
   const [mode,    setMode]    = useState(saved.session?.mode || "none");
   const [browser, setBrowser] = useState(saved.session?.browser || "firefox");
+  const [profile, setProfile] = useState(saved.session?.profile || "");
   const [longest, setLongest] = useState(String(maxSeconds ?? 180));
   const [pause,   setPause]   = useState(String(saved.pause ?? TOOL_PAUSE));
   const [ignore,  setIgnore]  = useState(!!saved.ignore_config);
   const [saving,  setSaving]  = useState(false);
 
-  const session = mode === "cookies" ? { mode, browser } : { mode };
+  const session = mode === "cookies" ? cookiesSession(browser, profile) : { mode };
   const youtube = tool === "yt-dlp";
   const dirty = JSON.stringify(session) !== JSON.stringify(saved.session || { mode: "none" })
     || pause.trim() !== String(saved.pause ?? TOOL_PAUSE)
@@ -806,7 +810,8 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg, onDirty })
       <div className="card-title">{title}</div>
       <p className="page-lede">
         How {tool} signs in when you click Sync on a source. FeedVault only passes on the browser&rsquo;s
-        name: it never sees, reads or stores your cookies or credentials.
+        name and the folder of the browser profile you pick: it never sees, reads or stores your cookies or
+        credentials.
       </p>
       <form className="insta-form" onSubmit={save}>
         <fieldset className="insta-modes">
@@ -831,9 +836,8 @@ function CookiesCard({ tool, saved, maxSeconds, onSaved, msg, setMsg, onDirty })
             </span>
           </label>
           {mode === "cookies" && (
-            <select className="insta-input" aria-label="Browser" value={browser} onChange={e => setBrowser(e.target.value)}>
-              {BROWSERS.map(b => <option key={b} value={b}>{b}</option>)}
-            </select>
+            <BrowserPick browser={browser} profile={profile}
+                         onChange={p => { setBrowser(p.browser); setProfile(p.profile); }} />
           )}
         </fieldset>
         <label className="insta-pause">

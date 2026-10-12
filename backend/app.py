@@ -23,6 +23,7 @@ from zlib import adler32
 
 import archives
 import biofetch
+import browsers
 import config
 import db
 import downloaders
@@ -1412,6 +1413,11 @@ def create_source():
     refused = _script_refused(body.get("options"))
     if refused:
         return jsonify({"ok": False, "error": refused[0]}), refused[1]
+    # Which browser profile's cookies a sync uses is the dashboard's to say:
+    # another site could pick an account, and learn which profiles exist.
+    session = body["options"].get("session") if isinstance(body.get("options"), dict) else None
+    if isinstance(session, dict) and session.get("profile") is not None and _foreign_origin():
+        return jsonify({"ok": False, "error": FOREIGN_REFUSED}), 403
     tool = body.get("tool")
     if tool is not None and tool not in sources.TOOLS:
         return jsonify({"ok": False, "error": f"tool must be one of: {', '.join(sources.TOOLS)}"}), 400
@@ -1933,6 +1939,13 @@ def _activate_profile(pid):
 @app.get("/api/downloaders")
 def get_downloaders():
     return jsonify(downloaders.status())
+
+
+@app.get("/api/browsers/profiles")
+def browser_profiles():
+    """The profiles a cookies session can name, per browser: names only,
+    read from Firefox's profiles.ini and the other browsers' folder names."""
+    return jsonify({"profiles": browsers.listing()})
 
 
 @app.post("/api/downloaders/check")

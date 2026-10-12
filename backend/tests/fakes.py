@@ -206,3 +206,33 @@ def yt_dlp_case(case, folder, media=True, thumbs=True):
         if thumbs:
             png(f"{base}.{YT_DLP_THUMB[data['extractor_key']]}", tuple((sum(map(ord, n)) * k) % 256 for k in (3, 7, 11)))
     return names
+
+
+# --- Browser profiles ---
+
+def firefox_profiles(root, profiles, make=True):
+    """Write a Firefox ``profiles.ini`` in ``root``: ``profiles`` are (name,
+    path) pairs, a relative path under ``root`` (IsRelative=1). Each
+    profile's folder is made (not with ``make=False``); no cookie database
+    is: FeedVault never looks for one. Returns the folders, by name."""
+    os.makedirs(root, exist_ok=True)
+    lines, folders = ["[General]", "StartWithLastProfile=1", "Version=2", ""], {}
+    for n, (name, path) in enumerate(profiles):
+        relative = not os.path.isabs(path)
+        folders[name] = os.path.join(root, path) if relative else path
+        if make:
+            os.makedirs(folders[name], exist_ok=True)
+        lines += [f"[Profile{n}]", f"Name={name}", f"IsRelative={int(relative)}", f"Path={path}", ""]
+    lines += ["[Install4F96D1932A9F858E]", "Default=abcd1234.default", "Locked=1", ""]
+    with open(os.path.join(root, "profiles.ini"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return folders
+
+
+def chromium_profile(root, name):
+    """A Chrome-family profile folder ``name`` in the browser's folder ``root``."""
+    folder = os.path.join(root, name)
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "Preferences"), "w") as f:
+        f.write("{}")
+    return folder

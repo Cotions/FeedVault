@@ -420,9 +420,10 @@ with `notify-send` when it is installed.
 By default syncs run without a login (public profiles only). **Settings → Sync →
 Instagram sync** can make instaloader use your browser's Instagram cookies
 (`--load-cookies`) or a session it saved after `instaloader --login` in a
-terminal. FeedVault only passes the browser or user name on; it never reads
-or stores cookies, passwords or session files (the one exception is
-removing the cookies yt-dlp copies into info JSONs, below).
+terminal. FeedVault only passes the browser or user name on (and the path of
+the browser profile you picked, below); it never reads or stores cookies,
+passwords or session files (the one exception is removing the cookies
+yt-dlp copies into info JSONs, below).
 
 gallery-dl and yt-dlp can use a browser's cookies the same way
 (`--cookies-from-browser`, **Settings → Sync**, cards "X, Reddit, Bluesky,
@@ -430,6 +431,16 @@ pixiv sync (gallery-dl)" and "YouTube and TikTok sync (yt-dlp)").
 yt-dlp copies the cookies it used into each video's `.info.json`; FeedVault
 rewrites the files of each sync without them, and **Settings → Sync → YouTube
 and TikTok sync** can do the same for info JSONs written before.
+
+With several browser profiles (one per account, say), **Browser profile**
+next to the browser picks whose cookies a sync uses; a source can have its
+own in its sync options. "Default" leaves the choice to the tool, as
+before. For Firefox the list is the profile names of its `profiles.ini`
+(what `about:profiles` shows); FeedVault looks the folder up there and
+gives it to the tool (`--cookies-from-browser firefox:<folder>`,
+`instaloader --load-cookies firefox --cookiefile <folder>/cookies.sqlite`),
+without opening the cookies itself. A profile renamed or removed since
+stops the sync with a message instead of using another profile's cookies.
 
 ## Links
 

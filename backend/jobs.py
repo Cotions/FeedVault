@@ -33,6 +33,7 @@ import subprocess
 import threading
 import time
 
+import browsers
 import config
 import db
 import health
@@ -102,7 +103,8 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
     summarize: optional, output lines -> (result dict, message) for a job
                that exited 0 and has no rescan target
     start:     optional, (params, note, argv) -> None or a new argument list
-               (without the tool), run in the job's thread right before
+               (without the tool; ``argv`` is the one that runs, not the
+               one shown), run in the job's thread right before
                the process starts (no other job of its group is running);
                an exception fails the job with its message, Cancelled
                cancels it; note(text) adds a [feedvault] line to its log
@@ -214,10 +216,12 @@ register("tool-version", label="Check a tool's version",
 # ---------------------------------------------------------------------------
 
 def _shown_argv(kind_name, argv):
-    """An argument list as shown and stored: scrubbed when its kind says so."""
+    """An argument list as shown and stored: never with a browser profile's
+    folder (browsers.shown), and scrubbed when its kind says so."""
+    argv = browsers.shown(argv)
     kind = _kinds.get(kind_name)
     if kind is None or "argv" not in kind.scrub:
-        return list(argv)
+        return argv
     return [health.scrub(a, LINE_MAX) or "" for a in argv]
 
 
@@ -439,7 +443,9 @@ def _run(job):
             return
         if kind.start:
             try:
-                args = kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"), job.argv)
+                # The list that runs, not the one shown (a profile's folder is hidden there).
+                args = kind.start(job.params, lambda text: _note(job, f"[feedvault] {text}"),
+                                  [job.tool, *job.args])
                 if args is not None:
                     _set_args(job, args)
             except Cancelled as e:

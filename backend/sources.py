@@ -23,6 +23,7 @@ import re
 from datetime import date
 from urllib.parse import urlsplit
 
+import browsers
 import db
 import health
 import people
@@ -45,6 +46,8 @@ HOST_PLATFORMS = {"instagram.com": "instagram", "x.com": "twitter", "twitter.com
                   "reddit.com": "reddit", "bsky.app": "bluesky", "pixiv.net": "pixiv",
                   "youtube.com": "youtube", "tiktok.com": "tiktok"}
 BROWSERS = ("firefox", "chrome", "chromium", "brave", "edge")
+# In a session error, after the browsers: the optional browser profile.
+PROFILE_HINT = ', "profile": "<a browser profile\'s name, optional>"'
 SESSION_MODES = ("none", "cookies", "login")
 COOKIE_MODES = ("none", "cookies")             # gallery-dl and yt-dlp: a browser's cookies or nothing
 ERRORS = ("login_required", "private", "not_found", "rate_limited", "missing", "generic")
@@ -267,17 +270,24 @@ def parse_target(tool, text):
 
 def clean_session(value, modes=SESSION_MODES):
     """A session setting, or None when malformed: {"mode": "none"} |
-    {"mode": "cookies", "browser": "firefox"} | {"mode": "login", "user":
-    "name"} (instaloader only), among ``modes``. FeedVault only passes the
-    browser's name or the user name on; the tool reads the cookies or its
-    own saved session file, never FeedVault."""
+    {"mode": "cookies", "browser": "firefox"}, with an optional "profile"
+    (a browser profile's name, browsers.clean_name; null as absent) |
+    {"mode": "login", "user": "name"} (instaloader only), among ``modes``.
+    FeedVault only passes on the browser's name, the folder of the browser
+    profile named (browsers.py) or the user name; the tool reads the
+    cookies or its own saved session file, never FeedVault."""
     if not isinstance(value, dict) or value.get("mode") not in modes:
         return None
     mode = value["mode"]
-    if set(value) - {"mode", {"cookies": "browser", "login": "user"}.get(mode)}:
+    if set(value) - {"mode", *{"cookies": ("browser", "profile"), "login": ("user",)}.get(mode, ())}:
         return None
     if mode == "cookies":
-        return {"mode": mode, "browser": value["browser"]} if value.get("browser") in BROWSERS else None
+        if value.get("browser") not in BROWSERS:
+            return None
+        if value.get("profile") is None:
+            return {"mode": mode, "browser": value["browser"]}
+        profile = browsers.clean_name(value["browser"], value["profile"])
+        return {"mode": mode, "browser": value["browser"], "profile": profile} if profile else None
     if mode == "login":
         user = value.get("user")
         return {"mode": mode, "user": user} if isinstance(user, str) and _HANDLE_RE.fullmatch(user) else None
@@ -396,7 +406,7 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
             out["session"] = clean_session(value["session"], SESSION_MODES if tool == "instaloader" else COOKIE_MODES)
             if out["session"] is None:
                 return None, ('session must be null, { "mode": "none" }, { "mode": "cookies", "browser": '
-                              f'{" | ".join(BROWSERS)} }}'
+                              f'{" | ".join(BROWSERS)}{PROFILE_HINT} }}'
                               + (' or { "mode": "login", "user": "<name>" }' if tool == "instaloader" else ""))
     if "content" in value:
         content = value["content"]
