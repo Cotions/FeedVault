@@ -256,6 +256,27 @@ def test_first_sync_starts_after_the_newest_indexed_post(env, client, fake):
     assert len(fake.runs()) == 2
 
 
+def test_first_sync_of_a_filename_only_folder_under_the_platform_folder(env, client, fake):
+    """The same archive as ``<root>/instagram/carol.cooks``, the default
+    folder of a source added by name: its posts are the source's account's,
+    so the first sync starts after them and the new ones join them."""
+    folder = env["media"] / "instagram" / "carol.cooks"
+    for i in range(3):
+        write_filename_post(folder, "carol.cooks", f"CCCCCCCCCC{i}", TS + i * DAY)
+    scanner.scan(env["roots"])
+    fake.set(carol_profile(new=2))
+    s = add_source(client)
+    assert (s["folder"], s["account"]) == (str(folder), {"platform": "instagram", "id": "carol.cooks"})
+    job = sync_now(client, s["id"])
+    assert (job["state"], job["message"], job["result"]["added"]) == ("done", "2 new posts", 2)
+    assert job["argv"][job["argv"].index("--filename-pattern") + 1] == "{target}-{date_utc:%Y-%m-%d}-{shortcode}"
+    log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
+    assert any("starting after its newest indexed post, 2024-06-03 12:00 UTC" in t for t in log)
+    [a] = get(client, "/api/authors")
+    assert (a["id"], a["aliases"], a["count"]) == ("777", ["carol.cooks"], 5)
+    assert get(client, f"/api/sources/{s['id']}")["account"] == {"platform": "instagram", "id": "777"}
+
+
 def test_seed_only_once_and_not_with_full_history(env, client, fake):
     carol_archive(env)
     fake.set(carol_profile(new=0))

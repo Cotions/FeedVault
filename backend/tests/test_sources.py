@@ -1,8 +1,9 @@
+import collections
 import json
 import os
 
 from conftest import H
-from fakes import owner, write_filename_post, write_post
+from fakes import owner, write_filename_post, write_meta, write_post
 
 import db
 import scanner
@@ -33,16 +34,18 @@ def delete(client, url, status=200):
     return r.get_json()
 
 
-def archive(env):
+def archive(env, base=None):
     """The real archive's shape: filename-only folders (no metadata JSON,
     the folder's name as author id), one of them also holding a post with
-    metadata, so its name is an alias of the numeric id."""
+    metadata, so its name is an alias of the numeric id. Under ``base``
+    (default the media root, as older libraries have them)."""
+    base = base or env["media"]
     for i in range(3):
-        write_filename_post(env["media"] / "carol.cooks", "carol.cooks", f"CCCCCCCCCC{i}", TS + i * 86400, slides=1 + i)
-    write_filename_post(env["media"] / "alice.example", "alice.example", "AAAAAAAAAA1", TS)
-    write_post(env["media"] / "alice.example", "A2", TS + 3 * 86400, ALICE, "image")
-    write_filename_post(env["media"] / "Dave_Old" / "Trips", "Trips", "DDDDDDDDDD1", TS)   # highlight subfolder
-    write_filename_post(env["media"] / "Dave_Old", "dave_old", "DDDDDDDDDD2", TS + 86400)
+        write_filename_post(base / "carol.cooks", "carol.cooks", f"CCCCCCCCCC{i}", TS + i * 86400, slides=1 + i)
+    write_filename_post(base / "alice.example", "alice.example", "AAAAAAAAAA1", TS)
+    write_post(base / "alice.example", "A2", TS + 3 * 86400, ALICE, "image")
+    write_filename_post(base / "Dave_Old" / "Trips", "Trips", "DDDDDDDDDD1", TS)   # highlight subfolder
+    write_filename_post(base / "Dave_Old", "dave_old", "DDDDDDDDDD2", TS + 86400)
     scanner.scan(env["roots"])
 
 
@@ -182,6 +185,148 @@ def test_suggestion_of_a_filename_only_folder_targets_the_folder(env, client):
     scanner.scan(env["roots"])
     [s] = get(client, "/api/sources")["suggestions"]
     assert (s["target"], s["account"]["id"]) == ("motherbeef", "motherbeef")
+
+
+def _indexed():
+    """{post id: what a scan must keep of it} of every indexed post."""
+    return {r["id"]: tuple(r)[1:] for r in db.connect().execute(
+        "SELECT id, author_id, author_handle, album, kind, posted_at, first_seen, missing FROM posts")}
+
+
+def test_filename_only_folders_under_the_platform_folder(env, client):
+    """The same archive as ``<root>/instagram/<name>``, a new source's
+    layout: the accounts are the profile folders', never one named after
+    the platform's folder, and each folder is offered as its account's."""
+    base = env["media"] / "instagram"
+    archive(env, base)
+    assert {pid: r[:3] for pid, r in _indexed().items()} == {
+        "instagram:CCCCCCCCCC0": ("carol.cooks", "carol.cooks", None),
+        "instagram:CCCCCCCCCC1": ("carol.cooks", "carol.cooks", None),
+        "instagram:CCCCCCCCCC2": ("carol.cooks", "carol.cooks", None),
+        "instagram:AAAAAAAAAA1": ("alice.example", "alice.example", None),
+        "instagram:A2": ("111", "alice.example", None),
+        "instagram:DDDDDDDDDD1": ("dave_old", "Dave_Old", "Trips"),
+        "instagram:DDDDDDDDDD2": ("dave_old", "dave_old", None)}
+    authors = {a["id"]: a for a in get(client, "/api/authors")}
+    assert sorted(authors) == ["111", "carol.cooks", "dave_old"]
+    assert (authors["111"]["aliases"], authors["111"]["count"]) == (["alice.example"], 2)
+    got = {s["folder"]: (s["target"], s["account"]["id"], s["count"]) for s in get(client, "/api/sources")["suggestions"]}
+    assert got == {str(base / "Dave_Old"): ("dave_old", "dave_old", 2),
+                   str(base / "alice.example"): ("alice.example", "111", 2),
+                   str(base / "carol.cooks"): ("carol.cooks", "carol.cooks", 3)}
+    # A source by name alone: that folder is its default, and its posts' account its own.
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "carol.cooks"})["source"]
+    assert (s["folder"], s["account"]) == (str(base / "carol.cooks"), {"platform": "instagram", "id": "carol.cooks"})
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "dave_old", "folder": str(base / "Dave_Old")})
+    assert s["source"]["account"] == {"platform": "instagram", "id": "dave_old"}
+    assert sources.account_folder(db.connect(), "instagram", "dave_old", env["roots"]) == str(base / "Dave_Old")
+    assert [x["folder"] for x in get(client, "/api/sources")["suggestions"]] == [str(base / "alice.example")]
+
+
+def test_a_filename_only_archive_moved_under_the_platform_folder_keeps_its_posts(env, client):
+    """``<root>/<name>`` moved to ``<root>/instagram/<name>`` and scanned
+    again: the same posts and accounts (ids, what the user said of them),
+    none missing, none new; only their paths change."""
+    archive(env)
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE posts SET first_seen = 5")
+    post(client, "/api/tags/apply", {"posts": ["instagram:CCCCCCCCCC1", "instagram:DDDDDDDDDD1"], "add": ["kept"],
+                                     "remove": []})
+    person = post(client, "/api/people", {"name": "Carol", "accounts": [{"platform": "instagram",
+                                                                         "id": "carol.cooks"}]})["person"]
+    before = _indexed()
+    authors = get(client, "/api/authors")
+    base = env["media"] / "instagram"
+    base.mkdir()
+    for name in ("carol.cooks", "alice.example", "Dave_Old"):
+        os.rename(env["media"] / name, base / name)
+    report = scanner.scan(env["roots"])
+    assert (report["added"], report["updated"], report["missing"], report["unmatched"]) == (0, 7, 0, 0)
+    assert _indexed() == before
+    assert get(client, "/api/authors") == authors
+    assert all(r[0].startswith(str(base) + os.sep) for r in conn.execute("SELECT meta_path FROM posts"))
+    assert all(r[0].startswith(str(base) + os.sep) for r in conn.execute("SELECT path FROM media"))
+    assert get(client, "/api/posts/instagram/CCCCCCCCCC1")["tags"] == ["kept"]
+    assert get(client, "/api/posts/instagram/DDDDDDDDDD1")["tags"] == ["kept"]
+    assert [tuple(r) for r in conn.execute("SELECT person_id, author_id FROM person_accounts")] == \
+        [(person["id"], "carol.cooks")]
+    carol = [a for a in get(client, "/api/authors") if a["id"] == "carol.cooks"][0]
+    assert carol["person"]["name"] == "Carol"
+    assert conn.execute("SELECT COUNT(*) FROM posts WHERE first_seen != 5").fetchone()[0] == 0
+
+
+def real_shapes(base):
+    """The shapes of a real filename-only library under ``base``: dated and
+    spaced names, highlight folders (titles of any text, some holding a
+    folder named after the profile again), and instaloader's other files."""
+    carol, dave = base / "carol.cooks", base / "Dave_Old"
+    for i in range(3):
+        write_filename_post(carol, "carol.cooks", f"CCCCCCCCCC{i}", TS + i * 86400, slides=1 + i, video=i == 2)
+    for name in ("carol.cooks - SPACEDcode1 - 1.jpg", "carol.cooks - SPACEDcode1 - 2.jpg", "carol.cooks - SPACEDcode2.jpg"):
+        (carol / name).write_bytes(b"x")
+    for n, title in enumerate(["Summer", "faqs", "Highlights", "\U0001F47E", "Fall∕Halloween", "3﹥", "More food"]):
+        write_filename_post(carol / title, title, f"CHIGHLIGHT{n}", TS + n * 86400)
+        (carol / title / "2024-06-01_12-00-00_UTC_cover.jpg").write_bytes(b"x")
+    # The highlight's folder holding one named after the profile, its files named either way.
+    write_filename_post(carol / "Trips" / "carol.cooks", "carol.cooks", "CNESTED0001", TS, slides=2)
+    write_filename_post(carol / "Trips" / "carol.cooks", "carol.cooks", "CNESTED0002", TS + 86400)
+    write_filename_post(carol / "Dinner \U0001F35D" / "carol.cooks", "Dinner \U0001F35D", "CNESTED0003", TS)
+    (carol / "Trips" / "carol.cooks" / "2024-06-01_12-00-00_UTC_profile_pic.jpg").write_bytes(b"x")
+    write_filename_post(dave, "dave_old", "DDDDDDDDDD1", TS)
+    write_filename_post(dave, "dave.new", "DDDDDDDDDD2", TS + 86400)             # renamed since
+    write_post(dave, "D3", TS + 2 * 86400, owner("dave.new", 444), "image")
+    # Not posts: profile pictures, resume files, the profile's metadata, a partial download, a stray file.
+    for folder in (carol, dave):
+        (folder / "2024-06-01_12-00-00_UTC_profile_pic.jpg").write_bytes(b"x")
+        (folder / "2023-01-01_08-30-00_UTC_profile_pic.jpg").write_bytes(b"x")
+    write_meta(str(carol / "iterator_AbCdEf12"), {"remaining_data": None}, node_type="FrozenNodeIterator", compress=True)
+    write_meta(str(carol / "carol.cooks_777"), {"id": "777", "username": "carol.cooks"}, node_type="Profile",
+               compress=True)
+    (carol / "carol.cooks-2024-06-09-CPARTIAL001.mp4.temp").write_bytes(b"x")
+    (carol / "test.py").write_text("print(1)\n")
+
+
+def _library(base):
+    """What a scan made of the library under ``base``: per post its account,
+    handle, album, kind and media (paths as under ``base``), the accounts,
+    and the files left unmatched."""
+    conn = db.connect()
+    rel = lambda p: os.path.relpath(p, base)                                    # noqa: E731
+    posts = {r["id"]: (r["author_id"], r["author_handle"], r["album"], r["kind"], r["tool"], rel(r["meta_path"]),
+                       sorted(rel(m[0]) for m in conn.execute("SELECT path FROM media WHERE post_id = ?", (r["id"],))))
+             for r in conn.execute("SELECT * FROM posts")}
+    authors = sorted((a["id"], a["handle"], a["count"], tuple(a["aliases"])) for a in db.authors(conn))
+    unmatched = sorted((rel(r[0]), r[1]) for r in conn.execute("SELECT path, reason FROM unmatched"))
+    return posts, authors, unmatched
+
+
+def test_a_real_filename_only_library_reads_the_same_in_both_layouts(env, client):
+    flat = env["tmp"] / "flat"
+    real_shapes(flat)
+    report = scanner.scan([str(flat)])
+    posts, authors, unmatched = want = _library(flat)
+    assert (report["added"], report["errors"]) == (18, [])
+    assert authors == [("444", "dave.new", 3, ("dave_old",)), ("carol.cooks", "carol.cooks", 15, ())]
+    albums = collections.Counter((p[0], p[2]) for p in posts.values())
+    assert albums == {("carol.cooks", None): 5, ("carol.cooks", "Summer"): 1, ("carol.cooks", "faqs"): 1,
+                      ("carol.cooks", "Highlights"): 1, ("carol.cooks", "\U0001F47E"): 1,
+                      ("carol.cooks", "Fall∕Halloween"): 1, ("carol.cooks", "3﹥"): 1,
+                      ("carol.cooks", "More food"): 1, ("carol.cooks", "Trips"): 2,
+                      ("carol.cooks", "Dinner \U0001F35D"): 1, ("dave_old", None): 2, ("444", None): 1}
+    assert {p[3] for p in posts.values() if p[2]} == {"story"}
+    assert len(posts["instagram:CNESTED0001"][6]) == 2 and len(posts["instagram:SPACEDcode1"][6]) == 2
+    # Profile pictures, covers and instaloader's own files are its: not
+    # posts, not unmatched. Nor are files that are not media.
+    assert unmatched == []
+
+    # The same library under <root>/instagram, in an index of its own.
+    db.init(str(env["tmp"] / "other" / "feedvault.db"))
+    base = env["media"] / "instagram"
+    real_shapes(base)
+    report = scanner.scan(env["roots"])
+    assert (report["added"], report["errors"]) == (18, [])
+    assert _library(base) == want
 
 
 def test_suggestions_never_create_sources(env, client):
