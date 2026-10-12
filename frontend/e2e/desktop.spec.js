@@ -24,6 +24,7 @@ test("Feed: Back from a post returns to where the Feed was scrolled", async ({ p
   const cards = page.locator("a.post-cover");
   expect(await cards.count()).toBeGreaterThan(14);
   const card = cards.nth(14);
+  const href = await card.getAttribute("href");
   await card.scrollIntoViewIfNeeded();
   const before = await page.evaluate(() => window.scrollY);
   expect(before).toBeGreaterThan(1000);
@@ -33,8 +34,12 @@ test("Feed: Back from a post returns to where the Feed was scrolled", async ({ p
   await page.goBack();
   await expect(page.locator("article.post-card").first()).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before - 50);
-  expect(await page.evaluate(() => window.scrollY)).toBeLessThan(before + 50);
+  // Not to the pixel: the next page of posts comes in once the position is
+  // back, the columns fill again and the browser's scroll anchoring may
+  // follow a card of another column (60px further, in CI). Where the Feed
+  // was is the card that was opened, on screen again.
   await idle(page);
+  await expect(page.locator(`a.post-cover[href="${href}"]`)).toBeInViewport();
 });
 
 // #149: Back from a post opened from the keyboard left focus on <body>, so
