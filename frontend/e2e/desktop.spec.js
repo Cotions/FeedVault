@@ -517,3 +517,48 @@ test("Browser profile: picked in Settings and on a source, a missing one stays s
     await request.post("/api/config", { headers: H, data: { instaloader: before.instaloader } });
   }
 });
+
+// instaloader reads a browser's cookies with its optional browser_cookie3
+// module: the Downloaders card says so, with the command that adds it,
+// only when the module is known missing and Instagram syncs use cookies
+// (GET /api/downloaders faked here: the instance has no such install).
+test("Downloaders: instaloader without browser_cookie3 is warned about, with the command", async ({ page }) => {
+  const venv = "/home/someone/.local/share/pipx/venvs/instaloader-with-a-long-name-of-its-own";
+  const command = `${venv}/bin/python -m pip install browser_cookie3`;
+  let module = { found: false, command };
+  let login = { mode: "cookies", browser: "firefox" };
+  await page.route(url => url.pathname === "/api/downloaders", async route => {
+    const json = await (await route.fetch()).json();
+    json.tools = json.tools.map(t => (t.tool === "instaloader" ? { ...t, login, browser_cookie3: module } : t));
+    return route.fulfill({ json });
+  });
+  for (const width of [1440, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/settings#downloaders");
+    const row = page.locator(".dl-row", { has: page.locator(".tool-name", { hasText: /^instaloader$/ }) });
+    const warn = row.locator(".kv-row", { hasText: "browser_cookie3 is not installed" });
+    await expect(warn).toContainText("instaloader cannot read firefox’s cookies without it");
+    await expect(warn.locator("code")).toHaveText(command);
+    // Nothing of it leaves the row, and the copy button is not under the command.
+    const outer = await row.boundingBox();
+    const code = await warn.locator("code").boundingBox();
+    const copy = await warn.getByRole("button", { name: `Copy ${command}` }).boundingBox();
+    for (const [what, b] of [["the command", code], ["its copy button", copy]]) {
+      expect(b.x, `${width}: ${what} stays in the row`).toBeGreaterThanOrEqual(outer.x - 0.5);
+      expect(b.x + b.width, `${width}: ${what} stays in the row`).toBeLessThanOrEqual(outer.x + outer.width + 0.5);
+    }
+    expect(copy.x, `${width}: the copy button is after the command`).toBeGreaterThanOrEqual(code.x + code.width - 0.5);
+  }
+  // Not known (a system install), or no cookies asked for: no warning.
+  const warning = page.locator("#downloaders").getByText("browser_cookie3 is not installed");
+  module = { found: null, command: "pipx install 'instaloader[browser_cookie3]'" };
+  await page.reload();
+  await expect(page.locator("#downloaders .dl-row").first()).toBeVisible();
+  await expect(warning).toHaveCount(0);
+  module = { found: false, command };
+  login = { mode: "none" };
+  await page.reload();
+  await expect(page.locator("#downloaders .dl-row").first()).toBeVisible();
+  await expect(warning).toHaveCount(0);
+  await idle(page);
+});

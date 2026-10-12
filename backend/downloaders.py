@@ -37,6 +37,16 @@ picked here from how it is installed, never from the request:
 Refused for system installs and missing tools: the card shows the command
 to run instead. It shares its tool's lock group, so it never runs during a
 sync of that tool; the tool is found again once it ends.
+
+instaloader reads a browser's cookies (``--load-cookies``) with
+browser_cookie3, an optional extra a plain ``pipx install instaloader``
+leaves out: without it every such run ends on "browser_cookie3 library is
+needed to load cookies from browsers". Whether it is there is looked for in
+the virtualenv's site-packages (cookies_module(): nothing run, unknown for a
+system install), and the command that adds it is shown, never run
+(cookies_command()): on the card while the Instagram session is a browser's
+cookies, and in the result of a sync, a save or a test that ended on that
+line (sync._setup).
 """
 import getpass
 import glob
@@ -63,6 +73,7 @@ VERSION_MAX = 200                              # characters kept of its first li
 INSTALLS = ("venv", "pipx", "system", "missing")
 
 PACKAGES = {"instaloader": "instaloader", "gallery-dl": "gallery-dl", "yt-dlp": "yt-dlp"}   # tool -> PyPI name
+COOKIES_MODULE = "browser_cookie3"             # what instaloader --load-cookies imports; its extra's name too
 PYPI_URL = "https://pypi.org/pypi/{}/json"
 PYPI_TIMEOUT = 10                              # seconds for the whole answer
 PYPI_MAX = 8 * 1024 * 1024                     # bytes; yt-dlp's page lists every release
@@ -381,9 +392,12 @@ def _test_outcome(params, code, lines, index, note=None):
     if code == 0:
         return "done", {"ok": True, "error": None, "line": None}, "Works"
     error, line = sync.classify(lines, TEST_FAILURES[params["tool"]])
+    tool = params["tool"]
+    lacks = sync._setup(tool, lines) if error == "generic" else None
+    if lacks:                                  # not the site's answer: the install's (browser_cookie3)
+        return "failed", {"ok": False, "error": "setup", "line": health.scrub(lacks[0])}, lacks[1]
     line = health.scrub(line)
     message = TEST_MESSAGES[error]
-    tool = params["tool"]
     if error == "private" and (sync.settings() if tool == "instaloader"
                                else sync.tool_settings(tool))["session"]["mode"] == "none":
         message = TEST_NO_SESSION
@@ -411,12 +425,58 @@ jobs.register("tool-test", label="Test a downloader", params={"tool": {"type": "
 # Updating
 # ---------------------------------------------------------------------------
 
-INSTALL_HINTS = {"ffmpeg": "sudo apt install ffmpeg"}
+# instaloader with its browser_cookie3 extra: a browser's cookies are the
+# session most use, and a plain install cannot read them.
+INSTALL_HINTS = {"ffmpeg": "sudo apt install ffmpeg",
+                 "instaloader": f"pipx install {shlex.quote(f'instaloader[{COOKIES_MODULE}]')}"}
 
 
 def install_hint(tool):
     """The command to install a missing tool, shown with a copy button, never run."""
     return INSTALL_HINTS.get(tool) or f"pipx install {PACKAGES[tool]}"
+
+
+def cookies_module(info):
+    """Whether the instaloader of ``info`` (a detect() or detect_install()
+    answer) has browser_cookie3: looked for in its virtualenv's
+    site-packages (the module's folder or its dist-info), nothing run.
+    None when that cannot be told: a system install (the Python it runs
+    under is not read), or a virtualenv that also sees the system's
+    packages (``include-system-site-packages = true``) and has none itself."""
+    if info["install"] not in ("venv", "pipx"):
+        return None
+    venv = info["venv"]
+    if glob.glob(os.path.join(glob.escape(venv), "lib", "python*", "site-packages", COOKIES_MODULE + "*")):
+        return True
+    try:
+        with open(os.path.join(venv, "pyvenv.cfg"), encoding="utf-8", errors="replace") as f:
+            shared = re.search(r"(?im)^\s*include-system-site-packages\s*=\s*true\s*$", f.read(65536))
+    except OSError:
+        shared = None
+    return None if shared else False
+
+
+def cookies_command(info):
+    """The command that gives the instaloader of ``info`` its browser_cookie3,
+    from how it is installed; shown with a copy button, never run. pipx: by
+    the name pipx knows the virtualenv under (``--suffix``, as update_plan).
+    A system install cannot be given it from here: the install command of
+    a copy that has it (install_hint)."""
+    if info["install"] == "pipx":
+        return f"pipx inject {shlex.quote(os.path.basename(info['venv']))} {COOKIES_MODULE}"
+    if info["install"] == "venv":
+        return f"{shlex.quote(os.path.join(info['venv'], 'bin', 'python'))} -m pip install {COOKIES_MODULE}"
+    return install_hint("instaloader")
+
+
+def cookies_message(info):
+    """What a run that ended on instaloader's "browser_cookie3 library is
+    needed …" tells the user: what is missing and the command that adds it."""
+    lacks = f"instaloader cannot read a browser's cookies: its {COOKIES_MODULE} module is not installed"
+    if info["install"] in ("venv", "pipx"):
+        return f"{lacks}. Run: {cookies_command(info)}"
+    return (f"{lacks}, and FeedVault cannot add it to this install. Run: {cookies_command(info)} "
+            "and set its path in Settings → Downloaders")
 
 
 def update_plan(info):
@@ -449,7 +509,7 @@ def update_plan(info):
         return {"argv": ["pipx", "upgrade", name], "command": f"pipx upgrade {name}", "reason": None}
     if kind == "missing":
         return {"argv": None, "command": install_hint(tool), "reason": f"{tool} is not installed"}
-    return {"argv": None, "command": f"pipx install {name}",
+    return {"argv": None, "command": install_hint(tool),
             "reason": f"{tool} is not in a virtualenv FeedVault can update: update it the way it was installed "
                       "(your package manager, pip), or install a copy with pipx and set its path here"}
 
@@ -524,6 +584,9 @@ def status(refresh=False):
         plan = update_plan(info)
         info["update"] = {"possible": plan["argv"] is not None, "command": plan["command"], "reason": plan["reason"]}
         info["install_hint"] = install_hint(t) if not info["found"] else None
+        # instaloader's alone: the others read a browser's cookies themselves.
+        info["browser_cookie3"] = ({"found": cookies_module(info), "command": cookies_command(info)}
+                                   if t == "instaloader" and info["found"] else None)
         out.append(info)
     return {"checked_at": checked_at, "check_updates": cfg.get("check_updates") is True, "tools": out}
 

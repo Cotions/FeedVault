@@ -161,6 +161,7 @@ RECORDED = {
         ("Profile carol does not exist.", "not_found"),
         ("carol: Profile carol does not exist.", "not_found"),
         ("carol: carol blocked you.", "error"),
+        ("browser_cookie3 library is needed to load cookies from browsers", "error"),
         ("Fatal error: something new", "error"),
     ],
     "gallery-dl": [
@@ -242,6 +243,40 @@ def test_instaloader_states_through_the_fake(env, client, fake, fail, state):
     h = get(client, f"/api/sources/{s['id']}")["health"]
     assert (h["state"], h["result"], h["failures"]) == (state, "failed", 1)
     assert h["line"] and "Errors or warnings occurred" not in h["line"]
+
+
+def test_setup_knows_the_line_of_a_missing_browser_cookie3():
+    line = "browser_cookie3 library is needed to load cookies from browsers"
+    assert health.setup("instaloader", [(1, "x"), (2, line + "\n"), (3, "Errors or warnings occurred:")]) == \
+        ("browser_cookie3", line)
+    assert health.setup("instaloader", [(1, "Cookies loaded successfully from firefox")]) is None
+    assert health.setup("instaloader", [(1, f"[feedvault] {line}")]) is None       # FeedVault's own notes
+    assert health.setup("yt-dlp", [(1, line)]) is None and health.setup("ffmpeg", []) is None
+
+
+def test_a_sync_without_browser_cookie3_says_how_to_add_it(env, client, fake):
+    """instaloader --load-cookies in an install without the module: not the
+    account's doing (error, not login_required), and the result names the
+    command for how the tool is installed (here a system one: the fake on PATH)."""
+    carol_archive(env)
+    fake.set(carol_profile(), browser_cookie3=False)
+    s = add_source(client)
+    assert sync_now(client, s["id"])["state"] == "done"            # no cookies asked for: the module is not needed
+    post(client, f"/api/sources/{s['id']}", {"options": {"session": {"mode": "cookies", "browser": "firefox"}}})
+    job = sync_now(client, s["id"])
+    line = "browser_cookie3 library is needed to load cookies from browsers"
+    assert (job["state"], job["result"]["error"], job["result"]["line"]) == ("failed", "setup", line)
+    assert job["message"] == ("instaloader cannot read a browser's cookies: its browser_cookie3 module is not "
+                              "installed, and FeedVault cannot add it to this install. Run: pipx install "
+                              "'instaloader[browser_cookie3]' and set its path in Settings → Downloaders")
+    got = get(client, f"/api/sources/{s['id']}")
+    assert (got["last_result"]["error"], got["last_result"]["message"]) == ("setup", job["message"])
+    h = got["health"]
+    assert (h["state"], h["line"], h["failures"], h["paused"]) == ("error", line, 1, None)
+    assert h["login"] == {"mode": "cookies", "found": None, "accepted": None}
+    fake.set(carol_profile())
+    sync_now(client, s["id"])
+    assert get(client, f"/api/sources/{s['id']}")["health"]["state"] == "ok"
 
 
 # ---------------------------------------------------------------------------

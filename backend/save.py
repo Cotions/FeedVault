@@ -355,6 +355,9 @@ def _outcome(params, code, lines, index, note=None):
     message = MESSAGES[result["error"]]
     if result["error"] == "private" and sync.settings()["session"]["mode"] == "none":
         message = NO_SESSION                   # the setting _build read: a save has no session of its own
+    lacks = sync._setup("instaloader", lines) if result["error"] == "generic" else None
+    if lacks:                                  # its install's doing (browser_cookie3), not the post's
+        result["error"], result["line"], message = "setup", health.scrub(lacks[0]), lacks[1]
     if result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"
     return "failed", result, message

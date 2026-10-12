@@ -982,6 +982,18 @@ NO_SESSION = {
 }
 
 
+def _setup(tool, lines):
+    """(line, message) when the output of a failed run says the tool's
+    install lacks something (health.setup: instaloader's browser_cookie3),
+    else None: the line that says it, raw, and what to do about it, with
+    the command for how the tool is installed now (downloaders.py)."""
+    lacks = health.setup(tool, lines)
+    if lacks is None:
+        return None
+    import downloaders                         # it imports this module
+    return lacks[1], downloaders.cookies_message(downloaders.detect_install(tool))
+
+
 def classify(lines, failures=None):
     """(error, line): what the output of a failed run says went wrong
     (health.classify with the tool's table, FAILURES by default), and the
@@ -1081,6 +1093,10 @@ def _ended_as(params, code, lines, index, note, tool, session=None, ran=None):
         message = TOOL_MESSAGES.get(result["error"], f"{tool} failed")
     if result["error"] == "generic" and ran:
         message = f"{ran} failed"              # a source's script: the program that ran, not its tool
+    # Not the account's doing, nor the site's: the tool's install (a script's own tool is not looked at).
+    lacks = _setup(tool, lines) if result["error"] == "generic" and ran in (None, tool) else None
+    if lacks:
+        result["error"], (result["line"], message) = "setup", lacks
     if result["error"] == "private" and session is not None and session.get("mode", "none") == "none":
         message = NO_SESSION["instaloader" if tool == "instaloader" else "tools"]
     # Tool output is untrusted text: no cookie, token or session path is kept (health.scrub).

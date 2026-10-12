@@ -2,7 +2,7 @@
 // the session it saves. Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BROWSERS, cookiesSession, profileChoices, profileMissing } from "../src/lib/browserProfiles.js";
+import { BROWSERS, cookiesFix, cookiesSession, profileChoices, profileMissing } from "../src/lib/browserProfiles.js";
 
 const NAMES = ["cotions", "default", "test", "TRND"];
 const DEFAULT = ["", "Default (the tool picks)"];
@@ -35,4 +35,18 @@ test("the session saved: no profile key without one, keys as the API answers the
   assert.equal(JSON.stringify(cookiesSession("firefox", "test")), '{"browser":"firefox","mode":"cookies","profile":"test"}');
   assert.equal(JSON.stringify(cookiesSession("chrome", "")), '{"browser":"chrome","mode":"cookies"}');
   assert.deepEqual(BROWSERS, ["firefox", "chrome", "chromium", "brave", "edge"]);
+});
+
+test("instaloader without browser_cookie3 is warned about only when known missing and cookies are used", () => {
+  const command = "pipx inject instaloader browser_cookie3";
+  const cookies = { mode: "cookies", browser: "firefox" };
+  const tool = (found, login) => ({ tool: "instaloader", login, browser_cookie3: { found, command } });
+  assert.equal(cookiesFix(tool(false, cookies)), command);
+  assert.equal(cookiesFix(tool(true, cookies)), null);
+  assert.equal(cookiesFix(tool(null, cookies)), null);                       // a system install: not known
+  assert.equal(cookiesFix(tool(false, { mode: "none" })), null);
+  assert.equal(cookiesFix(tool(false, { mode: "login", user: "me" })), null);
+  assert.equal(cookiesFix({ tool: "yt-dlp", login: cookies, browser_cookie3: null }), null);
+  assert.equal(cookiesFix({ tool: "instaloader", login: cookies }), null);   // an older backend
+  assert.equal(cookiesFix(undefined), null);
 });

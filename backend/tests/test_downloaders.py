@@ -547,8 +547,10 @@ def test_update_refused_for_system_missing_and_without_pipx(layout, client):
     tools = by_tool(client.get("/api/downloaders", headers=H).get_json())
     # Missing: the install command, shown, never run.
     assert tools["instaloader"]["update"]["possible"] is False
-    assert tools["instaloader"]["install_hint"] == "pipx install instaloader"
-    assert "run pipx install instaloader" in refused("instaloader")
+    # With the extra that reads a browser's cookies, quoted for a shell.
+    assert tools["instaloader"]["install_hint"] == "pipx install 'instaloader[browser_cookie3]'"
+    assert "run pipx install 'instaloader[browser_cookie3]'" in refused("instaloader")
+    assert tools["gallery-dl"]["install_hint"] is None and downloaders_hint("gallery-dl") == "pipx install gallery-dl"
     # ffmpeg: never updated from here, not even a choice.
     assert tools["ffmpeg"]["update"]["possible"] is False and tools["ffmpeg"]["install_hint"] is None
     assert "must be one of" in refused("ffmpeg")
@@ -556,13 +558,95 @@ def test_update_refused_for_system_missing_and_without_pipx(layout, client):
     fake_tool(str(layout["bin"]), "instaloader")
     client.post("/api/downloaders/check", headers=H)
     t = by_tool(client.get("/api/downloaders", headers=H).get_json())["instaloader"]
-    assert (t["install"], t["update"]["possible"], t["update"]["command"]) == ("system", False, "pipx install instaloader")
+    assert (t["install"], t["update"]["possible"], t["update"]["command"]) == ("system", False,
+                                                                           "pipx install 'instaloader[browser_cookie3]'")
     assert "not in a virtualenv" in refused("instaloader")
     # pipx install, but no pipx to run.
     assert "pipx is not on the PATH" in refused("gallery-dl")
     # A venv without its python.
     assert "no Python at" in refused("yt-dlp")
     assert all(not updater_runs(p) for p in (os.path.join(layout["venv"], "bin", "python"),))
+
+
+def downloaders_hint(tool):
+    import downloaders
+    return downloaders.install_hint(tool)
+
+
+BC3_LINE = "browser_cookie3 library is needed to load cookies from browsers"
+
+
+def instaloader_in(layout, client, venv, module=None, shared=False):
+    """The Downloaders entry of an instaloader in the virtualenv ``venv``
+    (set in Settings), with ``module`` in its site-packages when named."""
+    fake_venv(venv)
+    if module:
+        os.makedirs(os.path.join(venv, "lib", "python3.12", "site-packages", module))
+    if shared:
+        with open(os.path.join(venv, "pyvenv.cfg"), "a") as f:
+            f.write("include-system-site-packages = true\n")
+    tool = fake_tool(os.path.join(venv, "bin"), "instaloader")
+    assert client.post("/api/config", json={"tools": {"instaloader": tool}}, headers=H).get_json()["ok"]
+    return by_tool(client.get("/api/downloaders", headers=H).get_json())["instaloader"]
+
+
+def test_browser_cookie3_is_looked_for_in_the_virtualenv(layout, client):
+    tmp = str(layout["tmp"])
+    tools = by_tool(client.get("/api/downloaders", headers=H).get_json())
+    # Missing: nothing to say; the other tools read cookies themselves.
+    assert all(tools[t]["browser_cookie3"] is None for t in tools)
+    # pipx: injected into the virtualenv, by the name pipx knows it under.
+    venv = os.path.join(tmp, "pipx", "venvs", "instaloader")
+    t = instaloader_in(layout, client, venv)
+    assert (t["install"], t["browser_cookie3"]) == \
+        ("pipx", {"found": False, "command": "pipx inject instaloader browser_cookie3"})
+    os.makedirs(os.path.join(venv, "lib", "python3.12", "site-packages", "browser_cookie3-0.20.1.dist-info"))
+    client.post("/api/downloaders/check", headers=H)
+    assert by_tool(client.get("/api/downloaders", headers=H).get_json())["instaloader"]["browser_cookie3"]["found"] is True
+    t = instaloader_in(layout, client, os.path.join(tmp, "pipx", "venvs", "instaloader@old"))
+    assert t["browser_cookie3"] == {"found": False, "command": "pipx inject instaloader@old browser_cookie3"}
+    # A plain virtualenv: its own pip; the path quoted for a shell.
+    venv = os.path.join(tmp, "my tools", "il")
+    t = instaloader_in(layout, client, venv, module="browser_cookie3")
+    assert (t["install"], t["browser_cookie3"]) == \
+        ("venv", {"found": True, "command": f"'{venv}/bin/python' -m pip install browser_cookie3"})
+    # Another module whose name only starts alike is not it... but one that sees the system's packages may have it.
+    t = instaloader_in(layout, client, os.path.join(tmp, "other"), module="browser_cookie")
+    assert t["browser_cookie3"]["found"] is False
+    assert instaloader_in(layout, client, os.path.join(tmp, "shared"), shared=True)["browser_cookie3"]["found"] is None
+    # A system install: unknown, and nothing FeedVault can add to: a copy that has it.
+    tool = fake_tool(os.path.join(tmp, "opt"), "instaloader")
+    assert client.post("/api/config", json={"tools": {"instaloader": tool}}, headers=H).get_json()["ok"]
+    t = by_tool(client.get("/api/downloaders", headers=H).get_json())["instaloader"]
+    assert (t["install"], t["browser_cookie3"]) == \
+        ("system", {"found": None, "command": "pipx install 'instaloader[browser_cookie3]'"})
+
+
+def test_cookies_message_names_the_fix_for_the_install(layout):
+    import downloaders
+    said = downloaders.cookies_message
+    assert said({"install": "pipx", "venv": "/p/venvs/instaloader"}) == (
+        "instaloader cannot read a browser's cookies: its browser_cookie3 module is not installed. "
+        "Run: pipx inject instaloader browser_cookie3")
+    assert said({"install": "venv", "venv": "/v"}).endswith("Run: /v/bin/python -m pip install browser_cookie3")
+    assert said({"install": "system", "venv": None}).endswith(
+        "FeedVault cannot add it to this install. Run: pipx install 'instaloader[browser_cookie3]' "
+        "and set its path in Settings → Downloaders")
+
+
+def test_test_job_says_how_to_add_browser_cookie3(layout, client):
+    venv = os.path.join(str(layout["tmp"]), "pipx", "venvs", "instaloader")
+    instaloader_in(layout, client, venv)
+    with open(os.path.join(venv, "bin", "instaloader.fail"), "w") as f:
+        f.write(BC3_LINE)
+    job = ended(jobs.submit("tool-test", {"tool": "instaloader"})["id"])
+    assert job["state"] == "failed" and job["result"] == {"ok": False, "error": "setup", "line": BC3_LINE}
+    assert job["message"].endswith("is not installed. Run: pipx inject instaloader browser_cookie3")
+    # The same words from another tool are only its output.
+    with open(os.path.realpath(layout["bin"] / "yt-dlp") + ".fail", "w") as f:
+        f.write(BC3_LINE)
+    job = ended(jobs.submit("tool-test", {"tool": "yt-dlp"})["id"])
+    assert job["result"]["error"] == "generic" and job["message"] == f"The test failed: {BC3_LINE}"
 
 
 @pytest.mark.parametrize("params", [

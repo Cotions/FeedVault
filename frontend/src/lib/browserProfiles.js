@@ -24,3 +24,12 @@ export const profileMissing = (listed, value) => !!(value && listed && !listed.i
 export function cookiesSession(browser, profile) {
   return profile ? { browser, mode: "cookies", profile } : { browser, mode: "cookies" };
 }
+
+/* The command that adds browser_cookie3 to instaloader (a tool of GET
+   /api/downloaders), when its sync reads a browser's cookies and its
+   install is known to lack the module; else null (there, not known, or no
+   cookies asked for). */
+export function cookiesFix(info) {
+  const module = info?.browser_cookie3;
+  return module?.found === false && info.login?.mode === "cookies" ? module.command : null;
+}
