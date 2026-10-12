@@ -460,9 +460,11 @@ test("Browser profile: picked in Settings and on a source, a missing one stays s
     await browser.selectOption("firefox");
     await profile.selectOption("test");
     await card.getByRole("button", { name: "Save" }).click();
-    await expect(card.getByRole("alert")).toHaveText("Saved. The next sync uses it.");
-    const saved = await (await request.get("/api/config", { headers: H })).json();
-    expect(saved.instaloader.session).toEqual({ mode: "cookies", browser: "firefox", profile: "test" });
+    // (The card's "Saved" line does not outlive the reload a save does: the setting is what is checked.)
+    await expect.poll(async () => (await (await request.get("/api/config", { headers: H })).json()).instaloader.session)
+      .toEqual({ mode: "cookies", browser: "firefox", profile: "test" });
+    await expect(card.getByRole("button", { name: "Save" })).toBeDisabled();
+    await expect(profile).toHaveValue("test");
 
     // Renamed in Firefox since: still the stored one, marked, with why.
     names = ["cotions", "default", "TRND"];
