@@ -245,6 +245,7 @@ _HANDLE_RE = re.compile(r"[A-Za-z0-9._]{1,30}")
 # Instaloader's own side files: profile pictures and highlight covers.
 _SIDE_RE = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC_(?:profile_pic|cover)\.(?:jpg|jpeg|png|webp)")
 _SHORTCODE_LENGTHS = {11, 39}   # posts; long ones are private-account shortcodes
+PLATFORM_DIR = "instagram"      # <root>/instagram/<profile>: the platform's folder, any case
 
 
 def _split_stem(stem, stem_counts):
@@ -283,10 +284,27 @@ def _posted_at(date, path):
     return day
 
 
+def _named_after(folder):
+    """Whether a media file right in ``folder`` is named after it: its
+    ``{target}`` is the folder's name (any case), so the folder is that
+    profile's own."""
+    name = os.path.basename(folder).lower()
+    try:
+        with os.scandir(folder) as it:
+            for e in it:
+                if not is_media(e.name):
+                    continue
+                m = _NAME_RE.fullmatch(e.name) or _SPACED_RE.fullmatch(e.name)
+                if m and m["target"].lower() == name:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def _filename_posts(root, dirpath, names):
     rel = os.path.relpath(dirpath, root)
     parts = [] if rel == "." else rel.split(os.sep)
-    top = parts[0] if parts else None
 
     dated, spaced = [], []
     for n in names:
@@ -316,6 +334,16 @@ def _filename_posts(root, dirpath, names):
         g = groups.setdefault(m["code"], {"target": m["target"], "date": None, "slots": {}})
         g["slots"].setdefault(idx, []).append(n)
 
+    # <root>/instagram holds the profile folders (<root>/instagram/<name>), as
+    # the root does in older libraries (<root>/<name>): what is under it reads
+    # as if it were right in the root. Unless it is the folder of the profile
+    # named "instagram" in such a library (files right in it are named after
+    # it): its subfolders are that profile's highlights.
+    if groups and parts and parts[0].lower() == PLATFORM_DIR \
+            and not _named_after(os.path.join(root, parts[0])):
+        parts = parts[1:]
+    top = parts[0] if parts else None
+
     posts, claimed = [], set()
     for code, g in sorted(groups.items()):
         target = g["target"]
@@ -323,6 +351,11 @@ def _filename_posts(root, dirpath, names):
         # be a handle ("More food", "#BARBIE"). The profile is the top folder.
         if len(parts) >= 2 or not _HANDLE_RE.fullmatch(target):
             album, handle = target, top
+            # Files named after the profile again, in a folder of its name
+            # under the highlight's (<profile>/<title>/<profile>): the title
+            # is the folder's.
+            if len(parts) >= 2 and target.lower() == top.lower():
+                album = parts[1]
         else:
             album, handle = None, target
         media = []

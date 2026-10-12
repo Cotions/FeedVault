@@ -225,3 +225,129 @@ def test_filename_only_spaced_layout(tmp_path):
     assert by["C-VnZi5PXXF"].posted_at == 1721000000
     assert by["C-VnZi5PXXF"].author_handle == "somehandle2005"
     assert r.claimed == set(os.listdir(prof))
+
+
+# --- <root>/instagram/<name>: the platform's folder holds the profile folders --
+
+def _layout(base):
+    """A filename-only library under ``base``: profile folders, highlight
+    subfolders, a highlight saved in the profile folder, a renamed profile,
+    the older spaced names, and loose files."""
+    for d in ("alice/Trips", "alice/#BARBIE", "feyafern", "Old.One"):
+        os.makedirs(base / d)
+    _touch_png(base / "alice" / "alice-2024-05-01-Cabc1234567_1.jpg", 1714564800)
+    _touch_png(base / "alice" / "alice-2024-05-01-Cabc1234567_2.jpg", 1714564800)
+    _touch_png(base / "alice" / "More food-2025-06-17-DLAPQ0fsLzE.jpg")
+    _touch_png(base / "alice" / "Trips" / "Trips-2025-07-09-DL5V1h4OX-O.jpg")
+    _touch_png(base / "alice" / "Trips" / "2025-04-30_02-55-57_UTC_cover.jpg")
+    _touch_png(base / "alice" / "#BARBIE" / "#BARBIE-2025-07-10-DL5V1h4OX-P.jpg")
+    _touch_png(base / "feyafern" / "feya.fern-2026-01-25-DT835qwgqH_.jpg")
+    _touch_png(base / "Old.One" / "old.one - C-VnZi5PXXF.jpg", 1721000000)
+    _touch_png(base / "loose.one-2024-05-02-Cloose12345.jpg")
+    _touch_png(base / "Loose title-2024-05-03-Cloose12346.jpg")
+
+
+def _parsed(root, base):
+    """{post id: what identifies the post} of every post under ``base``,
+    paths as under it."""
+    out = {}
+    for dirpath, _, names in os.walk(base):
+        r = parse_dir(str(root), dirpath, names)
+        assert r.claimed == set(names), dirpath
+        for p in r.posts:
+            assert p.post_id not in out
+            out[p.post_id] = (p.kind, p.author_id, p.author_handle, p.album, p.url, p.posted_at, p.tool,
+                              os.path.relpath(p.meta_path, base),
+                              [(m.idx, m.kind, os.path.relpath(m.path, base)) for m in p.media])
+    return out
+
+
+def test_filename_only_under_the_platform_folder_reads_as_under_the_root(tmp_path):
+    flat, new, upper = tmp_path / "flat", tmp_path / "new", tmp_path / "upper"
+    for base in (flat, new / "instagram", upper / "Instagram"):
+        _layout(base)
+    want = _parsed(flat, flat)
+    assert want["Cabc1234567"][:5] == ("carousel", "alice", "alice", None, "https://www.instagram.com/p/Cabc1234567/")
+    assert want["DL5V1h4OX-O"][:5] == ("story", "alice", "alice", "Trips", None)
+    assert want["DL5V1h4OX-P"][:5] == ("story", "alice", "alice", "#BARBIE", None)
+    assert want["DLAPQ0fsLzE"][:4] == ("story", "alice", "alice", "More food")
+    assert want["DT835qwgqH_"][:4] == ("image", "feyafern", "feya.fern", None)
+    assert want["C-VnZi5PXXF"][:4] == ("image", "old.one", "old.one", None)
+    assert want["Cloose12345"][:4] == ("image", "loose.one", "loose.one", None)
+    assert want["Cloose12346"][:4] == ("story", None, None, "Loose title")
+    assert len(want) == 8
+    assert _parsed(new, new / "instagram") == want
+    assert _parsed(upper, upper / "Instagram") == want
+
+
+def test_filename_only_profile_named_instagram(tmp_path):
+    # An older library: <root>/instagram is the profile's own folder (files
+    # right in it are named after it), its subfolders its highlights, as
+    # under any other profile folder.
+    old = tmp_path / "old"
+    prof = old / "instagram"
+    os.makedirs(prof / "trips")
+    os.makedirs(prof / "alice")
+    _touch_png(prof / "instagram-2024-05-01-Cabc1234567.jpg")
+    _touch_png(prof / "trips" / "trips-2025-07-09-DL5V1h4OX-O.jpg")
+    _touch_png(prof / "alice" / "alice-2025-07-10-DL5V1h4OX-P.jpg")     # a highlight called "alice"
+    got = _parsed(old, prof)
+    assert got["Cabc1234567"][:4] == ("image", "instagram", "instagram", None)
+    assert got["DL5V1h4OX-O"][:4] == ("story", "instagram", "instagram", "trips")
+    assert got["DL5V1h4OX-P"][:4] == ("story", "instagram", "instagram", "alice")
+    # The older spaced names say so as well, in any case.
+    os.remove(prof / "instagram-2024-05-01-Cabc1234567.jpg")
+    _touch_png(prof / "Instagram - C-VnZi5PXXF.jpg")
+    assert _parsed(old, prof)["DL5V1h4OX-O"][:4] == ("story", "instagram", "instagram", "trips")
+
+    # The same profile in the new layout: <root>/instagram/instagram.
+    new = tmp_path / "new"
+    prof = new / "instagram" / "instagram"
+    os.makedirs(prof / "trips")
+    os.makedirs(new / "instagram" / "alice")
+    _touch_png(prof / "instagram-2024-05-01-Cabc1234567.jpg")
+    _touch_png(prof / "trips" / "trips-2025-07-09-DL5V1h4OX-O.jpg")
+    _touch_png(new / "instagram" / "alice" / "alice-2025-07-10-DL5V1h4OX-P.jpg")
+    got = _parsed(new, new / "instagram")
+    assert got["Cabc1234567"][:4] == ("image", "instagram", "instagram", None)
+    assert got["DL5V1h4OX-O"][:4] == ("story", "instagram", "instagram", "trips")
+    assert got["DL5V1h4OX-P"][:4] == ("image", "alice", "alice", None)
+
+
+def test_filename_only_instagram_folder_with_no_file_named_after_it(tmp_path):
+    # Nothing right in <root>/instagram says it is a profile's: it is the
+    # platform's folder, and a folder in it a profile's, whatever is in it
+    # (the highlights of a profile named "instagram" that kept no post of
+    # its own read as profiles: nothing tells them apart).
+    plat = tmp_path / "instagram"
+    os.makedirs(plat / "trips")
+    os.makedirs(plat / "bob")
+    _touch_png(plat / "trips" / "trips-2025-07-09-DL5V1h4OX-O.jpg")
+    _touch_png(plat / "bob" / "Summer 24-2025-07-10-DL5V1h4OX-P.jpg")
+    _touch_png(plat / "2024-08-19_18-02-19_UTC_profile_pic.jpg")       # not a post's name
+    got = _parsed(tmp_path, plat)
+    assert got["DL5V1h4OX-O"][:4] == ("image", "trips", "trips", None)
+    assert got["DL5V1h4OX-P"][:4] == ("story", "bob", "bob", "Summer 24")
+    # A loose file of another profile there does not make it one either.
+    _touch_png(plat / "carol-2024-05-01-Cabc1234567.jpg")
+    got = _parsed(tmp_path, plat)
+    assert got["Cabc1234567"][:4] == ("image", "carol", "carol", None)
+    assert got["DL5V1h4OX-O"][:4] == ("image", "trips", "trips", None)
+
+
+def test_filename_only_beside_metadata_under_the_platform_folder(tmp_path):
+    # A profile folder with both: metadata keeps its files, the others are
+    # the folder's (alice.example), not the platform folder's.
+    prof = tmp_path / "instagram" / "alice.example"
+    write_post(prof, "AAA111", 1717243200, ALICE, "image")
+    _touch_png(prof / "alice.example-2024-05-01-Cabc1234567.jpg")
+    r = parse_dir(str(tmp_path), str(prof), os.listdir(prof))
+    assert sorted((p.tool, p.post_id, p.author_id, p.album) for p in r.posts) == [
+        ("instaloader", "AAA111", "111", None),
+        ("instaloader (filenames)", "Cabc1234567", "alice.example", None)]
+    # A folder of another platform's name is a profile folder like any other.
+    hl = tmp_path / "twitter" / "Trips"
+    os.makedirs(hl)
+    _touch_png(hl / "Trips-2025-07-09-DL5V1h4OX-O.jpg")
+    p = parse_dir(str(tmp_path), str(hl), os.listdir(hl)).posts[0]
+    assert (p.author_id, p.author_handle, p.album) == ("twitter", "twitter", "Trips")

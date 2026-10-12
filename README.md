@@ -219,7 +219,12 @@ instaloader --load-cookies firefox --no-compress-json some_profile    # a whole 
 - without metadata (`save_metadata=False`), FeedVault rebuilds posts from file
   names shaped like `{target}-{date:%Y-%m-%d}-{shortcode}` (or the older
   `{target} - {shortcode} - N`). Media, author, date and highlight title come
-  through; captions and likes do not, since they were never saved
+  through; captions and likes do not, since they were never saved. The
+  account is the profile's folder, `<media root>/instagram/<name>/` or
+  `<media root>/<name>/` (older libraries), and a folder inside it is a
+  highlight. `<media root>/instagram/` itself is only read as a profile's
+  folder (the profile named `instagram`, in an older library) when files
+  right in it are named after it
 
 Files FeedVault cannot attach to a post show up on the **Unmatched** page.
 
