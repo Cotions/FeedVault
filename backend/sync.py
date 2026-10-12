@@ -121,6 +121,9 @@ How they meet the stopping points:
 - stories, highlights and tagged posts need a logged-in session (Instagram
   shows them to logged-in viewers only): refused when the source is saved
   without one, and again at sync time (the setting can change since).
+- a cookies session that names a browser profile (browsers.py) is given
+  that profile's folder, found when the job is built; a profile no longer
+  there refuses the job (jobs.BadRequest), never another one's cookies.
 
 How it went is read from the output (login required, private, not found,
 rate limited: health.py's tables) and stored on the source. Two syncs of one tool pause between
@@ -138,6 +141,7 @@ from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 import archives
+import browsers
 import config
 import db
 import health
@@ -199,7 +203,8 @@ def clean_settings(value, current):
         out["session"] = sources.clean_session(value["session"])
         if out["session"] is None:
             return None, ('session must be { "mode": "none" }, { "mode": "cookies", "browser": '
-                          f'{" | ".join(sources.BROWSERS)} }} or {{ "mode": "login", "user": "<name>" }}')
+                          f'{" | ".join(sources.BROWSERS)}{sources.PROFILE_HINT} }} '
+                          'or { "mode": "login", "user": "<name>" }')
     if "pause" in value:
         if _pause(value["pause"], None) is None:
             return None, f"pause must be whole seconds from 0 to {PAUSE_MAX}"
@@ -207,9 +212,25 @@ def clean_settings(value, current):
     return out, None
 
 
+def _profile(session, of):
+    """``of`` (browsers.folder or browsers.cookie_file) for the browser
+    profile a cookies session names. jobs.BadRequest when it cannot be
+    found: the job is refused, never run with another profile's cookies."""
+    try:
+        return of(session["browser"], session["profile"])
+    except browsers.Unknown as e:
+        raise jobs.BadRequest(str(e))
+
+
 def session_flags(session):
+    """instaloader's session flags. With a browser profile: --cookiefile,
+    that profile's cookie database (a path; instaloader opens it). Raises
+    jobs.BadRequest when the profile is not found."""
     if session["mode"] == "cookies":
-        return ["--load-cookies", session["browser"]]
+        flags = ["--load-cookies", session["browser"]]
+        if session.get("profile"):
+            flags += ["--cookiefile", _profile(session, browsers.cookie_file)]
+        return flags
     if session["mode"] == "login":
         return ["--login", session["user"]]
     return []
@@ -244,7 +265,7 @@ def clean_tool_settings(tool, value, current):
         out["session"] = sources.clean_session(value["session"], sources.COOKIE_MODES)
         if out["session"] is None:
             return None, ('session must be { "mode": "none" } or { "mode": "cookies", "browser": '
-                          f'{" | ".join(sources.BROWSERS)} }}')
+                          f'{" | ".join(sources.BROWSERS)}{sources.PROFILE_HINT} }}')
     if "pause" in value:
         if _pause(value["pause"], None) is None:
             return None, f"pause must be whole seconds from 0 to {PAUSE_MAX}"
@@ -253,8 +274,15 @@ def clean_tool_settings(tool, value, current):
 
 
 def cookie_flags(session):
-    """--cookies-from-browser <browser>: the tool reads the browser's cookies, FeedVault never."""
-    return ["--cookies-from-browser", session["browser"]] if session["mode"] == "cookies" else []
+    """--cookies-from-browser <browser>, or <browser>:<folder> with a
+    browser profile (both tools take a profile's folder as a path): the
+    tool reads the browser's cookies, FeedVault never. Raises
+    jobs.BadRequest when the profile is not found."""
+    if session["mode"] != "cookies":
+        return []
+    if not session.get("profile"):
+        return ["--cookies-from-browser", session["browser"]]
+    return ["--cookies-from-browser", f'{session["browser"]}:{_profile(session, browsers.folder)}']
 
 
 def config_flags(tool, cfg=None):

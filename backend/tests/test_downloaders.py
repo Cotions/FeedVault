@@ -390,6 +390,23 @@ def test_test_job_argv(layout, client, monkeypatch):
     assert got["yt-dlp"] == ["--simulate", "--no-playlist", "--", "https://www.youtube.com/watch?v=jNQXAC9IVRw"]
     # Each in its tool's lock group: the same as that tool's syncs.
     assert all(jobs._kinds[sync.KINDS[t]].group == t for t in downloaders.TESTED)
+    # A browser profile: the folder profiles.ini gives it, or no test at all.
+    from fakes import firefox_profiles
+    firefox = firefox_profiles(os.path.join(os.path.expanduser("~"), ".mozilla", "firefox"), [("test", "9k879us5.test")])
+    session = {"mode": "cookies", "browser": "firefox", "profile": "test"}
+    for tool in ("instaloader", "gallery-dl", "yt-dlp"):
+        assert client.post("/api/config", json={tool: {"session": session}}, headers=H).get_json()["ok"]
+    assert downloaders._build_test({"tool": "instaloader"})["args"][-6:] == [
+        "--load-cookies", "firefox", "--cookiefile", os.path.join(firefox["test"], "cookies.sqlite"), "--", "instagram"]
+    assert downloaders._build_test({"tool": "gallery-dl"})["args"][:3] == [
+        "--simulate", "--cookies-from-browser", "firefox:" + firefox["test"]]
+    assert downloaders._build_test({"tool": "yt-dlp"})["args"][:4] == [
+        "--simulate", "--no-playlist", "--cookies-from-browser", "firefox:" + firefox["test"]]
+    assert downloaders.login("gallery-dl") == session
+    os.rmdir(firefox["test"])
+    for tool in ("instaloader", "gallery-dl", "yt-dlp"):
+        r = client.post("/api/jobs", json={"kind": "tool-test", "params": {"tool": tool}}, headers=H)
+        assert r.status_code == 400 and r.get_json()["error"].startswith('the firefox profile "test" was not found')
 
 
 @pytest.mark.parametrize("params", [

@@ -323,7 +323,7 @@ def session_file_exists(user):
 
 def login(tool, cfg=None):
     """The session a sync of ``tool`` uses, from the settings: {"mode":
-    "none" | "cookies" (+ "browser") | "login" (+ "user", "session_file":
+    "none" | "cookies" (+ "browser", "profile" when one is set) | "login" (+ "user", "session_file":
     whether instaloader's session file for it exists)}. None for ffmpeg.
     No file is opened: the session file is only looked for."""
     cfg = cfg or config.load()

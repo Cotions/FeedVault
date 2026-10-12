@@ -23,6 +23,7 @@ from zlib import adler32
 
 import archives
 import biofetch
+import browsers
 import config
 import db
 import downloaders
@@ -1933,6 +1934,13 @@ def _activate_profile(pid):
 @app.get("/api/downloaders")
 def get_downloaders():
     return jsonify(downloaders.status())
+
+
+@app.get("/api/browsers/profiles")
+def browser_profiles():
+    """The profiles a cookies session can name, per browser: names only,
+    read from Firefox's profiles.ini and the other browsers' folder names."""
+    return jsonify({"profiles": browsers.listing()})
 
 
 @app.post("/api/downloaders/check")

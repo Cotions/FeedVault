@@ -4,7 +4,7 @@ import os
 import pytest
 
 from conftest import H
-from fakes import owner, write_post
+from fakes import firefox_profiles, owner, write_post
 from test_sync import DAY, TS, add_source, carol_archive, ended, fake, get, post, set_config, sync_now  # noqa: F401
 
 import config
@@ -112,6 +112,14 @@ def test_argv(env, client, fake):
                            "--filename-pattern", "{shortcode}", "--load-cookies", "firefox", "--", "-" + CODE]
     assert (job["kind"], job["group"], job["label"], job["params"]) == \
         (save.KIND, "instaloader", f"Save post {CODE}", {"shortcode": CODE})
+    # The setting's browser profile, as a sync: its cookie database's path, or no job.
+    firefox = firefox_profiles(os.path.join(os.path.expanduser("~"), ".mozilla", "firefox"), [("test", "9k879us5.test")])
+    set_config(instaloader={"pause": 0, "session": {"mode": "cookies", "browser": "firefox", "profile": "test"}})
+    assert save._build({"shortcode": CODE})["args"][-6:] == [
+        "--load-cookies", "firefox", "--cookiefile", os.path.join(firefox["test"], "cookies.sqlite"), "--", "-" + CODE]
+    os.rmdir(firefox["test"])
+    with pytest.raises(jobs.BadRequest, match='the firefox profile "test" was not found'):
+        save._build({"shortcode": CODE})
     assert not os.path.exists(stage)           # emptied and removed
 
 

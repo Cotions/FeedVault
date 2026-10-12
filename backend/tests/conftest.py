@@ -35,6 +35,8 @@ import toolguard  # noqa: E402
 #   config.py                   its config and data folders (XDG_CONFIG_HOME, XDG_DATA_HOME, else ~)
 #   downloaders.pipx_venvs      PIPX_HOME, else XDG_DATA_HOME/pipx, ~/.local/pipx
 #   downloaders.session_files   XDG_CONFIG_HOME/instaloader, the temp dir's .instaloader-<user>
+#   browsers.py                 Firefox's profiles.ini and the browsers' profile folders (names and
+#                               paths; no cookie database): XDG_CONFIG_HOME, ~/.mozilla, ~/.var, ~/snap
 #   the tools it runs           instaloader's session, gallery-dl's and yt-dlp's configs, the
 #                               browser cookie databases --cookies-from-browser reads: all under HOME
 #
