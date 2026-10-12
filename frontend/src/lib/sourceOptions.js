@@ -83,7 +83,7 @@ export function today(now = new Date()) {
 
 /* The form's state from a source's stored options (or the defaults):
    { content: [kinds], media, since: "" | date, first: "new" | "full" | "last", count: "" | text, schedule,
-     script: "" | script id } */
+     script: "" | script id, session: null (the tool's, from Settings) | the source's own } */
 export function formOf(options, choices) {
   const o = options || {};
   return {
@@ -94,6 +94,7 @@ export function formOf(options, choices) {
     count: o.first_posts ? String(o.first_posts) : "",
     schedule: o.schedule || "off",
     script: o.script || "",
+    session: o.session || null,
   };
 }
 
@@ -121,7 +122,7 @@ export function formError(form, choices, now = new Date()) {
    (only last_posts is refused once a source has synced). */
 export function optionsOf(form, choices, firstSync = true) {
   const out = { media: choices?.media ? form.media : "all", since: form.since || null, schedule: form.schedule,
-                script: form.script || null };
+                script: form.script || null, session: form.session || null };
   if (choices?.content?.length) out.content = choices.content.filter(k => form.content.includes(k));
   out.full_history = form.first === "full";
   if (firstSync) out.first_posts = form.first === "last" ? Number(form.count) : null;
@@ -138,8 +139,10 @@ export function toggleKind(form, k) {
 }
 
 /* The kinds picked that need a logged-in session, when the session is
-   none: their labels, else []. */
+   none: their labels, else []. ``session``: the one a sync would use
+   as saved; the form's own, once picked, comes first. */
 export function needsLogin(form, choices, session) {
+  session = form.session || session;
   if (session?.mode && session.mode !== "none") return [];
   return (choices?.login || []).filter(k => form.content.includes(k));
 }

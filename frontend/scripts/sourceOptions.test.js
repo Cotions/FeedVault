@@ -13,7 +13,7 @@ const NOW = new Date(2026, 9, 2, 12);
 
 test("defaults from no options", () => {
   assert.deepEqual(formOf(null, IG), { content: ["posts"], media: "all", since: "", first: "new", count: "",
-                                    schedule: "off", script: "" });
+                                    schedule: "off", script: "", session: null });
   assert.equal(formOf({ script: "my-insta" }, IG).script, "my-insta");
   assert.deepEqual(formOf({ first_posts: 50, full_history: false }, YT).first, "last");
 });
@@ -38,10 +38,10 @@ test("options sent", () => {
                  schedule: "daily" };
   assert.deepEqual(optionsOf(form, IG), { media: "images", since: "2024-01-01", content: ["posts", "stories"],
                                            full_history: false, first_posts: null, schedule: "daily",
-                                           script: null });
+                                           script: null, session: null });
   assert.deepEqual(optionsOf({ ...form, first: "last", count: "20" }, YT),
                    { media: "all", since: "2024-01-01", full_history: false, first_posts: 20, schedule: "daily",
-                     script: null });
+                     script: null, session: null });
   assert.equal("first_posts" in optionsOf(form, YT, false), false);
   assert.equal(optionsOf({ ...form, script: "builtin:yt-dlp-channel" }, YT).script, "builtin:yt-dlp-channel");
 });
@@ -50,6 +50,17 @@ test("login kinds without a session", () => {
   const form = { ...formOf(null, IG), content: ["posts", "stories", "tagged"] };
   assert.deepEqual(needsLogin(form, IG, { mode: "none" }), ["stories", "tagged"]);
   assert.deepEqual(needsLogin(form, IG, { mode: "login", user: "x" }), []);
+  // The source's own session, once picked, is the one that counts.
+  const own = { browser: "firefox", mode: "cookies", profile: "test" };
+  assert.deepEqual(needsLogin({ ...form, session: own }, IG, { mode: "none" }), []);
+  assert.deepEqual(needsLogin({ ...form, session: { mode: "none" } }, IG, { mode: "login", user: "x" }), ["stories", "tagged"]);
+});
+
+test("a source's own session is kept and sent", () => {
+  const own = { browser: "firefox", mode: "cookies", profile: "test" };
+  assert.deepEqual(formOf({ session: own }, IG).session, own);
+  assert.deepEqual(optionsOf(formOf({ session: own }, IG), IG).session, own);
+  assert.equal(optionsOf({ ...formOf({ session: own }, IG), session: null }, IG).session, null);
 });
 
 test("summary", () => {

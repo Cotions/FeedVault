@@ -421,3 +421,92 @@ test("a rename suggestion's Accept and Dismiss stay on one line", async ({ page 
   expect(dismiss.x + dismiss.width).toBeLessThanOrEqual(outer.x + outer.width + 0.5);
   await idle(page);
 });
+
+// A cookies session names which browser profile its cookies come from: the
+// select beside the browser lists what the browser has (faked here: the
+// instance's HOME has no browser), saves it, and keeps a profile the
+// browser no longer has, marked. Then the same on a source of its own.
+test("Browser profile: picked in Settings and on a source, a missing one stays shown", async ({ page, request }) => {
+  let names = ["cotions", "default", "test", "TRND"];
+  await page.route(url => url.pathname === "/api/browsers/profiles", route => route.fulfill({
+    json: { profiles: { firefox: names, chrome: ["Default", "Profile 1"], chromium: [], brave: [], edge: [] } } }));
+  const before = await (await request.get("/api/config", { headers: H })).json();
+  const made = await (await request.post("/api/sources", { headers: H, data: { target: `https://x.com/e2e_profile_${Date.now()}` } })).json();
+  expect(made.ok, JSON.stringify(made)).toBe(true);
+  const inside = async (el, outer, what) => {
+    const a = await el.boundingBox();
+    const b = await outer.boundingBox();
+    expect(a.x, what).toBeGreaterThanOrEqual(b.x - 0.5);
+    expect(a.x + a.width, what).toBeLessThanOrEqual(b.x + b.width + 0.5);
+  };
+  try {
+    await page.goto("/settings#sync");
+    const card = page.locator(".card", { hasText: "Instagram sync (instaloader)" });
+    await card.getByRole("radio", { name: /Use my browser/ }).check();
+    const browser = card.getByRole("combobox", { name: "Browser", exact: true });
+    const profile = card.getByRole("combobox", { name: "Browser profile" });
+    await expect(profile.locator("option")).toHaveText(["Default (the tool picks)", "cotions", "default", "test", "TRND"]);
+    await expect(profile).toHaveValue("");
+    // Side by side, neither over the other nor out of the card.
+    const [b, p] = [await browser.boundingBox(), await profile.boundingBox()];
+    expect(p.x, "the profile starts after the browser").toBeGreaterThanOrEqual(b.x + b.width);
+    expect(Math.abs(p.y - b.y), "on the browser's line").toBeLessThan(2);
+    await inside(profile, card, "the profile select stays in the card");
+    // Another browser: its own profiles, back to Default.
+    await profile.selectOption("test");
+    await browser.selectOption("chrome");
+    await expect(profile).toHaveValue("");
+    await expect(profile.locator("option")).toHaveText(["Default (the tool picks)", "Default", "Profile 1"]);
+    await browser.selectOption("firefox");
+    await profile.selectOption("test");
+    await card.getByRole("button", { name: "Save" }).click();
+    await expect(card.getByRole("alert")).toHaveText("Saved. The next sync uses it.");
+    const saved = await (await request.get("/api/config", { headers: H })).json();
+    expect(saved.instaloader.session).toEqual({ mode: "cookies", browser: "firefox", profile: "test" });
+
+    // Renamed in Firefox since: still the stored one, marked, with why.
+    names = ["cotions", "default", "TRND"];
+    await page.reload();
+    await expect(profile).toHaveValue("test");
+    await expect(profile.locator("option")).toHaveText(["Default (the tool picks)", "test · not found", "cotions", "default", "TRND"]);
+    const note = card.locator(".browser-pick-note");
+    await expect(note).toContainText("firefox has no profile named test now");
+    await inside(note, card, "the note stays in the card");
+    // Nothing changed since it was loaded: leaving does not ask.
+    await page.locator(".settings-tabs").getByRole("link", { name: "Library" }).click();
+    await expect(page).toHaveURL(/\/settings#library$/);
+    await page.goto("/creators");
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    // A source's own: its Options, under Login.
+    names = ["cotions", "default", "test", "TRND"];
+    const row = page.locator(`.source-row[data-source-id="${made.source.id}"]`);
+    await row.getByRole("button", { name: "Options" }).click();
+    const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
+    const login = dialog.getByRole("combobox", { name: "Login a sync uses" });
+    await expect(login).toHaveValue("");
+    await expect(dialog.getByRole("combobox", { name: "Browser profile" })).toHaveCount(0);
+    await login.selectOption("cookies");
+    const own = dialog.getByRole("combobox", { name: "Browser profile" });
+    await expect(own.locator("option")).toHaveText(["Default (the tool picks)", "cotions", "default", "test", "TRND"]);
+    await inside(own, dialog, "the profile select stays in the dialog");
+    await own.selectOption("TRND");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog).toHaveCount(0);
+    const { sources } = await (await request.get("/api/sources", { headers: H })).json();
+    expect(sources.find(s => s.id === made.source.id).options.session)
+      .toEqual({ mode: "cookies", browser: "firefox", profile: "TRND" });
+    await row.getByRole("button", { name: "Options" }).click();
+    await expect(login).toHaveValue("cookies");
+    await expect(own).toHaveValue("TRND");
+    await login.selectOption("");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog).toHaveCount(0);
+    const again = await (await request.get("/api/sources", { headers: H })).json();
+    expect(again.sources.find(s => s.id === made.source.id).options.session).toBeNull();
+    await idle(page);
+  } finally {
+    await request.delete(`/api/sources/${made.source.id}`, { headers: H });
+    await request.post("/api/config", { headers: H, data: { instaloader: before.instaloader } });
+  }
+});
