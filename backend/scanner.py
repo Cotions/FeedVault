@@ -387,8 +387,11 @@ def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_see
 
     # The same post downloaded twice into different folders: first one wins
     # while its file still exists; the copy is reported, not indexed, and
-    # recorded with its files for the Duplicates page.
-    if (existing and existing["meta_path"] != post.meta_path
+    # recorded with its files for the Duplicates page. Not when the file it
+    # was indexed from is now one of its side files (instaloader's .json
+    # beside a newer .json.xz of the same name): the same copy, read from
+    # the other file.
+    if (existing and existing["meta_path"] != post.meta_path and existing["meta_path"] not in post.side_files
             and (existing["meta_path"] in seen_meta or os.path.exists(existing["meta_path"]))):
         unmatched.append((post.meta_path, size, mtime,
                           f"duplicate of {post.id} ({existing['meta_path']})"))

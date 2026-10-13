@@ -386,7 +386,7 @@ def test_videos_only_keeps_a_carousels_videos(env, client, tools):
     # The video post, and the mixed carousel with its one video; image posts and the image carousel are not posts.
     assert shortcodes(client, "777") == ["CCAROMIX001", "CPOSTVID001"]
     names = sorted(os.listdir(env["media"] / "instagram" / "carol.cooks"))
-    mixed = [n for n in names if "CCAROMIX001" in n and not n.endswith((".json", ".txt"))]
+    mixed = [n for n in names if "CCAROMIX001" in n and not n.endswith((".json.xz", ".txt"))]
     assert mixed == ["carol.cooks-2024-06-05-CCAROMIX001_2.mp4"]
     assert not any(n.endswith(".jpg") for n in names)
     r = client.get("/api/posts?author=777&limit=100", headers=H).get_json()

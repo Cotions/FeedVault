@@ -213,8 +213,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "slim_metadata": false }` |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "slim_metadata": true }` (see [instaloader metadata](#instaloader-metadata)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/profiles` | `{ "active": "default", "profiles": [profile, …] }`, see [Profiles](#profiles) |
 | POST | `/api/profiles` | body `{ "name", "data_directory", "media_roots": [...] }` → `{ "ok": true, "profile": profile, "active", "profiles" }`: a new profile, not switched to; see [Profiles](#profiles) |
 | POST | `/api/profiles/<id>` | body `{ "name" }` → `{ "ok": true, "active", "profiles" }`: renames it |
@@ -251,7 +251,7 @@ jobs) and its own media roots (each with its own `.feedvault-trash`).
 Exactly one is active, and every other route of this file reads and writes
 the active one. The rest of the config is shared by all profiles: tool
 paths, the instaloader, gallery-dl and yt-dlp settings, link routing,
-`check_updates`, `desktop_notifications`, `bio_import` and
+`check_updates`, `desktop_notifications`, `bio_import`, `slim_metadata` and
 `schedules_paused` (one switch for all: only the active profile's schedules
 run anyway). So is the scripts folder.
 
@@ -1862,7 +1862,7 @@ comes from the stored source:
 
 ```
 instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-update]
-            --no-compress-json --dirname-pattern <folder> --filename-pattern <pattern>
+            --dirname-pattern <folder> --filename-pattern <pattern>
             --title-pattern {date_utc}_UTC_{typename} [--sanitize-paths] [content flags] [session flags] -- <target>
 ```
 
@@ -1911,8 +1911,11 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   account has, the stamp is set before every post (1970), so the first
   sync walks the whole profile, skipping the files already there, and a
   retry does the same.
-- **Metadata on.** `--no-compress-json` writes each post's JSON beside its
-  media, so new posts get captions, stats and the account's numeric id.
+- **Metadata on.** instaloader writes each post's JSON beside its media,
+  compressed (`.json.xz`; syncs before this asked for plain `.json`, and a
+  folder may hold both), so new posts get captions, stats and the
+  account's numeric id. With `slim_metadata` on, the files a sync wrote
+  are slimmed when it ends, see [instaloader metadata](#instaloader-metadata).
   The folder's name becomes an alias of that id (see [People](#people)),
   so old filename-only posts and new ones are one account.
 - **Names like the folder's.** `--filename-pattern` is detected from the
@@ -2431,7 +2434,7 @@ owner of a post is only known once instaloader has fetched it, so it
 downloads into a folder of its own in the data directory first:
 
 ```
-instaloader --no-compress-json --dirname-pattern <data_directory>/instaloader/saving/<shortcode>
+instaloader --dirname-pattern <data_directory>/instaloader/saving/<shortcode>
             --filename-pattern {shortcode} [session flags] -- -<shortcode>
 ```
 
@@ -2569,6 +2572,100 @@ from the index, never by walking the media folders (the trash total comes
 from the trash manifests). Their answers are cached until anything in the index changes
 (a scan, a delete, a restore, a review decision, a tag change).
 
+## instaloader metadata
+
+instaloader writes Instagram's whole answer beside each post
+(`<base>.json.xz`, or plain `<base>.json` from `--no-compress-json`) and a
+`<handle>_<id>.json[.xz]` per profile: tens of kilobytes each, most of it
+nothing FeedVault reads. FeedVault reads both forms, and a folder may hold
+both. A post with both files is one post, read from the `.json.xz`; the
+`.json` is one of its files (trashed, restored and moved with it).
+
+The **slim form** of such a file is the same structure with only this left
+(`parsers/instaloader.py`, `slim`):
+
+- `instaloader` (`version`, `node_type`), whole;
+- of a Post's or a StoryItem's `node`: `__typename`, `id`, `shortcode`,
+  `code`, `product_type`, `date`, `taken_at_timestamp`, `video_view_count`,
+  `video_play_count`; `owner` (`id`, `pk`, `username`, `full_name`); the
+  caption (`edge_media_to_caption.edges[0].node.text`, `caption.text` or
+  `caption`); the `count` of `edge_media_preview_like`, `edge_liked_by`,
+  `edge_media_to_comment` and `edge_media_to_parent_comment`;
+  `location.name`; of `iphone_struct`: `user` (`id`, `pk`, `username`,
+  `full_name`), `caption.text`, `taken_at`, `like_count`, `comment_count`,
+  `play_count`, `view_count`;
+- of a Profile's `node`: `id`, `username`, `biography`, `external_url`,
+  each `bio_links[].url`;
+- besides, every value right in `node` that is a number, `true`, `false`,
+  `null`, or a text of at most 200 characters that is not a link
+  (`is_video`, `accessibility_caption`, `full_name`, …).
+
+Everything else is removed: picture and video URLs (`display_url`,
+`display_resources`, `video_url`, `thumbnail_*`), `edge_sidecar_to_children`
+(a carousel's items), `edge_media_to_tagged_user`, comment previews and
+`edge_media_to_comment.edges`, `dimensions`, `media_preview`, the rest of
+`owner` and of `iphone_struct` (`image_versions2`, `video_versions`,
+`carousel_media`, …), a Profile's `edge_*` lists and pictures. That is the
+list of what the parser reads: a slim file parses to exactly the post the
+whole one did. A structure the parser makes no post or profile of (a
+Hashtag, an iterator's state, a node with no post id) is left as it is. A
+slim file is written xz-compressed, a few hundred bytes.
+
+What is removed cannot be put back: for a post Instagram no longer has, it
+is gone.
+
+- **New files.** `slim_metadata` (config, default `false`; `POST
+  /api/config`): when `true`, the instaloader metadata a sync, a save or an
+  instaloader source's script wrote is slimmed when the download ends,
+  before the folder is indexed. The job's log says `N files of metadata
+  slimmed, … freed`; a file that could not be rewritten gets a log line
+  (`could not slim <path>: …`) and does not change how the job ended. Off,
+  new files are compressed and whole.
+- **The files on disk.** Job kind `slim-metadata`, group `instaloader`
+  (never while instaloader runs), started with `POST /api/jobs`. `mode`
+  `preview` changes nothing; `apply` rewrites every instaloader metadata
+  file under the media roots that is not slim and compressed already: a
+  `.json` becomes a `.json.xz`, a `.json.xz` is replaced. Both end `done`
+  with `result`:
+
+```json
+{ "mode": "preview", "checked": 1204, "clean": 4, "files": 1200, "bytes_before": 48211004,
+  "bytes_after": 811200, "failures": 0, "failed": [], "stopped": false }
+```
+
+`checked`: instaloader files read; `clean`: slim and compressed already;
+`files`: to rewrite (`preview`) or rewritten (`apply`); `bytes_before` and
+`bytes_after`: the size of those files and what they take slim, exact in
+both modes (a preview slims and compresses each in memory); `failed`: the
+first 20 `{ path, error }`, `failures` how many in all (each is in the
+job's log); `stopped`: cancelled, or FeedVault quit, before the end.
+`message`: `1200 files to slim: 46.0 MB now, 792.2 KB after`, `1200 files
+slimmed, 45.2 MB freed; 2 files failed and were left as they were`. `400`
+with no media root.
+
+One file at a time: the slim form goes to a temporary file in the same
+folder (`.<name>.<random>.feedvault-slim.tmp`) with the original's mode,
+times and, when FeedVault may set it, owner, and is fsynced; that file is
+read back from the disk and must hold the slim form and parse to the same
+post; it is then renamed over the `.json.xz`, or put beside the `.json`
+under the name `.json.xz` (never over a file that is there); only then is
+the `.json` removed. A failure at any step leaves the original as it was,
+is counted, and the job goes on. A file that changed while it was being
+rewritten is left. The index follows as files change (`meta_path` of posts
+and copies, a profile's source, dismissed duplicates naming a copy), and
+each folder is indexed again: no rescan is needed.
+
+Cancelled or killed, every file is either done or as it was. Running it
+again skips what is done, removes a temporary file a kill left behind, and
+finishes a post left with both files (the `.json` goes once the `.json.xz`
+beside it reads as the same post; a `.json.xz` that reads as anything else
+is a failure, and both stay).
+
+Only regular files in the folders a scan reads (no dot-folder, so not the
+trash; a symlink is neither followed nor rewritten) whose content is
+instaloader's are touched: gallery-dl's and yt-dlp's JSONs,
+`_comments.json`, captions and media never are.
+
 ## Jobs
 
 Command-line tools run as **jobs**, started from the dashboard (later from
@@ -2609,7 +2706,10 @@ A **job**:
   next start after a crash (`ended_at` is then `null`: when it stopped is
   unknown).
 - `argv`: for display. The first item is the tool's name; the path actually
-  run is resolved when the job starts (see [Tools](#tools)).
+  run is resolved when the job starts (see [Tools](#tools)). A kind that is
+  FeedVault's own work (`slim-metadata`) runs no process: its first item is
+  `feedvault`, its `exit_code` stays `null`, and cancelling it stops it
+  after the file it is on, with its `result` so far.
 - `rescan`: a folder inside a media root, or `null`. When the job exits 0,
   that folder (with its subfolders) is indexed and `result` is
   `{ "added": 3, "updated": 0 }`.
@@ -2649,6 +2749,7 @@ Built-in kinds:
 | `instaloader-post` | `shortcode` | instaloader for one post, see [How a save runs](#how-a-save-runs); started by `POST /api/save` only | `instaloader` |
 | `gallery-dl-post` | `platform` (`twitter`), `id`, `handle` (optional); the same params as `yt-dlp-post` | gallery-dl for one X post, see [How an X or TikTok save runs](#how-an-x-or-tiktok-save-runs); started by `POST /api/save` only | `gallery-dl` |
 | `yt-dlp-post` | `platform` (`tiktok`), `id`, `handle` (optional) | yt-dlp for one TikTok video, as above | `yt-dlp` |
+| `slim-metadata` | `mode`: `preview` or `apply` | no tool: FeedVault's own work, see [instaloader metadata](#instaloader-metadata); `argv` is `["feedvault", "slim-metadata", mode]`, `exit_code` `null` | `instaloader` |
 | `script` | `script`, `target`, `url`, `folder`, `sha256` | a script on its own, see [Scripts](#scripts); started by `POST /api/scripts/<id>/run` only | the tool's name for a downloader's command, else `scripts` |
 | `script-sync` | `source`, `script`, `target`, `sha256` or `why`, `scheduled` | a source's script instead of its tool's command, see [Scripts](#scripts); started by the source's Sync (or the scheduler) only; `result` as a sync's; one with `why` is `failed` at once, never queued | the source's tool |
 
@@ -2935,7 +3036,7 @@ be run as they are, or copied into a file.
 
 ```json
 { "name": "instaloader, no videos", "description": "…", "needs": "target", "rescan": "{root}",
-  "argv": ["instaloader", "--no-videos", "--no-compress-json", "--latest-stamps", "{archive}",
+  "argv": ["instaloader", "--no-videos", "--latest-stamps", "{archive}",
            "--dirname-pattern", "{root}", "--", "{target}"] }
 ```
 

@@ -207,12 +207,16 @@ See [docs/API.md → Profiles](docs/API.md#profiles).
 Any instaloader layout works. These flags make life easier:
 
 ```bash
-instaloader --load-cookies firefox --no-compress-json -- -SHORTCODE   # one post
-instaloader --load-cookies firefox --no-compress-json :saved          # your Saved collection
-instaloader --load-cookies firefox --no-compress-json some_profile    # a whole profile
+instaloader --load-cookies firefox -- -SHORTCODE   # one post
+instaloader --load-cookies firefox :saved          # your Saved collection
+instaloader --load-cookies firefox some_profile    # a whole profile
 ```
 
-- `--no-compress-json` writes plain `.json` instead of `.json.xz` (both are read)
+- instaloader writes each post's metadata compressed (`.json.xz`). Plain `.json`
+  (`--no-compress-json`) is read too, and a folder may hold both. Most of such a
+  file is nothing FeedVault reads: Settings → Sync → Instagram metadata can slim
+  the files you have, and the new ones as they arrive (what is removed is gone
+  for good)
 - `--load-cookies <browser>` reuses your browser session instead of a password login.
   It needs instaloader's optional `browser_cookie3` module, which a plain
   install leaves out: `pipx install 'instaloader[browser_cookie3]'`, or

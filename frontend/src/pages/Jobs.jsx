@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cancelJob, getJobLog } from "../lib/api";
-import { useJobs, ENDED, SAVE_KINDS, jobDuration, jobExit, shownParams } from "../lib/jobs";
+import { useJobs, ENDED, SAVE_KINDS, SLIM_KIND, jobDuration, jobExit, shownParams } from "../lib/jobs";
 import { fmtAgo, fmtFullDate, fmtIn, fmtStamp } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -135,9 +135,9 @@ export function CancelJobDialog({ job, onClose }) {
     >
       {job && (
         <p>
-          <strong>{job.label}</strong> (#{job.id}) {job.state === "running"
-            ? "is stopped: the tool and everything it started get SIGTERM, then SIGKILL after 10 seconds. Files it already wrote stay, so a later run can resume."
-            : "leaves the queue without running."}
+          <strong>{job.label}</strong> (#{job.id}) {job.state !== "running" ? "leaves the queue without running."
+            : job.kind === SLIM_KIND ? "stops after the file it is on. Every file is either done or as it was; start it again to do the rest."
+            : "is stopped: the tool and everything it started get SIGTERM, then SIGKILL after 10 seconds. Files it already wrote stay, so a later run can resume."}
         </p>
       )}
     </ConfirmDialog>

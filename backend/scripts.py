@@ -77,27 +77,27 @@ BUILTINS = {
         "description": "A profile's new posts, with metadata, stopping at the newest one already "
                        "downloaded (its time kept in FeedVault's stamps file).",
         "needs": "target", "rescan": "{root}",
-        "argv": ["instaloader", "--latest-stamps", "{archive}", "--no-compress-json",
+        "argv": ["instaloader", "--latest-stamps", "{archive}",
                  "--dirname-pattern", "{root}", "--", "{target}"]},
     "instaloader-saved": {
         "name": "instaloader: your saved posts",
         "description": "The posts saved by the account you are logged in as, each in a folder named "
                        "after its owner. Needs a login: add \"--login\", \"<you>\" in your copy.",
         "needs": "none", "rescan": "{root}",
-        "argv": ["instaloader", "--no-compress-json", "--dirname-pattern", "{root}/{profile}", "--", ":saved"]},
+        "argv": ["instaloader", "--dirname-pattern", "{root}/{profile}", "--", ":saved"]},
     "instaloader-post": {
         "name": "instaloader: one post",
         "description": "One post by its shortcode (the part after /p/ in its link), in a folder named "
                        "after its owner.",
         "needs": "target", "rescan": "{root}",
-        "argv": ["instaloader", "--no-compress-json", "--dirname-pattern", "{root}/{profile}", "--", "-{target}"]},
+        "argv": ["instaloader", "--dirname-pattern", "{root}/{profile}", "--", "-{target}"]},
     "instaloader-stories": {
         "name": "instaloader: stories and highlights",
         "description": "A profile's current stories and its highlights, no posts. Instagram shows them "
                        "to logged-in viewers only: add \"--login\", \"<you>\" in your copy.",
         "needs": "target", "rescan": "{root}",
         "argv": ["instaloader", "--no-posts", "--no-profile-pic", "--stories", "--highlights",
-                 "--no-compress-json", "--dirname-pattern", "{root}", "--", "{target}"]},
+                 "--dirname-pattern", "{root}", "--", "{target}"]},
     "gallery-dl-user": {
         "name": "gallery-dl: a profile's media",
         "description": "Everything on a profile link not in gallery-dl's download archive yet (FeedVault's), "
@@ -1717,12 +1717,21 @@ def _sync_outcome(params, code, lines, index, note):
     return sync._outcome(params, code, lines, index, note, _tool(params), ran=params.get("ran"))
 
 
+def _sync_after(job, note):
+    """After the script's run: what its tool's own sync does then (the
+    cookies out of yt-dlp's info JSONs; instaloader's new metadata slimmed,
+    when that setting is on)."""
+    sync._strip_cookies(job, note)
+    if _tool(job["params"]) == "instaloader":
+        sync._slim_new(job, note)
+
+
 jobs.register(SYNC_KIND, label="Sync with a script",
               params={**sync.PARAMS, "script": {"type": "text", "max": 80},
                       "target": {"type": "text", "max": sources.URL_MAX},
                       "sha256": {"type": "text", "max": 64, "required": False},
                       "why": {"type": "text", "max": WHY_MAX, "required": False}},
-              build=_sync_build, group=_tool, check=_sync_check, start=_sync_start, after=sync._strip_cookies,
+              build=_sync_build, group=_tool, check=_sync_check, start=_sync_start, after=_sync_after,
               outcome=_sync_outcome, ended=sync._ended, pause=_sync_pause, scrub=("argv",),
               describe=lambda params, argv: f"Sync {params.get('target', '').removeprefix('https://')} "
                                             f"with {params.get('script')}")

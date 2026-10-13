@@ -108,7 +108,7 @@ def test_argv(env, client, fake):
     set_config(instaloader={"pause": 0, "session": {"mode": "cookies", "browser": "firefox"}})
     job = save_now(client, CODE)
     stage = os.path.join(config.load()["data_directory"], "instaloader", "saving", CODE)
-    assert job["argv"] == ["instaloader", "--no-compress-json", "--dirname-pattern", stage,
+    assert job["argv"] == ["instaloader", "--dirname-pattern", stage,
                            "--filename-pattern", "{shortcode}", "--load-cookies", "firefox", "--", "-" + CODE]
     assert (job["kind"], job["group"], job["label"], job["params"]) == \
         (save.KIND, "instaloader", f"Save post {CODE}", {"shortcode": CODE})
@@ -141,7 +141,7 @@ def test_saved_into_the_owners_source_folder(env, client, fake):
     assert job["result"]["post"] == f"instagram:{CODE}" and job["result"]["folder"] == str(folder)
     assert job["result"]["added"] == 1
     day = "2024-06-11"
-    for suffix in ("_1.jpg", "_2.jpg", ".json", ".txt"):
+    for suffix in ("_1.jpg", "_2.jpg", ".json.xz", ".txt"):
         assert (folder / f"carol.cooks-{day}-{CODE}{suffix}").is_file()
     p = db.get_post(db.connect(), "instagram", CODE)
     assert p["author"]["handle"] == "carol.cooks" and p["media_count"] == 2
@@ -221,7 +221,7 @@ def test_never_overwrites(env, client, fake):
     fake.set(profile(handle="stranger", uid=4242))
     save_now(client)
     assert taken.read_bytes() == b"mine"
-    assert (folder / f"stranger-2024-06-11-{CODE}.json").is_file()
+    assert (folder / f"stranger-2024-06-11-{CODE}.json.xz").is_file()
 
 
 @pytest.mark.parametrize("fail, error", [("login", "login_required"), ("429", "rate_limited"),
@@ -345,7 +345,7 @@ def test_saved_post_moves_into_the_new_source_before_its_sync(env, client, fake)
     assert job["state"] == "done", job
     folder = env["media"] / "instagram" / "stranger"
     # Moved whole, named as the sync names its files (the target), nothing left behind.
-    for suffix in ("_1.jpg", "_2.jpg", ".json", ".txt"):
+    for suffix in ("_1.jpg", "_2.jpg", ".json.xz", ".txt"):
         assert (folder / f"stranger-2024-06-11-{CODE}{suffix}").is_file()
     assert not [n for n in os.listdir(saved) if CODE in n]
     log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
@@ -358,7 +358,7 @@ def test_saved_post_moves_into_the_new_source_before_its_sync(env, client, fake)
     conn = db.connect()
     p = db.get_post(conn, "instagram", CODE)
     meta = conn.execute("SELECT meta_path FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()[0]
-    assert meta == str(folder / f"stranger-2024-06-11-{CODE}.json")
+    assert meta == str(folder / f"stranger-2024-06-11-{CODE}.json.xz")
     paths = [r[0] for r in conn.execute("SELECT path FROM media WHERE post_id = ?", (f"instagram:{CODE}",))]
     assert p["media_count"] == 2 and all(path.startswith(str(folder)) for path in paths)
     # Same post id: first_seen, tags, Review decision and collections stay with it.
@@ -388,8 +388,8 @@ def test_saved_post_moves_when_the_source_has_older_posts(env, client, fake):
     log = [ln["text"] for ln in jobs.log(job["id"])["lines"]]
     assert any("starting after its newest indexed post, 2024-06-02" in t for t in log)
     # The folder's layout ({date_utc}_UTC), and the post in between downloaded.
-    assert (folder / "2024-06-11_12-00-00_UTC.json").is_file()
-    assert (folder / "2024-06-06_12-00-00_UTC.json").is_file()
+    assert (folder / "2024-06-11_12-00-00_UTC.json.xz").is_file()
+    assert (folder / "2024-06-06_12-00-00_UTC.json.xz").is_file()
     assert job["result"]["added"] == 1
     assert db.saved_ids(db.connect(), ["instagram:CBETWEEN001"]) == ["instagram:CBETWEEN001"]
 
@@ -406,13 +406,13 @@ def test_saved_post_is_never_moved_over_a_file(env, client, fake):
     assert taken.read_bytes() == b"mine"
     # Left whole where it was: not split between the folders.
     assert len([n for n in os.listdir(env["media"] / "_saved") if CODE in n]) == 4
-    assert not (folder / f"stranger-2024-06-11-{CODE}.json").exists()
+    assert not (folder / f"stranger-2024-06-11-{CODE}.json.xz").exists()
     assert any("1 saved post left in _saved" in ln["text"] for ln in jobs.log(job["id"])["lines"])
     # Saved one by one, it sets no starting point: the sync walks the whole
     # profile, the posts older than it included.
     assert "--fast-update" not in job["argv"]
     assert any("saved one by one gives no starting point" in ln["text"] for ln in jobs.log(job["id"])["lines"])
-    assert (folder / "stranger-2024-06-01-COLDER00000.json").is_file()
+    assert (folder / "stranger-2024-06-01-COLDER00000.json.xz").is_file()
 
 
 def test_saved_post_move_rolls_back_on_failure(env, client, fake, monkeypatch):
@@ -490,7 +490,7 @@ def test_saved_post_moves_once_the_first_sync_finds_the_account(env, client, fak
     job = sync_now(client, s["id"])
     assert job["result"]["added"] == 1
     folder = env["media"] / "instagram" / "newname"
-    assert (folder / f"newname-2024-06-11-{CODE}.json").is_file()
+    assert (folder / f"newname-2024-06-11-{CODE}.json.xz").is_file()
     assert not [n for n in os.listdir(env["media"] / "_saved") if CODE in n]
     meta = db.connect().execute("SELECT meta_path FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()[0]
     assert meta.startswith(str(folder))
