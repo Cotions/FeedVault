@@ -535,8 +535,8 @@ export default function Feed() {
                 </li>
                 <li>
                   Download some posts with instaloader, for example
-                  <code className="cmd">instaloader --no-compress-json -- -SHORTCODE</code>
-                  <span className="dim"> (plain <code>.json</code> is easiest to read by hand; compressed <code>.json.xz</code> works too).</span>
+                  <code className="cmd">instaloader -- -SHORTCODE</code>
+                  <span className="dim"> (its metadata is read compressed, <code>.json.xz</code>, or plain, <code>.json</code>).</span>
                 </li>
                 <li>Rescan, and they show up here.</li>
               </ol>

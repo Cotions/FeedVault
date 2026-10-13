@@ -14,6 +14,7 @@ The node is Instagram's own JSON as instaloader received it, so field names
 vary with the endpoint it came from. Every lookup below tolerates both the
 GraphQL shape and the iPhone API shape, and falls back to None.
 """
+import dataclasses
 import json
 import lzma
 import os
@@ -127,6 +128,99 @@ def _media_for(dirpath, base, names, index=None):
     return media, claimed
 
 
+# --- the slim form -------------------------------------------------------------
+#
+# Most of a metadata file is what nothing here reads: ``iphone_struct`` (every
+# resolution's CDN URL, long expired), the sidecar's children, the comments'
+# preview, the tagged users. slim() keeps what _post_from, _caption, _typename
+# and _profile read (the fields named here: a lookup added there is added
+# here, and test_slim.py compares the two on every sample), the
+# ``instaloader`` header, and the node's own scalar values that are neither
+# links nor long. Everything else goes.
+#
+# A spec: True keeps the value as it is; a dict keeps those of its keys;
+# [spec] the first item of a list (all that is read of it); (spec,) every item.
+# A value that is not what its spec expects stays as it is.
+
+_SCALAR_MAX = 200                              # characters: a longer string at the top of a node is not kept
+
+_COUNT = {"count": True}
+_USER = {"id": True, "pk": True, "username": True, "full_name": True}
+_SLIM_POST = {
+    "__typename": True, "id": True, "shortcode": True, "code": True, "product_type": True,
+    "date": True, "taken_at_timestamp": True, "video_view_count": True, "video_play_count": True,
+    "owner": _USER,
+    "edge_media_to_caption": {"edges": [{"node": {"text": True}}]},
+    "caption": {"text": True},                 # or the text itself
+    "edge_media_preview_like": _COUNT, "edge_liked_by": _COUNT,
+    "edge_media_to_comment": _COUNT, "edge_media_to_parent_comment": _COUNT,
+    "location": {"name": True},
+    "iphone_struct": {"user": _USER, "caption": {"text": True}, "taken_at": True, "like_count": True,
+                      "comment_count": True, "play_count": True, "view_count": True},
+}
+_SLIM_PROFILE = {"id": True, "username": True, "biography": True, "external_url": True,
+                 "bio_links": ({"url": True},)}
+_SLIM = {"Post": _SLIM_POST, "StoryItem": _SLIM_POST, "Profile": _SLIM_PROFILE}
+
+
+def _cheap(v):
+    """Whether a value at the top of a node is kept though nothing reads it:
+    a number, true, false, null, or a short string that is not a link."""
+    if isinstance(v, str):
+        return len(v) <= _SCALAR_MAX and not v.startswith(("http://", "https://"))
+    return v is None or isinstance(v, (bool, int, float))
+
+
+def _keep(value, spec):
+    if spec is True:
+        return value
+    if isinstance(spec, dict):
+        if not isinstance(value, dict):
+            return value
+        return {k: _keep(v, spec[k]) for k, v in value.items() if k in spec}
+    if not isinstance(value, list):
+        return value
+    if isinstance(spec, tuple):
+        return [_keep(v, spec[0]) for v in value]
+    return [_keep(v, spec[0]) for v in value[:1]]
+
+
+def slim(data):
+    """An instaloader JSON structure without what FeedVault does not read
+    (see above), or None when it is not one this parser reads: a post's, a
+    story item's or a profile's ``{"node": {...}, "instaloader": {...}}``.
+    What comes back is new; ``data`` is not changed. Slimming it again
+    gives the same."""
+    if reads(data) is None:
+        return None                            # a Hashtag, an iterator's state, no post id: left as it is
+    info = data["instaloader"]
+    spec = _SLIM[info["node_type"]]
+    node = {k: _keep(v, spec[k]) if k in spec else v for k, v in data["node"].items()
+            if k in spec or _cheap(v)}
+    return {"node": node, "instaloader": info}
+
+
+def reads(data):
+    """What parse_dir makes of an instaloader JSON structure, its files
+    aside: (node type, the post's fields or the profile's), or None when it
+    makes neither of it. Two structures that read the same are the same
+    file to FeedVault."""
+    info = data.get("instaloader") if isinstance(data, dict) else None
+    if not isinstance(info, dict) or not isinstance(data.get("node"), dict):
+        return None
+    kind = info.get("node_type")
+    try:
+        if kind == "Profile":
+            p = _profile(data["node"], "")
+            return p and (kind, (p.author_id, p.handle, p.bio, p.urls))
+        if kind in _POST_TYPES:
+            post = _post_from(data["node"], kind, info.get("version"), "", [])
+            return post and (kind, dataclasses.asdict(post))
+    except (AttributeError, TypeError, ValueError):
+        pass                                   # a shape _post_from does not expect
+    return None
+
+
 def _post_from(node, node_type, version, meta_path, media):
     owner = node.get("owner") or {}
     iphone = node.get("iphone_struct") or {}
@@ -179,7 +273,7 @@ def _post_from(node, node_type, version, meta_path, media):
 
 
 def _profile(node, path):
-    """What a Profile file (``<handle>_<id>.json.xz``, written with the
+    """What a Profile file (``<handle>_<id>.json[.xz]``, written with the
     profile's posts) says for link suggestions: its bio and links."""
     if not isinstance(node, dict) or node.get("id") is None:
         return None
@@ -402,12 +496,20 @@ def parse_dir(root, dirpath, names):
     names_set = set(names)
     seen_instaloader = False
     index = None                               # _media_index(names), once a post needs it
+    # A post can have both a .json and a .json.xz (downloaded again by an
+    # instaloader that compresses, or by one that does not): one post, read
+    # from the .json.xz, the .json its side file. Each base's .json.xz first.
+    metas = sorted((base, not n.endswith(".xz"), n) for n, base in ((n, _meta_base(n)) for n in names)
+                   if base is not None)
+    read = {}                                  # base -> the post its .json.xz gave, or None
 
-    for n in sorted(names):
-        base = _meta_base(n)
-        if base is None:
-            continue
+    for base, plain, n in metas:
         path = os.path.join(dirpath, n)
+        if plain and base in read:
+            result.claimed.add(n)
+            if read[base] is not None:
+                read[base].side_files.append(path)
+            continue
         try:
             data = _load(path)
         except (OSError, ValueError, lzma.LZMAError, EOFError) as e:
@@ -428,6 +530,7 @@ def parse_dir(root, dirpath, names):
             if profile:
                 result.profiles.append(profile)
         if node_type not in _POST_TYPES:
+            read[base] = None
             continue                           # Profile, Hashtag, iterator state
         node = data["node"] if isinstance(data["node"], dict) else {}
         if index is None:
@@ -441,8 +544,10 @@ def parse_dir(root, dirpath, names):
             # Metadata alone: instaloader fetched none of its files (a sync
             # of videos only, --no-pictures, leaves an image post so).
             result.claimed |= {base + s for s in _SIDE_SUFFIXES if base + s in names_set}
+            read[base] = None
             continue
         result.posts.append(post)
+        read[base] = post
         result.claimed |= claimed
         result.claimed |= {base + s for s in _SIDE_SUFFIXES if base + s in names_set}
 

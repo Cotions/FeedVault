@@ -27,9 +27,13 @@ instaloader:
   (unless the source asks for its full history). Only dates that can be
   trusted count (see trusted_newest): a seed after a post never downloaded
   would skip it for good.
-- metadata on (``--no-compress-json``), so new posts get captions and the
-  account's numeric id; people.refresh_aliases links them to the folder's
-  older filename-only posts.
+- metadata on, as instaloader writes it by default: a compressed
+  ``.json.xz`` beside each post (never ``--no-compress-json``; older syncs
+  left plain ``.json``, and a folder may hold both), so new posts get
+  captions and the account's numeric id; people.refresh_aliases links them
+  to the folder's older filename-only posts. With ``slim_metadata`` on, the
+  files a sync wrote are slimmed when it ends, before the folder is indexed
+  (slim.py).
 - ``--filename-pattern`` as the folder's files are already named, so new
   files sit beside the old ones and a post already there is recognised.
 - ``--sanitize-paths`` when the folder is on exFAT, FAT or NTFS (statfs,
@@ -152,6 +156,7 @@ import news
 import notify
 import people
 import scanner
+import slim
 import sources
 import trash
 import userdata
@@ -435,7 +440,6 @@ def _build(params):
     return {"tool": "instaloader", "rescan": folder, "args": [
         "--latest-stamps", stamps_path(cfg),
         *(["--fast-update"] if fast_update(stamps, target, options) else []),
-        "--no-compress-json",
         "--dirname-pattern", _escape(folder),
         "--filename-pattern", pattern,
         "--title-pattern", TITLE,
@@ -1357,8 +1361,16 @@ def _forget_saved(conn, src):
 # ``scheduled``: queued by the scheduler (notify.py: a failure it repeats adds no entry).
 PARAMS = {"source": {"type": "text", "max": 15}, "scheduled": {"type": "choice", "choices": ["1"], "required": False}}
 
+def _slim_new(job, note):
+    """After an instaloader run, with ``slim_metadata`` on: the metadata
+    files it wrote are slimmed (slim.py), before the folder is indexed. A
+    failure is logged; the sync goes on."""
+    if job["rescan"] and job["started_at"] is not None:
+        slim.after(job["rescan"], config.load()["media_roots"], job["started_at"], note)
+
+
 jobs.register(KIND, label="Sync from Instagram", params=PARAMS,
-              build=_build, group=GROUP, start=_start, outcome=_outcome, ended=_ended,
+              build=_build, group=GROUP, start=_start, after=_slim_new, outcome=_outcome, ended=_ended,
               pause=lambda params: settings()["pause"],
               describe=lambda params, argv: f"Sync @{argv[-1]}" if argv else "Sync from Instagram")
 

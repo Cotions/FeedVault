@@ -30,8 +30,10 @@ to the new name and the profile is downloaded, exit 1 as instaloader's),
 a tagged post's target is ``<profile>/:tagged``, a highlight's
 ``<profile>/<title>``, as instaloader's; with --sanitize-paths the ``:``
 and Windows' other reserved characters in those become their full-width
-look-alikes, as instaloader's sanitize_path does), --no-compress-json (metadata
-JSON beside the media, plus the profile's JSON and a caption .txt),
+look-alikes, as instaloader's sanitize_path does), --no-compress-json (the
+metadata JSON beside the media and the profile's JSON, plain ``.json``;
+without it ``.json.xz``, as instaloader compresses them by default; a
+caption .txt either way),
 --no-posts, --reels, --tagged, --stories and --highlights (the last two
 fail with "Login required." without --login or --load-cookies; with
 either it prints instaloader's lines of a session loaded and accepted), in
@@ -64,6 +66,7 @@ import argparse
 import ast
 import configparser
 import json
+import lzma
 import os
 import struct
 import sys
@@ -75,6 +78,20 @@ STAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"
 
 
 STALL = None                                   # data["stall"], set by main
+PLAIN = False                                  # --no-compress-json, set by run
+
+
+def save_json(base, structure, opened=lambda: None):
+    """As instaloader's save_structure_to_file: ``<base>.json.xz``, or a
+    plain ``<base>.json`` with --no-compress-json."""
+    if PLAIN:
+        with open(base + ".json", "w") as f:
+            opened()
+            json.dump(structure, f, indent=4, sort_keys=True)
+        return
+    with lzma.open(base + ".json.xz", "wt") as f:
+        opened()
+        json.dump(structure, f, sort_keys=True, separators=(",", ":"))
 
 
 def stall(p, at):
@@ -115,6 +132,7 @@ def node(p, profile, target):
     typename = {"image": "GraphImage", "video": "GraphVideo", "carousel": "GraphSidecar"}[kind]
     n = {"__typename": typename, "id": str(abs(hash(p["shortcode"])) % 10**18), "shortcode": p["shortcode"],
          "taken_at_timestamp": p["ts"], "is_video": kind == "video",
+         "display_url": f"https://cdn.invalid/{p['shortcode']}.jpg",
          "owner": {"id": str(profile["id"]), "username": target, "full_name": profile.get("name", target)},
          "edge_media_to_caption": {"edges": [{"node": {"text": p["caption"]}}] if p.get("caption") else []},
          "edge_media_preview_like": {"count": p.get("likes", 12)}, "edge_media_to_comment": {"count": 3}}
@@ -138,10 +156,8 @@ def write(base, p, profile, owner, videos=True, thumbnails=True, pictures=True):
         if video and videos:
             mp4(name + ".mp4", opened)
     stall(p, "media")
-    with open(base + ".json", "w") as f:
-        stall(p, "json-opened")
-        json.dump({"node": node(p, profile, owner),
-                   "instaloader": {"version": "4.15.1", "node_type": "Post"}}, f, indent=4)
+    save_json(base, {"node": node(p, profile, owner), "instaloader": {"version": "4.15.1", "node_type": "Post"}},
+              lambda: stall(p, "json-opened"))
     stall(p, "json")
     if p.get("caption"):
         with open(base + ".txt", "w") as f:
@@ -335,12 +351,12 @@ def story_items(items, target, owner_target, profile, args, folder, keep, last=N
             mp4(base + ".mp4")
         if not video or not args.no_video_thumbnails or args.no_videos:
             png(base + ".jpg", (90, 120, 200))
-        with open(base + ".json", "w") as f:
-            json.dump({"node": {"__typename": "GraphStoryVideo" if video else "GraphStoryImage", "id": str(it["id"]),
-                                "taken_at_timestamp": it["ts"], "is_video": video,
-                                "owner": {"id": str(profile["id"]), "username": target,
-                                          "full_name": profile.get("name", target)}},
-                       "instaloader": {"version": "4.15.1", "node_type": "StoryItem"}}, f, indent=4)
+        save_json(base, {"node": {"__typename": "GraphStoryVideo" if video else "GraphStoryImage", "id": str(it["id"]),
+                                  "taken_at_timestamp": it["ts"], "is_video": video,
+                                  "display_url": f"https://cdn.invalid/{it['id']}.jpg",
+                                  "owner": {"id": str(profile["id"]), "username": target,
+                                            "full_name": profile.get("name", target)}},
+                         "instaloader": {"version": "4.15.1", "node_type": "StoryItem"}})
         print(f"{base}.jpg json ")
 
 
@@ -369,6 +385,8 @@ def run(argv):
         ap.add_argument(flag, action="store_true")
     ap.add_argument("targets", nargs="*")
     args = ap.parse_args(argv)
+    global PLAIN
+    PLAIN = args.no_compress_json
     data_file = os.environ.get("FAKE_INSTALOADER") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                                    "fake_instaloader.json")
     with open(data_file) as f:
@@ -408,9 +426,6 @@ def run(argv):
             status = fail(data.get("fail") or data["profiles"][target]["fail"], target)
             continue
         if target.startswith("-"):
-            if not args.no_compress_json:
-                print("fake instaloader: only --no-compress-json is supported", file=sys.stderr)
-                return 2
             status = one_post(data, args, target) or status
             continue
         profile = data["profiles"].get(target)
@@ -436,13 +451,11 @@ def run(argv):
         folder = (args.dirname_pattern or "{target}").format(target=target, profile=target)
         os.makedirs(folder, exist_ok=True)
         print(f"[1/1] Downloading profile {target}")
-        if not args.no_compress_json:
-            print("fake instaloader: only --no-compress-json is supported", file=sys.stderr)
-            return 2
-        with open(os.path.join(folder, f"{target}_{profile['id']}.json"), "w") as f:
-            json.dump({"node": {"id": str(profile["id"]), "username": target, "biography": profile.get("bio", ""),
-                                "external_url": profile.get("url")},
-                       "instaloader": {"version": "4.15.1", "node_type": "Profile"}}, f, indent=4)
+        save_json(os.path.join(folder, f"{target}_{profile['id']}"),
+                  {"node": {"id": str(profile["id"]), "username": target, "biography": profile.get("bio", ""),
+                            "external_url": profile.get("url"),
+                            "profile_pic_url": f"https://cdn.invalid/{profile['id']}.jpg"},
+                   "instaloader": {"version": "4.15.1", "node_type": "Profile"}})
         stamps = configparser.ConfigParser()
         if args.latest_stamps:
             stamps.read(args.latest_stamps)

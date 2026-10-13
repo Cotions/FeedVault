@@ -1897,6 +1897,12 @@ code.profile-row-path:not(.dim) { color: var(--text-dim); }
 .settings-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .info-cookies { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
 .info-cookies .page-lede { margin-bottom: 0; }
+/* Settings → Sync, Instagram metadata: the clean-up of the files on disk, under the switch */
+.slim-existing { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.slim-existing .page-lede { margin-bottom: 0; }
+.slim-existing .settings-actions { flex-wrap: wrap; }
+.slim-failed { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.slim-failed code { overflow-wrap: anywhere; }
 .scan-running { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
 
 /* Appearance: theme cards (orb + sample button + highlight digits). */

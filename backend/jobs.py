@@ -12,6 +12,8 @@ sessions at once), different groups in parallel, at most MAX_RUNNING in all.
 Each job runs in a session of its own, so cancelling (SIGTERM, then SIGKILL)
 reaches everything it started. When a job that downloads into a media root
 exits cleanly, that folder is indexed and the job reports its new posts.
+A kind may instead be work FeedVault does itself, in the job's thread (its
+``run``): queued, locked, logged, cancelled and listed as the others are.
 
 Jobs are kept in the ``jobs`` table: the queue, and the last HISTORY_KEPT
 ended jobs with the tail of their output. Output is untrusted text: each
@@ -71,19 +73,19 @@ class Cancelled(Exception):
 
 class Kind:
     def __init__(self, name, label, params, build, group, summarize=None, start=None, outcome=None,
-                 ended=None, pause=None, describe=None, after=None, check=None, scrub=()):
+                 ended=None, pause=None, describe=None, after=None, check=None, scrub=(), run=None):
         self.name, self.label, self.params = name, label, params
         self.build, self.group, self.summarize = build, group, summarize
         self.start, self.outcome, self.ended = start, outcome, ended
         self.pause, self.describe, self.after = pause, describe, after
-        self.check, self.scrub = check, tuple(scrub)
+        self.check, self.scrub, self.run = check, tuple(scrub), run
 
 
 _kinds = {}
 
 
 def register(name, *, label, params, build, group, summarize=None, start=None, outcome=None, ended=None,
-             pause=None, describe=None, after=None, check=None, scrub=()):
+             pause=None, describe=None, after=None, check=None, scrub=(), run=None):
     """Add a job kind.
 
     params:    {name: {"type": "choice", "choices": [...]}
@@ -125,9 +127,17 @@ def register(name, *, label, params, build, group, summarize=None, start=None, o
     describe:  optional, (params, argv) -> label shown instead of ``label``
     scrub:     what of the job is scrubbed as its output is (health.scrub)
                wherever it is shown or stored: "argv", "params" (each value)
+    run:       optional, (params, note, stopped) -> (state, result, message):
+               FeedVault's own work, done in the job's thread instead of a
+               process (build's "tool" and "args" only name it, for
+               display; no after, outcome or summarize, and no rescan: it
+               indexes what it changes). ``stopped()`` turns true once the
+               job is cancelled or FeedVault is stopping: it returns soon
+               after, with what it did so far. An exception fails the job
+               with its message
     """
     _kinds[name] = Kind(name, label, params, build, group, summarize, start, outcome, ended, pause, describe, after,
-                        check, scrub)
+                        check, scrub, run)
 
 
 def kinds():
@@ -431,8 +441,8 @@ def _run(job):
         if isinstance(script, Script) and head is None:
             _finish(job, "failed", message=f"{script.path}: its first line must be #! and an absolute path")
             return
-        exe = head[0] if head else tool_path(job.tool)
-        if exe is None:
+        exe = head[0] if head else None if kind.run else tool_path(job.tool)
+        if exe is None and not kind.run:
             _finish(job, "failed", result={"error": "missing"}, message=tool_lookup(job.tool)[1])
             return
         if job.cancelled:
@@ -455,6 +465,9 @@ def _run(job):
             except Exception as e:
                 _finish(job, "failed", message=str(e) or type(e).__name__)
                 return
+        if kind.run:
+            _work(job, kind)
+            return
         # The downloaders are Python: live output.
         env = {**(os.environ if job.env is None else job.env), "PYTHONUNBUFFERED": "1"}
         fd = proc = failed = None
@@ -533,6 +546,24 @@ def _run(job):
             _finish(job, "done", message="finished")
     except Exception as e:                     # keep the app alive; show it in the UI
         _finish(job, "failed", message=f"job runner error: {e}")
+
+
+def _work(job, kind):
+    """A kind with ``run``: its work, in this thread. Cancelling or
+    stopping FeedVault only tells it (``stopped``); it ends the job itself,
+    with what it had done by then."""
+    try:
+        state, result, message = kind.run(job.params, lambda text: _note(job, f"[feedvault] {text}"),
+                                          lambda: job.cancelled or job.interrupted)
+    except Exception as e:
+        _finish(job, "failed", message=str(e) or type(e).__name__)
+        return
+    if job.cancelled:
+        _finish(job, "cancelled", result=result, message=message)
+    elif job.interrupted:
+        _finish(job, "interrupted", result=result)
+    else:
+        _finish(job, state, result=result, message=message)
 
 
 _SHEBANG = re.compile(rb"#![ \t]*([^ \t\n]+)[ \t]*([^\n]*)")

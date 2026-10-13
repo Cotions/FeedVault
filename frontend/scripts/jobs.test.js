@@ -2,7 +2,7 @@
 // column and which toast style it gets (#139). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { endTone, jobExit, scriptJobToReopen } from "../src/lib/jobs.js";
+import { endTone, jobExit, scriptJobToReopen, slimJobs } from "../src/lib/jobs.js";
 
 test("Scripts opens again the log of the newest script run still going (#149)", () => {
   assert.equal(scriptJobToReopen(null), null);
@@ -17,6 +17,22 @@ test("Scripts opens again the log of the newest script run still going (#149)", 
   assert.equal(scriptJobToReopen(jobs).id, 7);
   assert.equal(scriptJobToReopen(jobs.slice(3)).id, 6);
   assert.equal(scriptJobToReopen([{ id: 3, kind: "script", state: "cancelled" }]), null);
+});
+
+test("Settings follows the newest count and the newest run of the metadata clean-up", () => {
+  assert.deepEqual(slimJobs(null), { preview: null, apply: null });
+  const jobs = [
+    { id: 9, kind: "slim-metadata", params: { mode: "preview" }, state: "running" },
+    { id: 8, kind: "instaloader-profile", params: { source: "3" }, state: "done" },
+    { id: 7, kind: "slim-metadata", params: { mode: "apply" }, state: "done" },
+    { id: 6, kind: "slim-metadata", params: { mode: "preview" }, state: "done" },
+    { id: 5, kind: "slim-metadata", params: { mode: "apply" }, state: "failed" },
+    { id: 4, kind: "tool-test", state: "done" },
+  ];
+  const { preview, apply } = slimJobs(jobs);
+  assert.equal(preview.id, 9);
+  assert.equal(apply.id, 7);
+  assert.deepEqual(slimJobs(jobs.slice(3, 4)), { preview: jobs[3], apply: null });
 });
 
 test("a cancelled job's signal is not shown as its exit code", () => {

@@ -144,7 +144,7 @@ def test_argv_is_built_from_the_source(env, client, fake):
     folder = str(env["media"] / "carol.cooks")
     assert job["argv"] == [
         "instaloader", "--latest-stamps", os.path.join(config.load()["data_directory"], "instaloader", "stamps.ini"),
-        "--fast-update", "--no-compress-json", "--dirname-pattern", folder,
+        "--fast-update", "--dirname-pattern", folder,
         "--filename-pattern", "{target}-{date_utc:%Y-%m-%d}-{shortcode}",
         "--title-pattern", "{date_utc}_UTC_{typename}", "--", "carol.cooks"]
     assert (job["params"], job["group"], job["rescan"], job["label"]) == \
@@ -249,7 +249,7 @@ def test_folder_with_braces_is_escaped(env, client, fake):
     fake.set(carol_profile(new=1))
     job = sync_now(client, s["id"])
     assert job["argv"][job["argv"].index("--dirname-pattern") + 1] == str(env["media"] / "we{{ir}}d")
-    assert job["state"] == "done" and any(n.endswith(".json") and "CNEWPOST000" in n for n in os.listdir(folder))
+    assert job["state"] == "done" and any(n.endswith(".json.xz") and "CNEWPOST000" in n for n in os.listdir(folder))
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ def test_first_sync_starts_after_the_newest_indexed_post(env, client, fake):
     assert a["aliases"] == ["carol.cooks"] and a["count"] == 5
     # Beside the old files, named the same way.
     names = sorted(n for n in os.listdir(folder) if n.startswith("carol.cooks-2024-06-04"))
-    assert names == ["carol.cooks-2024-06-04-CNEWPOST000.jpg", "carol.cooks-2024-06-04-CNEWPOST000.json",
+    assert names == ["carol.cooks-2024-06-04-CNEWPOST000.jpg", "carol.cooks-2024-06-04-CNEWPOST000.json.xz",
                      "carol.cooks-2024-06-04-CNEWPOST000.txt"]
     s = get(client, f"/api/sources/{s['id']}")
     assert s["account"] == {"platform": "instagram", "id": "777"}               # the alias's id now
@@ -615,7 +615,7 @@ def test_trashed_post_quit_while_instaloader_writes_it_goes_back_at_the_next_sta
     """#77: Quit lands anywhere in instaloader's writing of B. Wherever it
     stops (the fake stops there for good, then shutdown() stops it), B goes
     back to the trash at the next start and leaves nothing in the folder:
-    an empty .json of B, which no parser reads, too."""
+    an empty .json.xz of B, which no parser reads, too."""
     s, folder = _trashed_between(env, client, fake)
     mark = env["tmp"] / "stalled"
     data = json.loads(fake.data.read_text())
@@ -629,9 +629,9 @@ def test_trashed_post_quit_while_instaloader_writes_it_goes_back_at_the_next_sta
     assert jobs.get(job["id"])["state"] == "interrupted"
     if at == "json-opened":
         # The side files real instaloader may have written before its JSON.
-        [meta] = [n for n in os.listdir(folder) if "CPOSTB00001" in n and n.endswith(".json")]
+        [meta] = [n for n in os.listdir(folder) if "CPOSTB00001" in n and n.endswith(".json.xz")]
         for side in (".txt", "_comments.json"):
-            (folder / (meta[:-len(".json")] + side)).write_text("[]")
+            (folder / (meta[:-len(".json.xz")] + side)).write_text("[]")
     monkeypatch.setattr(jobs, "_closing", False)
     sync._trashed_before.clear()
     jobs.recover()
@@ -640,7 +640,7 @@ def test_trashed_post_quit_while_instaloader_writes_it_goes_back_at_the_next_sta
 
 
 def test_metadata_that_cannot_be_read_now_is_not_taken_for_cut(env, client, fake, monkeypatch):
-    """#77: only a .json whose content is wrong is taken for one instaloader
+    """#77: only a .json.xz whose content is wrong is taken for one instaloader
     was stopped writing; one FeedVault cannot open (permissions, I/O) stays."""
     s, folder = _trashed_between(env, client, fake)
     mark = env["tmp"] / "stalled"
@@ -649,7 +649,7 @@ def test_metadata_that_cannot_be_read_now_is_not_taken_for_cut(env, client, fake
     post(client, f"/api/sources/{s['id']}/sync")
     wait_for(mark.exists)
     jobs.shutdown()
-    [meta] = [folder / n for n in os.listdir(folder) if "CPOSTB00001" in n and n.endswith(".json")]
+    [meta] = [folder / n for n in os.listdir(folder) if "CPOSTB00001" in n and n.endswith(".json.xz")]
     meta.chmod(0)
     try:
         monkeypatch.setattr(jobs, "_closing", False)
@@ -765,7 +765,7 @@ def test_pattern_follows_the_folder(env, client, fake):
     job = sync_now(client, s["id"])
     assert job["argv"][job["argv"].index("--filename-pattern") + 1] == "{date_utc}_UTC"
     assert job["message"] == "1 new post"
-    assert "2024-06-02_12-00-00_UTC.json" in os.listdir(m)
+    assert "2024-06-02_12-00-00_UTC.json.xz" in os.listdir(m)
 
 
 # ---------------------------------------------------------------------------

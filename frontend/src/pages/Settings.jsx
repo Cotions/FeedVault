@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
-import { useJobs, ENDED } from "../lib/jobs";
+import { useJobs, ENDED, SLIM_KIND, slimJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { JobLog } from "./Jobs";
 import { fmtAgo, fmtBytes, fmtFullDate, plural } from "../lib/fmt";
@@ -756,6 +756,134 @@ function InstaloaderCard({ saved, onSaved, onDirty }) {
   );
 }
 
+/* Settings → Sync: instaloader's metadata files (slim.py). New ones arrive
+   compressed and whole; the switch slims them as each sync or save ends. The
+   button slims the ones already on disk: a first job counts them and changes
+   nothing, the dialog says what goes for good, a second job does it. Both
+   are read from the shared jobs poll, so they survive leaving the page. */
+function MetadataCard({ on, onSaved }) {
+  const { list, started } = useJobs();
+  const [busy,   setBusy]   = useState(false);
+  const [msg,    setMsg]    = useState(null);
+  const [asked,  setAsked]  = useState(null);   // the count this page started: its answer opens the dialog
+  const [dlgErr, setDlgErr] = useState(null);
+  const { preview, apply } = slimJobs(list?.jobs);
+  const answer = asked != null && preview?.id === asked && ENDED.has(preview.state) ? preview : null;
+  const counting = asked != null && !answer;
+  const working = !!apply && !ENDED.has(apply.state);
+  // The count's answer: files to slim (the dialog), or a line saying why there is nothing to confirm.
+  const counted = answer?.state === "done" && answer.result && !answer.result.stopped ? answer.result : null;
+  const found = counted?.files ? counted : null;
+  const unread = counted?.failures ? ` ${plural(counted.failures, "file")} could not be read: see the job's log.` : "";
+  const answered = !answer || found ? null
+    : !counted ? { ok: false, text: `Not counted: ${answer.message || answer.state}.` }
+    : { ok: !counted.failures, text: `Nothing to slim: ${plural(counted.checked, "instaloader metadata file")} checked, ${counted.checked === 1 ? "it is" : "all"} slim and compressed already.${unread}` };
+
+  async function set(value) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await saveSettings({ slim_metadata: value });
+      if (r?.ok === false) setMsg({ ok: false, text: r.error || "Save failed." });
+      else onSaved();
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function count() {
+    setMsg(null);
+    try {
+      const r = await startJob(SLIM_KIND, { mode: "preview" });
+      if (r?.ok) { started(r.job); setDlgErr(null); setAsked(r.job.id); }
+      else setMsg({ ok: false, text: r?.error || "Could not start it." });
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    }
+  }
+
+  async function run() {
+    setBusy(true);
+    setDlgErr(null);
+    try {
+      const r = await startJob(SLIM_KIND, { mode: "apply" });
+      if (!r?.ok) { setDlgErr(r?.error || "Could not start it."); return; }
+      started(r.job);
+      setAsked(null);
+    } catch (e) {
+      setDlgErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const failed = apply && ENDED.has(apply.state) ? apply.result?.failed || [] : [];
+  const more = (apply?.result?.failures ?? 0) - failed.length;
+  return (
+    <div className="card" id="slim-metadata">
+      <div className="card-title">Instagram metadata (instaloader)</div>
+      <p className="page-lede">
+        instaloader saves all Instagram says about a post in a JSON beside it: tens of kilobytes, most of it nothing
+        FeedVault reads. New ones are saved compressed (<code>.json.xz</code>). A slim one holds only what FeedVault
+        reads, in a few hundred bytes.
+      </p>
+      <label className="dl-toggle">
+        <input type="checkbox" checked={on} disabled={busy} onChange={e => set(e.target.checked)} />
+        <span>Slim new metadata after each sync and save <span className="dim">(off: compressed, nothing removed)</span></span>
+      </label>
+      <div className="slim-existing">
+        <p className="page-lede">
+          The files already in your media roots stay as they are until you slim them here. This counts them first,
+          and changes nothing until you confirm.
+        </p>
+        <div className="settings-actions">
+          <button type="button" className="btn-secondary" onClick={count} disabled={counting || working}>
+            <Icon name="search" size={14} />{counting ? "Counting…" : "Slim existing metadata…"}
+          </button>
+          <JobStatus job={apply} what="Slimming" />
+        </div>
+        {failed.length > 0 && (
+          <ul className="slim-failed">
+            {failed.map(f => <li key={f.path}><code>{f.path}</code> <span className="dim">{f.error}</span></li>)}
+            {more > 0 && <li className="dim">and {plural(more, "other")}: see the job&rsquo;s log on the <Link to="/jobs" className="text-link">Jobs</Link> page</li>}
+          </ul>
+        )}
+      </div>
+      {(msg || answered) && <div className={`msg ${(msg || answered).ok ? "ok" : "err"}`} role="status">{(msg || answered).text}</div>}
+      <ConfirmDialog
+        open={!!found}
+        danger
+        busy={busy}
+        error={dlgErr}
+        title={`Slim ${plural(found?.files ?? 0, "metadata file")}?`}
+        confirmLabel={`Slim ${plural(found?.files ?? 0, "file")}`}
+        onConfirm={run}
+        onCancel={() => setAsked(null)}
+      >
+        <p>
+          {plural(found?.files ?? 0, "instaloader metadata file")} under your media roots
+          take{found?.files === 1 ? "s" : ""} <strong>{fmtBytes(found?.bytes_before ?? 0)}</strong> now and would
+          take <strong>{fmtBytes(found?.bytes_after ?? 0)}</strong>. That is measured, not estimated: each was slimmed
+          and compressed in memory to count it.
+          {found?.clean ? ` ${plural(found.clean, "other")} ${found.clean === 1 ? "is" : "are"} slim already.` : ""}
+          {found?.failures ? ` ${plural(found.failures, "file")} could not be read and will be left as ${found.failures === 1 ? "it is" : "they are"}.` : ""}
+        </p>
+        <p>
+          Each is rewritten compressed, holding only what FeedVault reads: the post&rsquo;s id, date, author, caption,
+          counts and location, or a profile&rsquo;s bio and links. The rest of what Instagram sent is removed: picture
+          and video addresses, a carousel&rsquo;s items, tagged accounts, comment previews, the iPhone copy of it all.
+        </p>
+        <p>
+          <strong>This cannot be undone.</strong> For a post that is gone from Instagram, what is removed cannot be
+          fetched again. Pictures, videos, captions and comments files are not touched.
+        </p>
+      </ConfirmDialog>
+    </div>
+  );
+}
+
 const COOKIE_TOOLS = {
   "gallery-dl": { title: "X, Reddit, Bluesky, pixiv sync (gallery-dl)", sites: "X, Reddit, Bluesky or pixiv" },
   "yt-dlp": { title: "YouTube and TikTok sync (yt-dlp)", sites: "YouTube or TikTok" },
@@ -1114,6 +1242,7 @@ export default function Settings() {
                 <SchedulesCard paused={config.schedules_paused === true} onSaved={reload} />
                 <DesktopCard on={config.desktop_notifications === true} onSaved={reload} />
                 <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} onDirty={onDirty} />
+                <MetadataCard on={config.slim_metadata === true} onSaved={reload} />
                 {Object.keys(COOKIE_TOOLS).map(t => (
                   <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
                                saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} onDirty={onDirty} />

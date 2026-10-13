@@ -9,7 +9,8 @@ downloads into a folder of its own in the data directory (``saving/<shortcode>``
 files named ``{shortcode}``). When it exits, the post's JSON names its owner,
 and the files move to the owner's folder (owner_folder), named the way that
 folder's files are (sync.detect_pattern), never over a file already there.
-That folder is then indexed.
+With ``slim_metadata`` on, its JSON is slimmed there (slim.py). That folder
+is then indexed.
 
 A post whose owner had no folder goes to ``<first root>/_saved``; once the
 owner gets an instaloader source, its next sync first moves it into the
@@ -19,6 +20,7 @@ source's folder (gather). Wherever it went, the post is noted in
 Same lock group and pause as instaloader syncs: one instaloader at a time.
 """
 import json
+import lzma
 import os
 import re
 import shutil
@@ -32,6 +34,7 @@ import health
 import jobs
 import people
 import scanner
+import slim
 import sources
 import sync
 import userdata
@@ -67,7 +70,6 @@ def _build(params):
         raise jobs.BadRequest("add a media root in Settings first")
     stage = staging(code, cfg)
     return {"tool": "instaloader", "args": [
-        "--no-compress-json",
         "--dirname-pattern", sync._escape(stage),
         "--filename-pattern", "{shortcode}",
         *sync.session_flags(sync.settings(cfg)["session"]),
@@ -144,11 +146,13 @@ def base_name(pattern, handle, code, posted):
 def _place(code, stage, roots, note):
     """Move the saved files to the owner's folder. Returns (folder, account
     key or None), or (None, None) when instaloader saved no post."""
-    meta = os.path.join(stage, code + ".json")
+    # Compressed, as instaloader writes it; plain from one that was told not to.
+    meta = next((p for p in (os.path.join(stage, code + s) for s in (".json.xz", ".json")) if os.path.exists(p)),
+                os.path.join(stage, code + ".json.xz"))
     try:
         data = parser._load(meta)
         post = parser._post_from(data["node"], "Post", None, meta, [])
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, lzma.LZMAError, EOFError):
         return None, None
     if post is None:
         return None, None
@@ -160,6 +164,7 @@ def _place(code, stage, roots, note):
         and sources._HANDLE_RE.fullmatch(post.author_handle) else None
     base = base_name(pattern, handle, code, post.posted_at)
     moved = kept = 0
+    metas = []
     for name in sorted(os.listdir(stage)):
         if not name.startswith(code):
             continue
@@ -169,6 +174,9 @@ def _place(code, stage, roots, note):
             continue
         shutil.move(src, dst)
         moved += 1
+        if parser._meta_base(name) is not None:
+            metas.append(dst)
+    slim.files(metas, roots, note)             # when the setting is on
     note(f"{moved} file{'' if moved == 1 else 's'} moved to {folder}"
          + (f"; {kept} already there, kept as they were" if kept else ""))
     key = people.canonical(conn, "instagram", post.author_id) if post.author_id else None

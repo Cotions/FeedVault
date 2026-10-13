@@ -69,8 +69,8 @@ each now says what was built.
 FeedVault reads any layout, but these settings make parsing reliable. They
 are in the README ("Downloading with …"), not in code.
 
-- **instaloader**: `--no-compress-json` (plain `.json`, easier to read by hand),
-  `--load-cookies firefox` for the session, `--dirname-pattern` per profile
+- **instaloader**: its default compressed metadata (`.json.xz`; plain `.json` is
+  read too), `--load-cookies firefox` for the session, `--dirname-pattern` per profile
 - **gallery-dl**: `--write-metadata` (one JSON per file), or the `metadata`
   postprocessor with `mode: json`
 - **yt-dlp**: `--write-info-json`

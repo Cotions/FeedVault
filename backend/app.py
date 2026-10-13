@@ -42,6 +42,7 @@ import save_tools
 import scanner
 import scheduler
 import scripts
+import slim
 import sources
 import sync
 import thumbs
@@ -1614,7 +1615,8 @@ def _public_config(cfg):
             "check_updates": cfg.get("check_updates") is True,
             "schedules_paused": cfg.get("schedules_paused") is True,
             "desktop_notifications": notify.enabled(cfg),
-            "bio_import": biofetch.enabled(cfg)}
+            "bio_import": biofetch.enabled(cfg),
+            "slim_metadata": slim.enabled(cfg)}
 
 
 @app.get("/api/config")
@@ -1666,6 +1668,10 @@ def _set_config(body):
         if not isinstance(body["bio_import"], bool):
             return jsonify({"ok": False, "error": "bio_import must be true or false"})
         changes["bio_import"] = body["bio_import"]
+    if "slim_metadata" in body:
+        if not isinstance(body["slim_metadata"], bool):
+            return jsonify({"ok": False, "error": "slim_metadata must be true or false"})
+        changes["slim_metadata"] = body["slim_metadata"]
     sessions = {t: sync.session_of(t, {"session": None}, cfg) for t in sync.KINDS if t in body}
     if "tools" in body:                        # checked before anything is saved
         tools, error = config.clean_tools(body["tools"], jobs.TOOLS)

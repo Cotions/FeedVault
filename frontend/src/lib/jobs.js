@@ -42,6 +42,15 @@ export function scriptJobToReopen(jobs) {
   return (jobs || []).find(j => j.kind === SCRIPT_KIND && !ENDED.has(j.state)) ?? null;
 }
 
+// Settings → Sync's "Slim existing metadata": the newest job of each mode
+// (kind "slim-metadata": "preview" counts, "apply" rewrites) in GET
+// /api/jobs' list (newest first), null where there is none.
+export const SLIM_KIND = "slim-metadata";
+export function slimJobs(jobs) {
+  const newest = mode => (jobs || []).find(j => j.kind === SLIM_KIND && j.params?.mode === mode) ?? null;
+  return { preview: newest("preview"), apply: newest("apply") };
+}
+
 // A job's params as shown: a script's SHA-256 is for the backend's check only.
 export const shownParams = job => Object.entries(job.params || {}).filter(([k]) => k !== "sha256").map(([, v]) => v);
 
