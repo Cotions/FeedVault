@@ -1,7 +1,9 @@
 """Link-in-bio import (#11): the one web page FeedVault fetches itself.
 
 The user pastes a person's linktr.ee (or similar) page and clicks Import;
-FeedVault fetches that one page and suggests the accounts it links to.
+FeedVault fetches that one page, suggests the accounts it links to, and
+keeps the page's own address and the links it shows a visitor in that
+person's Links (links.py), so they outlast the page.
 Everything else that reaches the network is a downloader started as a job,
 or the PyPI version check (downloaders.py). So this is kept small and
 bounded:
@@ -20,9 +22,13 @@ bounded:
   found in the page: the caller only parses what comes back.
 
 The page's body is never logged or stored; its URL may be logged. It is
-read with html.parser and json only (never run), and only the profile links
+read with html.parser and json only (never run). Only the profile links
 the routing table knows become suggestions; the user adds each one through
-the usual calls.
+the usual calls. What is stored is the links a visitor would click
+(shown_links: no image, font, script, CDN or tracking address, nothing of
+the bio site itself), each through links.py's own cleaning, with the label
+the page gives it as plain text. A saved link is text like any other in
+Links: never fetched, here or anywhere, and an import only ever adds.
 """
 import codecs
 import ipaddress
@@ -32,11 +38,13 @@ import socket
 import ssl
 import threading
 import time
+import unicodedata
 from html.parser import HTMLParser
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 import config
 import db
+import links
 import people
 import sources
 
@@ -496,6 +504,9 @@ def fetch(url, clock=time.monotonic):
 
 MAX_LINKS = 1000                               # distinct links read from a page
 MAX_SUGGESTIONS = 100
+MAX_SAVED = 200                                # links one import may add to a person's Links
+MAX_READ = 20_000                              # links of a page looked at for that, its images and scripts too
+LABEL_READ = 2000                              # characters of a link's label read from the page
 _JSON_NODES = 200_000                          # values walked in the page's JSON, all blocks together
 _URL_START = re.compile(r"https?://", re.IGNORECASE)
 
@@ -503,29 +514,72 @@ _URL_START = re.compile(r"https?://", re.IGNORECASE)
 class _Links(HTMLParser):
     """The href of every <a> and <area>, and the text of JSON <script>
     blocks (Next.js' __NEXT_DATA__, application/json, application/ld+json),
-    which some sites draw their links from. Nothing else is read."""
+    which some sites draw their links from. Nothing else is read.
+    ``anchors``: the same hrefs, each with the label a visitor reads on it
+    (its text, else its aria-label, title or image's alt)."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.hrefs, self.blocks, self._json = [], [], None
+        self.anchors, self._a, self._quiet = [], None, False
+
+    def _close_anchor(self):
+        if self._a is not None:
+            href, text, spare, _ = self._a
+            self.anchors.append((href, "".join(text) if "".join(text).strip() else spare))
+            self._a = None
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag in ("a", "area") and a.get("href"):
             self.hrefs.append(a["href"])
+            self._close_anchor()               # an <a> the page never closed
+            spare = a.get("aria-label") or a.get("title") or a.get("alt") or ""
+            if tag == "a":
+                self._a = [a["href"], [], spare, 0]   # href, text read, label without text, its length
+            else:
+                self.anchors.append((a["href"], spare))
         elif tag == "script":
+            self._quiet = True
             kind = (a.get("type") or "").split(";")[0].strip().lower()
             if a.get("id") == "__NEXT_DATA__" or kind in ("application/json", "application/ld+json"):
                 self._json = []
+        elif tag == "style":
+            self._quiet = True
+        elif tag == "img" and self._a is not None and not self._a[2]:
+            self._a[2] = a.get("alt") or ""
 
     def handle_data(self, data):
         if self._json is not None:
             self._json.append(data)
+        elif self._a is not None and not self._quiet and self._a[3] < LABEL_READ:
+            self._a[1].append(data[:LABEL_READ])
+            self._a[3] += len(data)
 
     def handle_endtag(self, tag):
         if tag == "script" and self._json is not None:
             self.blocks.append("".join(self._json))
             self._json = None
+        if tag in ("script", "style"):
+            self._quiet = False
+        elif tag == "a":
+            self._close_anchor()
+
+
+def read(text):
+    """A page parsed once, for page_links and shown_links. Malformed HTML
+    gives what was read before it broke."""
+    parser = _Links()
+    try:
+        parser.feed(text)
+        parser.close()
+    except Exception:                          # html.parser on broken markup: keep what it found
+        pass
+    if parser._json is not None:               # a JSON block the page never closed
+        parser.blocks.append("".join(parser._json))
+        parser._json = None
+    parser._close_anchor()
+    return parser
 
 
 def _json_urls(block, budget):
@@ -549,17 +603,11 @@ def _json_urls(block, budget):
     return out
 
 
-def page_links(text):
-    """The distinct absolute http(s) links of a page, in order: anchors,
-    then JSON blocks. Malformed HTML gives what was read before it broke."""
-    parser = _Links()
-    try:
-        parser.feed(text)
-        parser.close()
-    except Exception:                          # html.parser on broken markup: keep what it found
-        pass
-    if parser._json is not None:               # a JSON block the page never closed
-        parser.blocks.append("".join(parser._json))
+def page_links(page):
+    """The distinct absolute http(s) links of a page (its text, or as read()
+    gives it), in order: anchors, then JSON blocks. Every one, an image's or
+    a script's address too: what profile() is asked about, not what is kept."""
+    parser = page if isinstance(page, _Links) else read(page)
     found, budget = list(parser.hrefs), [_JSON_NODES]
     for block in parser.blocks:
         found.extend(_json_urls(block, budget))
@@ -621,36 +669,28 @@ def _account(a):
     return {k: a[k] for k in ("platform", "id", "handle", "name", "count", "url")}
 
 
-def suggest(conn, pid, links, table, roots):
-    """{accounts: [suggestion], other: n} for a person from a page's links.
+def suggest(conn, pid, found_links, table, roots):
+    """[suggestion] for a person from a page's links (page_links): the
+    profiles the routing table knows, each once, at most MAX_SUGGESTIONS.
 
     A suggestion: {platform, handle, url, tool, status, profile_url,
     account, person, source}. ``status``: "linked" (theirs already, as an account or a
     source), "other" (``person``'s), "indexed" (an account in the index
     linked to nobody: add it to them), "source" (a source linked to nobody
-    yet), "new" (nothing downloaded: add it as a source of theirs).
-    ``other``: the links that are not a profile the routing table knows,
-    the bio site's own pages aside."""
+    yet), "new" (nothing downloaded: add it as a source of theirs)."""
     accounts = db.accounts(conn)
     by_name = _by_name(accounts)
-    out, seen, other = [], set(), 0
-    for link in links:
+    out, seen = [], set()
+    for link in found_links:
         found = profile(link, table)
         if found is None:
-            try:
-                own = _host(urlsplit(link).hostname) in SITES
-            except ValueError:                 # https://[oops: not a link at all
-                own = False
-            if not own:
-                other += 1
             continue
         platform, handle, url, tool, target = found
         if (platform, handle.lower()) in seen:
             continue
         seen.add((platform, handle.lower()))
         if len(out) >= MAX_SUGGESTIONS:
-            other += 1
-            continue
+            break
         keys = by_name.get((platform, handle.lower()), set())
         account = accounts[next(iter(keys))] if len(keys) == 1 else None
         folder = sources.default_folder(tool, platform, target, roots) if roots else None
@@ -674,4 +714,192 @@ def suggest(conn, pid, links, table, roots):
                     "profile_url": (account or {}).get("url") or db.profile_url(platform, own),
                     "account": _account(account) if account else None,
                     "person": {"id": owner["id"], "name": owner["name"]} if owner else None, "source": sid})
-    return {"accounts": out, "other": other}
+    return out
+
+
+# ---------------------------------------------------------------------------
+# What the page shows a visitor: kept in the person's Links (links.py)
+# ---------------------------------------------------------------------------
+
+# A link-in-bio site's other names: its own pages too, like its host's.
+_ALSO_OWN = {"linktr.ee": ("linktree.com",), "linkin.bio": ("later.com",)}
+# Sites that serve a page's parts or count its visitors, never somewhere a
+# visitor goes; their subdomains too.
+_ASSET_SITES = frozenset({
+    "cloudfront.net", "amazonaws.com", "akamaihd.net", "akamaized.net", "akamai.net", "fastly.net", "fastlylb.net",
+    "azureedge.net", "b-cdn.net", "bunnycdn.com", "cloudinary.com", "imgix.net", "jsdelivr.net", "unpkg.com",
+    "cdnjs.com", "gstatic.com", "googleapis.com", "googleusercontent.com", "ggpht.com", "typekit.net",
+    "fontawesome.com", "gravatar.com", "fbcdn.net", "facebook.net", "cdninstagram.com", "twimg.com", "ytimg.com",
+    "tiktokcdn.com", "tiktokcdn-us.com", "googletagmanager.com", "google-analytics.com", "doubleclick.net",
+    "googlesyndication.com", "googleadservices.com", "cloudflareinsights.com", "sentry.io", "datadoghq.com",
+    "newrelic.com", "nr-data.net", "bugsnag.com", "segment.com", "segment.io", "hotjar.com", "amplitude.com",
+    "mixpanel.com", "statsig.com", "clarity.ms", "scorecardresearch.com", "cookielaw.org", "onetrust.com",
+    "cookiebot.com", "recaptcha.net", "hcaptcha.com", "stripe.network",
+    "w3.org", "schema.org", "ogp.me", "gmpg.org", "xmlns.com", "purl.org",     # namespaces, not pages
+})
+# The same, told by a subdomain's name on any site (cdn.example.com,
+# static2.example.com, api.example.com).
+_ASSET_LABEL = re.compile(r"(?:cdn|static|assets?|img|images?|media|fonts?|js|css|ugc|thumbs?|thumbnails?|avatars?"
+                          r"|analytics|tracking|track|pixel|telemetry|metrics|stats|sentry|api|graph|ingress)"
+                          r"(?:[-0-9].*)?")
+# Files a page is built from or plays, by the path's ending.
+_ASSET_ENDINGS = (
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg", ".ico", ".bmp", ".heic", ".tif", ".tiff",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot", ".js", ".mjs", ".css", ".map", ".json", ".webmanifest", ".wasm",
+    ".mp4", ".webm", ".mov", ".m3u8", ".mp3", ".m4a", ".ogg", ".wav",
+)
+# Names no public site has: a link to one would open something on the
+# user's own network.
+_PRIVATE_ENDINGS = {"local", "localhost", "internal", "intranet", "lan", "home", "corp", "arpa", "test", "invalid"}
+_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_NUMBER_RE = re.compile(r"[0-9]+|0x[0-9a-f]*")     # a last label browsers read as part of an IPv4 address
+_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+# In a JSON block, a link is a text under a key named for one (url, href,
+# linkUrl, links, sameAs…), its label a text beside it under one of _LABEL_KEYS.
+_LINK_KEY = re.compile(r".*(?:url|href|link|uri)s?|sameas|website")
+_LABEL_KEYS = ("title", "label", "text", "name", "buttonText", "caption")
+# Nothing under a key named for a part of the page or for the site's own
+# workings is read at all (thumbnailUrl, profilePictureUrl, metaImage,
+# environment, statsigInitValues, dynamicConfigs…).
+_PLUMBING_KEY = re.compile(
+    r"image|img|avatar|thumb|picture|photo|icon|logo|background|banner|poster|sprite|font|video|audio|asset|cdn"
+    r"|css|style|theme|embed|seo|canonical|pixel|tracking|analytic|metric|endpoint|webhook|config|environment"
+    r"|statsig|experiment|sponsor|datafeed|manifest|i18n|locale")
+_CONSTANT_KEY = re.compile(r"[A-Z0-9]+(?:_[A-Z0-9]+)+")      # GRAPHQL_API_ENDPOINT: the site's settings
+# An address written in a label: a word that starts as one.
+_ADDRESS_IN_LABEL = re.compile(r"(?:https?://|www\.)\S+|(?:[a-z0-9-]+\.)+[a-z]{2,}/\S*", re.IGNORECASE)
+
+
+def _key(name):
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _json_shown(block, budget):
+    """[(link, label)] of a JSON text, in order: the texts under a link's
+    key (_LINK_KEY), outside anything named for the page's parts or the
+    site's settings (_PLUMBING_KEY, _CONSTANT_KEY). ``budget`` as _json_urls."""
+    try:
+        stack = [(json.loads(block), "", None)]
+    except (ValueError, RecursionError):
+        return []
+    out = []
+    while stack and budget[0] > 0:
+        budget[0] -= 1
+        v, key, owner = stack.pop()            # a value, the key it is under, the object it is in
+        if isinstance(v, str):
+            if _LINK_KEY.fullmatch(key):
+                out.append((v, next((owner[k] for k in _LABEL_KEYS if isinstance(owner.get(k), str)
+                                     and owner[k].strip()), "") if owner is not None else ""))
+        elif isinstance(v, dict):
+            stack.extend((x, _key(k), v) for k, x in reversed(list(v.items()))
+                         if not _CONSTANT_KEY.fullmatch(k) and not _PLUMBING_KEY.search(_key(k)))
+        elif isinstance(v, list):
+            stack.extend((x, key, None) for x in reversed(v))
+    return out
+
+
+def clean_label(text, url=None):
+    """A label from the page as a saved link's title: plain text, bounded.
+    Control and format characters go (an escape sequence, a right-to-left
+    override, a zero-width space; the joiner inside an emoji stays),
+    whitespace is collapsed, and it is cut to links.MAX_TITLE. A label
+    that shows another site's address than the link's is not used at all:
+    it would read as where the link goes. "" for none."""
+    if not isinstance(text, str):
+        return ""
+    kept = []
+    for c in text[:LABEL_READ]:
+        kind = unicodedata.category(c)
+        if kind in ("Cc", "Zl", "Zp"):
+            kept.append(" ")
+        elif c == "\u200d" or not kind.startswith("C"):
+            kept.append(c)
+    title = links.clean_title(" ".join("".join(kept).split())[:links.MAX_TITLE]) or ""
+    if url is not None:
+        for m in _ADDRESS_IN_LABEL.finditer(title):
+            named = links.clean_url(m.group(0) if "://" in m.group(0) else "https://" + m.group(0))
+            if named is None or links.site(named) != links.site(url):
+                return ""
+    return title
+
+
+def _visitor_url(link, own):
+    """(URL as links.py stores it, None), (None, "refused") or (None,
+    "plumbing") for a link found in a page whose sites are ``own``.
+
+    Refused: what links.clean_url refuses (another scheme, a login part, a
+    control character, too long), a port of its own, and a host that is not
+    a public site's name (an IP address in any spelling, a single word,
+    .local and the like). Plumbing: the bio site's own pages, a host or a
+    file that serves a page's parts. The host is stored in its ASCII form,
+    so a look-alike name shows as the xn-- name it is."""
+    url = links.clean_url(link)
+    if url is None:
+        return None, "refused"
+    parts = urlsplit(url)
+    try:
+        if parts.port is not None:
+            return None, "refused"
+        host = parts.hostname.encode("idna").decode("ascii").lower().rstrip(".")
+    except (UnicodeError, ValueError):
+        return None, "refused"
+    labels = host.split(".")
+    if len(labels) < 2 or not all(_LABEL_RE.fullmatch(x) for x in labels) or _NUMBER_RE.fullmatch(labels[-1]) \
+            or labels[-1] in _PRIVATE_ENDINGS:
+        return None, "refused"
+    # The rest as a browser would send it (check_url does the same for the
+    # page fetched): nothing that is not ASCII is stored as it is, so no
+    # right-to-left override or look-alike letter shows in the address.
+    try:
+        rest = [quote(x, safe=_SAFE + "?") for x in (parts.path, parts.query, parts.fragment)]
+    except UnicodeError:                       # half of a surrogate pair, from a JSON escape
+        return None, "refused"
+    url = links.clean_url(urlunsplit((parts.scheme, host, *rest)))
+    if url is None:
+        return None, "refused"
+    if any(host == site or host.endswith("." + site) for site in (*own, *_ASSET_SITES)):
+        return None, "plumbing"
+    under = host[:-len(links.site(url))].split(".")        # the labels below the site's own name
+    if any(_ASSET_LABEL.fullmatch(x) for x in under) or parts.path.lower().endswith(_ASSET_ENDINGS):
+        return None, "plumbing"
+    return url, None
+
+
+def shown_links(page, page_url, table):
+    """([(url, title)], dropped): what an import keeps in a person's Links.
+
+    First the page's own address, then every link it shows a visitor, each
+    once, in order: its anchors (the label is the anchor's text), the
+    links of its JSON blocks (_json_shown: Linktree's buttons and icons,
+    the label a button's title), and any other address in it that is a
+    profile the routing table knows (what suggest() offers is always kept).
+    Each goes through _visitor_url: the page's images, fonts, scripts, CDN
+    and tracking addresses and the bio site's own pages are left out
+    without a word, and ``dropped`` counts the links refused (a mailto: or
+    javascript: link, an address on the user's own network…). URLs are as
+    links.clean_url gives them, titles as clean_label does; "" for none."""
+    parser = page if isinstance(page, _Links) else read(page)
+    first = links.clean_url(page_url)
+    host = _host(urlsplit(page_url).hostname)
+    own = (host, *_ALSO_OWN.get(host, ())) if host else ()
+    found, budget = list(parser.anchors), [_JSON_NODES]
+    for block in parser.blocks:
+        found.extend(_json_shown(block, budget))
+    found.extend((link, "") for link in page_links(parser) if profile(link, table) is not None)
+    out, refused = ({first: ""} if first else {}), set()
+    for link, label in found[:MAX_READ]:
+        link = link.strip()
+        if link.startswith("//"):
+            link = "https:" + link
+        if not _SCHEME_RE.match(link):
+            continue                           # /a/path, #top, a word: the site's own, or no link
+        if len(out) + len(refused) >= MAX_LINKS:
+            break
+        url, why = _visitor_url(link, own)
+        if url is None:
+            if why == "refused":
+                refused.add(link)
+            continue
+        if not out.get(url) and url != first:  # the first label a link is given
+            out[url] = clean_label(label, url)
+    return list(out.items()), len(refused)

@@ -1,7 +1,7 @@
 // Desktop, 1440x900: saved links, on the Links page and on a person's
 // page. Addresses are invented (.example); FeedVault never opens them, and
 // neither does the test: it checks the anchors, it does not follow them.
-import { test, expect, openPage, idle, stressData } from "./fixtures.js";
+import { test, expect, openPage, idle, stressData, fakeBioImport } from "./fixtures.js";
 import { STRESS_LINKS } from "./stress.js";
 
 const H = { "X-FeedVault": "1" };
@@ -86,6 +86,54 @@ test("a person's Links: add, reorder, edit and delete", async ({ page }) => {
     await idle(page);
   } finally {
     // The person's links stay, tied to no one, once the person is gone: both cleared.
+    const { links } = await (await page.request.get(`/api/links?person=${pid}`, { headers: H })).json();
+    for (const l of links) await page.request.delete(`/api/links/${l.id}`, { headers: H });
+    await page.request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});
+
+// A link-in-bio import keeps the page's links (faked, fixtures.js: nothing
+// is fetched, and the fake saves them as the backend would): the person's
+// Links show them at once, with no reload, a label from the page as plain
+// text; importing again finds nothing new and changes nothing.
+test("a link-in-bio import shows the links it saved in the person's Links", async ({ page }) => {
+  const stamp = Date.now();
+  const made = await page.request.post("/api/people", { headers: H, data: { name: `E2E bio links ${stamp}` } });
+  const pid = (await made.json()).person.id;
+  const found = [
+    { url: `https://linktr.ee/e2e${stamp}`, title: "" },
+    { url: `https://www.patreon.com/e2e-bio-${stamp}`, title: "My Patreon" },
+    { url: `https://e2e-bio-${stamp}.example/shop`, title: "<img src=x onerror=alert(1)>" },
+  ];
+  try {
+    await fakeBioImport(page, { found });
+    await page.goto(`/people/${pid}`);
+    const section = page.locator(".person-links-section");
+    await expect(section.locator(".empty")).toBeVisible();
+    const box = page.locator(".bio-import");
+    await box.getByRole("textbox", { name: "Link-in-bio page" }).fill(`linktr.ee/e2e${stamp}`);
+    await box.getByRole("button", { name: "Import" }).click();
+    await expect(box.locator(".bio-import-kept")).toHaveText("3 links saved to their Links");
+
+    const titles = section.locator(".link-row .link-row-title");
+    await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "My Patreon", "<img src=x onerror=alert(1)>"]);
+    await expect(section.locator(".link-group-title")).toHaveText(["Socials", "Other", "Add a link"]);
+    expect(await section.locator("img").count(), "a label is text, never markup").toBe(0);
+    for (const [i, link] of found.entries()) await expectSafeAnchor(section.locator(".link-row").nth(i), link.url);
+
+    // Again, the page unchanged: nothing new, and what the user made of a link stays.
+    await section.getByRole("button", { name: "Edit My Patreon" }).click();
+    const edit = section.locator(".link-row.is-editing");
+    await edit.getByLabel("Title").fill("Patreon, mine");
+    await edit.getByRole("button", { name: "Save" }).click();
+    await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "Patreon, mine", "<img src=x onerror=alert(1)>"]);
+    await box.getByRole("button", { name: "Import" }).click();
+    await expect(box.locator(".bio-import-kept")).toHaveText("No new link to save · 3 links already there");
+    await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "Patreon, mine", "<img src=x onerror=alert(1)>"]);
+    await page.reload();
+    await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "Patreon, mine", "<img src=x onerror=alert(1)>"]);
+    await idle(page);
+  } finally {
     const { links } = await (await page.request.get(`/api/links?person=${pid}`, { headers: H })).json();
     for (const l of links) await page.request.delete(`/api/links/${l.id}`, { headers: H });
     await page.request.delete(`/api/people/${pid}`, { headers: H });

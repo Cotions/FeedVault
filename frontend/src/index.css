@@ -3141,6 +3141,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .bio-import-list.person-accounts { margin-bottom: 0; }
 .bio-import-row .creator-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bio-import-row > .btn-primary { flex-shrink: 0; }
+/* What the import saved to their Links: a second line under "N accounts found". */
+.bio-import-result > .bio-import-kept { margin-top: -2px; overflow: visible; overflow-wrap: anywhere; }
 .person-notes {
   width: 100%; resize: vertical; padding: 9px 12px;
   font: inherit; font-size: 13px; color: var(--text);

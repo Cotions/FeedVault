@@ -80,7 +80,7 @@ def test_clean_url_normalizes(raw, clean):
     "https://example.com@evil.com", "https://", "https:///path", "https://exa mple.com",
     "https://example.com/a b", "https://example.com/\x00", "https://example.com/a\tb", "http://example.com\\@evil.com",
     "https://example.com:port/", "https://%65vil.com/", "https://<script>/", "http://[not-ipv6]/",
-    "https://example.com/" + "a" * links.MAX_URL,
+    "https://example.com/" + "a" * links.MAX_URL, "https://example.com/\ud800",
 ])
 def test_clean_url_refuses(raw):
     assert links.clean_url(raw) is None
@@ -540,6 +540,55 @@ def test_delete_many(client):
     for body in ({}, {"ids": []}, {"ids": ["1"]}, {"ids": list(range(1, links.MAX_IDS + 2))}):
         post(client, "/api/links/delete", body, 400)
     assert urls(client) == ["https://b.example"]
+
+
+# ---------------------------------------------------------------------------
+# Keeping links found elsewhere (links.keep: the link-in-bio import)
+# ---------------------------------------------------------------------------
+
+def test_keep_adds_only_what_a_person_does_not_have(client, clock):
+    alice, bob = person(client, "Alice"), person(client, "Bob")
+    mine = add(client, "https://www.patreon.com/alice", person=alice, title="Mine", notes="n")["link"]
+    add(client, "https://b.example", person=bob, title="Bob's")
+    add(client, "https://loose.example", title="Loose")
+    conn = db.connect()
+    found = [("https://www.patreon.com/alice", "Theirs"), ("http://patreon.com/alice/", "Another spelling"),
+             ("https://b.example", "x"), ("https://loose.example", "x"), ("https://new.example/1", "One"),
+             ("https://new.example/2", ""), ("https://new.example/3", "Three")]
+    assert links.keep(conn, alice, found, 1_000_077, 2) == {"saved": 2, "already": 2, "elsewhere": 2, "over": 1}
+    assert not conn.in_transaction
+    got = get(client, f"/api/people/{alice}")["links"]
+    assert got[0] == mine                                  # its title, notes and place untouched
+    assert [(x["url"], x["title"], x["position"], x["created_at"]) for x in got[1:]] == [
+        ("https://new.example/1", "One", 2, 1_000_077), ("https://new.example/2", "", 3, 1_000_077)]
+    assert [x["title"] for x in get(client, f"/api/people/{bob}")["links"]] == ["Bob's"]
+    assert [x["title"] for x in get(client, "/api/links?person=none")["links"]] == ["Loose"]
+    assert recent(client)[0] == ("Alice", 1_000_077)           # given to her then, as a link added by hand
+    # Nothing new, and a person who is gone: nothing written.
+    assert links.keep(conn, alice, found[:2], 78, 2) == {"saved": 0, "already": 2, "elsewhere": 0, "over": 0}
+    assert links.keep(conn, 999, found, 78, 2) is None and not conn.in_transaction
+    assert len(urls(client)) == 5
+
+
+def test_keep_saves_all_or_none(client):
+    alice = person(client, "Alice")
+    conn = db.connect()
+    with pytest.raises(sqlite3.IntegrityError):            # a title that is not text: the table refuses it
+        links.keep(conn, alice, [("https://a.example", "A"), ("https://b.example", None)], 1, 10)
+    assert not conn.in_transaction and urls(client) == []
+
+
+@pytest.mark.parametrize("a, b, same", [
+    ("https://www.patreon.com/alice", "http://patreon.com/alice/", True),
+    ("https://shop.example", "https://www.shop.example/", True),
+    ("https://shop.example/a?x=1", "https://shop.example/a?x=2", False),
+    ("https://shop.example/a", "https://shop.example/A", False),
+    ("https://shop.example/a#one", "https://shop.example/a#two", False),
+    ("https://shop.example:8443/a", "https://shop.example/a", False),
+    ("https://alice.shop.example/", "https://shop.example/", False),
+])
+def test_spellings_of_one_address(a, b, same):
+    assert (links.spelling(links.clean_url(a)) == links.spelling(links.clean_url(b))) is same
 
 
 def test_jobs_poll_counts_unsorted_links(client):

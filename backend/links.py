@@ -55,6 +55,7 @@ def clean_url(value):
     if not url or len(url) > MAX_URL or "\\" in url or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
         return None
     try:
+        url.encode("utf-8")                    # half of a surrogate pair (a JSON "\ud800"): the table cannot hold it
         parts = urlsplit(url)
         port = parts.port                      # a port that is not a number raises
     except ValueError:
@@ -220,7 +221,55 @@ def create(conn, url, title, notes, pid, now):
     return get(conn, lid)
 
 
-UNSET = _UNSET = object()                  # an argument not given (None means no one)
+def spelling(url):
+    """What two spellings of one address share: http or https, with or
+    without www., with or without a last slash."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    return (host[4:] if host.startswith("www.") else host, parts.port, parts.path.rstrip("/"), parts.query,
+            parts.fragment)
+
+
+def keep(conn, pid, found, now, limit):
+    """Save the links a person does not have yet, from ``found`` ([(url,
+    title)], each cleaned, no URL twice): last in their order, in the order
+    given, in one transaction with the write lock taken first (as assign).
+    A URL saved already is left exactly as it is, whoever it is tied to:
+    never moved, retitled or removed (the link-in-bio import, biofetch.py,
+    run again on a page that changed). Another spelling of a link they
+    have (spelling) is theirs already too. At most ``limit`` are saved.
+
+    {"saved", "already" (this person's), "elsewhere" (another person's, or
+    no one's), "over" (new, but past the limit)}, or None when the person
+    is gone."""
+    out = {"saved": 0, "already": 0, "elsewhere": 0, "over": 0}
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute("SELECT 1 FROM people WHERE id = ?", (pid,)).fetchone() is None:
+            conn.execute("ROLLBACK")
+            return None
+        place = _next_position(conn, pid)
+        have = {spelling(u) for (u,) in conn.execute("SELECT url FROM links WHERE person_id = ?", (pid,))}
+        for url, title in found:
+            row = conn.execute("SELECT person_id FROM links WHERE url = ?", (url,)).fetchone()
+            if row is not None or spelling(url) in have:
+                out["elsewhere" if row is not None and row[0] != pid else "already"] += 1
+            elif out["saved"] >= limit:
+                out["over"] += 1
+            else:
+                conn.execute("INSERT INTO links(url, title, notes, person_id, position, created_at, tied_at) "
+                             "VALUES (?, ?, '', ?, ?, ?, ?)", (url, title, pid, place + out["saved"], now, now))
+                out["saved"] += 1
+                have.add(spelling(url))
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    return out
+
+
+UNSET = _UNSET = object()                # an argument not given (None means no one)
 
 
 def _give(conn, lid, pid, now):

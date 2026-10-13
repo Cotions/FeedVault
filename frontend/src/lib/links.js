@@ -102,3 +102,18 @@ export function sharedTitle(text) {
   if (title.length > MAX_TITLE) title = title.slice(0, MAX_TITLE).replace(/[\uD800-\uDBFF]$/, "").trimEnd();
   return title;
 }
+
+/* What a link-in-bio import kept in a person's Links, in words (the
+   endpoint's `links`: { saved, already, elsewhere, dropped, over }), one
+   part per count that is not zero. Only numbers are read: not a word of
+   it comes from the page. */
+export function importedParts(links) {
+  const n = k => (Number.isInteger(links?.[k]) && links[k] > 0 ? links[k] : 0);
+  return [
+    n("saved") ? `${plural(n("saved"), "link")} saved to their Links` : "No new link to save",
+    n("already") && `${plural(n("already"), "link")} already there`,
+    n("elsewhere") && `${plural(n("elsewhere"), "link")} saved for someone else or no one, left there`,
+    n("dropped") && `${plural(n("dropped"), "link")} dropped (not a web address Links keeps)`,
+    n("over") && `${plural(n("over"), "link")} over what one import saves: import again for the rest`,
+  ].filter(Boolean);
+}

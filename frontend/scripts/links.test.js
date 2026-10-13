@@ -1,7 +1,7 @@
 // Checks for lib/links.js: the address a link form sends (#126). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_TITLE, droppedUrl, externalUrl, mayCarryUrl, sharedTitle, urlLines, urlProblem, withScheme } from "../src/lib/links.js";
+import { MAX_TITLE, droppedUrl, externalUrl, importedParts, mayCarryUrl, sharedTitle, urlLines, urlProblem, withScheme } from "../src/lib/links.js";
 import { NO_PERSON, personOptions } from "../src/lib/people.js";
 
 test("an address with no scheme gets https://", () => {
@@ -108,4 +108,16 @@ test("why an outside address is not one: said in a few words", () => {
   assert.equal(urlProblem("https://user:pw@example.org/"), "it has a user name or password in it");
   assert.equal(urlProblem("https://example.org/a b"), "it has a space, a backslash or a control character in it");
   assert.equal(urlProblem("https://"), "it is not a web address");
+});
+
+test("what a link-in-bio import kept, in words", () => {
+  assert.deepEqual(importedParts({ saved: 4, already: 0, elsewhere: 0, dropped: 0, over: 0 }), ["4 links saved to their Links"]);
+  assert.deepEqual(importedParts({ saved: 1, already: 12, elsewhere: 1, dropped: 2, over: 3 }), [
+    "1 link saved to their Links", "12 links already there", "1 link saved for someone else or no one, left there",
+    "2 links dropped (not a web address Links keeps)", "3 links over what one import saves: import again for the rest"]);
+  assert.deepEqual(importedParts({ saved: 0, already: 9 }), ["No new link to save", "9 links already there"]);
+  // An answer that is not the shape expected says nothing it does not know.
+  for (const odd of [undefined, null, {}, { saved: "<b>7</b>", already: -1, dropped: 1.5, over: null }]) {
+    assert.deepEqual(importedParts(odd), ["No new link to save"]);
+  }
 });
