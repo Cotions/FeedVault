@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { authorFeedPath, fmtInt, platformLabel, platformShort } from "../lib/fmt";
+import { authorFeedPath, fmtInt, platformLabel } from "../lib/fmt";
 import { accountKey, personPath, REASONS } from "../lib/people";
 import Icon from "./Icon";
+import PlatformIcon from "./PlatformIcon";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -30,7 +31,7 @@ export default function Suggestions({ data, busy, onLink, onDismiss, title = "Li
             <div className="suggestion-accounts">
               {s.accounts.map(a => (
                 <Link key={accountKey(a)} to={authorFeedPath(a.platform, a)} className="chip platform-chip" title={`${platformLabel(a.platform)} · ${a.count} posts`}>
-                  {platformShort(a.platform)} @{a.handle || a.id}
+                  <PlatformIcon platform={a.platform} size={12} inChip />@{a.handle || a.id}
                 </Link>
               ))}
               {s.person && <span className="suggestion-into">into <Link to={personPath(s.person.id)} className="text-link">{s.person.name}</Link></span>}

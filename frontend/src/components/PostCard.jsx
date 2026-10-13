@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import Icon from "./Icon";
+import PlatformIcon from "./PlatformIcon";
 import TagChips from "./TagChips";
-import { excerpt, fmtShortDate, fmtFullDate, platformLabel, platformShort, postPath, authorFeedPath } from "../lib/fmt";
+import { excerpt, fmtShortDate, fmtFullDate, platformLabel, postPath, authorFeedPath } from "../lib/fmt";
 
 /* One tile in the masonry feed. The cover keeps its natural aspect ratio (the
    grid is CSS columns, so tall and wide media sit side by side). Text-only
@@ -98,11 +99,11 @@ export default function PostCard({ post, index = 0, selectMode = false, selected
 
       <div className="post-info">
         <div className="post-meta">
+          <PlatformIcon platform={post.platform} size={13} />
           <Link to={authorFeedPath(post.platform, post.author)} className="post-author"
                 title={post.author?.name && post.author.name !== handle ? `${post.author.name} · @${handle}` : `@${handle}`}>
             @{handle}
           </Link>
-          <span className="post-platform" title={platformLabel(post.platform)}>{platformShort(post.platform)}</span>
           {post.decision === "keep" && <span className="kept-dot" title="Marked as kept" aria-label="kept" role="img" />}
           <time className="post-date" dateTime={post.posted_at ? new Date(post.posted_at * 1000).toISOString() : undefined} title={fmtFullDate(post.posted_at)}>
             {fmtShortDate(post.posted_at)}
