@@ -812,7 +812,7 @@ def clean_label(text, url=None):
         kind = unicodedata.category(c)
         if kind in ("Cc", "Zl", "Zp"):
             kept.append(" ")
-        elif c == "‍" or not kind.startswith("C"):
+        elif c == "\u200d" or not kind.startswith("C"):
             kept.append(c)
     title = links.clean_title(" ".join("".join(kept).split())[:links.MAX_TITLE]) or ""
     if url is not None:
@@ -847,7 +847,14 @@ def _visitor_url(link, own):
     if len(labels) < 2 or not all(_LABEL_RE.fullmatch(x) for x in labels) or _NUMBER_RE.fullmatch(labels[-1]) \
             or labels[-1] in _PRIVATE_ENDINGS:
         return None, "refused"
-    url = links.clean_url(urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment)))
+    # The rest as a browser would send it (check_url does the same for the
+    # page fetched): nothing that is not ASCII is stored as it is, so no
+    # right-to-left override or look-alike letter shows in the address.
+    try:
+        rest = [quote(x, safe=_SAFE + "?") for x in (parts.path, parts.query, parts.fragment)]
+    except UnicodeError:                       # half of a surrogate pair, from a JSON escape
+        return None, "refused"
+    url = links.clean_url(urlunsplit((parts.scheme, host, *rest)))
     if url is None:
         return None, "refused"
     if any(host == site or host.endswith("." + site) for site in (*own, *_ASSET_SITES)):

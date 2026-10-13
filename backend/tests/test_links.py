@@ -80,7 +80,7 @@ def test_clean_url_normalizes(raw, clean):
     "https://example.com@evil.com", "https://", "https:///path", "https://exa mple.com",
     "https://example.com/a b", "https://example.com/\x00", "https://example.com/a\tb", "http://example.com\\@evil.com",
     "https://example.com:port/", "https://%65vil.com/", "https://<script>/", "http://[not-ipv6]/",
-    "https://example.com/" + "a" * links.MAX_URL,
+    "https://example.com/" + "a" * links.MAX_URL, "https://example.com/\ud800",
 ])
 def test_clean_url_refuses(raw):
     assert links.clean_url(raw) is None
@@ -570,7 +570,7 @@ def test_keep_adds_only_what_a_person_does_not_have(client, clock):
     assert len(urls(client)) == 5
 
 
-def test_keep_saves_all_or_none(client, monkeypatch):
+def test_keep_saves_all_or_none(client):
     alice = person(client, "Alice")
     conn = db.connect()
     with pytest.raises(sqlite3.IntegrityError):            # a title that is not text: the table refuses it

@@ -55,6 +55,7 @@ def clean_url(value):
     if not url or len(url) > MAX_URL or "\\" in url or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
         return None
     try:
+        url.encode("utf-8")                    # half of a surrogate pair (a JSON "\ud800"): the table cannot hold it
         parts = urlsplit(url)
         port = parts.port                      # a port that is not a number raises
     except ValueError:

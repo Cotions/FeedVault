@@ -1108,6 +1108,9 @@ def test_plumbing_is_not_a_link_to_keep(link):
     ("https://alice.example/jsmith", "https://alice.example/jsmith"),
     ("https://alice.example/files/kit.pdf", "https://alice.example/files/kit.pdf"),
     ("https://alice.co.uk/", "https://alice.co.uk"),
+    # Past the host, as a browser sends it: no override or look-alike letter is stored as it is.
+    ("https://shop.example/café?q=‮gnp#а", "https://shop.example/caf%C3%A9?q=%E2%80%AEgnp#%D0%B0"),
+    ("https://shop.example/a%20b?x=1&y=%2F", "https://shop.example/a%20b?x=1&y=%2F"),
     ("https://bücher.example/a", "https://xn--bcher-kva.example/a"),      # stored as the name it is
     ("https://раypal.example/", "https://xn--ypal-43d9g.example"),   # a look-alike shows as one
     ("https://ｓｈｏｐ.example/", "https://shop.example"),     # fullwidth letters are the plain ones
@@ -1121,7 +1124,7 @@ def test_links_kept_as_links_py_stores_them(link, kept):
     "file:///etc/passwd", "ftp://files.example/a", "mailto:a@b.example", "vbscript:x", "blob:https://a.example/1",
     "https://user:pw@evil.example/", "https://evil.example@shop.example/", "https://evil.example\\@shop.example/",
     "https://shop.example/a b", "https://shop.example/\x1b[31m", "https://shop.example/\r\nSet-Cookie: a=b",
-    "https://shop.example/" + "a" * 2100, "https://", "https:///nohost", "https://shop.example:99999/",
+    "https://shop.example/" + "a" * 2100, "https://shop.example/\ud800x", "https://","https:///nohost", "https://shop.example:99999/",
     # Nothing on the user's own machine or network, however it is spelled.
     "http://127.0.0.1:3380/api/config", "http://localhost/", "http://localhost.:3380/", "https://LOCALHOST/",
     "http://[::1]/", "http://[::ffff:10.0.0.1]/", "http://192.168.1.1/admin", "http://10.0.0.1/", "http://2130706433/",
@@ -1174,14 +1177,14 @@ HOSTILE = """<a href="https://ok.example/1"><script>alert(1)</script><style>a{}<
 <script type="application/json">{"links": [
   {"title": {"$gt": ""}, "url": "https://ok.example/6"}, {"title": ["a"], "url": "https://ok.example/7"},
   {"title": "T", "url": ["https://ok.example/8", {"url": "https://ok.example/9"}]},
-  {"title": "T", "url": 5}, {"title": "T", "url": null}, {"title": "T", "url": {"href": "data:text/html,x"}},
+  {"title": "T", "url": 5}, {"title": "T", "url": null}, {"title": "T", "url": "https://ok.example/\\ud800"}, {"title": "T", "url": {"href": "data:text/html,x"}},
   {"title": "T\\u0000\\u001b[1m\\u202e", "url": " https://ok.example/10 "}]}</script>""" % ("y" * 5000)
 
 
 def test_a_hostile_page_saves_only_clean_links(bio, client, monkeypatch):
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(HOSTILE).fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 12, "already": 0, "elsewhere": 0, "over": 0, "dropped": 3}
+    assert r["links"] == {"saved": 12, "already": 0, "elsewhere": 0, "over": 0, "dropped": 4}
     assert saved(client, bio["id"]) == [
         ("https://linktr.ee/alice", ""), ("https://ok.example/1", "Click [2J me"),
         ("https://ok.example/2", "<script>alert(2)</script>"), ("https://ok.example/3", "y" * 300),

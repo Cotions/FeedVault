@@ -1434,7 +1434,9 @@ import); `backend/biofetch.py`.
   `2130706433`, `0x7f.1`), a single word (`localhost`), and names ending in
   `.local`, `.localhost`, `.internal`, `.intranet`, `.lan`, `.home`,
   `.corp`, `.arpa`, `.test` or `.invalid`. An IDN host is saved in its
-  ASCII form (`xn--…`), so a look-alike name shows as what it is.
+  ASCII form (`xn--…`), and what is not ASCII in the path, query or
+  fragment percent-encoded as a browser sends it, so a look-alike name
+  shows as what it is and no right-to-left override is stored.
 - **Titles**: the label the page gives a link (an anchor's text, else its
   `aria-label`, `title` or image's `alt`; in JSON the `title`, `label`,
   `text`, `name`, `buttonText` or `caption` beside the link), as plain
