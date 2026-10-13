@@ -6,9 +6,10 @@ import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
-import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, platformLabel, platformShort, plural, safeUrl } from "../lib/fmt";
+import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, platformLabel, plural, safeUrl } from "../lib/fmt";
 import { accountKey, accountRef } from "../lib/people";
 import Icon from "../components/Icon";
+import PlatformIcon from "../components/PlatformIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
 import CreatorPicker from "../components/CreatorPicker";
@@ -30,7 +31,7 @@ function AccountRow({ account: a, busy, onUnlink }) {
   const named = a.name && a.name !== a.handle;
   return (
     <li className="person-account">
-      <span className="chip platform-chip" title={platformLabel(a.platform)}>{platformShort(a.platform)}</span>
+      <PlatformIcon platform={a.platform} />
       <span className="person-account-id">
         <span className="creator-name" title={named ? `${handle} · ${a.name}` : handle}>
           {handle}

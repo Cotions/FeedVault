@@ -6,12 +6,13 @@ import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
 import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { healthBadge, lastGood, loginText } from "../lib/health";
-import { fmtAgo, fmtFullDate, fmtIn, fmtInt, platformLabel, platformShort, safeUrl } from "../lib/fmt";
+import { fmtAgo, fmtFullDate, fmtIn, fmtInt, platformLabel, safeUrl } from "../lib/fmt";
 import {
   FIRST_POSTS_MAX, MEDIA, SCHEDULES, firstPostsEach, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin,
   optionsOf, optionsSummary, scheduleShort, scheduleText, scriptHref, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
+import PlatformIcon from "./PlatformIcon";
 import BrowserPick from "./BrowserPick";
 import { cookiesSession } from "../lib/browserProfiles";
 import ConfirmDialog from "./ConfirmDialog";
@@ -155,7 +156,7 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
   const summary = optionsSummary(s);
   return (
     <li className={`source-row${flash ? " is-flash" : ""}`} data-source-id={s.id}>
-      <span className="chip platform-chip" title={platformLabel(s.platform)}>{platformShort(s.platform)}</span>
+      <PlatformIcon platform={s.platform} />
       <span className="source-id">
         <span className="creator-name" title={sourceName(s)}>
           {sourceName(s)}
@@ -606,7 +607,7 @@ export function AddSource({ person = null, onAdded, onDirty }) {
       {resolved?.ok && (
         <div className="source-resolved" role="status">
           <ToolBadge tool={resolved.tool} />
-          <span className="chip platform-chip" title={platformLabel(resolved.platform)}>{platformShort(resolved.platform)}</span>
+          <PlatformIcon platform={resolved.platform} />
           <span className="source-resolved-target">{resolved.target.replace(/^https:\/\//, "")}</span>
           <span className="dim">into</span>
           <code className="source-folder" title={resolved.folder}>{resolved.folder}</code>

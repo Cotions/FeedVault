@@ -6,9 +6,10 @@ import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
-import { platformLabel, platformShort, authorFeedPath, fmtBytes, fmtInt, plural } from "../lib/fmt";
+import { platformLabel, authorFeedPath, fmtBytes, fmtInt, plural } from "../lib/fmt";
 import { accountKey, accountRef, accountText, matchedFormer, matches, personPath, personText, suggestName } from "../lib/people";
 import Icon from "../components/Icon";
+import PlatformIcon from "../components/PlatformIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
 import SelectionBar from "../components/SelectionBar";
@@ -128,7 +129,7 @@ function PersonCard({ person: p, index, settled, selectMode, selected, onToggle,
           {p.accounts.length === 0 && <span className="creator-sub">No account linked</span>}
           {p.accounts.map(a => (
             <span key={accountKey(a)} className="chip platform-chip" title={`${platformLabel(a.platform)} @${a.handle || a.id}`}>
-              {platformShort(a.platform)} @{a.handle || a.id}
+              <PlatformIcon platform={a.platform} size={12} inChip /><span className="chip-text">@{a.handle || a.id}</span>
             </span>
           ))}
         </span>
@@ -294,7 +295,7 @@ function SourceSuggestions({ list, busy, onAdd, onAddAll }) {
         {shown.map(s => (
           <li key={s.folder} className="suggestion source-suggestion">
             <div className="suggestion-accounts">
-              <span className="chip platform-chip" title={platformLabel(s.platform)}>{platformShort(s.platform)} @{s.target}</span>
+              <span className="chip platform-chip" title={platformLabel(s.platform)}><PlatformIcon platform={s.platform} size={12} inChip />@{s.target}</span>
               {s.person && <span className="suggestion-into">for <Link to={personPath(s.person.id)} className="text-link">{s.person.name}</Link></span>}
             </div>
             <div className="suggestion-why">

@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { bioImport, createSource, linkAccounts } from "../lib/api";
-import { platformLabel, platformShort, plural, safeUrl } from "../lib/fmt";
+import { platformLabel, plural, safeUrl } from "../lib/fmt";
 import { importedParts } from "../lib/links";
 import { personPath } from "../lib/people";
 import Icon from "./Icon";
+import PlatformIcon from "./PlatformIcon";
 
 const STATUS = {
   linked: "Linked to them",
@@ -105,7 +106,7 @@ export default function BioImport({ person, enabled, onAdded, onImported }) {
                 const done = added[key];
                 return (
                   <li key={key} className="person-account bio-import-row">
-                    <span className="chip platform-chip" title={platformLabel(a.platform)}>{platformShort(a.platform)}</span>
+                    <PlatformIcon platform={a.platform} />
                     <span className="person-account-id">
                       <span className="creator-name" title={`@${a.handle}`}>@{a.handle}</span>
                       <span className="creator-sub">

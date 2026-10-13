@@ -128,6 +128,9 @@ body {
 /* ── Icons ──────────────────────────────────────────────── */
 .icon { flex-shrink: 0; display: block; }
 .icon-fill { fill: currentColor; stroke: none; }
+/* A platform's logo (components/PlatformIcon.jsx) in its brand colour, set
+   on the icon itself; X and TikTok, black marks, take the text colour. */
+.platform-icon { flex-shrink: 0; display: block; color: var(--text); }
 @keyframes iconSpin { to { transform: rotate(360deg); } }
 .icon.spin { animation: iconSpin 0.9s linear infinite; }
 
@@ -1350,13 +1353,8 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   transition: color 0.15s;
 }
 .post-author:hover { color: var(--accent-hover); }
-.post-platform {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 1.2px;
-  color: var(--muted);
-  flex-shrink: 0;
-}
+/* The logo has no baseline of its own: centred on the line instead. */
+.post-meta > .platform-icon { align-self: center; }
 .post-date {
   margin-left: auto;
   font-family: var(--mono);
@@ -3065,10 +3063,12 @@ main[tabindex]:focus-visible { outline: none; box-shadow: none; }
 button.creator-main { background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .person-card .creator-id { gap: 5px; }
 .person-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.platform-chip { text-transform: none; }
+.platform-chip { text-transform: none; gap: 5px; }
 /* A person's accounts: a long handle is cut (its title has it), never runs
    over the count and the card's buttons. */
-.person-chips .platform-chip { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.person-chips .platform-chip { max-width: 100%; min-width: 0; }
+/* Room for the descenders the cut (overflow) would take off the chip's 1 line-height. */
+.person-chips .chip-text { padding-block: 2px; margin-block: -2px; }
 .person-stats { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
 
 .suggestions {
@@ -3437,8 +3437,10 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-row.is-flash, .creator-card.is-flash, .creator-card.is-flash:hover {
   border-color: rgba(var(--glow-rgb), 0.7); box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.18);
 }
-/* One width for TT, IG and X, so the names after them line up. */
-.source-row > .platform-chip { min-width: 28px; justify-content: center; }
+/* One width for a logo and for the text of a platform that has none, so
+   the names after them line up. */
+.source-row > .platform-chip, .person-account > .platform-chip { min-width: 28px; justify-content: center; }
+.source-row > .platform-icon, .person-account > .platform-icon { margin-inline: 6px; }
 .source-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
 .source-summary { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .source-schedule {
