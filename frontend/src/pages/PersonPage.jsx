@@ -190,7 +190,7 @@ export default function PersonPage() {
   const suggestApi = useApi(getSuggestions, refreshKey);
   const { data: config } = useApi(getConfig, refreshKey);
   // Their new posts, again whenever the jobs poll's total moves.
-  const { newCount, started } = useJobs();
+  const { newCount, started, refresh } = useJobs();
   const newApi = useApi(getNew, `${refreshKey}:${newCount}`);
   const [busy,     setBusy]     = useState(false);
   const [editName, setEditName] = useState(null);     // the name being typed, null when not renaming
@@ -436,6 +436,7 @@ export default function PersonPage() {
             person={p}
             enabled={config?.bio_import === true}
             onAdded={() => { reload(); suggestApi.reload(); sources.reload(); }}
+            onImported={() => { reload(); refresh(); }}   // their Links block, and the nav's counts
           />
         </section>
 

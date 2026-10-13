@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { bioImport, createSource, linkAccounts } from "../lib/api";
 import { platformLabel, platformShort, plural, safeUrl } from "../lib/fmt";
+import { importedParts } from "../lib/links";
 import { personPath } from "../lib/people";
 import Icon from "./Icon";
 
@@ -14,14 +15,17 @@ const STATUS = {
 
 /* A person's page: the accounts their link-in-bio page (linktr.ee and the
    like) lists, fetched by the backend on an explicit click, each added
-   with the usual calls. Everything in the answer comes from someone else's
-   page: shown as text only, and the one link is the profile address
-   FeedVault builds itself (profile_url). Off until Settings turns it on. */
-export default function BioImport({ person, enabled, onAdded }) {
+   with the usual calls. The import also keeps the page's address and the
+   links it shows in their Links: the backend saves them, the counts are
+   said here, and onImported lets the page show them. Everything in the
+   answer comes from someone else's page: shown as text only, and the one
+   link is the profile address FeedVault builds itself (profile_url). Off
+   until Settings turns it on. */
+export default function BioImport({ person, enabled, onAdded, onImported }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(null);       // "fetch", or the key of the one being added
   const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);   // { url, accounts, other }
+  const [result, setResult] = useState(null);   // { url, accounts, links: { saved, already, … } }
   const [added, setAdded] = useState({});       // key → true
 
   async function load(e) {
@@ -35,6 +39,7 @@ export default function BioImport({ person, enabled, onAdded }) {
       const r = await bioImport(person.id, url.trim());
       if (!r?.ok) { setError(r?.error || "Could not import that page."); return; }
       setResult(r);
+      onImported?.(r);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -80,7 +85,7 @@ export default function BioImport({ person, enabled, onAdded }) {
           onChange={e => setUrl(e.target.value)}
         />
         <button type="submit" className="btn-secondary" disabled={!enabled || !!busy || !url.trim()}
-                title={enabled ? "Fetches this one page now, and lists the accounts it links to" : "Turn it on in Settings first"}>
+                title={enabled ? "Fetches this one page now, lists the accounts it links to, and saves its links to their Links" : "Turn it on in Settings first"}>
           <Icon name="download" size={14} className={busy === "fetch" ? "spin" : ""} />
           {busy === "fetch" ? "Fetching…" : "Import"}
         </button>
@@ -90,8 +95,8 @@ export default function BioImport({ person, enabled, onAdded }) {
         <div className="bio-import-result" aria-live="polite">
           <p className="creator-sub">
             {result.accounts.length ? `${plural(result.accounts.length, "account")} found` : "No account found"}
-            {result.other > 0 && ` · ${plural(result.other, "other link")} left out`}
           </p>
+          <p className="creator-sub bio-import-kept">{importedParts(result.links).join(" · ")}</p>
           {result.accounts.length > 0 && (
             <ul className="person-accounts bio-import-list">
               {result.accounts.map(a => {

@@ -660,6 +660,17 @@ def bio(env, client, monkeypatch):
     return alice
 
 
+def person_links(client, pid):
+    """A person's saved links in the order they were saved, as GET /api/people/<id> gives them."""
+    r = client.get(f"/api/people/{pid}", headers=H)
+    assert r.status_code == 200, r.get_json()
+    return sorted(r.get_json()["links"], key=lambda x: x["position"])
+
+
+def saved(client, pid):
+    return [(x["url"], x["title"]) for x in person_links(client, pid)]
+
+
 def bio_import(client, pid, url="https://linktr.ee/alice", status=200, headers=H):
     r = client.post(f"/api/people/{pid}/bio-import", json={"url": url}, headers=headers)
     assert r.status_code == status, r.get_json()
@@ -690,10 +701,23 @@ def test_import_end_to_end(bio, client, monkeypatch):
         ("tiktok", "new.one"): "https://www.tiktok.com/@new.one", ("twitter", "example_user1"): "https://x.com/example_user1",
         ("youtube", "alicevids"): "https://www.youtube.com/@alicevids", ("bluesky", "alice.bsky.social"): None,
         ("youtube", "UC1234567890abcdefghij"): None}
-    # shop.example, the X post, the Instagram post, the intent link, tiktok.com/new.one, the YouTube video
-    assert r["other"] == 6
+    # The page and every link it shows are in Alice's Links, anchors first,
+    # a link once whatever its spelling (www., a last slash); the mailto:
+    # and javascript: ones are refused, and the site's own Report page and
+    # "instagram.com/notalink" are not links to keep.
+    assert "other" not in r
+    assert r["links"] == {"saved": 14, "already": 1,"elsewhere": 0, "over": 0, "dropped": 2}
+    assert saved(client, bio["id"]) == [
+        ("https://linktr.ee/alice", ""), ("https://instagram.com/alice.example", "Instagram"),
+        ("https://x.com/example_user1/status/123", "a post"), ("https://twitter.com/example_user1", "X"),
+        ("https://www.instagram.com/p/C8xYz/", "a post"), ("https://x.com/intent/follow?screen_name=alice", "follow"),
+        ("https://tiktok.com/new.one", "no @"), ("https://bsky.app/profile/alice.bsky.social", ""),
+        ("https://www.youtube.com/channel/UC1234567890abcdefghij/", "channel"),
+        ("https://www.tiktok.com/@new.one?lang=en", ""), ("https://shop.example/alice", "My shop"),
+        ("https://x.com/Example_User1", "X"), ("https://www.youtube.com/@alicevids/videos", "Videos"),
+        ("https://www.youtube.com/watch?v=abc", "Latest")]
     assert net.connects == [PUBLIC]
-    # Nothing was added.
+    # No account and no source was added.
     from test_people import get, links
     assert links() == [("Alice", "instagram", "111"), ("Bob", "instagram", "222")]
     before = len(get(client, "/api/sources")["sources"])
@@ -718,8 +742,10 @@ def test_an_account_of_someone_else(bio, client, monkeypatch):
 
 def test_an_empty_page(bio, client, monkeypatch):
     monkeypatch.setattr(biofetch, "FETCHER", bio_net("").fetcher())
-    assert bio_import(client, bio["id"]) == {"ok": True, "url": "https://linktr.ee/alice", "accounts": [],
-                                            "other": 0}
+    assert bio_import(client, bio["id"]) == {
+        "ok": True, "url": "https://linktr.ee/alice", "accounts": [],
+        "links": {"saved": 1, "already": 0, "elsewhere": 0, "over": 0, "dropped": 0}}
+    assert saved(client, bio["id"]) == [("https://linktr.ee/alice", "")]      # the page itself is kept
 
 
 class Untouchable:
@@ -767,7 +793,7 @@ def test_the_page_is_never_logged(bio, client, monkeypatch, capsys):
     bio_import(client, bio["id"])
     out = capsys.readouterr()
     assert "SECRET-PAGE-TEXT" not in out.out + out.err
-    assert "https://linktr.ee/alice: 1 accounts, 0 other links" in out.out
+    assert "https://linktr.ee/alice: 1 accounts, 2 links saved, 0 saved already, 0 dropped, 0 over the limit" in out.out
 
 
 def test_busy_is_a_429(bio, client, monkeypatch):
@@ -802,7 +828,7 @@ def test_a_broken_link_in_the_page_is_counted_not_a_crash(bio, client, monkeypat
     page = '<a href="https://[oops">x</a><a href="https://x.com/example_user1">x</a>'
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(page).fetcher())
     r = bio_import(client, bio["id"])
-    assert len(r["accounts"]) == 1 and r["other"] == 1
+    assert len(r["accounts"]) == 1 and r["links"]["saved"] == 2 and r["links"]["dropped"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -912,3 +938,445 @@ def test_settings_cannot_be_changed_from_another_site(env, client, foreign):
     assert not biofetch.enabled(config.load())
     assert client.post("/api/config", json={"bio_import": True}, headers={**H, "Origin": "http://localhost:5173",
                                                                           "Sec-Fetch-Site": "same-origin"}).get_json()["ok"]
+
+
+# ---------------------------------------------------------------------------
+# Keeping the page's links: an import saves them to the person's Links
+# ---------------------------------------------------------------------------
+
+def linktree_page(buttons, socials=()):
+    """A page shaped like the one linktr.ee serves (hand-written, no copy):
+    no anchor at all, the buttons and icons in __NEXT_DATA__ twice over
+    (account.links and pageProps.links), between the avatar, the theme's
+    files, the site's settings and its own advertisers."""
+    import json
+    ugc = "https://ugc.production.linktr.ee"
+    links = [{"context": {"monetization": None}, "id": 500000 + i, "type": b.get("type", "CLASSIC"), "position": i,
+              "title": b.get("title"), "url": b.get("url"), "shouldRouteToProfile": False,
+              "modifiers": {"animation": None, "isForwarding": False, "thumbnailUrl": f"{ugc}/thumb-{i}.jpeg",
+                            "layoutOption": "stack"},
+              "rules": {"gate": {"activeOrder": [], "sensitiveContent": {"domain": ""}, "age": None}},
+              "metadata": {"title": None, "image": f"https://shop-pictures.example/og/{i}.png", "imageAlt": None},
+              "parent": None} for i, b in enumerate(buttons)]
+    account = {
+        "id": 1234567, "uuid": "0d7c1f0e-0000-4000-8000-000000000001", "username": "alice", "isActive": True,
+        "profilePictureUrl": f"{ugc}/0d7c1f0e_avatar.jpeg", "customAvatar": f"{ugc}/0d7c1f0e_avatar.jpeg",
+        "bannerImage": None, "pageTitle": "Alice", "description": "Painter. https://not-a-button.example in the bio text",
+        "googleAnalyticsId": None, "facebookPixelId": None,
+        "backgroundImageAttributes": {"url": f"{ugc}/0d7c1f0e_background.jpeg"},
+        "theme": {"key": "custom", "background": {"type": "image", "url": "https://assets.production.linktr.ee/profiles/t.svg"},
+                  "typeface": {"family": "Inter", "url": "https://fonts.gstatic.com/s/inter/v13/inter.woff2"}},
+        "socialLinks": [{"type": kind, "url": url, "position": i} for i, (kind, url) in enumerate(socials)],
+        "links": links, "pinnedLinks": [], "socialFeeds": [],
+    }
+    data = {
+        "props": {"pageProps": {
+            "account": account, "theme": account["theme"], "username": "alice", "pageTitle": "Alice",
+            "customAvatar": account["customAvatar"], "socialLinks": account["socialLinks"],
+            "links": [{**x, "thumbnail": f"{ugc}/thumb.jpeg", "metaData": {"image": "https://linktr.ee/og/image/alice.jpg"}}
+                      for x in links],
+            "leapLink": None,
+            "environment": {
+                "INGRESS_API_ENDPOINT": "https://ingress.linktr.ee/abc", "GRAPHQL_API_ENDPOINT": "https://graph.linktr.ee/graphql",
+                "BASE_PROFILE_URL": "https://linktr.ee", "CDN_DISTRIBUTION_URL": "https://assets.production.linktr.ee/profiles/",
+                "META_IMAGE_URL": "https://assets.production.linktr.ee/profiles/_next/static/default-meta-image.png",
+                "PAYMENTS_URL": "https://pay.payments-provider.example/v3"},
+            "statsigInitValues": {"dynamicConfigs": {"manual_sponsorships": {"data": [
+                {"image": "https://assets.production.linktr.ee/soco/banners/brand.webp",
+                 "metadata": {"vendorIcon": "https://assets.production.linktr.ee/soco/icons/brand.webp"},
+                 "title": "Watch Brand+", "url": "https://sponsor-ads.example/direct/plat123"}]}}},
+            "dataFeedsProfileUrl": "https://data-feeds.example/profiles/alice",
+            "latestBlogPosts": [{"title": "How to grow", "url": "https://linktr.ee/blog/how-to-grow"}],
+            "googleAdConfig": {"scriptUrl": "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"},
+        }},
+        "page": "/[profile]", "query": {"profile": "alice"}, "buildId": "AbCdEfGh",
+        "assetPrefix": "https://assets.production.linktr.ee/profiles", "locale": "en", "scriptLoader": [],
+    }
+    ld = {"@context": "https://schema.org", "@type": "ProfilePage", "mainEntity": {
+        "@type": "Person", "name": "Alice", "url": "https://linktr.ee/alice", "image": account["profilePictureUrl"],
+        "sameAs": [url for _, url in socials]}}
+    return ('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Alice | Linktree</title>'
+            '<link rel="preload" as="style" href="https://assets.production.linktr.ee/profiles/_next/static/css/a1.css">'
+            '<link rel="icon" href="https://assets.production.linktr.ee/profiles/favicon.ico">'
+            '<link rel="canonical" href="https://linktr.ee/alice">'
+            '<meta property="og:image" content="https://linktr.ee/og/image/alice.jpg">'
+            f'<script type="application/ld+json">{json.dumps(ld)}</script>'
+            '<script async src="https://www.googletagmanager.com/gtag/js?id=G-0000"></script></head>'
+            '<body><div id="__next"><div id="profile-container"></div></div>'
+            f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+            '<script src="https://assets.production.linktr.ee/profiles/_next/static/chunks/main-1.js" defer></script>'
+            '</body></html>')
+
+
+BUTTONS = [
+    {"title": "My Patreon", "url": "https://www.patreon.com/alice"},
+    {"title": "  Merch &\n prints ", "url": "https://alice-shop.example/store?ref=linktree"},
+    {"type": "HEADER", "title": "Elsewhere", "url": None},
+    {"title": "Discord", "url": "https://discord.gg/AbCdEf"},
+    {"type": "YOUTUBE_VIDEO", "title": "Latest video", "url": "https://www.youtube.com/watch?v=abc123"},
+    {"title": "My band's page", "url": "https://linktr.ee/alice.band"},           # the bio site itself: not kept
+    {"title": "Email me", "url": "mailto:alice@alice.example"},                   # refused, counted
+    {"title": "X / Twitter", "url": "https://x.com/Example_User1"},
+    {"title": "Press kit", "url": "https://alice.example/press-kit.pdf"},
+    {"title": "A picture", "url": "https://alice.example/portrait.jpg"},         # a file to show, not a page
+]
+SOCIALS = [("INSTAGRAM", "https://www.instagram.com/alice.example/"), ("TIKTOK", "https://www.tiktok.com/@new.one"),
+           ("EMAIL_ADDRESS", "mailto:alice@alice.example")]
+LINKTREE_PAGE = linktree_page(BUTTONS, SOCIALS)
+LINKTREE_KEPT = [
+    ("https://linktr.ee/alice", ""),
+    ("https://www.instagram.com/alice.example/", ""), ("https://www.tiktok.com/@new.one", ""),
+    ("https://www.patreon.com/alice", "My Patreon"),
+    ("https://alice-shop.example/store?ref=linktree", "Merch & prints"), ("https://discord.gg/AbCdEf", "Discord"),
+    ("https://www.youtube.com/watch?v=abc123", "Latest video"), ("https://x.com/Example_User1", "X / Twitter"),
+    ("https://alice.example/press-kit.pdf", "Press kit"),
+]
+
+# A site that draws its links as anchors (hand-written, as lnk.bio and the
+# like serve them): the buttons, between the site's own pages, its CDN's
+# files and links that are not web addresses.
+LNK_BIO_PAGE = """<!DOCTYPE html><html lang="en"><head><title>Alice | Lnk.Bio</title>
+<link rel="stylesheet" href="https://cdn.lnk.bio/css/app.min.css"><link rel="icon" href="https://lnk.bio/favicon.ico">
+<link rel="canonical" href="https://lnk.bio/alice">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-0000"></script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Person", "name": "Alice",
+ "url": "https://lnk.bio/alice", "image": "https://cdn.lnk.bio/profilepics/alice.jpg",
+ "sameAs": ["https://www.twitch.tv/alice_live", "https://ko-fi.com/alice/"]}</script>
+<style>a.button { background: url(https://cdn.lnk.bio/img/bg.png) }</style></head><body>
+<header><a href="https://lnk.bio/"><img src="https://cdn.lnk.bio/img/logo.svg" alt="Lnk.Bio"></a></header>
+<a class="avatar" href="https://cdn.lnk.bio/profilepics/alice_full.jpg"><img src="https://cdn.lnk.bio/profilepics/alice.jpg" alt="Alice"></a>
+<a class="social" href="https://www.instagram.com/alice.example/" aria-label="Instagram" rel="noopener"><svg viewBox="0 0 24 24"><path d="M0 0"/></svg></a>
+<a class="button" href="https://ko-fi.com/alice" target="_blank" rel="noopener"><span class="title">  Buy me
+   a coffee </span><script>track("https://tracker.example/click")</script></a>
+<a class="button" href="https://alice.example/blog?utm_source=lnkbio">My <b>blog</b></a>
+<a class="button" href="//alice-store.example/prints">Prints</a>
+<a class="button" href="https://discord.gg/AbCdEf"><img src="https://cdn.lnk.bio/img/discord.svg" alt="Discord server"></a>
+<a class="button" href="https://media.alice.example/intro.mp4">Intro video</a>
+<a class="button" href="https://static.files-host.example/alice/presskit.zip">Press kit</a>
+<a href="mailto:alice@alice.example">Email</a> <a href="tel:+15550100">Call</a>
+<a href="javascript:void(0)" onclick="share()">Share</a> <a href="#top">Top</a> <a href="/alice/subscribe">Subscribe</a>
+<map><area href="https://alice.example/map" alt="Where I show"></map>
+<footer><a href="https://lnk.bio/privacy">Privacy</a> <a href="https://help.lnk.bio/report?u=alice">Report</a>
+<a href="https://lnk.bio/signup?ref=alice">Create your own Lnk.Bio</a></footer>
+<img src="https://www.facebook.com/tr?id=1&ev=PageView" width="1" height="1" alt="">
+</body></html>"""
+LNK_BIO_KEPT = [
+    ("https://lnk.bio/alice", ""), ("https://www.instagram.com/alice.example/", "Instagram"),
+    ("https://ko-fi.com/alice", "Buy me a coffee"), ("https://alice.example/blog?utm_source=lnkbio", "My blog"),
+    ("https://alice-store.example/prints", "Prints"), ("https://discord.gg/AbCdEf", "Discord server"),
+    ("https://alice.example/map", "Where I show"), ("https://www.twitch.tv/alice_live", ""),
+    ("https://ko-fi.com/alice/", ""),          # another spelling of a link kept: links.keep passes it over
+]
+
+
+def test_a_linktree_page_keeps_its_buttons_and_icons_only():
+    found, dropped = biofetch.shown_links(LINKTREE_PAGE, "https://linktr.ee/alice", ROUTES)
+    assert found == LINKTREE_KEPT
+    assert dropped == 1                        # the mailto: link, once though it is there three times
+    # What profile detection reads is what it read before: every address in the page.
+    every = biofetch.page_links(LINKTREE_PAGE)
+    assert "https://ugc.production.linktr.ee/0d7c1f0e_avatar.jpeg" in every
+    assert "https://sponsor-ads.example/direct/plat123" in every
+    assert {(p[0], p[1]) for p in filter(None, (biofetch.profile(x, ROUTES) for x in every))} == {
+        ("instagram", "alice.example"), ("tiktok", "new.one"), ("twitter", "Example_User1")}
+
+
+def test_an_anchor_page_keeps_its_buttons_only():
+    found, dropped = biofetch.shown_links(LNK_BIO_PAGE, "https://lnk.bio/alice", ROUTES)
+    assert found == LNK_BIO_KEPT
+    assert dropped == 3                        # mailto:, tel:, javascript:
+
+
+@pytest.mark.parametrize("link", [
+    "https://linktr.ee/s/about", "https://www.linktr.ee/bob", "https://ugc.production.linktr.ee/a", "https://linktree.com/",
+    "https://d1234abcd.cloudfront.net/a", "https://bucket.s3.amazonaws.com/a", "https://fonts.googleapis.com/css2?family=Inter",
+    "https://www.googletagmanager.com/gtag/js?id=G-1", "https://cdn.shop.example/a", "https://cdn2.shop.example/a",
+    "https://static-files.shop.example/a", "https://api.shop.example/v1/me", "https://images.shop.example/a",
+    "https://shop.example/a.PNG", "https://shop.example/font.woff2", "https://shop.example/app.js?v=3",
+    "https://shop.example/style.css", "https://shop.example/data.json", "https://schema.org", "https://www.w3.org/2000/svg",
+])
+def test_plumbing_is_not_a_link_to_keep(link):
+    assert biofetch._visitor_url(link, ("linktr.ee", "linktree.com")) == (None, "plumbing")
+
+
+@pytest.mark.parametrize("link, kept", [
+    ("https://www.patreon.com/alice", "https://www.patreon.com/alice"),
+    ("HTTP://Shop.Example:80/", "http://shop.example"),
+    ("https://beacons.ai/alice", "https://beacons.ai/alice"),                  # another bio site is a link like any
+    ("https://music.apple.com/us/artist/alice/1", "https://music.apple.com/us/artist/alice/1"),
+    ("https://open.spotify.com/artist/1", "https://open.spotify.com/artist/1"),
+    ("https://alice.example/jsmith", "https://alice.example/jsmith"),
+    ("https://alice.example/files/kit.pdf", "https://alice.example/files/kit.pdf"),
+    ("https://alice.co.uk/", "https://alice.co.uk"),
+    ("https://bücher.example/a", "https://xn--bcher-kva.example/a"),      # stored as the name it is
+    ("https://раypal.example/", "https://xn--ypal-43d9g.example"),   # a look-alike shows as one
+    ("https://ｓｈｏｐ.example/", "https://shop.example"),     # fullwidth letters are the plain ones
+])
+def test_links_kept_as_links_py_stores_them(link, kept):
+    assert biofetch._visitor_url(link, ("linktr.ee",)) == (kept, None)
+
+
+@pytest.mark.parametrize("link", [
+    "javascript:alert(document.cookie)", "JaVaScRiPt:alert(1)", "data:text/html,<script>alert(1)</script>",
+    "file:///etc/passwd", "ftp://files.example/a", "mailto:a@b.example", "vbscript:x", "blob:https://a.example/1",
+    "https://user:pw@evil.example/", "https://evil.example@shop.example/", "https://evil.example\\@shop.example/",
+    "https://shop.example/a b", "https://shop.example/\x1b[31m", "https://shop.example/\r\nSet-Cookie: a=b",
+    "https://shop.example/" + "a" * 2100, "https://", "https:///nohost", "https://shop.example:99999/",
+    # Nothing on the user's own machine or network, however it is spelled.
+    "http://127.0.0.1:3380/api/config", "http://localhost/", "http://localhost.:3380/", "https://LOCALHOST/",
+    "http://[::1]/", "http://[::ffff:10.0.0.1]/", "http://192.168.1.1/admin", "http://10.0.0.1/", "http://2130706433/",
+    "http://0x7f.0.0.1/", "http://0x7f.1/", "http://017700000001/", "http://127.1/", "http://169.254.169.254/latest",
+    "https://router.local/", "https://nas.lan/", "https://printer.home/", "https://db.internal/", "https://intranet/",
+    "http://１２７.0.0.1/", "http://127。0。0。1/", "https://shop.example:8443/",
+    "https://sh_op.example/", "https://-shop.example/", "https://shop..example/", "https://%6c%6fcalhost/",
+])
+def test_links_refused_and_counted(link):
+    assert biofetch._visitor_url(link, ("linktr.ee",)) == (None, "refused")
+    page = '<a href="%s">Click here</a>' % link.replace('"', "&quot;").replace("<", "&lt;")
+    assert biofetch.shown_links(page, "https://linktr.ee/alice", ROUTES)[0] == [("https://linktr.ee/alice", "")]
+
+
+@pytest.mark.parametrize("label, title", [
+    ("  Buy me\n\ta   coffee ", "Buy me a coffee"),
+    ("<img src=x onerror=alert(1)>", "<img src=x onerror=alert(1)>"),          # text, and shown as text
+    ("\x1b[31mred\x1b[0m\x00\x07 alert", "[31mred [0m alert"),
+    ("safe‮gnp.exe", "safegnp.exe"),                                       # no right-to-left override
+    ("in​vis﻿ible⁦⁩­", "invisible"),
+    ("line break s\x85here", "line break s here"),
+    ("\U0001f469‍\U0001f4bb my blog", "\U0001f469‍\U0001f4bb my blog"),   # an emoji's joiner stays
+    ("\ud800 lone surrogate", "lone surrogate"),
+    ("x" * 5000, "x" * 300),
+    ("", ""), ("   ", ""), (None, ""), (7, ""), (["a"], ""), ({"title": "a"}, ""),
+])
+def test_labels_are_plain_bounded_text(label, title):
+    assert biofetch.clean_label(label) == title
+    import links
+    assert len(title) <= links.MAX_TITLE and links.clean_title(title) == title
+
+
+@pytest.mark.parametrize("label, title", [
+    ("My shop", "My shop"), ("shop.example/alice", "shop.example/alice"), ("See www.shop.example", "See www.shop.example"),
+    ("@alice.example on Instagram", "@alice.example on Instagram"), ("v2.0 out now", "v2.0 out now"),
+    # A label that reads as another site's address would pass for where the link goes.
+    ("https://www.patreon.com/alice", ""), ("Go to www.paypal.com now", ""), ("paypal.com/signin", ""),
+    ("HTTPS://PAYPAL.COM", ""), ("http://user@shop.example", ""),
+])
+def test_a_label_naming_another_site_is_not_used(label, title):
+    assert biofetch.clean_label(label, "https://shop.example/alice") == title
+
+
+HOSTILE = """<a href="https://ok.example/1"><script>alert(1)</script><style>a{}</style><b>Click</b>\x1b[2J ‮me</a>
+<a href="https://ok.example/2" title="&lt;script&gt;alert(2)&lt;/script&gt;"></a>
+<a href="https://ok.example/3">%s</a><a href="https://ok.example/4">https://www.patreon.com/alice</a>
+<a href="javascript:fetch('/api/config')">Free</a><a href="http://127.0.0.1:3380/api/people/1">Local</a>
+<a href="https://ok.example/5" onclick="steal()"><img src="https://cdn.ok.example/x.png" alt='" onerror="alert(5)'></a>
+<a href="https://ok.example/never-closed">open
+<script type="application/json">{"links": [
+  {"title": {"$gt": ""}, "url": "https://ok.example/6"}, {"title": ["a"], "url": "https://ok.example/7"},
+  {"title": "T", "url": ["https://ok.example/8", {"url": "https://ok.example/9"}]},
+  {"title": "T", "url": 5}, {"title": "T", "url": null}, {"title": "T", "url": {"href": "data:text/html,x"}},
+  {"title": "T\\u0000\\u001b[1m\\u202e", "url": " https://ok.example/10 "}]}</script>""" % ("y" * 5000)
+
+
+def test_a_hostile_page_saves_only_clean_links(bio, client, monkeypatch):
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(HOSTILE).fetcher())
+    r = bio_import(client, bio["id"])
+    assert r["links"] == {"saved": 12, "already": 0, "elsewhere": 0, "over": 0, "dropped": 3}
+    assert saved(client, bio["id"]) == [
+        ("https://linktr.ee/alice", ""), ("https://ok.example/1", "Click [2J me"),
+        ("https://ok.example/2", "<script>alert(2)</script>"), ("https://ok.example/3", "y" * 300),
+        ("https://ok.example/4", ""), ("https://ok.example/5", '" onerror="alert(5)'),
+        ("https://ok.example/never-closed", "open"), ("https://ok.example/6", ""), ("https://ok.example/7", ""),
+        ("https://ok.example/8", ""), ("https://ok.example/9", ""), ("https://ok.example/10", "T [1m")]
+    for x in person_links(client, bio["id"]):
+        assert x["url"].startswith("https://") and x["notes"] == "" and x["person"]["id"] == bio["id"]
+        assert all(c.isprintable() for c in x["url"] + x["title"])
+
+
+# ---------------------------------------------------------------------------
+# The import, again: only what is new, nothing changed, nothing removed
+# ---------------------------------------------------------------------------
+
+def test_the_first_import_saves_the_page_and_its_links(bio, client, monkeypatch):
+    net = bio_net(LINKTREE_PAGE)
+    monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
+    r = bio_import(client, bio["id"])
+    assert r["links"] == {"saved": 9, "already": 0, "elsewhere": 0, "over": 0, "dropped": 1}
+    assert saved(client, bio["id"]) == LINKTREE_KEPT
+    # Links like any other: theirs, in the order of the page, social or not by their host.
+    got = person_links(client, bio["id"])
+    assert [x["position"] for x in got] == list(range(1, 10))
+    assert {x["url"]: x["kind"] for x in got}["https://alice-shop.example/store?ref=linktree"] == "other"
+    assert {x["url"]: x["kind"] for x in got}["https://www.patreon.com/alice"] == "social"
+    assert all(x["person"] == {"id": bio["id"], "name": "Alice"} and x["notes"] == "" for x in got)
+    # The accounts are suggested as before, none added.
+    assert {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]} == {
+        ("instagram", "alice.example"): "linked", ("tiktok", "new.one"): "new", ("twitter", "Example_User1"): "indexed"}
+    assert net.connects == [PUBLIC] and net.lookups == ["linktr.ee"]        # the page, and no link of it
+
+
+def test_importing_again_saves_only_what_is_new(bio, client, monkeypatch):
+    from test_people import post
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(LINKTREE_PAGE).fetcher())
+    bio_import(client, bio["id"])
+    by_url = {x["url"]: x for x in person_links(client, bio["id"])}
+    # The user makes them theirs: a title, notes, another order.
+    patreon, discord = by_url["https://www.patreon.com/alice"], by_url["https://discord.gg/AbCdEf"]
+    post(client, f"/api/links/{patreon['id']}", {"title": "Patreon (tiers from 3 €)", "notes": "joined in May"})
+    post(client, f"/api/links/{discord['id']}", {"title": ""})
+    post(client, f"/api/people/{bio['id']}/links/order", {"ids": [discord["id"], patreon["id"]]})
+    before = person_links(client, bio["id"])
+
+    # The page changed: the shop and the video are gone, Patreon has a new label, two links are new.
+    changed = [{"title": "Support me!!", "url": "https://www.patreon.com/alice"}, BUTTONS[3], BUTTONS[7], BUTTONS[8],
+               {"title": "New album", "url": "https://alice.bandcamp.example/album/two"},
+               {"title": "Patreon again", "url": "http://patreon.com/alice/"}]
+    page = linktree_page(changed, SOCIALS[:2] + [("YOUTUBE", "https://www.youtube.com/@alicevids")])
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(page).fetcher())
+    r = bio_import(client, bio["id"])
+    assert r["links"] == {"saved": 2, "already": 8, "elsewhere": 0, "over": 0, "dropped": 0}
+    after = person_links(client, bio["id"])
+    assert after[:9] == before                 # ids, titles, notes, order: as they were
+    assert [(x["url"], x["title"], x["position"]) for x in after[9:]] == [
+        ("https://www.youtube.com/@alicevids", "", 10), ("https://alice.bandcamp.example/album/two", "New album", 11)]
+    kept = {x["url"]: x for x in after}
+    assert kept["https://www.patreon.com/alice"]["title"] == "Patreon (tiers from 3 €)"
+    assert kept["https://www.patreon.com/alice"]["notes"] == "joined in May"
+    assert kept["https://discord.gg/AbCdEf"]["title"] == ""                  # emptied by the user: not filled again
+    assert "https://alice-shop.example/store?ref=linktree" in kept          # taken down by its owner: still here
+    assert "https://www.youtube.com/watch?v=abc123" in kept
+
+    # The page is gone altogether: the import fails, and nothing saved goes with it.
+    monkeypatch.setattr(biofetch, "FETCHER", Net(pages={("linktr.ee", "/alice"): html_answer(b"", status="404 Not Found")}).fetcher())
+    assert bio_import(client, bio["id"], status=502)["error"] == "the site answered 404"
+    assert person_links(client, bio["id"]) == after
+    # And an import that finds nothing new changes nothing.
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net("").fetcher())
+    assert bio_import(client, bio["id"])["links"] == {"saved": 0, "already": 1, "elsewhere": 0, "over": 0, "dropped": 0}
+    assert person_links(client, bio["id"]) == after
+
+
+def test_a_link_saved_for_someone_else_stays_theirs(bio, client, monkeypatch):
+    from test_people import get, post
+    [bob] = [p for p in get(client, "/api/people") if p["name"] == "Bob"]
+    theirs = post(client, "/api/links", {"url": "https://www.patreon.com/alice", "title": "Bob's", "person": bob["id"]})["link"]
+    loose = post(client, "/api/links", {"url": "https://discord.gg/AbCdEf", "notes": "to sort"})["link"]
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(LINKTREE_PAGE).fetcher())
+    r = bio_import(client, bio["id"])
+    assert r["links"] == {"saved": 7, "already": 0, "elsewhere": 2, "over": 0, "dropped": 1}
+    assert "https://www.patreon.com/alice" not in dict(saved(client, bio["id"]))
+    assert person_links(client, bob["id"]) == [theirs]
+    assert get(client, "/api/links?person=none")["links"] == [loose]
+
+
+def test_an_import_saves_at_most_max_saved_links(bio, client, monkeypatch):
+    monkeypatch.setattr(biofetch, "MAX_SAVED", 5)
+    page = "".join(f'<a href="https://shop.example/item/{i}">Item {i}</a>' for i in range(12))
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(page).fetcher())
+    r = bio_import(client, bio["id"])
+    assert r["links"] == {"saved": 5, "already": 0, "elsewhere": 0, "over": 8, "dropped": 0}
+    assert saved(client, bio["id"]) == [("https://linktr.ee/alice", "")] + [
+        (f"https://shop.example/item/{i}", f"Item {i}") for i in range(4)]
+    # The next import goes on from there: what is saved does not count against the limit.
+    r = bio_import(client, bio["id"])
+    assert r["links"] == {"saved": 5, "already": 5, "elsewhere": 0, "over": 3, "dropped": 0}
+    assert [u for u, _ in saved(client, bio["id"])][5:] == [f"https://shop.example/item/{i}" for i in range(4, 9)]
+
+
+def test_the_limits_of_what_one_import_reads_and_saves(bio, client, monkeypatch):
+    assert biofetch.MAX_SAVED == 200 and biofetch.MAX_SAVED <= biofetch.MAX_LINKS
+    page = "".join(f'<a href="https://shop.example/item/{i}">Item {i}</a>' for i in range(3000))
+    found, dropped = biofetch.shown_links(page, "https://linktr.ee/alice", ROUTES)
+    assert len(found) == biofetch.MAX_LINKS and dropped == 0
+    page = "".join(f'<a href="javascript:a{i}()">x</a>' for i in range(3000)) + '<a href="https://late.example/">late</a>'
+    found, dropped = biofetch.shown_links(page, "https://linktr.ee/alice", ROUTES)
+    assert found == [("https://linktr.ee/alice", "")] and dropped == biofetch.MAX_LINKS - 1
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(
+        "".join(f'<a href="https://shop.example/item/{i}">Item {i}</a>' for i in range(3000))).fetcher())
+    r = bio_import(client, bio["id"])
+    assert r["links"] == {"saved": 200, "already": 0, "elsewhere": 0, "over": 800, "dropped": 0}
+    assert len(person_links(client, bio["id"])) == 200
+
+
+def test_a_huge_label_or_block_is_read_within_bounds():
+    import time
+    page = '<a href="https://shop.example/a">' + "<b>x</b>" * 200_000 + "</a>"
+    start = time.monotonic()
+    found, _ = biofetch.shown_links(page, "https://linktr.ee/alice", ROUTES)
+    assert found[1] == ("https://shop.example/a", "x" * 300)
+    blob = '<script type="application/json">' + json_shown_list(150_000) + "</script>"
+    found, _ = biofetch.shown_links(blob, "https://linktr.ee/alice", ROUTES)
+    assert len(found) == biofetch.MAX_LINKS
+    deep = '<script type="application/json">' + '{"url":' * 50_000 + '"https://shop.example/deep"' + "}" * 50_000 + "</script>"
+    assert biofetch.shown_links(deep, "https://linktr.ee/alice", ROUTES)[0] in (
+        [("https://linktr.ee/alice", "")], [("https://linktr.ee/alice", ""), ("https://shop.example/deep", "")])
+    assert time.monotonic() - start < 20
+
+
+def json_shown_list(n):
+    import json
+    return json.dumps({"links": [{"title": "t%d" % i, "url": "https://shop.example/j%d" % i} for i in range(n)]})
+
+
+def test_saved_links_are_mirrored_like_any_other(bio, env, client, monkeypatch):
+    import json
+    import db
+    import userdata
+    seen = []
+    monkeypatch.setattr(userdata, "changed", seen.append)
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(LINKTREE_PAGE).fetcher())
+    bio_import(client, bio["id"])
+    assert seen == ["links"]
+    bio_import(client, bio["id"])              # nothing new: nothing to write
+    assert seen == ["links"]
+    data = str(env["tmp"] / "data")
+    userdata.export(db.connect(), "links", data)
+    with open(userdata.path(data, "links")) as f:
+        rows = json.load(f)["rows"]
+    assert sorted((r["position"], r["url"], r["title"], r["person"], r["notes"]) for r in rows) == [
+        (n, url, title, "Alice", "") for n, (url, title) in enumerate(LINKTREE_KEPT, 1)]
+    assert all(r["tied_at"] == r["created_at"] and r["id"] for r in rows)
+    # And they come back from the file as the API saved them.
+    import links
+    assert [links.restore_row(r) for r in rows] == rows
+
+
+def test_nothing_saved_is_ever_fetched(bio, client, monkeypatch):
+    """The one page is fetched; its links are text from then on."""
+    import urllib.request
+
+    def refuse(*a, **k):
+        raise AssertionError("links must never be fetched")
+    net = bio_net(LINKTREE_PAGE)
+    monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    bio_import(client, bio["id"])
+    client.get(f"/api/people/{bio['id']}", headers=H)
+    client.get("/api/links", headers=H)
+    assert net.lookups == ["linktr.ee"] and net.connects == [PUBLIC] and len(net.socks) == 1
+
+
+def test_nothing_is_saved_when_the_import_is_refused(env, client, monkeypatch):
+    from test_people import create, get, post
+    p = create(client, "Alice")["person"]
+    monkeypatch.setattr(biofetch, "FETCHER", bio_net(LINKTREE_PAGE).fetcher())
+    bio_import(client, p["id"], status=403)                                     # switched off
+    post(client, "/api/config", {"bio_import": True})
+    bio_import(client, p["id"], "https://evil.example/alice", status=400)
+    bio_import(client, p["id"], headers={**H, "Origin": "https://linktr.ee"}, status=403)
+    bio_import(client, 999, status=404)
+    assert get(client, "/api/links")["links"] == []
+
+
+def test_a_person_deleted_during_the_fetch_gets_no_links(bio, client, monkeypatch):
+    from test_people import get
+
+    class Deleting:
+        def fetch(self, url):
+            assert client.delete(f"/api/people/{bio['id']}", headers=H).status_code == 200
+            return biofetch.Page("https://linktr.ee/alice", LINKTREE_PAGE)
+    monkeypatch.setattr(biofetch, "FETCHER", Deleting())
+    assert bio_import(client, bio["id"], status=404)["error"] == "no such person"
+    assert get(client, "/api/links")["links"] == []

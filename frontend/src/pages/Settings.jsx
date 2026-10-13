@@ -563,7 +563,10 @@ function BioImportCard({ on, onSaved }) {
       <p className="page-lede">
         On a person&rsquo;s page, paste their linktr.ee (or Beacons, Lnk.Bio, solo.to, Campsite, Linkin.bio,
         AllMyLinks) link and FeedVault fetches that one page, once per click, to list the accounts it links to.
-        Nothing else is fetched, and the page is not kept.
+        Importing also saves the page&rsquo;s address and every link it shows (a shop, a Patreon, a site, the
+        profiles) to that person&rsquo;s Links, so they stay when the page changes or goes; import again later
+        to pick up what is new. Nothing saved before is replaced or removed. Nothing else is fetched, never a
+        saved link, and the page itself is not kept.
       </p>
       <label className="dl-toggle">
         <input type="checkbox" checked={on} disabled={busy} onChange={e => set(e.target.checked)} />

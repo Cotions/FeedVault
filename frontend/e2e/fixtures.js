@@ -1043,7 +1043,8 @@ export function formatStateFindings(list) {
 // Link-in-bio import (#11) without a fetch: GET /api/config says the switch
 // is on (the instance's own setting stays off), and the import and the two
 // Add calls are answered here, so the backend's fetcher is never reached and
-// the demo is not changed. Returns what the page sent.
+// the demo is not changed. Returns what the page sent. What the backend
+// itself saves from a page is checked in backend/tests/test_biofetch.py.
 export const BIO_ACCOUNTS = [
   { platform: "instagram", handle: "fake.linked", url: "https://instagram.com/fake.linked", tool: "instaloader",
     status: "linked", profile_url: "https://www.instagram.com/fake.linked/", account: null, person: null, source: 7 },
@@ -1060,8 +1061,23 @@ export const BIO_ACCOUNTS = [
     account: null, person: { id: 1, name: "Somebody Else With A Long Name" }, source: null },
 ];
 
-export async function fakeBioImport(page) {
+// `found` ([{ url, title }]): what the faked page shows a visitor. The
+// backend would save those to the person's Links; here the usual call does
+// (POST /api/links, the ones not saved yet), so the page has real links to
+// show, and the test deletes them. Without it the counts are made up and
+// nothing is saved.
+export async function fakeBioImport(page, { found = null } = {}) {
   const sent = { imports: [], links: [], sources: [] };
+  async function kept(route) {
+    if (!found) return { saved: 4, already: 2, elsewhere: 0, dropped: 1, over: 0 };
+    const person = Number(new URL(route.request().url()).pathname.split("/")[3]);
+    const out = { saved: 0, already: 0, elsewhere: 0, dropped: 0, over: 0 };
+    for (const link of found) {
+      const r = await page.request.post("/api/links", { headers: { "X-FeedVault": "1" }, data: { ...link, person } });
+      out[r.ok() ? "saved" : r.status() === 409 ? "already" : "dropped"] += 1;
+    }
+    return out;
+  }
   await page.route("**/api/config", async route => {
     if (route.request().method() !== "GET") return route.fallback();
     const response = await route.fetch();
@@ -1069,7 +1085,7 @@ export async function fakeBioImport(page) {
   });
   await page.route("**/api/people/*/bio-import", async route => {
     sent.imports.push(route.request().postDataJSON());
-    await route.fulfill({ json: { ok: true, url: "https://linktr.ee/somebody", accounts: BIO_ACCOUNTS, other: 2 } });
+    await route.fulfill({ json: { ok: true, url: "https://linktr.ee/somebody", accounts: BIO_ACCOUNTS, links: await kept(route) } });
   });
   await page.route("**/api/people/*/accounts", async route => {
     sent.links.push(route.request().postDataJSON());

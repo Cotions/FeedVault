@@ -190,7 +190,8 @@ test("Person: link-in-bio import lists the accounts and Add uses the usual calls
   await box.getByRole("button", { name: "Import" }).click();
   await expect(box.locator(".bio-import-row")).toHaveCount(BIO_ACCOUNTS.length);
   expect(sent.imports).toEqual([{ url: "linktr.ee/somebody" }]);
-  await expect(box).toContainText("5 accounts found · 2 other links left out");
+  await expect(box).toContainText("5 accounts found");
+  await expect(box.locator(".bio-import-kept")).toHaveText("4 links saved to their Links · 2 links already there · 1 link dropped (not a web address Links keeps)");
 
   const row = handle => box.locator(".bio-import-row", { hasText: `@${handle}` });
   await expect(row("fake.linked")).toContainText("Linked to them");

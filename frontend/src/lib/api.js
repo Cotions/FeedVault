@@ -291,8 +291,10 @@ export function mergePeople(ids, { name, accounts = [] } = {}) {
 }
 // { suggestions: [{ id, score, reason, reasons: [{ reason, detail }], accounts, person }], dismissed }
 export function getSuggestions() { return get("/api/people/suggestions"); }
-// Fetches that one link-in-bio page (when Settings allows it) and lists the accounts it links to;
-// adds nothing → { ok, url, accounts: [{ platform, handle, url, profile_url, status, account, person, source }], other }
+// Fetches that one link-in-bio page (when Settings allows it), lists the accounts it links to (adding none)
+// and saves the page's address and the links it shows to the person's Links, those they do not have yet
+// → { ok, url, accounts: [{ platform, handle, url, profile_url, status, account, person, source }],
+//     links: { saved, already, elsewhere, dropped, over } }
 export function bioImport(id, url) { return post(`/api/people/${seg(id)}/bio-import`, { url }); }
 export function dismissSuggestion(id) { return post("/api/people/suggestions/dismiss", { id }); }
 

@@ -457,8 +457,11 @@ an interview, an article. A link can belong to a person (it shows on their
 page too, socials first, in the order you give them) or to no one. Whether a
 link is a social profile or something else is read from its address.
 FeedVault never opens or fetches a saved link itself; it only stores the
-text and opens it in a new tab when you click it. (The link-in-bio import
-on a person's page is separate, and adds nothing to Links.) See [docs/API.md](docs/API.md#links).
+text and opens it in a new tab when you click it. The link-in-bio import
+on a person's page saves to their Links too: the page's own address and
+every link it shows (a shop, a Patreon, a site, the profiles), so they stay
+when the page changes or goes. Import again later and only what is new is
+added; nothing you saved or edited is replaced or removed. See [docs/API.md](docs/API.md#links).
 
 To save the page you are reading in another tab, drag **Save to FeedVault**
 (under Add a link on the Links page) to your bookmarks bar. Clicked on any
@@ -556,7 +559,8 @@ yourself: whoever reaches the port can run them, so never expose it. The server 
 each only if you turn it on: PyPI's JSON page of instaloader, gallery-dl and yt-dlp, at most once a day,
 to say when an update is out (**Settings → Downloads → Downloaders → Check PyPI for new versions**); and a
 person's link-in-bio page (linktr.ee and a few like it), one page each time you click Import on their page
-(**Settings → Downloads → Link-in-bio import**), read for the accounts it lists and never stored. The dashboard
+(**Settings → Downloads → Link-in-bio import**), read for the accounts it lists and for the links it shows,
+which are saved to that person's Links as text (the page itself is never stored, and no saved link is ever fetched). The dashboard
 loads nothing from other sites: its fonts are bundled with it. The rules each request is under:
 [docs/API.md → Security rules](docs/API.md#security-rules). API reference:
 [docs/API.md](docs/API.md).

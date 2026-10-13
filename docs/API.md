@@ -1339,12 +1339,14 @@ only: see [Link-in-bio import](#link-in-bio-import)).
 
 The one web page FeedVault fetches itself, and only when asked: a person's
 link-in-bio page (linktr.ee and the like), read for the profiles it links
-to. Off until `{ "bio_import": true }` is set (Settings → Downloads →
-Link-in-bio import); `backend/biofetch.py`.
+to, which are suggested, and for the links it shows a visitor, which are
+saved to that person's [Links](#links) so they outlast the page. Off until
+`{ "bio_import": true }` is set (Settings → Downloads → Link-in-bio
+import); `backend/biofetch.py`.
 
 | Method | Path | Returns |
 |---|---|---|
-| POST | `/api/people/<id>/bio-import` | body `{ "url": "https://linktr.ee/somebody" }` → `{ "ok": true, "url": "https://linktr.ee/somebody", "accounts": [found, …], "other": 3 }` |
+| POST | `/api/people/<id>/bio-import` | body `{ "url": "https://linktr.ee/somebody" }` → `{ "ok": true, "url": "https://linktr.ee/somebody", "accounts": [found, …], "links": { "saved": 7, "already": 2, "elsewhere": 0, "dropped": 1, "over": 0 } }` |
 
 ```json
 { "platform": "twitter", "handle": "somebody", "url": "https://x.com/somebody", "tool": "gallery-dl",
@@ -1352,7 +1354,7 @@ Link-in-bio import); `backend/biofetch.py`.
   "name": "Some Body", "count": 12, "url": "https://x.com/somebody" }, "person": null, "source": null }
 ```
 
-- **Nothing is added.** Each account found is a suggestion; the dashboard
+- **No account or source is added.** Each account found is a suggestion; the dashboard
   adds the ones the user picks with the usual calls:
   `POST /api/people/<id>/accounts` for an account in the index
   (`status` `indexed`), `POST /api/sources` with `person` for one not
@@ -1373,15 +1375,81 @@ Link-in-bio import); `backend/biofetch.py`.
   `POST /api/sources` is sent. `profile_url` is the profile's address as
   FeedVault builds it from the platform and the handle (the indexed
   account's `url`, else Instagram, X, TikTok or YouTube `@name`), or
-  `null`: the only link the dashboard shows, never one taken from the page. `other`
-  counts the distinct links that are not one (the bio site's own pages
-  aside); they are not listed. At most 100 accounts, from at most 1000
-  distinct links.
+  `null`: the only link the dashboard shows in this list, never one taken
+  from the page. At most 100 accounts, from at most 1000 distinct links.
+- **The page's links are saved** to the person's [Links](#links): first the
+  page's own address (`url`, after redirects), then every link the page
+  shows a visitor, profiles and others alike, in the page's order. `links`
+  counts them:
+  - `saved`: new links of theirs, last in their order, `notes` empty.
+  - `already`: links they have already, by URL as `POST /api/links` stores
+    it, or in another spelling of it (`http`/`https`, with or without
+    `www.`, with or without a last slash). They are left exactly as they
+    are: the title, notes and place the user gave them are never written
+    over.
+  - `elsewhere`: URLs saved for another person or for no one (a URL is
+    saved once): left where they are, never moved.
+  - `dropped`: links refused, see below.
+  - `over`: new links past the 200 one import saves; importing again
+    saves the next ones (what is saved already does not count).
+
+  **Nothing is ever removed or replaced**: a link the page no longer shows
+  stays saved, which is the point, and importing again only adds what is
+  new. Nothing is saved when the import fails (any `ok: false` answer).
+  The saved links are user data like any other link
+  (`userdata/links.json`), and none is ever fetched: saving is text.
+- **What counts as a link the page shows**: the `href` of an `<a>` or
+  `<area>`; in a JSON block, a text under a key named for a link (`url`,
+  `href`, `link`, `uri`, a name ending in one of them such as `linkUrl`,
+  their plurals, `sameAs`, `website`), which is where Linktree keeps its
+  buttons and icons; and any other address in the page that is an account
+  as above. Left out, silently:
+  - anything in a JSON block under a key named for a part of the page or
+    for the site's own workings (`image`, `avatar`, `thumbnail`, `picture`,
+    `icon`, `logo`, `background`, `banner`, `font`, `video`, `theme`,
+    `style`, `seo`, `tracking`, `analytics`, `endpoint`, `config`,
+    `environment`, `statsig`, `sponsor`… anywhere in the key, at any depth
+    above the link) or under an `ALL_CAPS` settings key;
+  - the bio site's own pages: the host of the page fetched and its
+    subdomains (`linktr.ee/s/about`, `ugc.production.linktr.ee`), and
+    `linktree.com` / `later.com` for Linktree / Linkin.bio. Another
+    person's page on the same site is left out with them; a page on
+    another bio site is kept;
+  - hosts that serve a page's parts or count its visitors (`cloudfront.net`,
+    `amazonaws.com`, `googleapis.com`, `gstatic.com`, `googletagmanager.com`,
+    `fbcdn.net`, `sentry.io`, `schema.org`, `w3.org` and the like, and any
+    subdomain named `cdn`, `static`, `assets`, `img`, `images`, `media`,
+    `fonts`, `js`, `css`, `ugc`, `api`, `analytics`, `tracking`… on any
+    site);
+  - files by their ending: images, fonts, scripts, styles, `.json`,
+    `.map`, video and audio (`.png`, `.woff2`, `.js`, `.css`, `.mp4`…). A
+    `.pdf` or `.zip` is kept.
+
+  **Dropped and counted** (`dropped`), never saved: what `POST /api/links`
+  refuses (any scheme but `http`/`https`: `mailto:`, `tel:`,
+  `javascript:`, `data:`; a login part; a backslash, whitespace or control
+  character; more than 2048 characters), and, since the address comes from
+  someone else's page, a port of its own and a host that is not a public
+  site's name: an IP address in any spelling (`127.0.0.1`, `[::1]`,
+  `2130706433`, `0x7f.1`), a single word (`localhost`), and names ending in
+  `.local`, `.localhost`, `.internal`, `.intranet`, `.lan`, `.home`,
+  `.corp`, `.arpa`, `.test` or `.invalid`. An IDN host is saved in its
+  ASCII form (`xn--…`), so a look-alike name shows as what it is.
+- **Titles**: the label the page gives a link (an anchor's text, else its
+  `aria-label`, `title` or image's `alt`; in JSON the `title`, `label`,
+  `text`, `name`, `buttonText` or `caption` beside the link), as plain
+  text: control and format characters removed (escape sequences,
+  right-to-left overrides, zero-width spaces), whitespace collapsed, cut to
+  300 characters. A label that spells another site's address than the
+  link's (`https://…`, `www.…`, `site.tld/…`) is not used. No label, or
+  one not used: `""`, as a link saved without a title. The page's own
+  address is saved without one.
 - How the page is read: with Python's `html.parser`, the `href` of every
   `<a>` and `<area>`, then every `http(s)` string in the page's JSON blocks
   (`<script id="__NEXT_DATA__">`, `type="application/json"` or
   `application/ld+json`), which some sites draw their links from. No script
-  runs, no other part of the page is kept, and no link in it is fetched.
+  runs, the page itself is never stored or logged (the server's log has
+  its URL and the counts above), and no link in it is fetched.
 - **The fetch.** One page, the URL given, and its redirects:
   - **Sites**: `https` on port 443, no login part, the host exactly one of
     `linktr.ee`, `beacons.ai`, `lnk.bio`, `solo.to`, `campsite.bio`,
@@ -1434,8 +1502,9 @@ and a row whose URL is not `http://` or `https://` is skipped.
 
 FeedVault never fetches a saved link: no title, preview or icon is looked
 up, and nothing leaves the machine. (The [link-in-bio
-import](#link-in-bio-import) is separate: it fetches only the page pasted
-into it, when switched on, and adds nothing to Links.) The dashboard opens a
+import](#link-in-bio-import) fetches only the page pasted into it, when
+switched on; it saves that page's address and the links it shows to the
+person's Links, as text, and fetches none of them.) The dashboard opens a
 link in a new tab (`rel="noopener noreferrer"`), and only an `http:` or
 `https:` one.
 
