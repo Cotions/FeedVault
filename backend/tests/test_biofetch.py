@@ -1374,11 +1374,13 @@ def test_nothing_is_saved_when_the_import_is_refused(env, client, monkeypatch):
 
 
 def test_a_person_deleted_during_the_fetch_gets_no_links(bio, client, monkeypatch):
+    import db
+    import people
     from test_people import get
 
     class Deleting:
         def fetch(self, url):
-            assert client.delete(f"/api/people/{bio['id']}", headers=H).status_code == 200
+            people.delete(db.connect(), bio["id"])     # not a request of its own: this one is being answered
             return biofetch.Page("https://linktr.ee/alice", LINKTREE_PAGE)
     monkeypatch.setattr(biofetch, "FETCHER", Deleting())
     assert bio_import(client, bio["id"], status=404)["error"] == "no such person"
