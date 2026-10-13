@@ -1,6 +1,6 @@
 // Desktop, 1440x900: an account's platform is its logo (PlatformIcon.jsx),
-// not the "IG" / "X" / "TT" text: on a person's page, in the Sources list
-// and on a post card. The logo is an image named after the platform, for
+// not the "IG" / "X" / "TT" text: on a person's page, in the Sources list,
+// on a post card and in Review's byline. The logo is an image named after the platform, for
 // screen readers and the tooltip, and sits before the name, on its line.
 // A platform with no logo keeps its text chip.
 import { test, expect, openPage, stressData, idle, fakeBioImport, BIO_ACCOUNTS } from "./fixtures.js";
@@ -85,3 +85,11 @@ test("Feed: a card's author follows the platform's logo", async ({ page }) => {
   await expect(card).toBeVisible();
   await expectBeforeName(card.locator(".post-meta").getByRole("img").first(), card.locator(".post-author"));
 });
+
+test("Review: the byline's handle follows the platform's logo, the chips after it", async ({ page }) => {
+  await openPage(page, { name: "Review", path: "/review" });
+  const byline = page.locator(".review-byline");
+  const handle = byline.locator(".post-byline-handle");
+  await expectBeforeName(byline.getByRole("img"), handle);
+  const [h, chip] = [await handle.boundingBox(), await byline.locator(".chip").first().boundingBox()];
+  expect(h.x + h.width).toBeLessThanOrEqual(chip.x);});

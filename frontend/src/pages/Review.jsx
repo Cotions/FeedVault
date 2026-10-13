@@ -533,8 +533,8 @@ function ReviewSession({ scope, scopeControls }) {
           {cur && (
             <div className="review-info" ref={infoRef}>
               <div className="review-byline">
-                <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
                 <PlatformIcon platform={cur.platform} />
+                <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
                 {media.length > 1 && <span className="chip">{safeItem + 1}/{media.length}</span>}
                 <span className="chip">{cur.kind}</span>
               </div>
