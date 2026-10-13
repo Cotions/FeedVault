@@ -180,8 +180,9 @@ def profile_handle(url):
 
 
 def folder_name(url):
-    """A folder name for a profile link: its profile name, lowercase; else "profile"."""
-    name = re.sub(r"[^a-z0-9._-]+", "_", (profile_handle(url) or "").lower()).strip("._")
+    """A folder name for a profile link: its profile name, lowercase (``_name``
+    and ``name_`` are other profiles than ``name``); else "profile"."""
+    name = re.sub(r"[^a-z0-9._-]+", "_", (profile_handle(url) or "").lower()).strip(".")
     return name[:80] or "profile"
 
 
