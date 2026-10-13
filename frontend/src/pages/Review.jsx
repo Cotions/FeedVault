@@ -5,13 +5,14 @@ import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
-import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, platformShort, authorFeedPath } from "../lib/fmt";
+import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, authorFeedPath } from "../lib/fmt";
 import { sameTag, tagsMatch, withTags } from "../lib/tags";
 import RichText from "../components/RichText";
 import TagChips from "../components/TagChips";
 import TagInput from "../components/TagInput";
 import CollectionDialog from "../components/CollectionDialog";
 import Icon from "../components/Icon";
+import PlatformIcon from "../components/PlatformIcon";
 import CreatorPicker from "../components/CreatorPicker";
 import { PHONE, restoreFocus, trapTab, useToastClearance } from "../lib/layout";
 import { useSwipe } from "../lib/swipe";
@@ -533,7 +534,7 @@ function ReviewSession({ scope, scopeControls }) {
             <div className="review-info" ref={infoRef}>
               <div className="review-byline">
                 <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
-                <span className="chip" title={platformLabel(cur.platform)}>{platformShort(cur.platform)}</span>
+                <PlatformIcon platform={cur.platform} />
                 {media.length > 1 && <span className="chip">{safeItem + 1}/{media.length}</span>}
                 <span className="chip">{cur.kind}</span>
               </div>
