@@ -225,7 +225,7 @@ def owner_folder(conn, roots, platform, tool, author_id, handle):
                 counts[folder] = counts.get(folder, 0) + 1
         if counts:
             return max(counts, key=lambda f: (counts[f], f))
-    if handle and re.sub(r"[^a-z0-9._-]+", "_", handle.lower()).strip("._"):
+    if handle and re.sub(r"[^a-z0-9._-]+", "_", handle.lower()).strip("."):
         return sources.default_folder(tool, platform, PROFILE_LINKS[platform].format(handle=handle), roots)
     return os.path.join(roots[0], save.SAVED)
 

@@ -106,7 +106,9 @@ def test_folder_names():
                       ("https://reddit.com/user/someone/submitted", "someone"),
                       ("https://bsky.app/profile/someone.bsky.social", "someone.bsky.social"),
                       ("https://pixiv.net/en/users/123456", "123456"), ("https://youtube.com/@a%20b", "a_20b"),
-                      ("https://youtube.com/channel/UCabc", "ucabc"), ("https://x.com/media", "profile")]:
+                      ("https://youtube.com/channel/UCabc", "ucabc"), ("https://x.com/media", "profile"),
+                      ("https://x.com/_Someone", "_someone"), ("https://x.com/Someone_", "someone_"),
+                      ("https://tiktok.com/@.some.one.", "some.one")]:
         assert sources.folder_name(url) == want, url
 
 
@@ -137,6 +139,10 @@ def test_create_by_link(env, client):
     assert (s["tool"], s["target"]) == ("instaloader", "somebody")
     # Same link written differently: the same source.
     assert "already" in post(client, "/api/sources", {"target": "x.com/Someone/media?s=1"}, 400)["error"]
+    # A name with an underscore at an end is another profile, with its own folder.
+    s = post(client, "/api/sources", {"target": "https://x.com/_Someone"})["source"]
+    assert s["folder"] == str(env["media"] / "twitter" / "_someone")
+    assert get(client, "/api/sources/resolve?url=https://x.com/Someone_")["source"] is None
     # The tool comes from the table, not the request.
     assert "gallery-dl" in post(client, "/api/sources", {"target": "https://x.com/other", "tool": "yt-dlp"},
                                 400)["error"]
@@ -144,7 +150,7 @@ def test_create_by_link(env, client):
                  {"target": "https://x.com/$(id)"}, {"target": ["https://x.com/a"]}, {"target": "https://x.com/"},
                  {"target": "https://x.com/a", "tool": "sh"}]:
         assert post(client, "/api/sources", body, 400)["ok"] is False, body
-    assert db.connect().execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 3
+    assert db.connect().execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 4
 
 
 def test_create_refuses_a_stored_target_that_is_not_normalized(env):
