@@ -417,7 +417,7 @@ What was already in the archive is never new, whenever it was posted.
 **Mark seen** on a Creators card or a person's page does the same for that
 person (or that account, when it is linked to nobody) only.
 
-A person's page has an **About** box: a gender (Female, Male, Non-binary,
+A person's page has an **About** box: a gender (Female, Male, Transgender,
 or any other you type), a country, and labels of your own ("cosplay",
 "travel"), kept apart from the posts' tags. Creators shows each person's
 flag and labels on their card, filters people by gender, country and

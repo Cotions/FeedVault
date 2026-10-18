@@ -29,7 +29,7 @@ MAX_GENDER = 40
 MAX_LABELS = 50                 # labels per person
 # Offered as quick choices; any other gender is kept as typed. One typed in
 # another case is stored as the preset.
-GENDERS = ("Female", "Male", "Non-binary")
+GENDERS = ("Female", "Male", "Transgender")
 # ISO 3166-1 alpha-2: every officially assigned code.
 COUNTRIES = frozenset("""
 AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ

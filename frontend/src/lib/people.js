@@ -89,7 +89,7 @@ function withNone(people, recent, query) {
 
 // Quick choices; any other gender is kept as typed (the backend stores one
 // typed in another case as the preset).
-export const GENDER_PRESETS = ["Female", "Male", "Non-binary"];
+export const GENDER_PRESETS = ["Female", "Male", "Transgender"];
 export const MAX_GENDER = 40;
 
 // Genders and labels compare as on the backend (SQLite NOCASE: ASCII letters only).

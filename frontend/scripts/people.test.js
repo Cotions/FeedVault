@@ -22,7 +22,7 @@ test("a country's name comes from the browser, its code when it has none", () =>
 });
 
 test("a gender is stored with its spaces collapsed, a preset in its own case", () => {
-  assert.equal(cleanGender("  non-BINARY "), "Non-binary");
+  assert.equal(cleanGender("  transGENDER "), "Transgender");
   assert.equal(cleanGender("female"), "Female");
   assert.equal(cleanGender("Two   spirit"), "Two spirit");
   assert.equal(cleanGender(""), "");

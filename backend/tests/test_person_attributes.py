@@ -49,8 +49,8 @@ def test_new_people_have_none(env, client):
 
 def test_set_read_and_clear(env, client):
     pid = create(client, "A")["person"]["id"]
-    p = update(client, pid, {"gender": "  non-BINARY ", "country": " fr ", "labels": ["Travel", "cosplay", "travel"]})["person"]
-    assert (p["gender"], p["country"], p["labels"]) == ("Non-binary", "FR", ["cosplay", "Travel"])
+    p = update(client, pid, {"gender": "  transGENDER ", "country": " fr ", "labels": ["Travel", "cosplay", "travel"]})["person"]
+    assert (p["gender"], p["country"], p["labels"]) == ("Transgender", "FR", ["cosplay", "Travel"])
     p = update(client, pid, {"gender": "Two   spirit"})["person"]
     assert p["gender"] == "Two spirit" and p["country"] == "FR"        # what is not sent stays
     for read in (get(client, f"/api/people/{pid}"), get(client, "/api/people")[0]):
@@ -104,11 +104,33 @@ def test_attributes_are_what_people_have(env, client):
     r = get(client, "/api/people/attributes")
     assert r["labels"] == [{"name": "Travel", "count": 3}, {"name": "cosplay", "count": 1}, {"name": "food", "count": 1}]
     assert r["genders"] == [{"name": "Female", "count": 2}, {"name": "Agender", "count": 1}]
-    assert r["presets"] == ["Female", "Male", "Non-binary"]
+    assert r["presets"] == ["Female", "Male", "Transgender"]
     assert len(r["countries"]) == 249 and {"FR", "US", "JP"} <= set(r["countries"])
     assert all(people.clean_country(c) == c for c in r["countries"])
     # Not post tags: the Tags page never sees them.
     assert get(client, "/api/tags") == []
+
+
+def test_attributes_follow_every_change(env, client):
+    """people.attributes is cached (db._memo) until the next commit: each
+    change, read right after it, shows."""
+    attrs = lambda: get(client, "/api/people/attributes")                  # noqa: E731
+    a = create(client, "A")["person"]["id"]
+    b = create(client, "B")["person"]["id"]
+    assert (attrs()["labels"], attrs()["genders"]) == ([], [])             # cached now
+    update(client, a, {"gender": "Transgender", "labels": ["travel"]})
+    assert attrs()["genders"] == [{"name": "Transgender", "count": 1}]
+    assert attrs()["labels"] == [{"name": "travel", "count": 1}]
+    update(client, b, {"gender": "Agender", "labels": ["food"]})
+    update(client, a, {"gender": "", "labels": ["food"]})
+    assert attrs()["genders"] == [{"name": "Agender", "count": 1}]
+    assert attrs()["labels"] == [{"name": "food", "count": 2}]
+    assert [p["labels"] for p in get(client, "/api/people")] == [["food"], ["food"]]
+    post(client, "/api/people/merge", {"ids": [a, b]})
+    assert attrs()["labels"] == [{"name": "food", "count": 1}]
+    assert attrs()["genders"] == [{"name": "Agender", "count": 1}]       # the first one set: b's
+    assert client.delete(f"/api/people/{a}", headers=H).status_code == 200
+    assert (attrs()["labels"], attrs()["genders"]) == ([], [])
 
 
 def test_merge_keeps_every_label_and_the_first_gender_and_country(env, client):

@@ -1246,7 +1246,7 @@ A **person**:
 - `name`: 1 to 64 characters, no `"` or control characters, unique without
   regard to (ASCII) case. `notes`: free text, at most 5000 characters.
 - `gender`: free text, at most 40 characters, spaces collapsed, `""` when
-  unset. `Female`, `Male` and `Non-binary` are presets: one sent in another
+  unset. `Female`, `Male` and `Transgender` are presets: one sent in another
   case is stored as the preset; anything else is kept as sent.
 - `country`: an ISO 3166-1 alpha-2 code, uppercase (`"fr"` is stored as
   `"FR"`), `""` when unset. A code that is not assigned is a 400.
@@ -1264,7 +1264,7 @@ A **person**:
 | GET | `/api/people` | `[person, …]`, by name |
 | POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted; at most 500 accounts and 20 profiles; `profiles` with no media root set is a 400) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
 | POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }] }`: a sync of each of the person's sources, as Sync all does for every source; 404 for an unknown id |
-| GET | `/api/people/attributes` | `{ "labels": [{ "name", "count" }], "genders": [{ "name", "count" }], "presets": ["Female", "Male", "Non-binary"], "countries": ["AD", …] }`: the labels and genders people have, most used first (what the person page suggests and the Creators filters offer), and every country code a person can have |
+| GET | `/api/people/attributes` | `{ "labels": [{ "name", "count" }], "genders": [{ "name", "count" }], "presets": ["Female", "Male", "Transgender"], "countries": ["AD", …] }`: the labels and genders people have, most used first (what the person page suggests and the Creators filters offer), and every country code a person can have |
 | GET | `/api/people/<id>` | person, with its `links` (see [Links](#links)), or 404 |
 | POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"] }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date) → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, tied to no one |
