@@ -298,7 +298,8 @@ export function mergePeople(ids, { name, accounts = [] } = {}) {
 // What a person's picture can be made from (docs/API.md "Profile pictures"):
 // { profile_pics: [{ key, name, at, account, url }], media: [{ id, post, kind, posted_at, thumb }] }
 export function getAvatarChoices(id) { return get(`/api/people/${seg(id)}/avatar/choices`); }
-// source: { media: id } or { profile_pic: key }; crop: { x, y, size } or null (the middle) → { ok, person }
+// source: { media: id } or { profile_pic: key }; crop: { x, y, size }, a 2:3 portrait, or null (the
+// default: the middle across, the upper part of a tall picture) → { ok, person }
 export function setAvatar(id, source, crop) {
   return post(`/api/people/${seg(id)}/avatar`, crop ? { ...source, crop } : source);
 }

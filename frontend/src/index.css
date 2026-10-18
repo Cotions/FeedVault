@@ -1596,7 +1596,9 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 }
 /* A person's picture (components/PersonAvatar): in the letter's box, so
    neither moves anything when the other takes its place. The letter of a
-   person is drawn from data-letter, not text. */
+   person is drawn from data-letter, not text. Round in chips and rows; a
+   2:3 portrait (.is-portrait) as wide as its box, on Creators' cards and
+   the person's page, a square picture (saved before portraits) covering it. */
 .avatar-letter[data-letter]::before { content: attr(data-letter); }
 .avatar-img {
   display: block;
@@ -1609,15 +1611,22 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   border: 1px solid rgba(var(--glow-rgb), 0.3);
 }
 .avatar-letter.is-chip, .avatar-img.is-chip { width: 22px; height: 22px; font-size: 11px; }
-.avatar-letter.is-large, .avatar-img.is-large { width: 52px; height: 52px; font-size: 21px; }
+.avatar-letter.is-portrait, .avatar-img.is-portrait {
+  width: 100%; height: auto;
+  aspect-ratio: 2 / 3;
+  border-radius: 10px;
+  object-position: center;
+  font-size: 44px;
+}
+.avatar-letter.is-portrait.is-large { font-size: 64px; }
 
-/* The person page's picture, a button that opens the picture dialog. */
+/* The person page's portrait, a button that opens the picture dialog. */
 .avatar-edit {
   position: relative;
   flex-shrink: 0;
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 10px;
   background: none;
   color: inherit;
   cursor: pointer;
@@ -1625,9 +1634,9 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .avatar-edit:hover .avatar-letter, .avatar-edit:hover .avatar-img { border-color: rgba(var(--glow-rgb), 0.75); }
 .avatar-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .avatar-edit-badge {
-  position: absolute; right: -3px; bottom: -3px;
+  position: absolute; right: 8px; bottom: 8px;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px;
+  width: 28px; height: 28px;
   border-radius: 50%;
   color: var(--text-dim);
   background: var(--surface-2);
@@ -1649,20 +1658,31 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .avatar-source { display: flex; flex-direction: column; gap: 8px; }
 .avatar-source .empty { padding: 10px 0; }
 .avatar-profile-pics { display: flex; flex-wrap: wrap; gap: 8px; }
+/* A profile picture: Use (one click, the default crop) and Adjust (frame it first). */
 .avatar-profile-pic {
-  display: inline-flex; align-items: center; gap: 9px;
+  display: inline-flex; align-items: center; gap: 2px;
   max-width: 100%;
-  padding: 4px 12px 4px 4px;
-  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--text);
-  text-align: left;
+  padding-right: 4px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 999px;
-  cursor: pointer;
 }
 .avatar-profile-pic.is-newest { border-color: rgba(var(--glow-rgb), 0.5); }
-.avatar-profile-pic:hover, .avatar-profile-pic:focus-visible { border-color: var(--accent); }
-.avatar-profile-pic img { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; object-fit: cover; }
+.avatar-profile-pic:hover, .avatar-profile-pic:focus-within { border-color: var(--accent); }
+.avatar-profile-use {
+  display: inline-flex; align-items: center; gap: 9px;
+  min-width: 0;
+  padding: 4px 8px 4px 4px;
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--text);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.avatar-profile-use:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.avatar-profile-use img { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; object-fit: cover; }
+.avatar-profile-adjust { padding: 4px 10px; font-size: 12px; border-radius: 999px; }
 .avatar-media-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px;
   max-height: 212px; overflow-y: auto;
@@ -1698,12 +1718,17 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 .avatar-crop-view:active { cursor: grabbing; }
 .avatar-crop-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .avatar-crop-view img { position: absolute; max-width: none; pointer-events: none; }
-/* What is kept is the whole square; the round window shows it as the cards will. */
-.avatar-crop-ring {
+/* What is kept is the whole 2:3 view; the dashed ring is what the round chips show. */
+.avatar-crop-frame {
   position: absolute; inset: 0;
-  border-radius: 50%;
-  box-shadow: 0 0 0 200px rgba(5, 7, 11, 0.55);
+  border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+.avatar-crop-chip {
+  position: absolute; left: 0;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.45);
   pointer-events: none;
 }
 .avatar-crop-zoom { display: flex; align-items: center; gap: 10px; width: 240px; max-width: 100%; font-size: 12px; color: var(--muted); }
@@ -3187,6 +3212,69 @@ main[tabindex]:focus-visible { outline: none; box-shadow: none; }
 /* ── People ─────────────────────────────────────────────── */
 .creators-section { display: flex; align-items: baseline; gap: 8px; margin: 18px 0 10px; }
 .creators-section:first-of-type { margin-top: 4px; }
+/* People's heading, and Portraits | Compact on its right. */
+.creators-people-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 4px 0 10px; }
+.creators-people-head .creators-section { margin: 0; flex: 1; }
+.links-tabs.creators-view { margin-bottom: 0; }
+.creator-grid + .creators-section { margin-top: 22px; }
+.creators-view .links-tab { min-height: 28px; padding: 3px 12px; font-size: 12.5px; }
+
+/* Portraits: a grid of tall cards, as Stash shows performers. The picture
+   in a fixed 2:3 box (nothing moves as it loads), the name, accounts,
+   labels and last sync under it (the card's link), then a last line of
+   the count and the card's buttons. */
+.creator-grid.is-portraits { grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); gap: 14px; }
+.person-card.is-portrait {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 1fr auto; align-items: center;
+}
+.person-card.is-portrait > .creator-main {
+  grid-row: 1; grid-column: 1 / -1; align-self: start;
+  flex-direction: column; align-items: stretch; gap: 0; padding: 0;
+}
+.person-card.is-portrait .portrait-box {
+  position: relative; display: block;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  border-radius: 9px 9px 0 0;
+  background: var(--surface-2);
+}
+.person-card.is-portrait .portrait-box > .avatar-img, .person-card.is-portrait .portrait-box > .avatar-letter {
+  width: 100%; height: 100%;
+  border: 0; border-radius: 0;
+  border-bottom: 1px solid var(--border);
+}
+.person-card.is-portrait .portrait-badges {
+  position: absolute; left: 8px; top: 8px; right: 8px;
+  display: flex; flex-wrap: wrap; gap: 4px;
+  pointer-events: none;
+}
+.portrait-badges:empty { display: none; }
+.portrait-badges .side-badge { box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
+.person-card.is-portrait .creator-id { flex: none; gap: 4px; padding: 10px 12px 0; }
+.person-card.is-portrait .creator-name { font-size: 13.5px; }
+/* One line of accounts: every card in a row about as tall (each chip's title has its handle). */
+.person-card.is-portrait .person-chips { flex-wrap: nowrap; overflow: hidden; }
+.person-card.is-portrait > .person-stats {
+  grid-row: 2; grid-column: 1; min-width: 0;
+  flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
+  padding: 6px 8px 10px 12px;
+}
+.person-card.is-portrait .creator-count { font-size: 16px; }
+.portrait-actions {
+  grid-row: 2; grid-column: 2;
+  display: flex; align-items: center; gap: 2px;
+  padding: 4px 8px 8px 0;
+}
+.portrait-actions > * { margin-right: 0; }
+.person-card.is-portrait > .creator-card-warn { grid-row: 3; grid-column: 1 / -1; padding: 0 12px 10px; }
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  .creator-grid.is-portraits { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .person-card.is-portrait { grid-template-rows: 1fr auto auto; padding-bottom: 0; }
+  .person-card.is-portrait > .creator-main { flex-basis: auto; }
+  .person-card.is-portrait > .person-stats { grid-column: 1 / -1; padding-bottom: 4px; }
+  .portrait-actions { grid-row: 3; grid-column: 1 / -1; justify-content: flex-end; padding: 0 6px 6px; }
+  .person-card.is-portrait > .creator-card-warn { grid-row: 4; }
+}
 .creator-card.is-selected {
   border-color: var(--glow);
   box-shadow: 0 0 0 2px rgba(var(--glow-rgb), 0.55);
@@ -3234,6 +3322,21 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 /* The person across the app on the left, their new posts and Mute on the
    right of the same line (below it when the line is full). */
 .person-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 4px 0 20px; }
+/* The card's head: their portrait on the left, the person across the app
+   and About beside it; the portrait above them on a phone. */
+.person-hero {
+  display: grid; grid-template-columns: clamp(170px, 17vw, 230px) minmax(0, 1fr); gap: 18px 26px;
+  align-items: start; margin: 4px 0 22px;
+}
+.person-hero .avatar-edit { width: 100%; }
+.person-hero-main { min-width: 0; }
+.person-hero-main > .person-bar { margin: 0 0 18px; }
+.person-hero-main > .person-about { margin-bottom: 0; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.person-hero + .person-section { padding-top: 18px; border-top: 1px solid var(--border-soft); }
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  .person-hero { grid-template-columns: minmax(0, 1fr); }
+  .person-hero .avatar-edit { width: min(200px, 60%); }
+}
 .person-links { display: flex; flex-wrap: wrap; gap: 8px; }
 .person-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .person-new:empty { display: none; }

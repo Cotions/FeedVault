@@ -6,10 +6,15 @@ profile picture instaloader saved beside their posts
 (``<date>_UTC_profile_pic.jpg``).
 
 Whatever it came as, it is opened as one of the image formats thumbs.py
-reads (never by its name), cropped square, and saved again as WebP: SIZE
-pixels for the page, SMALL for the cards and chips. Both live in
+reads (never by its name), cropped to a portrait (2:3, as Stash shows a
+performer), and saved again as WebP three times: WIDTH x HEIGHT for the
+page, CARD wide for the Creators cards, and a SMALL square of the
+portrait's upper part (the face, mostly) for the round chips. They live in
 ``<data_dir>/avatars/``, named by a hash of the picture saved, never next
-to the media (the media folders are only ever read). The person keeps that
+to the media (the media folders are only ever read). Pictures saved before
+portraits (a 512 px square and its 96 px one, no card file) are still
+served: the card size falls back to the large one, and every place shows
+them covering its box. The person keeps that
 name (people.avatar, exported in people.json), so a rebuilt index points
 at the same files; a file no person names any more is deleted as the
 change that let it go is made.
@@ -28,8 +33,11 @@ import config
 import db
 import thumbs
 
-SIZE = 512
-SMALL = 96
+WIDTH, HEIGHT = 600, 900                # the portrait, 2:3
+CARD = 300                              # the cards' portrait, 300 x 450
+SMALL = 96                              # the chips' square
+TOP_BIAS = 0.25                         # the default crop of a tall picture: a quarter of what is cut off is above
+SMALL_TOP = 0.2                         # the chips' square: a fifth of the portrait it leaves out is above it
 QUALITY = 86
 MAX_UPLOAD = 15 * 1024 * 1024           # bytes
 MAX_FILE = 100 * 1024 * 1024            # a picture read from the media folders
@@ -59,21 +67,30 @@ def clean_name(value):
     return None
 
 
-def path(data_dir, name, small=False):
-    return os.path.join(data_dir, FOLDER, f"{name}-{SMALL}.webp" if small else f"{name}.webp")
+# The files of an avatar: kind -> what follows the name.
+KINDS = {"large": "", "card": f"-{CARD}", "small": f"-{SMALL}"}
+
+
+def path(data_dir, name, kind="large"):
+    return os.path.join(data_dir, FOLDER, f"{name}{KINDS[kind]}.webp")
 
 
 def file_name(value):
-    """The avatar name and whether it is the small one, from a served file's
-    name (``<name>.webp`` or ``<name>-96.webp``), or None."""
-    m = re.fullmatch(rf"([0-9a-f]{{20}})(-{SMALL})?\.webp", value or "")
-    return (m[1], bool(m[2])) if m else None
+    """The avatar name and which of its files (a KINDS key), from a served
+    file's name (``<name>.webp``, ``<name>-300.webp`` or ``<name>-96.webp``),
+    or None."""
+    m = re.fullmatch(rf"([0-9a-f]{{20}})(-{CARD}|-{SMALL})?\.webp", value or "")
+    if not m:
+        return None
+    return m[1], next(k for k, v in KINDS.items() if v == (m[2] or ""))
 
 
 def clean_crop(value):
-    """The square to keep, {x, y, size}: its left and top as fractions of the
-    picture's width and height, its side as a fraction of the shorter one.
-    None (the default) keeps the middle. Raises Refused when malformed."""
+    """The portrait to keep, {x, y, size}: its left and top as fractions of
+    the picture's width and height, its size as a fraction of the largest
+    2:3 box the picture holds (1: that box; 0.5: half as wide and high).
+    None (the default) keeps the middle across and the upper part of a tall
+    picture (TOP_BIAS). Raises Refused when malformed."""
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -93,22 +110,36 @@ def clean_crop(value):
 # Making one
 # ---------------------------------------------------------------------------
 
-def _square(w, h, crop):
-    """(left, top, side) in pixels of a w x h picture."""
-    side = min(w, h) * (crop["size"] if crop else 1)
-    side = max(1, min(side, w, h))
+def _fit(w, h):
+    """The largest 2:3 box a w x h picture holds: (width, height)."""
+    return (w, w * 1.5) if w * 1.5 <= h else (h / 1.5, h)
+
+
+def _portrait(w, h, crop):
+    """(left, top, width, height) in pixels of a w x h picture."""
+    bw, bh = _fit(w, h)
+    k = crop["size"] if crop else 1
+    bw, bh = max(1, min(bw * k, w)), max(1, min(bh * k, h))
     if crop is None:
-        left, top = (w - side) / 2, (h - side) / 2
+        left, top = (w - bw) / 2, (h - bh) * TOP_BIAS
     else:
         left, top = crop["x"] * w, crop["y"] * h
-    left, top = max(0, min(left, w - side)), max(0, min(top, h - side))
-    return round(left), round(top), max(1, round(side))
+    left, top = max(0, min(left, w - bw)), max(0, min(top, h - bh))
+    return round(left), round(top), max(1, round(bw)), max(1, round(bh))
 
 
-def _webp(img, size):
+def _webp(img, width, height):
     out = io.BytesIO()
-    img.resize((size, size), Image.LANCZOS).save(out, "WEBP", quality=QUALITY, method=4)
+    img.resize((width, height), Image.LANCZOS).save(out, "WEBP", quality=QUALITY, method=4)
     return out.getvalue()
+
+
+def _sized(img, width):
+    """A portrait as WebP, ``width`` wide at most, 2:3; one narrower as it is
+    (never enlarged, its rounded pixels kept)."""
+    if img.width <= width:
+        return _webp(img, img.width, img.height)
+    return _webp(img, width, round(width * 1.5))
 
 
 def _write(target, data):
@@ -136,9 +167,11 @@ def make(data_dir, src, crop=None):
             if w * h > MAX_PIXELS:
                 raise Refused(f"the picture is too large ({w} x {h} pixels; at most {MAX_PIXELS // 1_000_000} "
                               "million)")
-            # A JPEG decoded at a fraction of its size when that is still enough.
-            want = math.ceil(SIZE / (crop["size"] if crop else 1))
-            img.draft("RGB", (want, want))
+            # A JPEG decoded at a fraction of its size when that is still
+            # enough: the portrait WIDTH wide, whichever way EXIF turns it.
+            box = min(_fit(w, h)[0], _fit(h, w)[0]) * (crop["size"] if crop else 1)
+            scale = min(1, WIDTH / max(1, box))
+            img.draft("RGB", (math.ceil(w * scale), math.ceil(h * scale)))
             img = ImageOps.exif_transpose(img)  # the first frame of an animation
             alpha = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
             img = img.convert("RGBA" if alpha else "RGB")
@@ -148,13 +181,17 @@ def make(data_dir, src, crop=None):
         raise Refused(f"the picture is too large (at most {MAX_PIXELS // 1_000_000} million pixels)")
     except (OSError, ValueError, SyntaxError):
         raise Refused("that is not a picture FeedVault can read (JPEG, PNG, WebP, GIF or AVIF)")
-    left, top, side = _square(img.width, img.height, crop)
-    img = img.crop((left, top, left + side, top + side))
-    big = _webp(img, min(SIZE, side))
-    small = _webp(img, min(SMALL, side))
+    left, top, bw, bh = _portrait(img.width, img.height, crop)
+    img = img.crop((left, top, left + bw, top + bh))
+    big, card = _sized(img, WIDTH), _sized(img, CARD)
+    # The chips' square: as wide as the portrait, from its upper part.
+    side = min(img.width, img.height)
+    up = round((img.height - side) * SMALL_TOP)
+    small = _webp(img.crop((0, up, side, up + side)), min(SMALL, side), min(SMALL, side))
     name = hashlib.sha256(big).hexdigest()[:20]
     config.make_private_dir(os.path.join(data_dir, FOLDER))
-    for target, data in ((path(data_dir, name), big), (path(data_dir, name, small=True), small)):
+    for kind, data in (("large", big), ("card", card), ("small", small)):
+        target = path(data_dir, name, kind)
         if not os.path.isfile(target):
             _write(target, data)
     return name
@@ -279,8 +316,8 @@ def drop_unused(conn, data_dir, names):
     for name in {n for n in names if n and NAME_RE.fullmatch(n)}:
         if conn.execute("SELECT 1 FROM people WHERE avatar = ? LIMIT 1", (name,)).fetchone():
             continue
-        for small in (False, True):
+        for kind in KINDS:
             try:
-                os.remove(path(data_dir, name, small))
+                os.remove(path(data_dir, name, kind))
             except OSError:
                 pass

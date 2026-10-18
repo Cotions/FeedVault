@@ -229,7 +229,7 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
-| GET | `/media/avatars/<file>` | a person's picture, `<avatar>.webp` (512 px) or `<avatar>-96.webp`, cached for good (`immutable`: a new picture has a new name); see [Profile pictures](#profile-pictures) |
+| GET | `/media/avatars/<file>` | a person's picture: `<avatar>.webp` (the 600 x 900 portrait), `<avatar>-300.webp` (300 x 450, the cards') or `<avatar>-96.webp` (a 96 px square), cached for good (`immutable`: a new picture has a new name); see [Profile pictures](#profile-pictures) |
 | GET | `/media/people/<id>/profile-pic/<key>` | one of the profile pictures instaloader saved for a person's accounts, as listed by `/api/people/<id>/avatar/choices` |
 | GET | `/userscript/feedvault.user.js` | the userscript (no header needed), with this instance's port in `API_BASE`, `@updateURL` and `@downloadURL` (the port the server listens on, never one from the request), see [Save from the browser](#save-from-the-browser-userscript) |
 | GET | `/` | the dashboard (`frontend/dist/index.html`; no header needed). Without a built dashboard, a plain-text note to run `./run.sh --build` |
@@ -1314,10 +1314,16 @@ poster), or a profile picture instaloader saved beside their posts
 sources). `backend/avatars.py`.
 
 Whatever it was, it is opened as JPEG, PNG, WebP, GIF or AVIF by its
-content (never by its name), turned upright (EXIF), cropped square and
-saved again as WebP, 512 px and 96 px (a smaller picture is not enlarged),
-in `<data_directory>/avatars/<avatar>.webp` and `<avatar>-96.webp`, never
-in a media folder. `avatar` is a hash of the picture: two people with the
+content (never by its name), turned upright (EXIF), cropped to a 2:3
+portrait (as Stash shows a performer) and saved again as WebP: 600 x 900
+for the person's page, 300 x 450 for the Creators cards, and a 96 px square
+of the portrait's upper part for the round chips (pickers, a page scoped
+to the person); a smaller picture is not enlarged. They are
+`<data_directory>/avatars/<avatar>.webp`, `<avatar>-300.webp` and
+`<avatar>-96.webp`, never in a media folder. A picture saved before
+portraits (a 512 px square and its 96 px one) keeps working: asked for
+`-300`, its large file is served, and the dashboard shows it covering the
+portrait's box. `avatar` is a hash of the picture: two people with the
 same one share its files. It is user data, a column of `people` exported
 with the person in `people.json`, so a rebuilt index gets it back (the
 `avatars` folder is not touched). Its files are deleted once no person has
@@ -1330,10 +1336,13 @@ another.
 | POST | `/api/people/<id>/avatar` | the picture as the body (`Content-Type` `image/*` or `application/octet-stream`, at most 15 MB; the crop in the query, `?x=&y=&size=`), or JSON `{ "media": 17 }` or `{ "profile_pic": "<key>" }` with an optional `"crop": { "x", "y", "size" }` → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>/avatar` | → `{ "ok": true, "person": {…} }`, the person without a picture |
 
-- The crop: `x` and `y`, the square's left and top as fractions (0 to 1)
-  of the upright picture's width and height, `size` its side as a fraction
-  of the shorter side (0.01 to 1). A square that would leave the picture
-  is moved back in. None: the middle square, as large as it can be.
+- The crop: `x` and `y`, the portrait's left and top as fractions (0 to
+  1) of the upright picture's width and height, `size` its width and height
+  as a fraction of the largest 2:3 box the picture holds (0.01 to 1). A
+  portrait that would leave the picture is moved back in. None: as large as
+  it can be, in the middle across and, down a tall picture, nearer the top
+  (a quarter of what is cut off is above, where faces are): a square
+  profile picture loses its sides only.
 - Refused with a 400: what is not one of those formats, a picture over 50
   million pixels (read from its header, before anything is decoded), a
   `media` that is not one of the person's (or a video without a poster), a

@@ -55,6 +55,8 @@ const PATHS = {
   bellOff:   <><path d="M6.2 16.8V11a5.8 5.8 0 0 1 1.3-3.7M10 5.5a5.8 5.8 0 0 1 7.8 5.5v5.8l1.7 1.7H8" /><path d="M10 20.6a2.2 2.2 0 0 0 4 0" /><path d="M4 4l16 16" /></>,
   clock:     <><circle cx="12" cy="12" r="8.5" /><path d="M12 7.4V12l3 2" /></>,
   vault:     <><rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2.4" /><circle cx="10.6" cy="12" r="3.6" /><path d="M10.6 8.4v7.2" /><path d="M7 12h7.2" /><path d="M17 9.4v5.2" /></>,
+  portraits: <><rect x="3.5" y="3.5" width="7.5" height="11" rx="1.6" /><rect x="13" y="3.5" width="7.5" height="11" rx="1.6" /><path d="M3.5 18h7.5M13 18h7.5M3.5 20.5h5M13 20.5h5" /></>,
+  rows:      <><rect x="3.5" y="4" width="17" height="6.5" rx="1.6" /><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.6" /></>,
 };
 
 export default function Icon({ name, size = 16, className = "", style }) {

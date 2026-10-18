@@ -33,6 +33,17 @@ import { Gap } from "../components/WinGap";
 
 const SUGGESTIONS_SHOWN = 4;
 
+/* How people are shown, kept in this browser: "portraits" (the default, a
+   grid of 2:3 pictures as Stash shows performers) or "compact" (rows).
+   Accounts linked to nobody are rows either way. */
+const VIEW_KEY = "feedvault.creators.view";
+const VIEWS = [["portraits", "Portraits"], ["compact", "Compact"]];
+function storedView() {
+  try { return localStorage.getItem(VIEW_KEY) === "compact" ? "compact" : "portraits"; } catch { return "portraits"; }
+}
+// A card's height before any is measured (lib/windowing), by view.
+const ESTIMATE = { portraits: 400, compact: 66 };
+
 // Person names are unique; a default that is taken gets " 2", " 3"…
 function freeName(name, people) {
   const taken = new Set(people.map(p => p.name.toLowerCase()));
@@ -137,11 +148,18 @@ function CardLabels({ labels }) {
   );
 }
 
-function PersonCard({ person: p, index, settled, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted, flash }) {
+function PersonCard({ person: p, index, settled, portrait, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted, flash }) {
   const where = countryName(p.country);
+  const badges = <><NewBadge count={fresh?.count} /><WarnBadge sync={sync} /></>;
   const body = (
     <>
-      <PersonAvatar person={p} />
+      {portrait ? (
+        // A fixed 2:3 box, the picture lazy-loaded in it: nothing moves as it comes.
+        <span className="portrait-box">
+          <PersonAvatar person={p} size="portrait" />
+          <span className="portrait-badges">{badges}</span>
+        </span>
+      ) : <PersonAvatar person={p} />}
       <span className="creator-id">
         <span className="creator-name">
           {p.country && <span className="person-flag" role="img" aria-label={where} title={where}>{countryFlag(p.country)}</span>}
@@ -158,17 +176,25 @@ function PersonCard({ person: p, index, settled, selectMode, selected, onToggle,
         <CardLabels labels={p.labels} />
         <CardSyncStatus sync={sync} />
       </span>
-      <span className="person-stats">
-        <span className="creator-count">{fmtInt(p.count)}</span>
-        <span className="creator-sub">{fmtBytes(p.bytes)}</span>
-        <NewBadge count={fresh?.count} />
-        <WarnBadge sync={sync} />
-      </span>
+      {!portrait && (
+        <span className="person-stats">
+          <span className="creator-count">{fmtInt(p.count)}</span>
+          <span className="creator-sub">{fmtBytes(p.bytes)}</span>
+          {badges}
+        </span>
+      )}
+    </>
+  );
+  const actions = !selectMode && (
+    <>
+      <SeenButton fresh={fresh} name={p.name} onSeen={onSeen} />
+      {muted != null && <MuteButton compact muted={muted} whom={{ person: p.id }} name={p.name} onDone={onMuted} />}
+      <CardSyncButton sync={sync} onSync={onSync} />
     </>
   );
   return (
     <div
-      className={`creator-card person-card${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
+      className={`creator-card person-card${portrait ? " is-portrait" : ""}${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
       data-index={index}
       style={settled ? undefined : { animationDelay: `${Math.min(index, 30) * 25}ms` }}
     >
@@ -179,9 +205,15 @@ function PersonCard({ person: p, index, settled, selectMode, selected, onToggle,
       ) : (
         <Link to={personPath(p.id)} className="creator-main" title={`Open ${p.name}`}>{body}</Link>
       )}
-      {!selectMode && <SeenButton fresh={fresh} name={p.name} onSeen={onSeen} />}
-      {!selectMode && muted != null && <MuteButton compact muted={muted} whom={{ person: p.id }} name={p.name} onDone={onMuted} />}
-      {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
+      {/* A portrait's last line, under its link: the count, and the buttons
+          at its right (a row of their own on a phone). */}
+      {portrait && (
+        <span className="person-stats">
+          <span className="creator-count" title={plural(p.count, "post")}>{fmtInt(p.count)}</span>
+          <span className="creator-sub">{fmtBytes(p.bytes)}</span>
+        </span>
+      )}
+      {portrait ? actions && <span className="portrait-actions">{actions}</span> : actions}
       <CardScriptWarnings sync={sync} />
     </div>
   );
@@ -480,7 +512,13 @@ export default function Creators() {
   // Each grid renders the lines of cards near the viewport once it has many
   // (lib/windowing.js). The browser's find bar sees those only: the filter
   // box searches every name and handle.
-  const winPeople = useWindow(people.length, { estimate: 66, grid: true });
+  const [view, setView] = useState(storedView);
+  const portraits = view === "portraits";
+  function changeView(v) {
+    setView(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* private mode */ }
+  }
+  const winPeople = useWindow(people.length, { estimate: ESTIMATE[view], grid: true });
   const winAccounts = useWindow(unlinked.length, { estimate: 66, grid: true });
 
   // One selection over both grids, in the order shown.
@@ -778,14 +816,26 @@ export default function Creators() {
           <>
             {people.length > 0 && (
               <>
-                <h3 className="card-title creators-section">People <span className="page-count">{fmtInt(people.length)}</span></h3>
-                <div className={`creator-grid${winPeople.settled ? " is-settled" : ""}`} ref={winPeople.listRef} {...winPeople.focusProps}>
+                <div className="creators-people-head">
+                  <h3 className="card-title creators-section">People <span className="page-count">{fmtInt(people.length)}</span></h3>
+                  <div className="links-tabs creators-view" role="group" aria-label="Show people as">
+                    {VIEWS.map(([v, label]) => (
+                      <button key={v} type="button" className={`links-tab${view === v ? " is-on" : ""}`} aria-pressed={view === v}
+                              onClick={() => changeView(v)}>
+                        <Icon name={v === "portraits" ? "portraits" : "rows"} size={14} />{label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className={`creator-grid${portraits ? " is-portraits" : ""}${winPeople.settled ? " is-settled" : ""}`}
+                     ref={winPeople.listRef} {...winPeople.focusProps}>
                   {winPeople.render(i => { const p = people[i]; return (
                     <PersonCard
                       key={p.id}
                       person={p}
                       index={i}
                       settled={winPeople.settled}
+                      portrait={portraits}
                       selectMode={sel.active}
                       selected={sel.isSelected(`person:${p.id}`)}
                       onToggle={shift => sel.toggle(index(`person:${p.id}`), shift)}
