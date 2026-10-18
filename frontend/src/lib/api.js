@@ -268,8 +268,10 @@ export function setCollectionCover(id, postId) { return post(`/api/collections/$
 
 /* ── People (see docs/API.md "People") ───────────────────── */
 
-// [{ id, name, notes, created_at, accounts: [account], platforms, count, bytes, newest }], by name
+// [{ id, name, notes, created_at, gender, country, labels, accounts: [account], platforms, count, bytes, newest }], by name
 export function getPeople() { return get("/api/people"); }
+// { labels: [{ name, count }], genders: [{ name, count }], presets: [gender], countries: [code] }
+export function getPeopleAttributes() { return get("/api/people/attributes"); }
 // Throws ApiError with status 404 for an unknown id.
 export function getPerson(id) { return get(`/api/people/${seg(id)}`); }
 // accounts: [{ platform, id }] → { ok, person } or { ok: false, error }
@@ -277,7 +279,7 @@ export function createPerson(name, accounts = [], profiles) {
   return post("/api/people", profiles ? { name, accounts, profiles } : { name, accounts });
 }
 export function syncPerson(id) { return post(`/api/people/${seg(id)}/sync`); }
-// changes: { name } and/or { notes } → { ok, person }
+// changes: any of { name, notes, gender, country, labels } → { ok, person }
 export function updatePerson(id, changes) { return post(`/api/people/${seg(id)}`, changes); }
 // Unlinks every account; posts are never touched → { ok, unlinked }
 export function deletePerson(id) { return del(`/api/people/${seg(id)}`); }

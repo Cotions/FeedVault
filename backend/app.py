@@ -904,6 +904,7 @@ def _people_changed(names=False):
     sources, mutes and saved web links are exported by person name)."""
     if names:
         userdata.changed("people")
+        userdata.changed("person_labels")
         userdata.changed("sources")
         userdata.changed("muted_people")
         userdata.changed("links")
@@ -913,6 +914,13 @@ def _people_changed(names=False):
 @app.get("/api/people")
 def list_people():
     return jsonify(people.people(db.connect()))
+
+
+@app.get("/api/people/attributes")
+def people_attributes():
+    """Labels and genders in use, the gender presets and the country codes:
+    what the person page's fields suggest and the Creators filters offer."""
+    return jsonify(people.attributes(db.connect()))
 
 
 MAX_PROFILES = 20                              # profile links per new person
@@ -1073,19 +1081,33 @@ def update_person(pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
     name = None if body.get("name") is None else people.clean_name(body["name"])
     notes = body.get("notes")
+    gender = None if body.get("gender") is None else people.clean_gender(body["gender"])
+    country = None if body.get("country") is None else people.clean_country(body["country"])
+    labels = None if body.get("labels") is None else people.clean_labels(body["labels"])
     if body.get("name") is not None and name is None:
         return jsonify({"ok": False, "error": _BAD_PERSON_NAME}), 400
     if notes is not None and (not isinstance(notes, str) or len(notes) > people.MAX_NOTES):
         return jsonify({"ok": False, "error": f"notes must be text of at most {people.MAX_NOTES} characters"}), 400
-    if name is None and notes is None:
-        return jsonify({"ok": False, "error": "send name or notes"}), 400
+    if body.get("gender") is not None and gender is None:
+        return jsonify({"ok": False, "error": f"gender must be text of at most {people.MAX_GENDER} characters "
+                                              "(\"\" for none)"}), 400
+    if body.get("country") is not None and country is None:
+        return jsonify({"ok": False, "error": "country must be an ISO 3166-1 alpha-2 code, such as \"FR\" "
+                                              "(\"\" for none)"}), 400
+    if body.get("labels") is not None and labels is None:
+        return jsonify({"ok": False, "error": f"labels must be a list of at most {people.MAX_LABELS} names of "
+                                              f"1 to {organize.MAX_NAME} characters, no quotes"}), 400
+    if name is None and notes is None and gender is None and country is None and labels is None:
+        return jsonify({"ok": False, "error": "send name, notes, gender, country or labels"}), 400
     try:
-        p = people.update(conn, pid, name, notes)
+        p = people.update(conn, pid, name, notes, gender, country, labels, int(time.time()))
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     _people_changed(names=name is not None)
-    if notes is not None:
+    if notes is not None or gender is not None or country is not None:
         userdata.changed("people")
+    if labels is not None:
+        userdata.changed("person_labels")
     return jsonify({"ok": True, "person": p})
 
 

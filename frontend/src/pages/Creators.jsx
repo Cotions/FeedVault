@@ -7,7 +7,10 @@ import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
 import { platformLabel, authorFeedPath, fmtBytes, fmtInt, plural } from "../lib/fmt";
-import { accountKey, accountRef, accountText, matchedFormer, matches, personPath, personText, suggestName } from "../lib/people";
+import {
+  accountKey, accountRef, accountText, attributeChoices, attributesMatch, countryFlag, countryName, filtersOn, matchedFormer, matches,
+  NO_FILTERS, personPath, personText, suggestName,
+} from "../lib/people";
 import Icon from "../components/Icon";
 import PlatformIcon from "../components/PlatformIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -119,12 +122,30 @@ function CardScriptWarnings({ sync }) {
   );
 }
 
+// A card's labels on one line: the first few, cut to fit, and "+n" for
+// the rest (the line's title names them all).
+const LABELS_SHOWN = 3;
+function CardLabels({ labels }) {
+  if (!labels?.length) return null;
+  const more = labels.length - LABELS_SHOWN;
+  return (
+    <span className="person-labels" title={`Labels: ${labels.join(", ")}`}>
+      {labels.slice(0, LABELS_SHOWN).map(l => <span key={l} className="card-label">{l}</span>)}
+      {more > 0 && <span className="card-label is-more">+{more}</span>}
+    </span>
+  );
+}
+
 function PersonCard({ person: p, index, settled, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted, flash }) {
+  const where = countryName(p.country);
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
       <span className="creator-id">
-        <span className="creator-name">{p.name}</span>
+        <span className="creator-name">
+          {p.country && <span className="person-flag" role="img" aria-label={where} title={where}>{countryFlag(p.country)}</span>}
+          {p.name}
+        </span>
         <span className="person-chips">
           {p.accounts.length === 0 && <span className="creator-sub">No account linked</span>}
           {p.accounts.map(a => (
@@ -133,6 +154,7 @@ function PersonCard({ person: p, index, settled, selectMode, selected, onToggle,
             </span>
           ))}
         </span>
+        <CardLabels labels={p.labels} />
         <CardSyncStatus sync={sync} />
       </span>
       <span className="person-stats">
@@ -324,6 +346,49 @@ function suggestionBody(s) {
   return { tool: s.tool, target: s.target, folder: s.folder, account: s.account };
 }
 
+// A filter's <select> value: "any", "none" (not set), or "is:" and the value.
+const pickValue = v => (v == null ? "any" : v === "" ? "none" : `is:${v}`);
+const pickedValue = v => (v === "any" ? null : v === "none" ? "" : v.slice(3));
+
+/* Gender, country and label filters for the people, beside the text
+   filter: each offers what the people have (with how many), and "not
+   set". One the people give no value for is left out, unless it is on. */
+function AttributeFilters({ people, value, onChange }) {
+  const c = useMemo(() => attributeChoices(people), [people]);
+  const fields = [
+    { key: "gender", label: "Gender", any: "Any gender", none: "Not set", list: c.genders, text: v => v },
+    { key: "country", label: "Country", any: "Any country", none: "Not set", list: c.countries,
+      text: v => `${countryFlag(v)} ${countryName(v)}` },
+    { key: "label", label: "Label", any: "Any label", none: "No label", list: c.labels, text: v => v },
+  ].filter(f => f.list.length || value[f.key] != null);
+  if (!fields.length) return null;
+  return (
+    <div className="feed-filters creator-filters" role="group" aria-label="Filter people">
+      {fields.map(f => {
+        const on = value[f.key];
+        // The option of the value on, whatever its case (?label=travel shows "Travel").
+        const listed = on ? f.list.find(o => o.value.toLowerCase() === on.toLowerCase()) : null;
+        return (
+          <label key={f.key} className="filter">
+            <span>{f.label}</span>
+            <select className="sort-select" value={pickValue(listed ? listed.value : on)}
+                    onChange={e => onChange({ ...value, [f.key]: pickedValue(e.target.value) })}>
+              <option value="any">{f.any}</option>
+              {f.list.map(o => <option key={o.value} value={pickValue(o.value)}>{f.text(o.value)} ({fmtInt(o.count)})</option>)}
+              {/* A value no one has any more (a label in the address): still shown while on. */}
+              {on && !listed && <option value={pickValue(on)}>{f.text(on)} (0)</option>}
+              <option value="none">{f.none} ({fmtInt(c.none[f.key])})</option>
+            </select>
+          </label>
+        );
+      })}
+      {filtersOn(value) && (
+        <button type="button" className="btn-ghost filter-clear" onClick={() => onChange(NO_FILTERS)}>Clear filters</button>
+      )}
+    </div>
+  );
+}
+
 export default function Creators() {
   const { refreshKey } = useScan();
   const toast = useToast();
@@ -363,6 +428,25 @@ export default function Creators() {
     }
   }
   const [filter, setFilter] = useState("");
+  const [params, setParams] = useSearchParams();
+  // Gender, country and label filters: from the address at first (a
+  // person's label links here with ?label=), kept in it as they change.
+  const [attrs, setAttrs] = useState(() => ({
+    gender: params.get("gender"), country: params.get("country"), label: params.get("label"),
+  }));
+  const attrsOn = filtersOn(attrs);
+  const filtering = !!filter || attrsOn;
+  function changeAttrs(next) {
+    setAttrs(next);
+    setParams(prev => {
+      const out = new URLSearchParams(prev);
+      for (const k of Object.keys(NO_FILTERS)) {
+        if (next[k] == null) out.delete(k);
+        else out.set(k, next[k]);
+      }
+      return out;
+    }, { replace: true });
+  }
   const [busy,   setBusy]   = useState(false);
   const [merge,  setMerge]  = useState(null);                // { name, error, account? } while the dialog is open
   const [each,   setEach]   = useState(null);                // { error } while "One creator each" asks
@@ -382,12 +466,15 @@ export default function Creators() {
   const data = authorsApi.data;
   const peopleAll = useMemo(() => peopleApi.data || [], [peopleApi.data]);
   const people = useMemo(
-    () => filter ? peopleAll.filter(p => matches(personText(p), filter)) : peopleAll,
-    [peopleAll, filter]);
+    () => peopleAll.filter(p => (!filter || matches(personText(p), filter)) && attributesMatch(p, attrs)),
+    [peopleAll, filter, attrs]);
+  // An account linked to no one has no gender, country or label: none
+  // passes those filters.
   const unlinked = useMemo(() => {
+    if (attrsOn) return [];
     const list = (data || []).filter(a => !a.person);
     return filter ? list.filter(a => matches(accountText(a), filter)) : list;
-  }, [data, filter]);
+  }, [data, filter, attrsOn]);
   const total = (data || []).reduce((s, a) => s + (a.count || 0), 0);
   // Each grid renders the lines of cards near the viewport once it has many
   // (lib/windowing.js). The browser's find bar sees those only: the filter
@@ -400,12 +487,11 @@ export default function Creators() {
     ...people.map(p => ({ id: `person:${p.id}`, person: p })),
     ...unlinked.map(a => ({ id: a.id != null ? `account:${accountKey(a)}` : null, account: a })),
   ], [people, unlinked]);
-  const sel = useSelection(items, { resetKey: `${filter}|${key}`, escapeBlocked: !!merge || !!each });
+  const sel = useSelection(items, { resetKey: `${filter}|${JSON.stringify(attrs)}|${key}`, escapeBlocked: !!merge || !!each });
 
   // ?source=<id>, from a failed sync's notification (#123): that source's
   // row or card in view, and lit for a moment, as Links does a link saved
   // already. Nothing filtered or in select mode hides it.
-  const [params, setParams] = useSearchParams();
   const asked = params.get("source");
   const [flash, setFlash] = useState(null);                  // the id of the source to point at
   const [askedSeen, setAskedSeen] = useState(null);
@@ -414,6 +500,7 @@ export default function Creators() {
     if (asked != null) {
       setFlash(Number(asked));
       setFilter("");
+      setAttrs(NO_FILTERS);
       if (sel.active) sel.exit();
     }
   }
@@ -603,7 +690,11 @@ export default function Creators() {
     if (!flashKey) toast("That source is not there any more.", "err");
     const t = setTimeout(() => {
       setFlash(null);
-      setParams(p => { const next = new URLSearchParams(p); next.delete("source"); return next; }, { replace: true });
+      setParams(p => {
+        const next = new URLSearchParams(p);
+        for (const k of ["source", ...Object.keys(NO_FILTERS)]) next.delete(k);
+        return next;
+      }, { replace: true });
     }, flashKey ? 2400 : 0);
     return () => clearTimeout(t);
   }, [flash, flashKey, flashPerson, flashAccount, scrollPeople, scrollAccounts, ready, setParams, toast]);
@@ -648,7 +739,7 @@ export default function Creators() {
       />
       <div className="card">
         {/* Hidden, not gone, while filtering or selecting: a source being typed stays. */}
-        <section className="sources-panel" aria-label="Sources" hidden={sel.active || !!filter}>
+        <section className="sources-panel" aria-label="Sources" hidden={sel.active || filtering}>
           <AddSource onAdded={sources.reload} onDirty={setNewSource} />
           <SyncAllBar count={sourceList.length} syncAll={syncAll} />
           {loose.length > 0 && (
@@ -661,7 +752,7 @@ export default function Creators() {
           )}
         </section>
 
-        {!sel.active && !filter && (
+        {!sel.active && !filtering && (
           <SourceSuggestions
             list={sources.data?.suggestions}
             busy={busy}
@@ -670,16 +761,18 @@ export default function Creators() {
           />
         )}
 
-        {!sel.active && !filter && (
+        {!sel.active && !filtering && (
           <Suggestions data={suggestApi.data} busy={busy} onLink={linkSuggestion} onDismiss={dismiss} />
         )}
+
+        {peopleApi.data && <AttributeFilters people={peopleAll} value={attrs} onChange={changeAttrs} />}
 
         {error && !data ? (
           <div className="empty">Could not load creators: {error.message}</div>
         ) : loading ? (
           <div className="empty">Loading…</div>
         ) : empty ? (
-          <div className="empty">{filter ? "No creator matches." : "No creators yet. They appear once posts are indexed."}</div>
+          <div className="empty">{filtering ? "No creator matches." : "No creators yet. They appear once posts are indexed."}</div>
         ) : (
           <>
             {people.length > 0 && (

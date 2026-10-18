@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getAuthors, getConfig, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
+import { getAuthors, getConfig, getPeopleAttributes, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
   createLink, updateLink, deleteLink, orderPersonLinks } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { authorFeedPath, fmtAgo, fmtBytes, fmtFullDate, fmtInt, fmtShortDate, platformLabel, plural, safeUrl } from "../lib/fmt";
-import { accountKey, accountRef } from "../lib/people";
+import { accountKey, accountRef, cleanGender, sameLabels } from "../lib/people";
 import Icon from "../components/Icon";
 import PlatformIcon from "../components/PlatformIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -19,6 +19,7 @@ import MuteButton from "../components/MuteButton";
 import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
+import PersonAbout from "../components/PersonAbout";
 import { LinkForm, LinkRow } from "../components/Links";
 import { copyUrls } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
@@ -190,12 +191,14 @@ export default function PersonPage() {
   const { data: authors } = useApi(getAuthors, refreshKey);
   const suggestApi = useApi(getSuggestions, refreshKey);
   const { data: config } = useApi(getConfig, refreshKey);
+  const attrApi = useApi(getPeopleAttributes, refreshKey);
   // Their new posts, again whenever the jobs poll's total moves.
   const { newCount, started, refresh } = useJobs();
   const newApi = useApi(getNew, `${refreshKey}:${newCount}`);
   const [busy,     setBusy]     = useState(false);
   const [editName, setEditName] = useState(null);     // the name being typed, null when not renaming
   const [notes,    setNotes]    = useState(null);     // edited notes, null when untouched
+  const [about,    setAbout]    = useState({});       // edited gender, country, labels (absent: untouched)
   const [confirm,  setConfirm]  = useState(false);
   const [dlgError, setDlgError] = useState(null);
   const [removing, setRemoving] = useState(null);     // the source to remove
@@ -207,7 +210,15 @@ export default function PersonPage() {
   // What was typed and not saved, asked about before the app leaves the page.
   const notesDirty  = !!p && notes != null && notes !== p.notes;
   const renameDirty = !!p && editName != null && editName !== p.name;
-  const unsaved = useUnsaved(notesDirty || renameDirty || linkEdits || newLink || newSource);
+  // What of the About fields changed: the gender as the backend would
+  // store it (spaces collapsed, a preset in its case), labels as typed.
+  const aboutChanges = !p ? {} : Object.fromEntries([
+    about.gender != null && cleanGender(about.gender) !== p.gender && ["gender", about.gender],
+    about.country != null && about.country !== p.country && ["country", about.country],
+    about.labels != null && !sameLabels(about.labels, p.labels) && ["labels", about.labels],
+  ].filter(Boolean));
+  const aboutDirty = Object.keys(aboutChanges);
+  const unsaved = useUnsaved(notesDirty || renameDirty || aboutDirty.length > 0 || linkEdits || newLink || newSource);
 
   const linked = useMemo(() => new Set((p?.accounts || []).map(accountKey)), [p]);
 
@@ -468,6 +479,17 @@ export default function PersonPage() {
 
         <PersonLinks person={p} onChanged={reload} onDirty={setLinkEdits} onAddDirty={setNewLink} />
 
+        <PersonAbout
+          person={p}
+          attributes={attrApi.data}
+          draft={about}
+          onDraft={changes => setAbout(a => ({ ...a, ...changes }))}
+          dirty={aboutDirty.length > 0}
+          busy={busy}
+          onSave={() => save(aboutChanges, () => { setAbout({}); attrApi.reload(); })}
+          onDiscard={() => setAbout({})}
+        />
+
         <section className="person-section">
           <h3 className="card-title">Notes</h3>
           <textarea
@@ -490,7 +512,8 @@ export default function PersonPage() {
         <DiscardDialog open={unsaved.asking} onDiscard={unsaved.discard} onKeep={unsaved.keep}>
           <p>
             Not saved for {p.name}:{" "}
-            {[notesDirty && "the notes", renameDirty && "the new name", linkEdits && "the changes to a link",
+            {[notesDirty && "the notes", renameDirty && "the new name",
+              ...aboutDirty.map(k => `the ${k}`), linkEdits && "the changes to a link",
               newLink && "the new link", newSource && "the new source"].filter(Boolean).join(", ")}.
           </p>
         </DiscardDialog>
