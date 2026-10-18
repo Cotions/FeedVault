@@ -42,14 +42,21 @@ the flags FeedVault passes, newest post first:
   ``--filter`` (evaluated as gallery-dl does: the file's metadata as names,
   ``date`` a datetime, a missing one None, ``datetime``, ``exts_image`` and
   ``exts_video`` defined), ``--date-after`` (stops at the first post at or
-  before it) and ``--post-range 1-N`` (stops after the Nth post).
+  before it), ``--post-range 1-N`` (stops after the Nth post) and ``-f``
+  (the file name: ``{a|b}``, ``{num:>02}`` and ``{date:?<before>/<after>/<strftime>}``
+  of the file's metadata, as gallery-dl's formatter has them).
 - yt-dlp: ``--write-info-json --write-thumbnail``, ``--download-archive``
   (``<extractor> <id>`` lines), ``--break-on-existing`` (exit 101 at the first
   archived video), ``-o`` (``%(uploader_id)s``, ``%(upload_date)s``,
   ``%(id)s``, ``%(ext)s``, ``%%``), ``--match-filters "duration <= N"``,
   ``--dateafter YYYYMMDD`` (skips older videos), ``--break-match-filters
   "upload_date >=? YYYYMMDD"`` (exit 101 at the first older one) and
-  ``--playlist-items 1:N`` (the first N listed). A
+  ``--playlist-items 1:N`` (the first N listed), ``%(a,b)s`` and
+  ``%(extractor_key)s`` in ``-o``, ``--no-write-info-json``,
+  ``--no-write-thumbnail``, ``--embed-metadata`` (the title, description,
+  uploader and link appended to the video as a FAKETAGS line that
+  fake_ffprobe reads back; ``--embed-thumbnail``, ``--embed-chapters``,
+  ``--no-embed-info-json`` and ``--remux-video`` change nothing else). A
   YouTube channel also gets its playlist info JSON. ``pinned`` videos are
   listed first, as TikTok lists a profile's pinned videos. With
   ``--cookies-from-browser`` (or ``config_cookies``: cookies from the
@@ -154,6 +161,26 @@ def _gallery_dl_files(account, post):
     return out
 
 
+def _gallery_dl_name(fmt, name, d):
+    """The file name -f gives (gallery-dl's formatter, the parts FeedVault
+    uses), else gallery-dl's own."""
+    if not fmt:
+        return name
+    when = datetime.strptime(d["date"], "%Y-%m-%d %H:%M:%S") if d.get("date") else None
+
+    def field(m):
+        keys, spec = m.group(1).split("|"), m.group(2)
+        found = [when if k == "date" else d.get(k) for k in keys]
+        v = next((x for x in found if x), found[-1])
+        if spec is None:
+            return str(v)
+        if spec.startswith("?"):
+            before, after, rest = spec[1:].split("/", 2)
+            return f"{before}{format(v, rest)}{after}" if v else ""
+        return format(v, spec)
+    return re.sub(r"\{([\w|]+)(?::([^}]*))?\}", field, fmt)
+
+
 def _gallery_dl_key(d):
     if d["category"] == "twitter":
         return f"twitter{d['tweet_id']}_{d['retweet_id']}_{d['num']}"
@@ -208,6 +235,7 @@ def gallery_dl_main(argv):
     ap.add_argument("--filter")
     ap.add_argument("--date-after")
     ap.add_argument("--post-range")
+    ap.add_argument("-f")
     ap.add_argument("urls", nargs="*")
     args = ap.parse_args(argv)
     options = dict(o.split("=", 1) for o in args.o)
@@ -274,7 +302,7 @@ def _gallery_dl_post(data, pid, args):
     os.makedirs(folder, exist_ok=True)
     for name, d in _gallery_dl_files(account, {**post, "id": post.get("retweet_of") or post["id"]}):
         d["subcategory"] = "tweet"
-        path = os.path.join(folder, name)
+        path = os.path.join(folder, _gallery_dl_name(args.f, name, d))
         (mp4 if d["extension"] == "mp4" else lambda p: png(p, colour(name)))(path)
         if args.write_metadata and not _config_drops_metadata(args.config_ignore):
             with open(path + ".json", "w", encoding="utf-8") as f:
@@ -296,7 +324,7 @@ def _gallery_dl_child(posts, account, folder, archive, args, abort, keep, after,
         for name, d in _gallery_dl_files(account, post):
             if not keep(d):
                 continue
-            path = os.path.join(folder, name)
+            path = os.path.join(folder, _gallery_dl_name(args.f, name, d))
             key = _gallery_dl_key(d)
             if (archive and archive.execute("SELECT 1 FROM archive WHERE entry = ?", (key,)).fetchone()) \
                     or os.path.exists(path):
@@ -365,8 +393,15 @@ def _chosen(video_id, cookies):
 
 
 def _fill(template, fields):
-    return re.sub(r"%%|%\((\w+)\)s", lambda m: "%" if m.group(0) == "%%" else str(fields.get(m.group(1), "NA")),
-                  template)
+    def one(m):
+        if m.group(0) == "%%":
+            return "%"
+        found = [fields.get(k) for k in m.group(1).split(",") if fields.get(k) is not None]
+        return str(found[0]) if found else "NA"
+    return re.sub(r"%%|%\(([\w,]+)\)s", one, template)
+
+
+TAGS = b"\nFAKETAGS "                         # what --embed-metadata embeds, as fake_ffprobe reads it
 
 
 def yt_dlp_main(argv):
@@ -376,8 +411,12 @@ def yt_dlp_main(argv):
     _log("yt-dlp", argv)
     ap = argparse.ArgumentParser(add_help=False)
     for flag in ("--write-info-json", "--write-thumbnail", "--break-on-existing", "--ignore-config",
-                 "--simulate", "--no-playlist"):
+                 "--simulate", "--no-playlist", "--embed-metadata", "--embed-chapters", "--embed-thumbnail",
+                 "--no-embed-info-json"):
         ap.add_argument(flag, action="store_true")
+    ap.add_argument("--no-write-info-json", dest="write_info_json", action="store_false")
+    ap.add_argument("--no-write-thumbnail", dest="write_thumbnail", action="store_false")
+    ap.add_argument("--remux-video")
     ap.add_argument("--download-archive")
     ap.add_argument("-o", default="%(title)s [%(id)s].%(ext)s")
     ap.add_argument("--match-filters")
@@ -467,16 +506,21 @@ def yt_dlp_main(argv):
             if args.dateafter and day < args.dateafter:
                 print(f"[download] {day} upload date is not in range {args.dateafter} to 99991231")
                 continue
-            fields = {**base_fields, "id": v["id"], "upload_date": day, "ext": "mp4"}
+            fields = {**base_fields, "id": v["id"], "upload_date": day, "ext": "mp4", "extractor_key": ie}
             path = _fill(args.o, fields)
             base = path[:-len(".mp4")]
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             mp4(path)
+            web = (f"https://www.tiktok.com/@{account['uploader']}/video/{v['id']}" if ie == "TikTok"
+                   else f"https://www.youtube.com/watch?v={v['id']}")
+            if args.embed_metadata:
+                with open(path, "ab") as f:
+                    f.write(TAGS + json.dumps({"title": v.get("title", ""), "description": v.get("description", ""),
+                                               "artist": account.get("channel") or account.get("uploader"),
+                                               "purl": web, "comment": web}).encode() + b"\n")
             if args.write_thumbnail:
                 png(f"{base}.{THUMB.get(ie, 'jpg')}", colour(v["id"]))
             if args.write_info_json and not _config_drops_metadata(args.ignore_config):
-                web = (f"https://www.tiktok.com/@{account['uploader']}/video/{v['id']}" if ie == "TikTok"
-                       else f"https://www.youtube.com/watch?v={v['id']}")
                 with open(base + ".info.json", "w", encoding="utf-8") as f:
                     json.dump({"_type": "video", "id": v["id"], "extractor": ie.lower(), "extractor_key": ie,
                                "webpage_url": web, "title": v.get("title", ""), "description": v.get("description", ""),

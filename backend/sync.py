@@ -31,9 +31,11 @@ instaloader:
   ``.json.xz`` beside each post (never ``--no-compress-json``; older syncs
   left plain ``.json``, and a folder may hold both), so new posts get
   captions and the account's numeric id; people.refresh_aliases links them
-  to the folder's older filename-only posts. With ``slim_metadata`` on, the
-  files a sync wrote are slimmed when it ends, before the folder is indexed
-  (slim.py).
+  to the folder's older filename-only posts. In the ``slim`` metadata mode
+  the files a sync wrote are slimmed when it ends, before the folder is
+  indexed (slim.py); in ``none`` there are none (``--no-metadata-json
+  --no-captions``) and new files are named DATED, which keeps the date and
+  shortcode the filename parser reads.
 - ``--filename-pattern`` as the folder's files are already named, so new
   files sit beside the old ones and a post already there is recognised.
 - ``--sanitize-paths`` when the folder is on exFAT, FAT or NTFS (statfs,
@@ -56,7 +58,11 @@ gallery-dl and yt-dlp (archives.py):
   is the likely cause (_unread).
 - metadata on (``--write-metadata``; ``--write-info-json --write-thumbnail``),
   into the source's folder; YouTube videos longer than ``youtube_max_seconds``
-  are not downloaded (ChannelVault's).
+  are not downloaded (ChannelVault's). In the ``none`` metadata mode
+  neither writes a file beside the media: gallery-dl names it after the
+  post's id, number and date (GALLERY_DL_BARE), yt-dlp after the account,
+  day and id (yt_dlp_name) and embeds the metadata, chapters and thumbnail
+  in it (YT_DLP_EMBED); the parsers read those names (parse_filenames).
 - after a yt-dlp sync, the info JSONs it wrote are rewritten without the
   cookies yt-dlp copies into them (info_cookies.py), before the folder is
   indexed.
@@ -193,18 +199,41 @@ def _pause(value, default):
     return value if ok else default
 
 
+def _metadata(tool, raw, cfg):
+    """A tool's metadata mode setting (sources.METADATA). instaloader's
+    was a switch before (config ``slim_metadata``): on reads as slim."""
+    if raw.get("metadata") in sources.METADATA[tool]:
+        return raw["metadata"]
+    return "slim" if tool == "instaloader" and cfg.get("slim_metadata") is True else "full"
+
+
+def _clean_metadata(tool, value, out):
+    """``value``'s metadata into ``out``; the error, else None."""
+    if "metadata" in value:
+        if value["metadata"] not in sources.METADATA[tool]:
+            return f"metadata must be one of: {', '.join(sources.METADATA[tool])}"
+        out["metadata"] = value["metadata"]
+    return None
+
+
 def settings(cfg=None):
-    """The global instaloader settings, cleaned: {"session": {...}, "pause": seconds}."""
-    raw = (cfg or config.load()).get("instaloader") or {}
+    """The global instaloader settings, cleaned: {"session": {...}, "pause":
+    seconds, "metadata": full | slim | none}."""
+    cfg = cfg or config.load()
+    raw = cfg.get("instaloader") or {}
     session = sources.clean_session(raw.get("session")) or {"mode": "none"}
-    return {"session": session, "pause": _pause(raw.get("pause"), PAUSE_DEFAULT)}
+    return {"session": session, "pause": _pause(raw.get("pause"), PAUSE_DEFAULT),
+            "metadata": _metadata("instaloader", raw, cfg)}
 
 
 def clean_settings(value, current):
     """Settings from POST /api/config merged over ``current``. Returns (settings, error)."""
-    if not isinstance(value, dict) or set(value) - {"session", "pause"}:
-        return None, "instaloader must be { session, pause }"
+    if not isinstance(value, dict) or set(value) - {"session", "pause", "metadata"}:
+        return None, "instaloader must be { session, pause, metadata }"
     out = dict(current)
+    error = _clean_metadata("instaloader", value, out)
+    if error:
+        return None, error
     if "session" in value:
         out["session"] = sources.clean_session(value["session"])
         if out["session"] is None:
@@ -252,19 +281,23 @@ def tool_settings(tool, cfg=None):
     """gallery-dl's or yt-dlp's settings, cleaned: {"session": {...}, "pause":
     seconds, "ignore_config": bool}, the session "none" or a browser's
     cookies (they have no login of their own FeedVault could name)."""
-    raw = (cfg or config.load()).get(tool) or {}
+    cfg = cfg or config.load()
+    raw = cfg.get(tool) or {}
     session = sources.clean_session(raw.get("session"), sources.COOKIE_MODES) or {"mode": "none"}
     return {"session": session, "pause": _pause(raw.get("pause"), TOOL_PAUSE_DEFAULT),
-            "ignore_config": raw.get("ignore_config") is True}
+            "ignore_config": raw.get("ignore_config") is True, "metadata": _metadata(tool, raw, cfg)}
 
 
 def clean_tool_settings(tool, value, current):
     """Settings from POST /api/config merged over ``current``. Returns (settings, error)."""
-    if not isinstance(value, dict) or set(value) - {"session", "pause", "ignore_config"}:
-        return None, f"{tool} must be {{ session, pause, ignore_config }}"
+    if not isinstance(value, dict) or set(value) - {"session", "pause", "ignore_config", "metadata"}:
+        return None, f"{tool} must be {{ session, pause, ignore_config, metadata }}"
     if "ignore_config" in value and not isinstance(value["ignore_config"], bool):
         return None, "ignore_config must be true or false"
     out = dict(current)
+    error = _clean_metadata(tool, value, out)
+    if error:
+        return None, error
     if "ignore_config" in value:
         out["ignore_config"] = value["ignore_config"]
     if "session" in value:
@@ -299,6 +332,58 @@ def config_flags(tool, cfg=None):
 def session_of(tool, options, cfg=None):
     """The session a sync of a source uses: its own, else the tool's setting."""
     return options["session"] or (settings(cfg) if tool == "instaloader" else tool_settings(tool, cfg))["session"]
+
+
+def metadata_of(tool, options, cfg=None):
+    """The metadata mode a sync of a source uses: its own, else the tool's
+    setting (a mode the tool does not have counts as full)."""
+    mode = options.get("metadata") or (settings(cfg) if tool == "instaloader" else tool_settings(tool, cfg))["metadata"]
+    return mode if mode in sources.METADATA.get(tool, ()) else "full"
+
+
+def folder_metadata(conn, tool, folder, cfg=None):
+    """The metadata mode for what a Save of ``tool`` puts into ``folder``:
+    that of the ``tool`` source downloading into it, else the setting."""
+    cfg = cfg or config.load()
+    row = conn.execute("SELECT * FROM sources WHERE tool = ? AND folder = ? ORDER BY id LIMIT 1",
+                       (tool, folder)).fetchone()
+    return metadata_of(tool, sources.stored_options(row, cfg) if row else {}, cfg)
+
+
+# The files a sync writes beside the media, per metadata mode
+# (sources.METADATA). none: instaloader writes no .json.xz and no caption
+# .txt (the parser reads such posts from their names: always DATED then);
+# gallery-dl no JSON, its files named GALLERY_DL_BARE; yt-dlp no info JSON
+# and no thumbnail file: title, date, description, link, uploader, chapters
+# and the thumbnail go into the video file itself (ffprobe reads them back,
+# parsers.yt_dlp), named YT_DLP_BARE. webm takes no embedded thumbnail
+# (yt-dlp would fail the video's postprocessing, never recording it in its
+# archive): it is remuxed to mkv first, which does, losslessly.
+INSTALOADER_BARE = ["--no-metadata-json", "--no-captions"]
+GALLERY_DL_BARE = "{category} {retweet_id|tweet_id|post_id|id} {num:>02}{date:? //%Y%m%d-%H%M%S}.{extension}"
+YT_DLP_BARE = "%(uploader_id)s-%(upload_date)s-%(id)s [%(extractor_key)s %({author})s].%(ext)s"
+YT_DLP_EMBED = ["--no-write-info-json", "--no-write-thumbnail", "--embed-metadata", "--embed-chapters",
+                "--embed-thumbnail", "--no-embed-info-json", "--remux-video", "webm>mkv"]
+
+
+def yt_dlp_name(mode, youtube=False):
+    """yt-dlp's -o template (inside the folder) for a metadata mode. With
+    none the name also carries the platform (extractor key) and the
+    account's id, which no file says otherwise: the channel id first on
+    YouTube, as parsers.yt_dlp reads it from an info JSON."""
+    if mode != "none":
+        return YT_DLP_NAME
+    return YT_DLP_BARE.format(author="channel_id,uploader_id" if youtube else "uploader_id,channel_id")
+
+
+def yt_dlp_metadata_flags(mode):
+    """yt-dlp's flags for what it writes beside a video."""
+    return list(YT_DLP_EMBED) if mode == "none" else ["--write-info-json", "--write-thumbnail"]
+
+
+def gallery_dl_metadata_flags(mode):
+    """gallery-dl's flags for what it writes beside a file."""
+    return ["-f", GALLERY_DL_BARE] if mode == "none" else ["--write-metadata"]
 
 
 def stamps_path(cfg=None):
@@ -435,6 +520,9 @@ def _build(params):
     if refused:
         raise jobs.BadRequest(refused)
     pattern, _ = detect_pattern(folder)
+    bare = metadata_of("instaloader", options, cfg) == "none"
+    if bare:
+        pattern = DATED                        # what parsers.instaloader reads a post from: date and shortcode
     stamps = configparser.ConfigParser(interpolation=None)
     stamps.read(stamps_path(cfg), encoding="utf-8")
     return {"tool": "instaloader", "rescan": folder, "args": [
@@ -444,6 +532,7 @@ def _build(params):
         "--filename-pattern", pattern,
         "--title-pattern", TITLE,
         *(["--sanitize-paths"] if windows_names(folder) else []),
+        *(INSTALOADER_BARE if bare else []),
         *content_flags(options),
         *session_flags(session),
         "--", target,
@@ -1193,6 +1282,9 @@ def _ended(job):
         return                                 # the id names another source now (database replaced)
     ended_at = job["ended_at"] or int(time.time())
     before = sources.last_result(src)
+    # As the run had them: "last N" from the platform's defaults is only
+    # for a source that never synced, which recording this one ends.
+    options = _options(src) if src is not None else None
     if not sources.record(conn, sid, job["id"], ended_at, {
             "state": job["state"], "error": r.get("error"), "message": job["message"],
             "line": health.scrub(r.get("line")), "added": r.get("added", 0), "job": job["id"],
@@ -1203,7 +1295,6 @@ def _ended(job):
     changed = {"sources"}
     _notify(conn, job, sid, before)
     src = sources.row(conn, sid)
-    options = _options(src)
     if job["state"] == "done" and (options["full_history"] or options["first_posts"]):
         floor = _first_posts_floor(conn, src, job, listed) if options["first_posts"] else None
         since = max(filter(None, (floor, options["since"])), default=None)
@@ -1362,11 +1453,16 @@ def _forget_saved(conn, src):
 PARAMS = {"source": {"type": "text", "max": 15}, "scheduled": {"type": "choice", "choices": ["1"], "required": False}}
 
 def _slim_new(job, note):
-    """After an instaloader run, with ``slim_metadata`` on: the metadata
-    files it wrote are slimmed (slim.py), before the folder is indexed. A
-    failure is logged; the sync goes on."""
+    """After an instaloader run whose metadata mode is slim (the source's,
+    else the setting): the metadata files it wrote are slimmed (slim.py),
+    before the folder is indexed. A failure is logged; the sync goes on."""
     if job["rescan"] and job["started_at"] is not None:
-        slim.after(job["rescan"], config.load()["media_roots"], job["started_at"], note)
+        cfg = config.load()
+        with contextlib.suppress(jobs.BadRequest):
+            src = sources.row(db.connect(), _source_id(job["params"]))
+            mode = metadata_of(src["tool"], _options(src), cfg) if src is not None else None
+            on = mode == "slim" if src is not None and src["tool"] == "instaloader" else None
+            slim.after(job["rescan"], cfg["media_roots"], job["started_at"], note, on=on)
 
 
 jobs.register(KIND, label="Sync from Instagram", params=PARAMS,
@@ -1450,7 +1546,7 @@ def _build_gallery_dl(params):
         raise jobs.BadRequest(refused)
     return {"tool": "gallery-dl", "rescan": folder, "args": [
         *config_flags("gallery-dl", cfg),
-        "--write-metadata",
+        *gallery_dl_metadata_flags(metadata_of("gallery-dl", options, cfg)),
         "--download-archive", archives.path("gallery-dl", cfg["data_directory"]),
         # Stop after 5 files in a row that are already there; full history goes on to the end.
         "-o", "skip=true" if options["full_history"] else "skip=abort:5",
@@ -1491,9 +1587,10 @@ def _build_yt_dlp(params):
     stop = ordered and not options["full_history"]
     floor = _floor(options)
     day = "%04d%02d%02d" % floor if floor else None
+    mode = metadata_of("yt-dlp", options, cfg)
     return {"tool": "yt-dlp", "rescan": folder, "args": [
         *config_flags("yt-dlp", cfg),
-        "--write-info-json", "--write-thumbnail",
+        *yt_dlp_metadata_flags(mode),
         "--download-archive", archives.path("yt-dlp", cfg["data_directory"]),
         *(["--break-on-existing"] if stop else []),
         # Nothing older than the floor; where the listing is newest first, stop at the first older video.
@@ -1501,7 +1598,7 @@ def _build_yt_dlp(params):
         *(["--break-match-filters", f"upload_date >=? {day}"] if day and ordered else []),
         *(["--playlist-items", f"1:{int(options['first_posts'])}"] if options["first_posts"] else []),
         # The output template is %-formatted: a % in the folder is doubled.
-        "-o", os.path.join(folder.replace("%", "%%"), YT_DLP_NAME),
+        "-o", os.path.join(folder.replace("%", "%%"), yt_dlp_name(mode, src["platform"] == "youtube")),
         # Long YouTube videos are ChannelVault's; one without a duration (live) is skipped too.
         *(["--match-filters", f"duration <= {longest}"] if src["platform"] == "youtube" else []),
         *cookie_flags(session),

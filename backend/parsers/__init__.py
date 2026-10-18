@@ -8,7 +8,7 @@ A parser never touches the network and never writes to the media folder.
 """
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "gif", "heic", "avif"}
 VIDEO_EXT = {"mp4", "mov", "webm", "m4v", "mkv"}
@@ -55,6 +55,10 @@ class ParsedPost:
     # Other files that belong to the post and go to the trash with it: the
     # per-file metadata JSONs besides meta_path, music, subtitles.
     side_files: list = field(default_factory=list)
+    # What reading the media file itself adds (a function of the post that
+    # fills it in), called by the scanner only when the post is indexed or
+    # its file changed: too slow for every scan (ffprobe, parsers.yt_dlp).
+    enrich: Optional[Callable] = field(default=None, compare=False, repr=False)
 
     @property
     def id(self):
@@ -106,8 +110,10 @@ class AccountFile:
 from . import instaloader, gallery_dl, yt_dlp  # noqa: E402
 
 # Parsers that read metadata first; guessing posts from file names comes last,
-# on whatever is left.
-PARSERS = [instaloader.parse_dir, gallery_dl.parse_dir, yt_dlp.parse_dir, instaloader.parse_filenames]
+# on whatever is left: the names a sync with no metadata files writes
+# (sync.GALLERY_DL_BARE, YT_DLP_BARE), then instaloader's, the loosest.
+PARSERS = [instaloader.parse_dir, gallery_dl.parse_dir, yt_dlp.parse_dir, gallery_dl.parse_filenames,
+           yt_dlp.parse_filenames, instaloader.parse_filenames]
 
 
 def parse_dir(root, dirpath, names):

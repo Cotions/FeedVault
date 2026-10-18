@@ -293,13 +293,16 @@ def post_entries(post):
     """{tool: [entries]} a trashed post adds: a gallery-dl post its files'
     entries, and a gallery-dl or yt-dlp post its yt-dlp line (both tools
     download TikTok and X: whichever syncs it next, it stays gone). Other
-    posts nothing (instaloader has no archive)."""
+    posts nothing (instaloader has no archive). A post read from its file
+    names (no metadata files: "<tool> (filenames)") has no JSON to make a
+    gallery-dl entry from: its yt-dlp line only (the sync that downloaded
+    it put gallery-dl's own entries in its archive)."""
     tool = post["tool"] or ""
     out = {}
     if tool == "gallery-dl":
         sides = json.loads(post["side_files"] or "[]")
         out["gallery-dl"] = _json_entries([post["meta_path"], *sides], installed_formats(run=False)[0])
-    if tool in ("gallery-dl", "yt-dlp"):
+    if tool.removesuffix(" (filenames)") in ("gallery-dl", "yt-dlp"):
         line = yt_dlp_entry(post["id"])
         if line:
             out["yt-dlp"] = [line]

@@ -149,6 +149,33 @@ def test_saved_into_the_owners_source_folder(env, client, fake):
     assert save_post(client)["have"] is True
 
 
+def test_saved_with_no_metadata_into_a_none_source(env, client, fake):
+    """The owner's source writes no metadata: neither does the save there,
+    named DATED (the date and shortcode its posts are read from)."""
+    folder = carol_archive(env)
+    add_source(client, folder=str(folder))
+    sid = db.connect().execute("SELECT id FROM sources").fetchone()[0]
+    post(client, f"/api/sources/{sid}", {"options": {"metadata": "none"}})
+    fake.set(profile(kind="carousel", slides=2))
+    job = save_now(client)
+    assert job["state"] == "done", job
+    mine = sorted(n for n in os.listdir(folder) if CODE in n)
+    assert mine == [f"carol.cooks-2024-06-11-{CODE}_1.jpg", f"carol.cooks-2024-06-11-{CODE}_2.jpg"]
+    p = db.get_post(db.connect(), "instagram", CODE)
+    assert p["author"]["handle"] == "carol.cooks" and p["media_count"] == 2
+
+
+def test_a_save_with_no_folder_keeps_its_metadata(env, client, fake):
+    """In _saved (no folder of the owner's) the metadata is what names the
+    owner: kept, whatever the setting."""
+    set_config(instaloader={**config.load().get("instaloader", {}), "metadata": "none"})
+    fake.set(profile(handle="stranger", uid=4242))
+    job = save_now(client)
+    assert job["state"] == "done", job
+    names = os.listdir(env["media"] / "_saved")
+    assert [n for n in names if n.endswith(".json.xz")], names
+
+
 def test_saved_into_the_folder_with_most_of_the_owners_posts(env, client, fake):
     """No source: the folder holding the owner's posts (by account id,
     whatever the folder's name and the handle then)."""

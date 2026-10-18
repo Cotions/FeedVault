@@ -6,9 +6,9 @@ what it keeps). A slim file holds what the parser reads and is
 xz-compressed, a few hundred bytes.
 
 - New downloads are compressed by instaloader itself (``.json.xz``, sync.py
-  and save.py) and complete. With ``slim_metadata`` on in the config (off by
-  default), the files a sync or a save wrote are slimmed as soon as it ends
-  (after, files).
+  and save.py) and complete. With the metadata mode "slim" (instaloader's
+  setting, or a source's own; "full" by default), the files a sync or a
+  save wrote are slimmed as soon as it ends (after, files).
 - The files already there are rewritten by a job the user starts (kind
   ``slim-metadata``): ``.json`` becomes ``.json.xz``, a ``.json.xz`` that
   is not slim is slimmed. Its ``mode`` "preview" changes nothing and counts
@@ -89,8 +89,11 @@ class Failed(Exception):
 
 
 def enabled(cfg=None):
-    """Whether new instaloader metadata is slimmed after each sync and save."""
-    return (cfg or config.load()).get("slim_metadata") is True
+    """Whether new instaloader metadata is slimmed after each sync and save
+    whose source does not say otherwise: instaloader's metadata setting is
+    slim (sync.settings)."""
+    import sync                                # it imports this module
+    return sync.settings(cfg)["metadata"] == "slim"
 
 
 # ---------------------------------------------------------------------------
@@ -493,12 +496,12 @@ def sweep(roots, apply, note=lambda text: None, stopped=lambda: False):
     return out
 
 
-def after(folder, roots, since, note):
+def after(folder, roots, since, note, on=None):
     """After a download into ``folder`` (inside a media root) that started
     at ``since``: slim the instaloader metadata written since, in it and
-    its subfolders, when the setting is on. The job indexes the folder
-    next. Returns the report, or None when the setting is off."""
-    if not enabled():
+    its subfolders, when ``on`` (None: the setting, enabled) says so. The
+    job indexes the folder next. Returns the report, or None when off."""
+    if not (enabled() if on is None else on):
         return None
     out = _new_report(True)
     for d in scanner.folders(folder):
@@ -507,10 +510,11 @@ def after(folder, roots, since, note):
     return out
 
 
-def files(paths, roots, note):
+def files(paths, roots, note, on=None):
     """Slim these metadata files (a Save's, just moved into a media root),
-    when the setting is on. The caller indexes their folder next."""
-    if not enabled():
+    when ``on`` (None: the setting, enabled) says so. The caller indexes
+    their folder next."""
+    if not (enabled() if on is None else on):
         return None
     out = _new_report(True)
     with db.write_lock:

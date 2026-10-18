@@ -1,4 +1,4 @@
-// Desktop, 1440x900: Settings → Sync, Instagram metadata. The count is the
+// Desktop, 1440x900: Settings → Sync, Metadata files. The count is the
 // real job on the throwaway instance (it changes nothing); the rewrite is
 // never started here: its request and its result are answered by the test,
 // so the demo vault's files stay as every other spec expects them.
@@ -14,21 +14,27 @@ async function openCard(page) {
   return card;
 }
 
-test("Settings: slimming new metadata is off until switched on", async ({ page, request }) => {
+test("Settings: each tool's metadata files are full until another mode is picked", async ({ page, request }) => {
   const card = await openCard(page);
-  const box = card.getByRole("checkbox", { name: /Slim new metadata after each sync and save/ });
-  await expect(box).not.toBeChecked();
-  const setting = async () => (await (await request.get("/api/config", { headers: H })).json()).slim_metadata;
-  expect(await setting()).toBe(false);
+  const group = tool => card.locator("fieldset.metadata-tool", { has: page.locator("legend", { hasText: tool }) });
+  const insta = group("instaloader");
+  const full = insta.getByRole("radio", { name: /^Full/ });
+  const slim = insta.getByRole("radio", { name: /^Slim/ });
+  await expect(full).toBeChecked();
+  // Slim is instaloader's only.
+  await expect(group("gallery-dl").getByRole("radio")).toHaveCount(2);
+  await expect(group("yt-dlp").getByRole("radio", { name: /^None/ })).not.toBeChecked();
+  const setting = async () => (await (await request.get("/api/config", { headers: H })).json()).instaloader.metadata;
+  expect(await setting()).toBe("full");
   try {
-    await box.click();                           // checked once the setting is saved and read back
-    await expect.poll(setting).toBe(true);
-    await expect(box).toBeChecked();
-    await box.click();
-    await expect.poll(setting).toBe(false);
-    await expect(box).not.toBeChecked();
+    await slim.click();                          // checked once the setting is saved and read back
+    await expect.poll(setting).toBe("slim");
+    await expect(slim).toBeChecked();
+    await full.click();
+    await expect.poll(setting).toBe("full");
+    await expect(full).toBeChecked();
   } finally {
-    await request.post("/api/config", { headers: H, data: { slim_metadata: false } });
+    await request.post("/api/config", { headers: H, data: { instaloader: { metadata: "full" } } });
   }
 });
 

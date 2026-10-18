@@ -24,9 +24,15 @@ yt-dlp for TikTok, as no gallery-dl entry can be made from yt-dlp's files).
 Only a run that exited 0 moves anything: what a failed one left (an info
 JSON and thumbnail without their video) is dropped with the saving folder.
 
+With the tool's metadata setting "none", the files are named (and yt-dlp's
+video embedded) as such a sync's; the metadata is still written, to find
+the owner and the archive entries, and stays behind with the saving folder
+when the owner's folder has no metadata files either (sync.folder_metadata).
+
 Same lock group and pause as the tool's syncs; the queue limit is
 save.py's, Instagram saves included.
 """
+import json
 import os
 import re
 import shutil
@@ -156,12 +162,19 @@ def _build(params, platform):
     if "$" in stage:
         raise jobs.BadRequest("the data directory holds a $, which the tool would expand")
     session = sync.session_of(tool, sources.clean_options(None), cfg)
+    # With no metadata files (the setting), named and embedded as such a
+    # sync's: the metadata is still written, only to find the owner, and
+    # left in the saving folder (_place).
+    bare = sync.metadata_of(tool, {}, cfg) == "none"
     if tool == "gallery-dl":
-        args = [*sync.config_flags(tool, cfg), "--write-metadata", "-D", stage]
+        args = [*sync.config_flags(tool, cfg), "--write-metadata",
+                *(["-f", sync.GALLERY_DL_BARE] if bare else []), "-D", stage]
     else:
+        flags = ["--write-info-json", *[f for f in sync.YT_DLP_EMBED if f != "--no-write-info-json"]] if bare \
+            else ["--write-info-json", "--write-thumbnail"]
         # The output template is %-formatted: a % in the folder is doubled.
-        args = [*sync.config_flags(tool, cfg), "--write-info-json", "--write-thumbnail", "--no-playlist",
-                "-o", os.path.join(stage.replace("%", "%%"), sync.YT_DLP_NAME)]
+        args = [*sync.config_flags(tool, cfg), *flags, "--no-playlist",
+                "-o", os.path.join(stage.replace("%", "%%"), sync.yt_dlp_name("none" if bare else "full"))]
     return {"tool": tool, "args": [*args, *sync.cookie_flags(session), "--", link]}
 
 
@@ -245,20 +258,36 @@ def _read(params, stage):
 
 
 def _place(params, stage, roots, note):
-    """Move the saved files to the owner's folder. Returns the folder, or
-    None when the tool saved no post."""
+    """Move the saved files to the owner's folder. Returns (the folder, the
+    post's archive entries as its metadata gives them: archives.post_entries),
+    or (None, None) when the tool saved no post."""
     post = _read(params, stage)
     if post is None:
-        return None
+        return None, None
     conn = db.connect()
     tool = PLATFORMS[params["platform"]]["tool"]
+    parser = gallery_dl_parser if tool == "gallery-dl" else yt_dlp_parser
+    if tool == "gallery-dl":
+        archives.installed_formats()           # read now, so post_entries has them (it never starts gallery-dl)
+    entries = archives.post_entries({"id": post.id, "tool": post.tool, "meta_path": post.meta_path,
+                                     "side_files": json.dumps(post.side_files)})
     folder = owner_folder(conn, roots, params["platform"], tool, post.author_id, post.author_handle)
     os.makedirs(folder, exist_ok=True)
+    # Without its metadata only where the folder's syncs write none either,
+    # and named so (_build) that the parser reads it from its names; there
+    # the folder is the account (never _saved, which is nobody's).
+    named = bool(post.media) and parser._BARE_RE.fullmatch(os.path.basename(post.media[0].path)) is not None
+    bare = sync.folder_metadata(conn, tool, folder) == "none" and not sources.in_saved(folder, roots)
+    if bare and not named:
+        note("metadata kept: the post was downloaded with it (the setting is not none)")
+    bare = bare and named
     moved = kept = 0
     for name in sorted(os.listdir(stage)):
         src, dst = os.path.join(stage, name), os.path.join(folder, name)
         if not os.path.isfile(src) or os.path.islink(src):
             continue
+        if bare and name.endswith(".json"):
+            continue                           # left in the saving folder, removed with it
         if os.path.lexists(dst):
             kept += 1                          # never over a file already there
             continue
@@ -266,19 +295,23 @@ def _place(params, stage, roots, note):
         moved += 1
     note(f"{moved} file{'' if moved == 1 else 's'} moved to {folder}"
          + (f"; {kept} already there, kept as they were" if kept else ""))
-    return folder
+    return folder, entries
 
 
-def record(conn, pid):
-    """Add the indexed post's entries to the download archives, as trashing
-    it would (archives.post_entries, with the installed gallery-dl's
-    formats): a sync of its profile skips it. Returns how many were new."""
+def record(conn, pid, entries=None):
+    """Add the post's entries to the download archives, as trashing it
+    would (archives.post_entries, with the installed gallery-dl's formats):
+    a sync of its profile skips it. ``entries``: as its metadata gave them
+    before it moved (it may have moved without), else the indexed post's.
+    Returns how many were new."""
+    data_dir = config.load()["data_directory"]
+    if entries is not None:
+        return sum(len(archives.add(tool, e, data_dir)) for tool, e in entries.items())
     row = conn.execute("SELECT id, tool, meta_path, side_files FROM posts WHERE id = ?", (pid,)).fetchone()
     if row is None:
         return 0
     if row["tool"] == "gallery-dl":
         archives.installed_formats()           # read now, so post_entries has them (it never starts gallery-dl)
-    data_dir = config.load()["data_directory"]
     return sum(len(archives.add(tool, e, data_dir)) for tool, e in archives.post_entries(row).items())
 
 
@@ -307,9 +340,9 @@ def _outcome(params, code, lines, index, note=None):
     notes = []
     pid = post_id(params)
     try:
-        folder = _place(params, stage, roots, notes.append) if roots and code == 0 else None
+        folder, entries = _place(params, stage, roots, notes.append) if roots and code == 0 else (None, None)
     except OSError as e:                       # a folder that cannot be made or written
-        folder = None
+        folder, entries = None, None
         result["error"] = "generic"
         notes.append(f"could not move the files: {e.strerror or e}")
     for text in notes:
@@ -323,7 +356,7 @@ def _outcome(params, code, lines, index, note=None):
         conn = db.connect()
         if db.saved_ids(conn, [pid]):
             result["post"] = pid
-            result["archived"] = record(conn, pid)
+            result["archived"] = record(conn, pid, entries)
             row = conn.execute("SELECT platform, author_id FROM posts WHERE id = ?", (pid,)).fetchone()
             if row["author_id"]:
                 key = people.canonical(conn, row["platform"], row["author_id"])

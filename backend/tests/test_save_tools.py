@@ -501,3 +501,39 @@ def test_saving_from_the_page_works_as_from_anywhere(env, client, fake):
     r = as_page(client, "POST", "/api/save", FROM_X, {"url": X_LINK})
     assert ended(r["job"]["id"])["state"] == "done"
     assert as_page(client, "POST", "/api/saved", FROM_X, {"ids": [f"twitter:{X_ID}"]})["saved"] == [f"twitter:{X_ID}"]
+
+
+# ---------------------------------------------------------------------------
+# Metadata mode none
+# ---------------------------------------------------------------------------
+
+def test_saved_with_no_metadata_files_when_the_folder_has_none(env, client, fake):
+    """The tool's setting none: the save names its files as a sync does then
+    and leaves no JSON beside them; its archive entries still come from
+    the staged metadata, so the next sync skips it."""
+    set_config(**{"gallery-dl": {"pause": 0, "metadata": "none"}, "yt-dlp": {"pause": 0, "metadata": "none"}})
+    fake.put(X_PROFILE, x_account((1, 1)))
+    src = add(client, X_PROFILE)
+    assert run_sync(client, src["id"])["state"] == "done"
+    new = "1800000000000000002"
+    fake.put(X_PROFILE, x_account((1, 1), (2, 2)))
+    job = save_now(client, f"https://x.com/someone/status/{new}")
+    assert job["state"] == "done" and job["result"]["folder"] == src["folder"], job
+    names = sorted(os.listdir(src["folder"]))
+    assert not [n for n in names if n.endswith(".json")], names
+    assert [n for n in names if new in n] == [f"twitter {new} 01 20240603-120000.jpg",
+                                              f"twitter {new} 02 20240603-120000.jpg"]
+    assert {f"twitter{new}_0_1", f"twitter{new}_0_2"} <= archive_entries("gallery-dl")
+    assert f"twitter {new}" in archive_entries("yt-dlp")
+    assert get(client, f"/api/posts/twitter/{new}")["id"] == f"twitter:{new}"
+    sync = run_sync(client, src["id"])
+    assert sync["state"] == "done" and sync["result"]["added"] == 0, sync
+    # yt-dlp: the video alone, its metadata embedded.
+    fake.put(TT_PROFILE, tt_account(1))
+    job = save_now(client, TT_LINK)
+    assert job["state"] == "done", job
+    argv = fake.runs("yt-dlp")[-1]["argv"]
+    assert "--embed-metadata" in argv and "--write-info-json" in argv      # into staging, for its entries
+    folder = os.path.join(env["roots"][0], "tiktok", "someone")
+    assert os.listdir(folder) == [f"6800000000000000009-20240602-{TT_ID} [TikTok 6800000000000000009].mp4"]
+    assert f"tiktok {TT_ID}" in archive_entries("yt-dlp")

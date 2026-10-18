@@ -33,7 +33,8 @@ and Windows' other reserved characters in those become their full-width
 look-alikes, as instaloader's sanitize_path does), --no-compress-json (the
 metadata JSON beside the media and the profile's JSON, plain ``.json``;
 without it ``.json.xz``, as instaloader compresses them by default; a
-caption .txt either way),
+caption .txt either way), --no-metadata-json (no JSON at all, the profile's
+neither, as instaloader's save_metadata off) and --no-captions (no .txt),
 --no-posts, --reels, --tagged, --stories and --highlights (the last two
 fail with "Login required." without --login or --load-cookies; with
 either it prints instaloader's lines of a session loaded and accepted), in
@@ -79,11 +80,15 @@ STAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"
 
 STALL = None                                   # data["stall"], set by main
 PLAIN = False                                  # --no-compress-json, set by run
+NO_JSON = False                                # --no-metadata-json, set by run
+NO_CAPTIONS = False                            # --no-captions, set by run
 
 
 def save_json(base, structure, opened=lambda: None):
     """As instaloader's save_structure_to_file: ``<base>.json.xz``, or a
-    plain ``<base>.json`` with --no-compress-json."""
+    plain ``<base>.json`` with --no-compress-json; none with --no-metadata-json."""
+    if NO_JSON:
+        return
     if PLAIN:
         with open(base + ".json", "w") as f:
             opened()
@@ -159,7 +164,7 @@ def write(base, p, profile, owner, videos=True, thumbnails=True, pictures=True):
     save_json(base, {"node": node(p, profile, owner), "instaloader": {"version": "4.15.1", "node_type": "Post"}},
               lambda: stall(p, "json-opened"))
     stall(p, "json")
-    if p.get("caption"):
+    if p.get("caption") and not NO_CAPTIONS:
         with open(base + ".txt", "w") as f:
             stall(p, "caption-opened")
             f.write(p["caption"])
@@ -381,12 +386,13 @@ def run(argv):
                  "--load-cookies", "--cookiefile", "--login", "--post-filter", "--storyitem-filter"):
         ap.add_argument(flag)
     for flag in ("--fast-update", "--no-compress-json", "--no-posts", "--reels", "--tagged", "--stories",
-                 "--highlights", "--no-videos", "--no-video-thumbnails", "--no-pictures", "--sanitize-paths"):
+                 "--highlights", "--no-videos", "--no-video-thumbnails", "--no-pictures", "--sanitize-paths",
+                 "--no-metadata-json", "--no-captions"):
         ap.add_argument(flag, action="store_true")
     ap.add_argument("targets", nargs="*")
     args = ap.parse_args(argv)
-    global PLAIN
-    PLAIN = args.no_compress_json
+    global PLAIN, NO_JSON, NO_CAPTIONS
+    PLAIN, NO_JSON, NO_CAPTIONS = args.no_compress_json, args.no_metadata_json, args.no_captions
     data_file = os.environ.get("FAKE_INSTALOADER") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                                    "fake_instaloader.json")
     with open(data_file) as f:

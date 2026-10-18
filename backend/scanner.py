@@ -411,6 +411,11 @@ def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_see
                                            (post.id,))}
         if have == {m.path for m in post.media}:
             return                             # nothing changed
+    if post.enrich is not None:
+        try:
+            post.enrich(post)                  # what the media file itself says (ParsedPost.enrich)
+        except Exception as e:                 # the post as its name gives it
+            print(f"[scan] {post.meta_path}: could not read its embedded metadata: {e}")
     outcome = db.upsert_post(conn, post, mtime, size, now, first_seen)
     report[outcome] += 1
 

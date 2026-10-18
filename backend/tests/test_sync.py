@@ -1068,11 +1068,11 @@ def test_interrupted_sync_of_an_id_now_naming_another_source_is_not_recorded(env
 
 def test_settings_api(env, client):
     cfg = get(client, "/api/config")
-    assert cfg["instaloader"] == {"session": {"mode": "none"}, "pause": 60}
+    assert cfg["instaloader"] == {"session": {"mode": "none"}, "pause": 60, "metadata": "full"}
     r = post(client, "/api/config", {"instaloader": {"session": {"mode": "cookies", "browser": "brave"}}})
-    assert r["config"]["instaloader"] == {"session": {"mode": "cookies", "browser": "brave"}, "pause": 60}
+    assert r["config"]["instaloader"] == {"session": {"mode": "cookies", "browser": "brave"}, "pause": 60, "metadata": "full"}
     r = post(client, "/api/config", {"instaloader": {"pause": 5}})
-    assert r["config"]["instaloader"] == {"session": {"mode": "cookies", "browser": "brave"}, "pause": 5}
+    assert r["config"]["instaloader"] == {"session": {"mode": "cookies", "browser": "brave"}, "pause": 5, "metadata": "full"}
     for bad in [{"session": {"mode": "login", "user": "a b"}}, {"session": {"mode": "cookies", "browser": "x"}},
                 {"pause": -1}, {"pause": 3601}, {"pause": "5"}, {"pause": True},
                 {"cookies": "/home/me/cookies.txt"}, {"session": {"mode": "login", "user": "me", "password": "pw"}},

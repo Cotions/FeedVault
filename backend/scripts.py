@@ -124,6 +124,34 @@ BUILTINS = {
         "argv": ["yt-dlp", "--write-info-json", "--write-thumbnail", "--download-archive", "{archive}",
                  "--break-on-existing", "-o", YT_DLP_NAME, "--", "{url}"]},
 }
+# The built-ins with what the tool's metadata setting says it writes beside
+# its files (sync.metadata_of): "none" as a source's sync does then.
+INSTALOADER_BARE_NAME = "{profile}-{date_utc:%Y-%m-%d}-{shortcode}"    # sync.DATED, of the post's owner
+
+
+def _bare(t):
+    """Built-in ``t`` writing no metadata files (sync.py's flags for "none")."""
+    argv, tool = list(t["argv"]), t["argv"][0]
+    if tool == "instaloader":
+        argv[1:1] = [*sync.INSTALOADER_BARE, "--filename-pattern", INSTALOADER_BARE_NAME]
+    elif tool == "gallery-dl":
+        i = argv.index("--write-metadata")
+        argv[i:i + 1] = sync.gallery_dl_metadata_flags("none")
+    else:
+        i = argv.index("--write-info-json")
+        argv[i:i + 2] = sync.yt_dlp_metadata_flags("none")
+        argv[argv.index(YT_DLP_NAME)] = "{root}/" + sync.yt_dlp_name("none")
+    description = t["description"].replace(", with metadata", "").replace(", with its info JSON and thumbnail", "")
+    return {**t, "description": description + " No metadata files, as Settings → Sync says.", "argv": argv}
+
+
+def builtins(cfg=None):
+    """BUILTINS as they run now: each tool's metadata setting applied."""
+    cfg = cfg or config.load()
+    modes = {tool: sync.metadata_of(tool, {}, cfg) for tool in sources.TOOLS}
+    return {name: _bare(t) if modes[t["argv"][0]] == "none" else t for name, t in BUILTINS.items()}
+
+
 # A shell script to start from: shown to copy, never run (it is no file).
 SHELL_TEMPLATE = """#!/bin/sh
 # name: My script
@@ -917,7 +945,7 @@ def parse_shell(text):
 
 
 def _builtin(name):
-    t = BUILTINS[name]
+    t = builtins()[name]
     return _runs({"id": BUILTIN + name, "builtin": True, "kind": "command", "file": None, "path": None,
                   "name": t["name"], "description": t["description"], "needs": t["needs"], "rescan": t["rescan"],
                   "tool": t["argv"][0], "argv": list(t["argv"]), "refused": None,
@@ -1164,7 +1192,7 @@ def missing(sid, refused):
 
 def template(name):
     """A built-in as the JSON file to create from it."""
-    return json.dumps(BUILTINS[name], indent=2) + "\n"
+    return json.dumps(builtins()[name], indent=2) + "\n"
 
 
 # ---------------------------------------------------------------------------

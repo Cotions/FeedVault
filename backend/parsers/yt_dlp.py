@@ -213,3 +213,108 @@ def _minutes(seconds):
     if seconds % 60:
         return f"{seconds} s"
     return f"{seconds // 60} min"
+
+
+# --- videos with no info JSON -----------------------------------------------
+#
+# A sync with metadata mode "none" writes the video alone, its metadata
+# embedded (--embed-metadata, --embed-thumbnail), named as sync.YT_DLP_BARE
+# has it: "<uploader id>-<upload date>-<id> [<extractor key> <account id>].<ext>",
+# "NA" for what yt-dlp did not know. The name gives the post and its
+# account; the title, description and link are read back from the file
+# with ffprobe when it is indexed (enrich), when there is one.
+
+_BARE_RE = re.compile(r"(?P<uploader>.*?)-(?P<date>\d{8}|NA)-(?P<id>[^ /]+) "
+                      r"\[(?P<key>[A-Za-z0-9]+) (?P<author>[^\]\s/]+)\]\.(?P<ext>[A-Za-z0-9]+)")
+FILENAMES = TOOL + " (filenames)"
+FFPROBE_TIMEOUT = 10                           # seconds per file
+_BARE_URLS = {
+    "youtube": lambda pid, handle: f"https://www.youtube.com/watch?v={pid}",
+    "tiktok": lambda pid, handle: f"https://www.tiktok.com/@{handle}/video/{pid}" if handle else None,
+}
+
+
+def _bare_posted(day, path):
+    """The upload day (UTC) from the name, the file's mtime when it falls
+    on it (±1 day for time zones), else the day; the mtime without one."""
+    try:
+        mtime = int(os.path.getmtime(path))
+    except OSError:
+        mtime = None
+    if day == "NA":
+        return mtime
+    start = int(datetime.strptime(day, "%Y%m%d").replace(tzinfo=timezone.utc).timestamp())
+    if mtime is not None and abs(mtime - (start + 43200)) <= 36 * 3600:
+        return mtime
+    return start
+
+
+def tags(path, ffprobe=None):
+    """The format tags embedded in a media file ({name lowercase: text}),
+    read by ffprobe (thumbs.ffprobe_path when not given); {} when there is
+    none or it fails."""
+    import subprocess
+    import thumbs
+    ffprobe = ffprobe or thumbs.ffprobe_path()
+    if ffprobe is None or not os.path.isabs(path):
+        return {}
+    try:
+        r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format_tags", "-of", "json", path],
+                           capture_output=True, text=True, timeout=FFPROBE_TIMEOUT)
+        found = json.loads(r.stdout or "{}").get("format", {}).get("tags", {})
+    except (subprocess.TimeoutExpired, OSError, ValueError, AttributeError):
+        return {}
+    if not isinstance(found, dict):
+        return {}
+    return {str(k).lower(): v for k, v in found.items() if isinstance(v, str)}
+
+
+def _enrich(post):
+    """What yt-dlp embedded (--embed-metadata): title and description as
+    the text, the uploader's name, the link."""
+    t = tags(post.media[0].path)
+    if not t:
+        return
+    post.text = _text({"id": post.post_id, "title": t.get("title"),
+                       "description": t.get("description") or t.get("synopsis")})
+    post.hashtags = list(dict.fromkeys(h.lower() for h in _HASHTAG_RE.findall(post.text)))
+    post.author_name = _str(t.get("artist")) or post.author_name
+    link = t.get("purl") or t.get("comment") or ""
+    if re.fullmatch(r"https?://[^\s]{1,500}", link):
+        post.url = link
+
+
+def parse_filenames(root, dirpath, names):
+    """Posts rebuilt from the names of videos yt-dlp wrote with no info
+    JSON (sync.YT_DLP_BARE), for the files no parser with metadata claimed
+    (parsers.PARSERS). Audio-only downloads count as videos, as above."""
+    result = DirResult()
+    inside = os.path.normpath(dirpath) != os.path.normpath(root)
+    folder = os.path.basename(os.path.normpath(dirpath)).lower() if inside else None
+    for n in sorted(names):
+        m = _BARE_RE.fullmatch(n)
+        if m is None or m["ext"].lower() not in VIDEO_EXT | AUDIO_EXT:
+            continue
+        path = os.path.join(dirpath, n)
+        result.claimed.add(n)
+        platform = m["key"].lower()
+        uploader = m["uploader"] if m["uploader"] not in ("", "NA") else None
+        # A YouTube uploader id is the @handle; TikTok's is a number: the folder's name then.
+        handle = uploader.lstrip("@") if uploader and not uploader.isdigit() else folder
+        url = _BARE_URLS.get(platform)
+        result.posts.append(ParsedPost(
+            platform=platform,
+            post_id=m["id"],
+            url=url(m["id"], handle) if url else None,
+            kind="video",
+            author_id=m["author"] if m["author"] != "NA" else folder,
+            author_handle=handle,
+            author_name=None,
+            posted_at=_bare_posted(m["date"], path),
+            text="",
+            meta_path=path,
+            tool=FILENAMES,
+            media=[Media(1, "video", path)],
+            enrich=_enrich,
+        ))
+    return result
