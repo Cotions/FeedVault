@@ -2208,7 +2208,8 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .creator-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 11px 10px 11px 14px; }
 .creator-review { margin-right: 10px; flex-shrink: 0; }
 .creator-seen { margin-right: 6px; flex-shrink: 0; }
-/* Review with a source's Options under it, so the name keeps its room. */
+/* Review with a source's Options and Make creator under it, so
+   the name keeps its room. */
 .creator-tools { display: flex; flex-direction: column; gap: 2px; margin-right: 10px; flex-shrink: 0; }
 .creator-tools .creator-review { margin-right: 0; }
 .creator-tools .icon-btn { width: 26px; height: 26px; }
