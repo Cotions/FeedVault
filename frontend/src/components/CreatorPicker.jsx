@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { platformLabel, platformShort } from "../lib/fmt";
 import { accountKey, accountText, matchedFormer, matches, personText } from "../lib/people";
+import PersonAvatar from "./PersonAvatar";
 
 const MAX_SHOWN = 60;
 
@@ -145,10 +146,13 @@ export default function CreatorPicker({
               onMouseEnter={() => setActive(i)}
             >
               {o.person ? (
-                <>
-                  <span className="picker-person">{o.person.name}</span>
-                  <span className="picker-sub" title={personSub(o.person)}>{personSub(o.person)}</span>
-                </>
+                <span className="picker-person-row">
+                  <PersonAvatar person={o.person} size="chip" />
+                  <span className="picker-person-text">
+                    <span className="picker-person">{o.person.name}</span>
+                    <span className="picker-sub" title={personSub(o.person)}>{personSub(o.person)}</span>
+                  </span>
+                </span>
               ) : (
                 <>
                   <span className="picker-handle">@{o.account.handle || o.account.id}</span>

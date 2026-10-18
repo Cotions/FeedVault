@@ -1,5 +1,6 @@
 import CreatorPicker from "./CreatorPicker";
 import PageHeader from "./PageHeader";
+import PersonAvatar from "./PersonAvatar";
 
 // The head of a page that can show one person (?person=<id>): its title,
 // the person's name, and the picker that sets or clears it.
@@ -8,7 +9,8 @@ export default function PersonScopeHead({ title, person, people, setParams }) {
   return (
     <PageHeader
       title={title}
-      sub={person ? (who ? who.name : `person ${person}`) : null}
+      sub={person ? (who ? <span className="page-count person-scope-who"><PersonAvatar person={who} size="chip" />{who.name}</span>
+                         : `person ${person}`) : null}
       actions={(people?.length > 0 || person) && (
         <CreatorPicker
           label="Person"

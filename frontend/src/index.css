@@ -1594,6 +1594,130 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   background: radial-gradient(circle at 30% 25%, rgba(var(--glow-rgb), 0.28), rgba(var(--accent-rgb), 0.08));
   border: 1px solid rgba(var(--glow-rgb), 0.3);
 }
+/* A person's picture (components/PersonAvatar): in the letter's box, so
+   neither moves anything when the other takes its place. The letter of a
+   person is drawn from data-letter, not text. */
+.avatar-letter[data-letter]::before { content: attr(data-letter); }
+.avatar-img {
+  display: block;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-2);
+  border: 1px solid rgba(var(--glow-rgb), 0.3);
+}
+.avatar-letter.is-chip, .avatar-img.is-chip { width: 22px; height: 22px; font-size: 11px; }
+.avatar-letter.is-large, .avatar-img.is-large { width: 52px; height: 52px; font-size: 21px; }
+
+/* The person page's picture, a button that opens the picture dialog. */
+.avatar-edit {
+  position: relative;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.avatar-edit:hover .avatar-letter, .avatar-edit:hover .avatar-img { border-color: rgba(var(--glow-rgb), 0.75); }
+.avatar-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.avatar-edit-badge {
+  position: absolute; right: -3px; bottom: -3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.avatar-edit:hover .avatar-edit-badge { color: var(--accent-hover); }
+
+/* The picture dialog (components/AvatarDialog). */
+.avatar-pick { display: flex; flex-direction: column; gap: 16px; }
+.avatar-drop {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  padding: 12px 14px;
+  font-size: 13px; color: var(--text-dim);
+  border: 1px dashed var(--edge);
+  border-radius: 10px;
+}
+.avatar-drop.is-over { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.08); }
+.avatar-drop .btn-secondary { margin-left: auto; }
+.avatar-source { display: flex; flex-direction: column; gap: 8px; }
+.avatar-source .empty { padding: 10px 0; }
+.avatar-profile-pics { display: flex; flex-wrap: wrap; gap: 8px; }
+.avatar-profile-pic {
+  display: inline-flex; align-items: center; gap: 9px;
+  max-width: 100%;
+  padding: 4px 12px 4px 4px;
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--text);
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.avatar-profile-pic.is-newest { border-color: rgba(var(--glow-rgb), 0.5); }
+.avatar-profile-pic:hover, .avatar-profile-pic:focus-visible { border-color: var(--accent); }
+.avatar-profile-pic img { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; object-fit: cover; }
+.avatar-media-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px;
+  max-height: 212px; overflow-y: auto;
+  /* Room for a focused tile's ring. */
+  padding: 2px;
+}
+.avatar-media {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.avatar-media:hover, .avatar-media:focus-visible { border-color: var(--accent); }
+.avatar-media img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.avatar-media .icon { position: absolute; right: 4px; bottom: 4px; color: #fff; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8)); }
+.avatar-remove { align-self: flex-start; }
+.avatar-pick > .btn-ghost { align-self: center; }
+.avatar-crop { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.avatar-crop-view {
+  position: relative;
+  max-width: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  border-radius: 12px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.avatar-crop-view:active { cursor: grabbing; }
+.avatar-crop-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.avatar-crop-view img { position: absolute; max-width: none; pointer-events: none; }
+/* What is kept is the whole square; the round window shows it as the cards will. */
+.avatar-crop-ring {
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 200px rgba(5, 7, 11, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+.avatar-crop-zoom { display: flex; align-items: center; gap: 10px; width: 240px; max-width: 100%; font-size: 12px; color: var(--muted); }
+.avatar-crop-zoom input { flex: 1; min-width: 0; }
+
+/* A person's picture among a picker's options, and by the name a page is scoped to. */
+.picker-person-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.picker-person-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.person-pick-option .avatar-letter, .person-pick-option .avatar-img {
+  display: inline-flex; vertical-align: middle;
+  width: 20px; height: 20px; margin: -3px 8px -2px 0; font-size: 10px;
+}
+.person-scope-who { display: inline-flex; align-items: center; gap: 6px; }
+.person-scope-who .avatar-letter, .person-scope-who .avatar-img { width: 18px; height: 18px; font-size: 9px; }
 
 .rich-text {
   font-size: 14px;

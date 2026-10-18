@@ -20,6 +20,8 @@ import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources"
 import { useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
 import PersonAbout from "../components/PersonAbout";
+import PersonAvatar from "../components/PersonAvatar";
+import AvatarDialog from "../components/AvatarDialog";
 import { LinkForm, LinkRow } from "../components/Links";
 import { copyUrls } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
@@ -200,6 +202,7 @@ export default function PersonPage() {
   const [notes,    setNotes]    = useState(null);     // edited notes, null when untouched
   const [about,    setAbout]    = useState({});       // edited gender, country, labels (absent: untouched)
   const [confirm,  setConfirm]  = useState(false);
+  const [picture,  setPicture]  = useState(false);    // the picture dialog is open
   const [dlgError, setDlgError] = useState(null);
   const [removing, setRemoving] = useState(null);     // the source to remove
   const [linkEdits, setLinkEdits] = useState(false);  // a link being edited has changes
@@ -375,6 +378,14 @@ export default function PersonPage() {
       />
       <div className="card person-page">
         <div className="person-bar">
+          {/* Their picture, first on the line: in the page's head it would
+              move the title off where every page has it (#93). */}
+          <button type="button" className="avatar-edit" onClick={() => setPicture(true)}
+                  title={p.avatar ? "Change picture" : "Add a picture"}
+                  aria-label={p.avatar ? `Change ${p.name}'s picture` : `Add a picture of ${p.name}`}>
+            <PersonAvatar person={p} size="large" />
+            <span className="avatar-edit-badge" aria-hidden="true"><Icon name="pencil" size={11} /></span>
+          </button>
           <nav className="person-links" aria-label={`${p.name} across the app`}>
             <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
             <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
@@ -517,6 +528,8 @@ export default function PersonPage() {
               newLink && "the new link", newSource && "the new source"].filter(Boolean).join(", ")}.
           </p>
         </DiscardDialog>
+
+        {picture && <AvatarDialog person={p} onChanged={reload} onClose={() => setPicture(false)} />}
 
         <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
 

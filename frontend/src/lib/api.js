@@ -59,7 +59,11 @@ export function sentAsIs(path) {
 async function request(method, path, body, { signal } = {}) {
   if (!sentAsIs(path)) throw new ApiError("no such page", 404, { ok: false, error: "no such page" });
   const opts = { method, headers: { ...CSRF_HEADERS }, signal };
-  if (body !== undefined) {
+  // A Blob (a picture uploaded) goes as it is, typed as itself.
+  if (typeof Blob !== "undefined" && body instanceof Blob) {
+    opts.headers["Content-Type"] = body.type || "application/octet-stream";
+    opts.body = body;
+  } else if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
@@ -268,7 +272,7 @@ export function setCollectionCover(id, postId) { return post(`/api/collections/$
 
 /* ── People (see docs/API.md "People") ───────────────────── */
 
-// [{ id, name, notes, created_at, gender, country, labels, accounts: [account], platforms, count, bytes, newest }], by name
+// [{ id, name, notes, created_at, gender, country, labels, avatar, accounts: [account], platforms, count, bytes, newest }], by name
 export function getPeople() { return get("/api/people"); }
 // { labels: [{ name, count }], genders: [{ name, count }], presets: [gender], countries: [code] }
 export function getPeopleAttributes() { return get("/api/people/attributes"); }
@@ -291,6 +295,19 @@ export function linkAccounts(id, { add = [], remove = [] } = {}) {
 export function mergePeople(ids, { name, accounts = [] } = {}) {
   return post("/api/people/merge", { ids, accounts, ...(name ? { name } : {}) });
 }
+// What a person's picture can be made from (docs/API.md "Profile pictures"):
+// { profile_pics: [{ key, name, at, account, url }], media: [{ id, post, kind, posted_at, thumb }] }
+export function getAvatarChoices(id) { return get(`/api/people/${seg(id)}/avatar/choices`); }
+// source: { media: id } or { profile_pic: key }; crop: { x, y, size } or null (the middle) → { ok, person }
+export function setAvatar(id, source, crop) {
+  return post(`/api/people/${seg(id)}/avatar`, crop ? { ...source, crop } : source);
+}
+// A picture file (a Blob) as the body, the crop in the query → { ok, person }
+export function uploadAvatar(id, blob, crop) {
+  return post(`/api/people/${seg(id)}/avatar${crop ? qs(crop) : ""}`, blob);
+}
+// → { ok, person }, without a picture
+export function removeAvatar(id) { return del(`/api/people/${seg(id)}/avatar`); }
 // { suggestions: [{ id, score, reason, reasons: [{ reason, detail }], accounts, person }], dismissed }
 export function getSuggestions() { return get("/api/people/suggestions"); }
 // Fetches that one link-in-bio page (when Settings allows it), lists the accounts it links to (adding none)

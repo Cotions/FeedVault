@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { personOptions } from "../lib/people";
+import PersonAvatar from "./PersonAvatar";
 
 /* Who a link goes to: a search field over an open list (not a dropdown:
    the list is the point), "No person (Unsorted)" and the recent people on
@@ -95,7 +96,7 @@ function PickRow({ o, i, listId, active, onPick, disabled, head }) {
         onMouseDown={e => e.preventDefault()}
         onClick={() => { if (!disabled) onPick(o); }}
       >
-        {o.person ? o.person.name : "No person (Unsorted)"}
+        {o.person ? <><PersonAvatar person={o.person} size="chip" />{o.person.name}</> : "No person (Unsorted)"}
       </li>
     </>
   );

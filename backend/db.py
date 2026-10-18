@@ -543,12 +543,20 @@ def _migrate_24(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS person_labels_label ON person_labels(label)")
 
 
+def _migrate_25(conn):
+    """A person's profile picture (avatars.py): the name of its files under
+    ``<data_dir>/avatars/`` ('' for none), a hash of the picture, so two
+    people with the same one share it. User data, exported with the person
+    in people.json; the files themselves are never in the media folders."""
+    conn.execute("ALTER TABLE people ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
-              _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24]
+              _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25]
 
 BACKUPS_KEPT = 3
 

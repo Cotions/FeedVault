@@ -229,6 +229,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/media/<id>/poster` | poster image for a video, 404 if none |
 | GET | `/media/<id>/thumb` | small JPEG, cached in the data directory; falls back to the original for images, 404 for a video with no frame |
 | GET | `/media/copy/<copy_id>/thumb` | the same for the first item of an extra copy (see [Duplicates](#duplicates)) |
+| GET | `/media/avatars/<file>` | a person's picture, `<avatar>.webp` (512 px) or `<avatar>-96.webp`, cached for good (`immutable`: a new picture has a new name); see [Profile pictures](#profile-pictures) |
+| GET | `/media/people/<id>/profile-pic/<key>` | one of the profile pictures instaloader saved for a person's accounts, as listed by `/api/people/<id>/avatar/choices` |
 | GET | `/userscript/feedvault.user.js` | the userscript (no header needed), with this instance's port in `API_BASE`, `@updateURL` and `@downloadURL` (the port the server listens on, never one from the request), see [Save from the browser](#save-from-the-browser-userscript) |
 | GET | `/` | the dashboard (`frontend/dist/index.html`; no header needed). Without a built dashboard, a plain-text note to run `./run.sh --build` |
 | GET | `/<path>` | a file of the built dashboard, else `index.html` (the dashboard's own routes, such as `/review`); `api/…`, `media/…` and `userscript/…` paths are a 404 here |
@@ -1239,6 +1241,7 @@ A **person**:
 ```json
 { "id": 3, "name": "Some Body", "notes": "", "created_at": 1727500000,
   "gender": "Female", "country": "FR", "labels": ["cosplay", "Travel"],
+  "avatar": "3f9a1c0b7d2e4f6a8b1c",
   "accounts": [account, …], "platforms": ["instagram", "twitter"],
   "count": 900, "bytes": 2347483648, "newest": 1727481600 }
 ```
@@ -1254,6 +1257,8 @@ A **person**:
   each a name as a tag's (1 to 64 characters, no `"` or control
   characters), once each without regard to (ASCII) case. They are not
   [tags](#tags): post tags and the Tags page never see them.
+- `avatar`: the name of the person's picture, or `null`; see
+  [Profile pictures](#profile-pictures).
 - `accounts`: most posts first. An account linked but not in the index
   (before the first scan of a rebuilt index, or every post trashed) is listed
   with `count` 0 and `handle` `null`.
@@ -1290,14 +1295,50 @@ A **person**:
   running counted in `skipped`, a refused one in `errors`.
 - Merge keeps the first id: its name (or `name`, when given), and the
   others' notes appended to its own. Its labels are those of all of them;
-  its gender and country are the first person's (in `ids` order) that has
-  one. Every account of the others, and
+  its gender, country and picture are the first person's (in `ids` order)
+  that has one (the others' pictures are deleted). Every account of the others, and
   `accounts`, move to it, and so do the others' [links](#links), after its
   own; the others are gone. `ids` must all exist (404
   otherwise); with one id, `accounts` must not be empty.
 - A bad name, a name taken by another person, bad notes, a gender over 40
   characters, a country that is not a code, bad labels or a malformed
   account list is a 400 `{ "ok": false, "error": "…" }`; an unknown id a 404.
+
+### Profile pictures
+
+A person can have a picture, shown instead of their initial wherever the
+dashboard shows them. It is made from what is on this machine, never
+fetched: a picture uploaded, an image of one of their posts (a video's
+poster), or a profile picture instaloader saved beside their posts
+(`<date>_UTC_profile_pic.jpg`, in the folders of their posts and of their
+sources). `backend/avatars.py`.
+
+Whatever it was, it is opened as JPEG, PNG, WebP, GIF or AVIF by its
+content (never by its name), turned upright (EXIF), cropped square and
+saved again as WebP, 512 px and 96 px (a smaller picture is not enlarged),
+in `<data_directory>/avatars/<avatar>.webp` and `<avatar>-96.webp`, never
+in a media folder. `avatar` is a hash of the picture: two people with the
+same one share its files. It is user data, a column of `people` exported
+with the person in `people.json`, so a rebuilt index gets it back (the
+`avatars` folder is not touched). Its files are deleted once no person has
+it any more: a new picture, Remove, the person deleted or merged into
+another.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/people/<id>/avatar/choices` | `{ "profile_pics": [{ "key", "name", "at", "account": { "platform", "id", "handle" }, "url" }], "media": [{ "id", "post", "kind", "posted_at", "thumb" }] }`: instaloader's profile pictures of their accounts, newest first (at most 6), and the newest pictures of their posts (at most 60: images, and videos with a poster) |
+| POST | `/api/people/<id>/avatar` | the picture as the body (`Content-Type` `image/*` or `application/octet-stream`, at most 15 MB; the crop in the query, `?x=&y=&size=`), or JSON `{ "media": 17 }` or `{ "profile_pic": "<key>" }` with an optional `"crop": { "x", "y", "size" }` → `{ "ok": true, "person": {…} }` |
+| DELETE | `/api/people/<id>/avatar` | → `{ "ok": true, "person": {…} }`, the person without a picture |
+
+- The crop: `x` and `y`, the square's left and top as fractions (0 to 1)
+  of the upright picture's width and height, `size` its side as a fraction
+  of the shorter side (0.01 to 1). A square that would leave the picture
+  is moved back in. None: the middle square, as large as it can be.
+- Refused with a 400: what is not one of those formats, a picture over 50
+  million pixels (read from its header, before anything is decoded), a
+  `media` that is not one of the person's (or a video without a poster), a
+  `profile_pic` not listed; with a 413, an upload over 15 MB. Nothing
+  changes then.
 
 ### Link suggestions
 
