@@ -214,7 +214,7 @@ function CardOptionsButton({ sync, onEdit }) {
   );
 }
 
-function AccountCard({ account: a, index, settled, query, selectMode, selected, onToggle, sync, onSync, onEdit, fresh, onSeen, muted, onMuted, flash }) {
+function AccountCard({ account: a, index, settled, query, selectMode, selected, onToggle, sync, onSync, onEdit, onMake, fresh, onSeen, muted, onMuted, flash }) {
   const former = matchedFormer(a, query);
   const sub = `${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}${former ? ` · was @${former}` : ""}`;
   const body = (
@@ -247,8 +247,9 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
         <Link to={authorFeedPath(a.platform, a)} className="creator-main" title={`Show posts by @${a.handle}`}>{body}</Link>
       )}
       {a.id != null && !selectMode && (
-        // Review, and Options under it when the account has a source.
-        <span className={sync ? "creator-tools" : undefined}>
+        // Review, Options under it when the account has a source, and Make
+        // creator beside them: a person of its own, in one click.
+        <span className="creator-tools">
           <Link
             to={`/review?${new URLSearchParams({ platform: a.platform, author: a.id })}`}
             className="icon-btn creator-review"
@@ -258,6 +259,11 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
             <Icon name="review" size={15} />
           </Link>
           <CardOptionsButton sync={sync} onEdit={onEdit} />
+          <button type="button" className="icon-btn creator-make" onClick={onMake}
+                  title={`Make @${a.handle || a.id} a creator: a person of its own`}
+                  aria-label={`Make @${a.handle || a.id} a creator`}>
+            <Icon name="userPlus" size={15} />
+          </button>
         </span>
       )}
       {!selectMode && <SeenButton fresh={fresh} name={`@${a.handle || a.id}`} onSeen={onSeen} />}
@@ -358,7 +364,8 @@ export default function Creators() {
   }
   const [filter, setFilter] = useState("");
   const [busy,   setBusy]   = useState(false);
-  const [merge,  setMerge]  = useState(null);                // { name, error } while the dialog is open
+  const [merge,  setMerge]  = useState(null);                // { name, error, account? } while the dialog is open
+  const [each,   setEach]   = useState(null);                // { error } while "One creator each" asks
   const nameRef = useRef(null);
   const [adding, setAdding] = useState(null);                // { name, links, error }: "New person" dialog
   const addRef = useRef(null);
@@ -393,7 +400,7 @@ export default function Creators() {
     ...people.map(p => ({ id: `person:${p.id}`, person: p })),
     ...unlinked.map(a => ({ id: a.id != null ? `account:${accountKey(a)}` : null, account: a })),
   ], [people, unlinked]);
-  const sel = useSelection(items, { resetKey: `${filter}|${key}`, escapeBlocked: !!merge });
+  const sel = useSelection(items, { resetKey: `${filter}|${key}`, escapeBlocked: !!merge || !!each });
 
   // ?source=<id>, from a failed sync's notification (#123): that source's
   // row or card in view, and lit for a moment, as Links does a link saved
@@ -415,6 +422,11 @@ export default function Creators() {
   const chosenPeople = chosen.filter(i => i.person).map(i => i.person);
   const chosenAccounts = chosen.filter(i => i.account).map(i => i.account);
   const canMerge = chosen.length > 0 && !(chosenPeople.length === 1 && chosenAccounts.length === 0);
+  const canEach = chosenAccounts.length > 0 && !chosenPeople.length;
+  // What the name dialog is about: one card's account (its Make creator
+  // button), else the selection.
+  const mergePeopleList = merge?.account ? [] : chosenPeople;
+  const mergeAccounts = merge?.account ? [merge.account] : chosenAccounts;
 
   function reload() { setVersion(v => v + 1); }
 
@@ -467,11 +479,25 @@ export default function Creators() {
     setMerge({ name, error: null });
   }
 
+  // One card's account as a person of its own. The page stays: the next
+  // card to go through is still there.
+  function askMake(a) {
+    setMerge({ name: freeName(suggestName([a]) || "New person", peopleAll), error: null, account: a });
+  }
+
   async function runMerge() {
     const name = merge.name.trim();
-    const accounts = chosenAccounts.map(accountRef);
+    const accounts = mergeAccounts.map(accountRef);
     setBusy(true);
     try {
+      if (merge.account) {
+        const r = await createPerson(name, accounts);
+        if (!r?.ok) { setMerge(m => ({ ...m, error: r?.error || "Could not create them." })); return; }
+        setMerge(null);
+        toast(`@${merge.account.handle || merge.account.id} is now a creator: ${r.person.name}.`);
+        reload();
+        return;
+      }
       const r = chosenPeople.length
         ? await mergePeople(chosenPeople.map(p => p.id), { name, accounts })
         : await createPerson(name, accounts);
@@ -484,6 +510,30 @@ export default function Creators() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // "One creator each": a person per selected account, named from it. A
+  // name taken already, or by one made earlier in the run, gets " 2"…
+  async function runEach() {
+    const taken = [...peopleAll];
+    let made = 0, failed = null;
+    setBusy(true);
+    try {
+      for (const a of chosenAccounts) {
+        const r = await createPerson(freeName(suggestName([a]) || "New person", taken), [accountRef(a)]);
+        if (r?.ok) { made++; taken.push(r.person); }
+        else failed = failed || `@${a.handle || a.id}: ${r?.error || "could not create them"}`;
+      }
+    } catch (err) {
+      failed = err.message;
+    } finally {
+      setBusy(false);
+    }
+    setEach(null);
+    sel.exit();
+    reload();
+    if (made) toast(`${plural(made, "creator")} made.`);
+    if (failed) toast(failed, "err");
   }
 
   // A person by hand: a name and the profile links to sync, before anything is downloaded.
@@ -676,6 +726,7 @@ export default function Creators() {
                       sync={a.id != null ? syncOf(`account:${accountKey(a)}`) : null}
                       onSync={sources.sync}
                       onEdit={setEditing}
+                      onMake={() => askMake(a)}
                       fresh={a.id != null ? fresh.get(`account:${accountKey(a)}`) : null}
                       onSeen={() => markCardSeen(fresh.get(`account:${accountKey(a)}`), { account: accountRef(a) },
                                                  `@${a.handle || a.id}`)}
@@ -692,9 +743,14 @@ export default function Creators() {
 
         {sel.active && (
           <SelectionBar selection={sel} loaded={items.filter(i => i.id).length}>
+            <button type="button" className="btn-secondary" disabled={!canEach || busy} onClick={() => setEach({ error: null })}
+                    title={canEach ? "A person for each selected account, named from it" : "Select accounts only"}>
+              <Icon name="userPlus" size={14} /> One creator each
+            </button>
             <button type="button" className="btn-primary" disabled={!canMerge || busy} onClick={askMerge}
                     title={canMerge ? "" : "Select accounts, or two people"}>
-              <Icon name="users" size={14} /> Merge into one person
+              <Icon name={chosen.length === 1 && chosenAccounts.length === 1 ? "userPlus" : "users"} size={14} />
+              {chosen.length === 1 && chosenAccounts.length === 1 ? " Make creator" : " Merge into one person"}
             </button>
           </SelectionBar>
         )}
@@ -755,9 +811,25 @@ export default function Creators() {
         </ConfirmDialog>
 
         <ConfirmDialog
+          open={!!each}
+          title={`Make ${plural(chosenAccounts.length, "creator")}?`}
+          confirmLabel="Create creators"
+          busy={busy}
+          error={each?.error}
+          onConfirm={runEach}
+          onCancel={() => setEach(null)}
+        >
+          <p>
+            Each selected account becomes a person of its own, named from the account. Posts and files are
+            not touched.
+          </p>
+        </ConfirmDialog>
+
+        <ConfirmDialog
           open={!!merge}
-          title={chosenPeople.length > 1 ? "Merge people" : chosenPeople.length ? `Add to ${chosenPeople[0].name}` : "New person"}
-          confirmLabel={chosenPeople.length ? "Merge" : "Create"}
+          title={merge?.account ? `Make @${merge.account.handle || merge.account.id} a creator`
+            : mergePeopleList.length > 1 ? "Merge people" : mergePeopleList.length ? `Add to ${mergePeopleList[0].name}` : "New person"}
+          confirmLabel={mergePeopleList.length ? "Merge" : "Create creator"}
           busy={busy}
           error={merge?.error}
           onConfirm={runMerge}
@@ -766,8 +838,8 @@ export default function Creators() {
           confirmDisabled={!merge?.name.trim()}
         >
           <p>
-            {chosenPeople.length > 1 && `${chosenPeople.length} people become one; their notes are kept. `}
-            {chosenAccounts.length > 0 && `${chosenAccounts.length} account${chosenAccounts.length === 1 ? "" : "s"} get linked. `}
+            {mergePeopleList.length > 1 && `${mergePeopleList.length} people become one; their notes are kept. `}
+            {mergeAccounts.length > 0 && `${mergeAccounts.length} account${mergeAccounts.length === 1 ? "" : "s"} get linked. `}
             Posts and files are not touched.
           </p>
           <label className="dialog-field">

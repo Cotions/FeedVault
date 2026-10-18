@@ -563,3 +563,83 @@ test("Downloaders: instaloader without browser_cookie3 is warned about, with the
   await expect(warning).toHaveCount(0);
   await idle(page);
 });
+
+// Accounts linked to nobody become creators from Creators: one card's Make
+// creator (the page stays, for the next card), and "One creator each" on a
+// selection. The people made are deleted after: their accounts are free again.
+async function unlinkedAccounts(request) {
+  const authors = await (await request.get("/api/authors", { headers: H })).json();
+  return authors.filter(a => !a.person && a.id != null);
+}
+async function deletePeopleOf(request, accounts) {
+  const people = await (await request.get("/api/people", { headers: H })).json();
+  const keys = new Set(accounts.map(a => `${a.platform}:${a.id}`));
+  for (const p of people) {
+    if (p.accounts.some(a => keys.has(`${a.platform}:${a.id}`))) await request.delete(`/api/people/${p.id}`, { headers: H });
+  }
+}
+const isAccount = a => u => u.platform === a.platform && u.id === a.id;
+
+test("Creators: an account's Make creator makes it a person, and the page stays", async ({ page, request }) => {
+  const [a] = await unlinkedAccounts(request);
+  expect(a).toBeTruthy();
+  try {
+    await openPage(page, { name: "Creators", path: "/creators" });
+    const make = page.getByRole("button", { name: `Make @${a.handle} a creator`, exact: true });
+    const card = page.locator(".creator-card").filter({ has: make });
+    await make.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText(`Make @${a.handle} a creator`);
+    const field = dialog.getByRole("textbox", { name: "Name" });
+    await expect(field).toBeFocused();
+    await expect(field).not.toHaveValue("");
+    const name = await field.inputValue();
+    await dialog.getByRole("button", { name: "Create creator" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".toast", { hasText: `@${a.handle} is now a creator` })).toBeVisible();
+    await expect(page).toHaveURL(/\/creators$/);
+    // Under People now, out of the accounts not linked.
+    await expect(card).toHaveCount(0);
+    await expect(page.locator(".person-card", { hasText: name })).toHaveCount(1);
+    expect((await unlinkedAccounts(request)).some(isAccount(a))).toBe(false);
+    await idle(page);
+  } finally {
+    await deletePeopleOf(request, [a]);
+  }
+});
+
+test("Creators: One creator each makes a person per selected account", async ({ page, request }) => {
+  const chosen = (await unlinkedAccounts(request)).slice(0, 2);
+  expect(chosen).toHaveLength(2);
+  try {
+    await openPage(page, { name: "Creators", path: "/creators" });
+    await page.getByRole("button", { name: "Select", exact: true }).click();
+    const bar = page.getByRole("toolbar", { name: "Selection" });
+    const each = bar.getByRole("button", { name: "One creator each" });
+    await expect(each).toBeDisabled();
+    const cardOf = a => page.locator(".creator-card:not(.person-card)", { hasText: `@${a.handle}` })
+      .locator("button.creator-main");
+    await cardOf(chosen[0]).click();
+    // One account: the merge button says what it does.
+    await expect(bar.getByRole("button", { name: "Make creator" })).toBeEnabled();
+    await expect(each).toBeEnabled();
+    await cardOf(chosen[1]).click();
+    await expect(bar.getByRole("button", { name: "Merge into one person" })).toBeEnabled();
+    await each.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("Make 2 creators?");
+    await dialog.getByRole("button", { name: "Create creators" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".toast", { hasText: "2 creators made." })).toBeVisible();
+    await expect(bar).toHaveCount(0);
+    const left = await unlinkedAccounts(request);
+    const people = await (await request.get("/api/people", { headers: H })).json();
+    for (const a of chosen) {
+      expect(left.some(isAccount(a))).toBe(false);
+      expect(people.filter(p => p.accounts.length === 1 && p.accounts.some(isAccount(a)))).toHaveLength(1);
+    }
+    await idle(page);
+  } finally {
+    await deletePeopleOf(request, chosen);
+  }
+});
