@@ -1,7 +1,7 @@
 """The user's own data, mirrored to JSON.
 
 The index is derived from the media folders and rebuilds from a rescan. A few
-tables are not: review decisions, tags, collections, people, sources, links, the
+tables are not: review decisions, tags, collections, people (and their labels), sources, links, the
 handles the user accepted for an account, the "new posts" marks, the posts
 the Save button added, who is muted. Each one is
 registered here once, and gets the same treatment:
@@ -32,6 +32,7 @@ from dataclasses import dataclass
 import config
 import db
 import links
+import people
 
 FORMAT_VERSION = 1
 DELAY = 2.0                     # seconds of quiet before a change is written
@@ -101,10 +102,19 @@ register("collection_posts", "collection_posts", ("collection", "post_id", "posi
                  "WHERE name = :collection"))
 # People by name, before the accounts linked to them, which are keyed by
 # platform and author id (a person missing from people.json is created again).
-register("people", "people", ("name", "notes", "created_at"), "name",
-         insert=("INSERT OR IGNORE INTO people(id, name, notes, created_at) "
-                 "VALUES (:id, :name, COALESCE(:notes, ''), COALESCE(:created_at, 0))",),
-         ids=True)
+# Their gender and country with them, cleaned as the API would (a file
+# edited by hand keeps the person, not a country that is not one).
+register("people", "people", ("name", "notes", "created_at", "gender", "country"), "name",
+         insert=("INSERT OR IGNORE INTO people(id, name, notes, created_at, gender, country) "
+                 "VALUES (:id, :name, COALESCE(:notes, ''), COALESCE(:created_at, 0), :gender, :country)",),
+         clean=people.restore_row, ids=True)
+# A person's labels by person name (after people), apart from post tags.
+register("person_labels", "person_labels", ("person", "label", "at"), ("person", "label"),
+         select="SELECT p.name, pl.label, pl.at FROM person_labels pl JOIN people p ON p.id = pl.person_id "
+                "ORDER BY p.name, pl.label",
+         insert=("INSERT OR IGNORE INTO person_labels(person_id, label, at) "
+                 "SELECT id, :label, COALESCE(:at, 0) FROM people WHERE name = :person",),
+         clean=people.restore_label)
 register("person_accounts", "person_accounts", ("platform", "author_id", "person", "at"), ("platform", "author_id"),
          select="SELECT pa.platform, pa.author_id, p.name, pa.at FROM person_accounts pa "
                 "JOIN people p ON p.id = pa.person_id ORDER BY pa.platform, pa.author_id",

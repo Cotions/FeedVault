@@ -524,12 +524,31 @@ def _migrate_23(conn):
     conn.execute("UPDATE links SET tied_at = created_at WHERE person_id IS NOT NULL")
 
 
+def _migrate_24(conn):
+    """A person's gender, country and labels (people.py). User data, like
+    the rest of a person: gender and country are columns of people ('' for
+    unset; country an ISO 3166-1 alpha-2 code, uppercase), exported with it
+    in people.json. Labels are free-form, many per person, unique per person
+    without regard to case, and apart from post tags; person_labels is
+    mirrored by userdata.py, the person by name."""
+    conn.execute("ALTER TABLE people ADD COLUMN gender TEXT NOT NULL DEFAULT ''")
+    conn.execute("ALTER TABLE people ADD COLUMN country TEXT NOT NULL DEFAULT ''")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS person_labels (
+            person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            label     TEXT NOT NULL COLLATE NOCASE,
+            at        INTEGER NOT NULL,
+            PRIMARY KEY (person_id, label)
+        ) WITHOUT ROWID""")
+    conn.execute("CREATE INDEX IF NOT EXISTS person_labels_label ON person_labels(label)")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
-              _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23]
+              _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24]
 
 BACKUPS_KEPT = 3
 

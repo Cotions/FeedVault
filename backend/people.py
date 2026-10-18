@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sqlite3
+import string
 import unicodedata
 
 import db
@@ -24,11 +25,80 @@ import organize
 
 MAX_NOTES = 5000
 MAX_ACCOUNTS = 500              # accounts per call
+MAX_GENDER = 40
+MAX_LABELS = 50                 # labels per person
+# Offered as quick choices; any other gender is kept as typed. One typed in
+# another case is stored as the preset.
+GENDERS = ("Female", "Male", "Transgender")
+# ISO 3166-1 alpha-2: every officially assigned code.
+COUNTRIES = frozenset("""
+AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ
+CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO
+FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE
+JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO
+MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW
+PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM
+TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW
+""".split())
 
 
 def clean_name(name):
     """A person's name with its spaces collapsed, or None (same rules as a tag name)."""
     return organize.clean_name(name)
+
+
+def clean_gender(value):
+    """A gender with its spaces collapsed ('' for none), a preset in its
+    own case, or None when it cannot be one."""
+    if not isinstance(value, str):
+        return None
+    value = " ".join(value.split())
+    if len(value) > MAX_GENDER or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        return None
+    return next((g for g in GENDERS if g.lower() == value.lower()), value)
+
+
+def clean_country(value):
+    """An ISO 3166-1 alpha-2 code, uppercase ('' for none), or None when it is not one."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().upper()
+    return value if value == "" or value in COUNTRIES else None
+
+
+def _fold(name):
+    """A label as SQLite's NOCASE compares it: ASCII letters only."""
+    return name.translate(_ASCII_LOWER)
+
+
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def clean_labels(value):
+    """Label names (same rules as a tag name), once each without regard to
+    case, in the order given; None when any is malformed or there are too many."""
+    if not isinstance(value, list) or len(value) > MAX_LABELS:
+        return None
+    out = {}
+    for v in value:
+        name = clean_name(v)
+        if name is None:
+            return None
+        out.setdefault(_fold(name), name)
+    return list(out.values())
+
+
+def restore_row(row):
+    """A people.json row as the API would store it: a gender or country it
+    would refuse (the file edited by hand) is dropped, not the person."""
+    return {**row, "gender": clean_gender(row.get("gender") or "") or "",
+            "country": clean_country(row.get("country") or "") or ""}
+
+
+def restore_label(row):
+    """A person_labels.json row with its label cleaned, or None to skip it."""
+    label = clean_name(row.get("label"))
+    return {**row, "label": label} if label else None
 
 
 def clean_accounts(value):
@@ -191,11 +261,12 @@ def account_set(conn, person_id):
 # Reads
 # ---------------------------------------------------------------------------
 
-def _person(row, accounts):
+def _person(row, accounts, labels):
     """A person as the API shows it. ``accounts`` are account rows (db.accounts)."""
     newest = [a["newest"] for a in accounts if a["newest"] is not None]
     return {
         "id": row["id"], "name": row["name"], "notes": row["notes"], "created_at": row["created_at"],
+        "gender": row["gender"], "country": row["country"], "labels": labels,
         "accounts": accounts,
         "platforms": sorted({a["platform"] for a in accounts}),
         "count": sum(a["count"] for a in accounts),
@@ -231,13 +302,40 @@ def _linked(conn, rows):
     return out
 
 
+def _labels(conn, ids=None):
+    """{person id: [label]}, each person's by name."""
+    out = collections.defaultdict(list)
+    where = f"WHERE person_id IN ({', '.join('?' for _ in ids)}) " if ids is not None else ""
+    for pid, label in conn.execute(f"SELECT person_id, label FROM person_labels {where}ORDER BY label",
+                                   list(ids or ())):
+        out[pid].append(label)
+    return out
+
+
 def people(conn):
     """Every person, by name."""
     def compute(conn):
         rows = conn.execute("SELECT * FROM people ORDER BY name COLLATE NOCASE, id").fetchall()
-        linked = _linked(conn, rows)
-        return [_person(r, linked[r["id"]]) for r in rows]
+        linked, labels = _linked(conn, rows), _labels(conn)
+        return [_person(r, linked[r["id"]], labels[r["id"]]) for r in rows]
     return db._memo(conn, ("people",), compute)
+
+
+def attributes(conn):
+    """What people are described by, for the pickers and filters: labels and
+    genders in use, most used first, the gender presets, and the countries
+    a person can have."""
+    def compute(conn):
+        used = lambda sql: [{"name": r[0], "count": r[1]} for r in conn.execute(sql)]  # noqa: E731
+        return {
+            "labels": used("SELECT MIN(label), COUNT(*) FROM person_labels GROUP BY label "
+                           "ORDER BY 2 DESC, 1 COLLATE NOCASE"),
+            "genders": used("SELECT MIN(gender), COUNT(*) FROM people WHERE gender != '' "
+                            "GROUP BY gender COLLATE NOCASE ORDER BY 2 DESC, 1 COLLATE NOCASE"),
+            "presets": list(GENDERS),
+            "countries": sorted(COUNTRIES),
+        }
+    return db._memo(conn, ("people-attributes",), compute)
 
 
 def exists(conn, pid):
@@ -247,7 +345,7 @@ def exists(conn, pid):
 
 def person(conn, pid):
     row = conn.execute("SELECT * FROM people WHERE id = ?", (pid,)).fetchone()
-    return _person(row, _linked(conn, [row])[pid]) if row else None
+    return _person(row, _linked(conn, [row])[pid], _labels(conn, [pid])[pid]) if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +407,23 @@ def create(conn, name, accounts, now):
     return person(conn, pid)
 
 
-def update(conn, pid, name=None, notes=None):
+def _set_labels(conn, pid, labels, now):
+    """A person's labels become ``labels``: the ones kept keep their date
+    (and take the case they are given in)."""
+    have = {_fold(r[0]): r[0] for r in conn.execute("SELECT label FROM person_labels WHERE person_id = ?", (pid,))}
+    wanted = {_fold(name): name for name in labels}
+    for key, name in have.items():
+        if key not in wanted:
+            conn.execute("DELETE FROM person_labels WHERE person_id = ? AND label = ?", (pid, name))
+    for key, name in wanted.items():
+        if key in have:
+            conn.execute("UPDATE person_labels SET label = ? WHERE person_id = ? AND label = ?", (name, pid, have[key]))
+        else:
+            conn.execute("INSERT INTO person_labels(person_id, label, at) VALUES (?, ?, ?)", (pid, name, now))
+
+
+def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=None, now=0):
+    """Change what is given; None leaves it as it is."""
     if name is not None and not _name_free(conn, name, but=(pid,)):
         raise Refused("a person with that name exists")
     try:
@@ -318,6 +432,12 @@ def update(conn, pid, name=None, notes=None):
                 conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, pid))
             if notes is not None:
                 conn.execute("UPDATE people SET notes = ? WHERE id = ?", (notes, pid))
+            if gender is not None:
+                conn.execute("UPDATE people SET gender = ? WHERE id = ?", (gender, pid))
+            if country is not None:
+                conn.execute("UPDATE people SET country = ? WHERE id = ?", (country, pid))
+            if labels is not None:
+                _set_labels(conn, pid, labels, now)
     except sqlite3.IntegrityError:              # the name, taken by another request since the check
         raise Refused("a person with that name exists")
     return person(conn, pid)
@@ -353,7 +473,8 @@ def link(conn, pid, add, remove, now):
 def merge(conn, ids, name, accounts, now):
     """Fold several people (and accounts) into the first id: its links,
     notes and name stay, the others' accounts, sources and saved web links
-    move to it and they are gone."""
+    move to it and they are gone. Labels are put together; the gender and
+    the country are those of the first person (in ``ids``) that has one."""
     keep = ids[0]
     if name is not None and not _name_free(conn, name, but=ids):
         raise Refused("a person with that name exists")
@@ -362,13 +483,17 @@ def merge(conn, ids, name, accounts, now):
         f"SELECT * FROM people WHERE id IN ({', '.join('?' for _ in ids)})", ids)}
     with conn:
         notes = [rows[i]["notes"].strip() for i in ids if rows[i]["notes"].strip()]
+        first = lambda column: next((rows[i][column] for i in ids if rows[i][column]), "")  # noqa: E731
         web_links.merge_into(conn, keep, ids[1:])
         for other in ids[1:]:
             conn.execute("UPDATE person_accounts SET person_id = ? WHERE person_id = ?", (keep, other))
             conn.execute("UPDATE sources SET person_id = ? WHERE person_id = ?", (keep, other))
+            # A label both have stays the kept person's; the other's copy goes with them.
+            conn.execute("UPDATE OR IGNORE person_labels SET person_id = ? WHERE person_id = ?", (keep, other))
             conn.execute("DELETE FROM people WHERE id = ?", (other,))
         _attach(conn, keep, accounts, now)
-        conn.execute("UPDATE people SET notes = ? WHERE id = ?", ("\n\n".join(notes)[:MAX_NOTES], keep))
+        conn.execute("UPDATE people SET notes = ?, gender = ?, country = ? WHERE id = ?",
+                     ("\n\n".join(notes)[:MAX_NOTES], first("gender"), first("country"), keep))
         if name is not None:
             conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, keep))
     return person(conn, keep)

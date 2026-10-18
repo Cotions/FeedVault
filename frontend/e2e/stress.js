@@ -2,8 +2,9 @@
 // make_demo.py --stress writes: through the throwaway instance's own API
 // (with its X-FeedVault header), never another server. STRESSpost01 gets
 // 15 tags, long ones among them, and goes in a collection with a long name;
-// its creator gets a person with a long name, and saved links with a long
-// title, address and notes (on the Links page and theirs); STRESSpost02 is
+// its creator gets a person with a long name, the longest gender, long
+// labels and a country, and saved links with a long title, address and
+// notes (on the Links page and theirs); STRESSpost02 is
 // trashed, so the Trash page has a post in it.
 //
 // Resolves to what the specs open: { post, author, collection, person }.
@@ -21,6 +22,17 @@ export const STRESS_TAGS = [
 ];
 export const STRESS_COLLECTION = "A collection with a very long name, to see where its title wraps";
 export const STRESS_PERSON = "Someone With A Name Long Enough To Push Every Header To The Edge";
+// Their About: the longest gender, a country with a long name, and labels
+// long and short, more than a card shows.
+export const STRESS_ABOUT = {
+  gender: "A gender typed in full, forty characters",
+  country: "VC",
+  labels: [
+    "a-label-long-enough-to-be-cut-on-every-card-it-is-shown-on-ok-64",
+    "Another label with spaces in it, that has to wrap somewhere too",
+    "travel", "UnbrokenUnbrokenUnbrokenUnbrokenUnbrokenUnbroken", "x",
+  ],
+};
 
 async function call(base, method, url, body) {
   const r = await fetch(base + url, {
@@ -43,7 +55,7 @@ export const STRESS_LINKS = [
 ];
 
 export async function seedStress(base) {
-  for (const n of [...STRESS_TAGS, STRESS_COLLECTION, STRESS_PERSON]) {
+  for (const n of [...STRESS_TAGS, STRESS_COLLECTION, STRESS_PERSON, ...STRESS_ABOUT.labels]) {
     if (n.length > MAX_NAME) throw new Error(`e2e stress: name longer than ${MAX_NAME}: ${n}`);
   }
   const post = await call(base, "GET", `/api/posts/${STRESS_POST.platform}/${STRESS_POST.post_id}`);
@@ -57,6 +69,7 @@ export async function seedStress(base) {
   const { person } = await call(base, "POST", "/api/people",
     { name: STRESS_PERSON, accounts: [{ platform: STRESS_POST.platform, id: post.author.id }] });
   for (const l of STRESS_LINKS) await call(base, "POST", "/api/links", { ...l, person: person.id });
+  await call(base, "POST", `/api/people/${person.id}`, STRESS_ABOUT);
   const trashed = await call(base, "POST", "/api/delete", { posts: [STRESS_TRASHED] });
   if (!trashed.posts?.includes(STRESS_TRASHED)) throw new Error(`e2e stress: ${STRESS_TRASHED} was not trashed`);
   return { post: STRESS_POST, author: post.author, collection: collection.id, person: person.id };

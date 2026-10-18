@@ -1158,10 +1158,11 @@ One person often posts on several platforms, under different handles. An
 `owner.id`, gallery-dl's `author.id`); a **person** links accounts into one.
 An account with no person is shown on its own, as before.
 
-People and their links are user data: tables `people` and `person_accounts`,
-never touched by a rescan, and written to
-`<data_directory>/userdata/people.json` and `person_accounts.json` (accounts
-by platform and author id, people by name) 2 s after the last change, so a
+People and their links are user data: tables `people`, `person_accounts`
+and `person_labels`, never touched by a rescan, and written to
+`<data_directory>/userdata/people.json`, `person_accounts.json` and
+`person_labels.json` (accounts by platform and author id, people by name)
+2 s after the last change, so a
 rebuilt index gets them back. Links are by account, not by post: a post
 trashed and restored, or replaced by a duplicate copy, keeps its person.
 Nothing moves on disk.
@@ -1237,12 +1238,22 @@ A **person**:
 
 ```json
 { "id": 3, "name": "Some Body", "notes": "", "created_at": 1727500000,
+  "gender": "Female", "country": "FR", "labels": ["cosplay", "Travel"],
   "accounts": [account, …], "platforms": ["instagram", "twitter"],
   "count": 900, "bytes": 2347483648, "newest": 1727481600 }
 ```
 
 - `name`: 1 to 64 characters, no `"` or control characters, unique without
   regard to (ASCII) case. `notes`: free text, at most 5000 characters.
+- `gender`: free text, at most 40 characters, spaces collapsed, `""` when
+  unset. `Female`, `Male` and `Transgender` are presets: one sent in another
+  case is stored as the preset; anything else is kept as sent.
+- `country`: an ISO 3166-1 alpha-2 code, uppercase (`"fr"` is stored as
+  `"FR"`), `""` when unset. A code that is not assigned is a 400.
+- `labels`: free-form labels describing the person, by name, at most 50,
+  each a name as a tag's (1 to 64 characters, no `"` or control
+  characters), once each without regard to (ASCII) case. They are not
+  [tags](#tags): post tags and the Tags page never see them.
 - `accounts`: most posts first. An account linked but not in the index
   (before the first scan of a rebuilt index, or every post trashed) is listed
   with `count` 0 and `handle` `null`.
@@ -1253,8 +1264,9 @@ A **person**:
 | GET | `/api/people` | `[person, …]`, by name |
 | POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted; at most 500 accounts and 20 profiles; `profiles` with no media root set is a 400) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
 | POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }] }`: a sync of each of the person's sources, as Sync all does for every source; 404 for an unknown id |
+| GET | `/api/people/attributes` | `{ "labels": [{ "name", "count" }], "genders": [{ "name", "count" }], "presets": ["Female", "Male", "Transgender"], "countries": ["AD", …] }`: the labels and genders people have, most used first (what the person page suggests and the Creators filters offer), and every country code a person can have |
 | GET | `/api/people/<id>` | person, with its `links` (see [Links](#links)), or 404 |
-| POST | `/api/people/<id>` | body `{ "name": "…" }` and/or `{ "notes": "…" }` (neither is a 400) → `{ "ok": true, "person": {…} }` |
+| POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"] }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date) → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, tied to no one |
 | POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted; at most 500 each) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
 | POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }] }` → `{ "ok": true, "person": {…} }`, see below |
@@ -1277,11 +1289,14 @@ A **person**:
   time per tool, the tool's pause between two, a source already queued or
   running counted in `skipped`, a refused one in `errors`.
 - Merge keeps the first id: its name (or `name`, when given), and the
-  others' notes appended to its own. Every account of the others, and
+  others' notes appended to its own. Its labels are those of all of them;
+  its gender and country are the first person's (in `ids` order) that has
+  one. Every account of the others, and
   `accounts`, move to it, and so do the others' [links](#links), after its
   own; the others are gone. `ids` must all exist (404
   otherwise); with one id, `accounts` must not be empty.
-- A bad name, a name taken by another person, bad notes or a malformed
+- A bad name, a name taken by another person, bad notes, a gender over 40
+  characters, a country that is not a code, bad labels or a malformed
   account list is a 400 `{ "ok": false, "error": "…" }`; an unknown id a 404.
 
 ### Link suggestions

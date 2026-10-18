@@ -3153,6 +3153,40 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-notes:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .person-notes-actions { display: flex; gap: 8px; margin-top: 8px; }
 
+/* About: gender and country side by side, labels under them (one column
+   on a phone). Labels are blue, apart from the posts' green tags. */
+.person-about-form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px 24px; align-items: start; }
+.about-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.about-labels, .person-about-form > .person-notes-actions { grid-column: 1 / -1; }
+.person-about-form > .person-notes-actions { margin-top: 0; }
+.about-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); }
+.about-gender { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.links-tabs.about-presets { margin-bottom: 0; flex-wrap: wrap; }
+.about-gender input[type="text"].page-filter { flex: 1 1 150px; min-width: 140px; max-width: 300px; }
+.country-picker { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.country-picker input[type="text"].page-filter { flex: 1 1 auto; min-width: 0; max-width: 320px; }
+.country-flag { font-size: 14px; }
+.about-labels-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.about-labels-edit .label-chips { flex: 1 1 100%; }               /* a row of their own: chips wrap, not shrink */
+.about-labels-edit .tag-input { flex: 0 1 260px; }
+.tag-chip.label-chip { color: var(--blue); background: rgba(91, 157, 255, 0.1); border-color: rgba(91, 157, 255, 0.3); }
+.tag-chip.label-chip > a { min-width: 24px; justify-content: center; }      /* a one-letter label: still a 24px target */
+@media (max-width: 760px) { .person-about-form { grid-template-columns: minmax(0, 1fr); } }
+/* A person card's country, before the name, and labels on one line, cut
+   to fit (the line's title names them all). */
+.person-flag { margin-right: 6px; }
+.person-labels { display: flex; gap: 4px; min-width: 0; overflow: hidden; }
+.card-label {
+  flex: 0 1 auto; min-width: 0; max-width: 7.5em;            /* a long one is cut before a short one is */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10.5px; line-height: 1.2; padding: 2px 7px;
+  color: var(--blue); background: rgba(91, 157, 255, 0.1);
+  border: 1px solid rgba(91, 157, 255, 0.3); border-radius: 999px;
+}
+.card-label.is-more { flex-shrink: 0; color: var(--muted); background: transparent; border-color: var(--border); }
+.creator-filters { margin-bottom: 14px; }
+.creator-filters .sort-select { max-width: 260px; }
+
 /* ── Links (the Links page, and a person's Links section) ── */
 .link-form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px 12px; align-items: end; }
 .link-form .filter { min-width: 0; }

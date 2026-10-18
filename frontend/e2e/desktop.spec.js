@@ -643,3 +643,80 @@ test("Creators: One creator each makes a person per selected account", async ({ 
     await deletePeopleOf(request, chosen);
   }
 });
+
+// A person's About: a gender preset, then one typed (Enter saves), a
+// country picked from the keyboard, a label (Enter on the empty field
+// saves). Creators then filters by each, and its text box finds the label.
+// The person is made for the test and deleted after.
+test("Person: gender, country and a label, and Creators filters by them", async ({ page, request }) => {
+  const name = `E2E about ${Date.now()}`;
+  const label = `e2e-label-${Date.now()}`;
+  const r = await (await request.post("/api/people", { headers: H, data: { name } })).json();
+  const pid = r.person.id;
+  const about = async () => (await (await request.get(`/api/people/${pid}`, { headers: H })).json());
+  try {
+    await page.goto(`/people/${pid}`);
+    await expect(page.locator("h2.page-title")).toHaveText(name);
+    await idle(page);
+    const section = page.locator(".person-about");
+    const save = section.getByRole("button", { name: "Save", exact: true });
+    const presets = section.getByRole("group", { name: "Gender presets" });
+
+    await presets.getByRole("button", { name: "Female" }).click();
+    await expect(presets.getByRole("button", { name: "Female" })).toHaveAttribute("aria-pressed", "true");
+    await save.click();
+    await expect(save).toHaveCount(0);
+    expect((await about()).gender).toBe("Female");
+
+    const gender = section.getByLabel("Gender", { exact: true });
+    await gender.fill("Genderfluid");
+    await expect(presets.getByRole("button", { name: "Female" })).toHaveAttribute("aria-pressed", "false");
+    await gender.press("Enter");
+    await expect(save).toHaveCount(0);
+    expect((await about()).gender).toBe("Genderfluid");
+
+    const country = section.getByRole("combobox", { name: "Country" });
+    await country.fill("fran");
+    await expect(page.getByRole("option").first()).toContainText("France");
+    await country.press("Enter");
+    await expect(country).toHaveValue(/France/);
+    const add = section.getByRole("combobox", { name: "Add a label…" });
+    await add.fill(label);
+    await add.press("Enter");
+    await expect(section.locator(".label-chip", { hasText: label })).toBeVisible();
+    await add.press("Enter");                                  // empty: saves the country and the label
+    await expect(save).toHaveCount(0);
+    const saved = await about();
+    expect([saved.country, saved.labels]).toEqual(["FR", [label]]);
+    await idle(page);
+
+    // The label's chip opens Creators filtered by it.
+    await section.locator(".label-chip a", { hasText: label }).click();
+    await expect(page).toHaveURL(new RegExp(`/creators\\?label=${label}$`));
+    const cards = page.locator(".person-card");
+    await expect(cards).toHaveCount(1);
+    await expect(cards.first()).toContainText(name);
+    await expect(cards.first().locator(".person-flag")).toHaveAttribute("aria-label", "France");
+    await expect(page.locator(".creator-card:not(.person-card)")).toHaveCount(0);   // accounts have no label
+    const filters = page.getByRole("group", { name: "Filter people" });
+    await filters.getByLabel("Gender").selectOption({ label: "Genderfluid (1)" });
+    await filters.getByLabel("Country").selectOption({ label: "🇫🇷 France (1)" });
+    await expect(cards).toHaveCount(1);
+    await filters.getByLabel("Gender").selectOption("none");
+    await expect(cards).toHaveCount(0);
+    await expect(page.locator(".empty", { hasText: "No creator matches." })).toBeVisible();
+    await filters.getByRole("button", { name: "Clear filters" }).click();
+    await expect(page).toHaveURL(/\/creators$/);
+    expect(await cards.count()).toBeGreaterThan(1);
+
+    // The text box matches labels and countries too.
+    const box = page.getByRole("textbox", { name: "Filter creators" });
+    await box.fill(label);
+    await expect(cards).toHaveCount(1);
+    await box.fill(`france ${name}`);
+    await expect(cards).toHaveCount(1);
+    await idle(page);
+  } finally {
+    await request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});

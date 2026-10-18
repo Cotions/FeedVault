@@ -417,6 +417,12 @@ What was already in the archive is never new, whenever it was posted.
 **Mark seen** on a Creators card or a person's page does the same for that
 person (or that account, when it is linked to nobody) only.
 
+A person's page has an **About** box: a gender (Female, Male, Transgender,
+or any other you type), a country, and labels of your own ("cosplay",
+"travel"), kept apart from the posts' tags. Creators shows each person's
+flag and labels on their card, filters people by gender, country and
+label, and its search box matches them too.
+
 Each sync that brought posts or failed also leaves an entry under the
 sidebar's **Notifications** bell ("12 new from X", "X: account not found");
 an entry opens exactly the posts that sync brought, or the source. A
