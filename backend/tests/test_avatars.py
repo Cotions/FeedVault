@@ -26,12 +26,27 @@ TS = 1717243200
 RED, BLUE = (220, 20, 20), (20, 20, 220)
 
 
+GREEN = (20, 200, 20)
+
+
 def picture(size=(1000, 500), fmt="PNG", halves=(RED, BLUE)):
     """A picture of two halves, left and right, as bytes."""
     img = Image.new("RGB", size, halves[0])
     img.paste(halves[1], (size[0] // 2, 0, size[0], size[1]))
     out = io.BytesIO()
     img.save(out, fmt)
+    return out.getvalue()
+
+
+def bands(size, rows):
+    """A picture of bands, top to bottom: rows is [(up to this row, colour)]."""
+    img = Image.new("RGB", size)
+    top = 0
+    for bottom, c in rows:
+        img.paste(c, (0, top, size[0], bottom))
+        top = bottom
+    out = io.BytesIO()
+    img.save(out, "PNG")
     return out.getvalue()
 
 
@@ -46,8 +61,12 @@ def files(env):
     return sorted(os.listdir(folder)) if os.path.isdir(folder) else []
 
 
-def opened(env, name, small=False):
-    return Image.open(avatars.path(config.load()["data_directory"], name, small))
+def opened(env, name, kind="large"):
+    return Image.open(avatars.path(config.load()["data_directory"], name, kind))
+
+
+def three(name):
+    return [f"{name}-300.webp", f"{name}-96.webp", f"{name}.webp"]
 
 
 def colour(img):
@@ -92,38 +111,72 @@ def test_new_people_have_none(env, client):
     assert get(client, "/api/people")[0]["avatar"] is None
 
 
-def test_upload_is_cropped_square_and_saved_twice_as_webp(env, client):
+def test_upload_is_cropped_to_a_portrait_and_saved_three_times_as_webp(env, client):
     pid = create(client, "A")["person"]["id"]
-    p = upload(client, pid, picture())["person"]
+    p = upload(client, pid, picture((1000, 900)))["person"]
     name = p["avatar"]
     assert avatars.NAME_RE.fullmatch(name)
-    assert files(env) == sorted([f"{name}.webp", f"{name}-96.webp"])
-    big, small = opened(env, name), opened(env, name, small=True)
-    assert (big.format, big.size, small.format, small.size) == ("WEBP", (500, 500), "WEBP", (96, 96))
+    assert files(env) == three(name)
+    big, card, small = opened(env, name), opened(env, name, "card"), opened(env, name, "small")
+    # 2:3 as large as the picture holds (600 x 900), the card's 300 x 450, the chips' square.
+    assert (big.format, big.size) == ("WEBP", (600, 900))
+    assert (card.format, card.size) == ("WEBP", (300, 450))
+    assert (small.format, small.size) == ("WEBP", (96, 96))
     assert get(client, f"/api/people/{pid}")["avatar"] == name
     assert get(client, "/api/people")[0]["avatar"] == name
-    # Larger than SIZE: brought down to it.
-    name = upload(client, pid, picture((2400, 1600)))["person"]["avatar"]
-    assert opened(env, name).size == (512, 512)
+    # Smaller than the portrait: never enlarged, still 2:3.
+    name = upload(client, pid, picture())["person"]["avatar"]
+    assert opened(env, name).size == (333, 500) and opened(env, name, "card").size == (300, 450)
+    # Larger: brought down to it; a JPEG too (decoded at a fraction of its size).
+    for size, fmt in (((2400, 1600), "PNG"), ((3000, 4000), "JPEG"), ((4000, 3000), "JPEG")):
+        name = upload(client, pid, picture(size, fmt))["person"]["avatar"]
+        assert opened(env, name).size == (600, 900), (size, fmt)
     # Never next to the media.
     assert not any(n.endswith(".webp") for _, _, ns in os.walk(env["media"]) for n in ns)
 
 
-def test_the_default_crop_is_the_middle_and_a_crop_keeps_its_square(env, client):
+def test_the_default_crop_is_the_middle_across_and_a_crop_keeps_its_portrait(env, client):
     pid = create(client, "A")["person"]["id"]
-    middle = opened(env, upload(client, pid, picture())["person"]["avatar"])
-    assert near(middle.convert("RGB").getpixel((10, 250)), RED) and near(middle.convert("RGB").getpixel((490, 250)), BLUE)
+    # A wide picture: its middle third, red on the left, blue on the right.
+    middle = opened(env, upload(client, pid, picture())["person"]["avatar"]).convert("RGB")
+    assert near(middle.getpixel((10, 250)), RED) and near(middle.getpixel((323, 250)), BLUE)
     left = upload(client, pid, picture(), query="?x=0&y=0&size=1")["person"]["avatar"]
     assert near(colour(opened(env, left)), RED)
     right = upload(client, pid, picture(), query="?x=0.5&y=0&size=1")["person"]["avatar"]
     assert near(colour(opened(env, right)), BLUE)
     # Out of the picture: kept inside it.
     assert upload(client, pid, picture(), query="?x=1&y=1&size=1")["person"]["avatar"] == right
-    # A quarter of the shorter side, from the top left: 125 px, all red.
+    # A quarter of the largest portrait (333 x 500), from the top left: 83 x 125, all red.
     zoomed = upload(client, pid, picture(), query="?x=0&y=0&size=0.25")["person"]["avatar"]
-    assert opened(env, zoomed).size == (125, 125) and near(colour(opened(env, zoomed)), RED, 5)
+    assert opened(env, zoomed).size == (83, 125) and near(colour(opened(env, zoomed)), RED, 5)
     for q in ("?x=0&y=0&size=2", "?x=-1&y=0&size=1", "?x=a&y=0&size=1", "?x=0&y=0&size=0", "?x=nan&y=0&size=1"):
         assert "crop" in upload(client, pid, picture(), 400, query=q)["error"]
+
+
+def test_the_default_crop_of_a_tall_picture_keeps_its_upper_part(env, client):
+    pid = create(client, "A")["person"]["id"]
+    # 400 x 1000: a 400 x 600 portrait, 400 rows cut off, a quarter of them
+    # above (rows 100 to 700). Centred (200 to 800) it would take blue in.
+    tall = bands((400, 1000), [(100, GREEN), (700, RED), (1000, BLUE)])
+    p = opened(env, upload(client, pid, tall)["person"]["avatar"]).convert("RGB")
+    assert p.size == (400, 600)
+    assert near(p.getpixel((200, 3)), RED) and near(p.getpixel((200, 596)), RED) and near(colour(p), RED, 5)
+    # An explicit crop goes where it says, from the top.
+    top = opened(env, upload(client, pid, tall, query="?x=0&y=0&size=1")["person"]["avatar"]).convert("RGB")
+    assert near(top.getpixel((200, 3)), GREEN)
+
+
+def test_the_small_square_is_the_portraits_upper_part(env, client):
+    pid = create(client, "A")["person"]["id"]
+    # A 400 x 600 portrait: its square is rows 40 to 440 (a fifth of the 200
+    # rows it leaves out above it), red; blue below it.
+    name = upload(client, pid, bands((400, 600), [(450, RED), (600, BLUE)]))["person"]["avatar"]
+    big, small = opened(env, name).convert("RGB"), opened(env, name, "small").convert("RGB")
+    assert near(big.getpixel((200, 590)), BLUE)
+    assert small.size == (96, 96) and near(colour(small), RED, 5) and near(small.getpixel((48, 94)), RED)
+    # A square profile picture (instaloader's): cover, its sides cut off.
+    sq = opened(env, upload(client, pid, picture((320, 320), halves=(RED, RED)))["person"]["avatar"])
+    assert sq.size == (213, 320) and near(colour(sq), RED, 5)
 
 
 def test_what_is_not_a_picture_is_refused(env, client):
@@ -227,10 +280,10 @@ def test_remove_and_change_drop_the_files_no_one_has(env, client):
     one = upload(client, a, picture())["person"]["avatar"]
     assert upload(client, b, picture())["person"]["avatar"] == one    # the same picture: one pair of files
     two = upload(client, a, picture(halves=(BLUE, RED)))["person"]["avatar"]
-    assert files(env) == sorted([f"{one}.webp", f"{one}-96.webp", f"{two}.webp", f"{two}-96.webp"])
+    assert files(env) == sorted(three(one) + three(two))
     p = client.delete(f"/api/people/{b}/avatar", headers=H).get_json()["person"]
     assert p["avatar"] is None
-    assert files(env) == sorted([f"{two}.webp", f"{two}-96.webp"])    # one is no one's now
+    assert files(env) == three(two)                                   # one is no one's now
     assert client.delete(f"/api/people/{a}", headers=H).status_code == 200
     assert files(env) == []
     assert client.delete(f"/api/people/{a}/avatar", headers=H).status_code == 404
@@ -244,20 +297,20 @@ def test_merge_keeps_the_first_picture(env, client):
     other = upload(client, c, picture(halves=(BLUE, RED)))["person"]["avatar"]
     m = post(client, "/api/people/merge", {"ids": [a, b, c]})["person"]
     assert m["id"] == a and m["avatar"] == first
-    assert files(env) == sorted([f"{first}.webp", f"{first}-96.webp"])
+    assert files(env) == three(first)
     assert other not in "".join(files(env))
 
 
 def test_served_cached_for_good_and_only_to_this_dashboard(env, client):
     pid = create(client, "A")["person"]["id"]
-    name = upload(client, pid, picture())["person"]["avatar"]
-    for file, size in ((f"{name}.webp", 500), (f"{name}-96.webp", 96)):
+    name = upload(client, pid, picture((1000, 900)))["person"]["avatar"]
+    for file, size in ((f"{name}.webp", (600, 900)), (f"{name}-300.webp", (300, 450)), (f"{name}-96.webp", (96, 96))):
         r = client.get(f"/media/avatars/{file}")
         assert r.status_code == 200 and r.mimetype == "image/webp"
         assert "immutable" in r.headers["Cache-Control"] and "max-age=31536000" in r.headers["Cache-Control"]
-        assert Image.open(io.BytesIO(r.data)).size == (size, size)
+        assert Image.open(io.BytesIO(r.data)).size == size
         assert client.get(f"/media/avatars/{file}", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
-    for bad in (f"{name}.jpg", f"{name}-48.webp", "..%2Ffeedvault.db", f"{name[:-1]}.webp", f"{'0' * 20}.webp"):
+    for bad in (f"{name}.jpg", f"{name}-48.webp", f"{name}-300-96.webp", "..%2Ffeedvault.db", f"{name[:-1]}.webp", f"{'0' * 20}.webp"):
         assert client.get(f"/media/avatars/{bad}").status_code == 404
 
 
@@ -279,3 +332,25 @@ def test_a_rebuild_keeps_the_picture(env, client):
         conn.execute("DELETE FROM people")
     userdata.restore_all(conn, base)
     assert {p["name"]: p["avatar"] for p in get(client, "/api/people")} == {"A": None, "B": name}
+
+
+def test_a_square_picture_saved_before_portraits_is_still_served(env, client):
+    """PR #188 saved <name>.webp (512 px square) and <name>-96.webp, no card
+    file: the card size is its large one, and dropping it removes both."""
+    pid = create(client, "A")["person"]["id"]
+    name = "0123456789abcdef0123"
+    folder = os.path.join(config.load()["data_directory"], "avatars")
+    os.makedirs(folder, exist_ok=True)
+    for file, side in ((f"{name}.webp", 512), (f"{name}-96.webp", 96)):
+        Image.new("RGB", (side, side), RED).save(os.path.join(folder, file), "WEBP")
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE people SET avatar = ? WHERE id = ?", (name, pid))
+    assert get(client, f"/api/people/{pid}")["avatar"] == name
+    for file, size in ((f"{name}.webp", 512), (f"{name}-300.webp", 512), (f"{name}-96.webp", 96)):
+        r = client.get(f"/media/avatars/{file}")
+        assert r.status_code == 200 and r.mimetype == "image/webp", file
+        assert Image.open(io.BytesIO(r.data)).size == (size, size)
+    # A new picture: the old one's files go, the new one's three stay.
+    new = upload(client, pid, picture())["person"]["avatar"]
+    assert files(env) == three(new)

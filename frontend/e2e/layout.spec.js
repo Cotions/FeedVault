@@ -345,7 +345,8 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
       const nav = box(document.querySelector(".person-links a"));
       const mute = box(document.querySelector(".person-new button"));
       const sections = [...document.querySelectorAll(".person-section")];
-      const accounts = sections[0];
+      // About comes first, beside the portrait at the top of the card.
+      const accounts = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Accounts"));
       const style = e => getComputedStyle(e);
       const bio = document.querySelector(".bio-import"), add = document.querySelector(".person-link-add");
       const sourcesEmpty = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Sources"))?.querySelector(".empty");

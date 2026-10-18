@@ -95,6 +95,13 @@ export function useWindow(count, { estimate = 48, grid = false, pins = [], from 
   const lines = on ? Math.ceil(count / cols) : 0;
   // Each measured line's pitch (its height and the gap after it), and the gap.
   const [meas, setMeas] = useState(() => ({ gap: 0, pitch: new Map() }));
+  // A new estimate is a new layout of the rows (Creators' Portraits and
+  // Compact): what was measured is forgotten, not averaged with the new.
+  const [measuredFor, setMeasuredFor] = useState(estimate);
+  if (measuredFor !== estimate) {                // adjusting state during render, not in an effect
+    setMeasuredFor(estimate);
+    setMeas(m => ({ gap: m.gap, pitch: new Map() }));
+  }
   const [range, setRange] = useState(() => [0, Math.ceil((900 + OVERSCAN) / estimate)]);
   const [settled, setSettled] = useState(false);
   const [focusRow, setFocusRow] = useState(-1);   // the row holding focus, or -1

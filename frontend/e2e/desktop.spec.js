@@ -721,11 +721,12 @@ test("Person: gender, country and a label, and Creators filters by them", async 
   }
 });
 
-// A person's picture: one uploaded (a picture drawn in the page, cropped
-// by a drag), shown on their page and their Creators card; then one of
-// their posts' pictures; then Remove, back to the letter. The person, made
-// for the test with an account linked to nobody, is deleted after (and
-// their picture's files with them).
+// A person's picture: one uploaded (a picture drawn in the page, framed
+// by a drag), shown as a 2:3 portrait on their page and their Creators
+// card (Portraits, the default), round in Compact, the view kept through
+// a reload; then one of their posts' pictures; then Remove, back to the
+// letter. The person, made for the test with an account linked to nobody,
+// is deleted after (and their picture's files with them).
 test("Person: upload a picture, pick one from a post, remove it", async ({ page, request }) => {
   const [a] = (await unlinkedAccounts(request)).filter(x => x.count > 0);
   expect(a).toBeTruthy();
@@ -734,12 +735,23 @@ test("Person: upload a picture, pick one from a post, remove it", async ({ page,
   const pid = r.person.id;
   const person = async () => (await (await request.get(`/api/people/${pid}`, { headers: H })).json());
   const loaded = img => img.evaluate(el => el.complete && el.naturalWidth > 0);
+  // A box 2:3 (to a pixel), at least ``min`` px wide.
+  const portrait = async (el, min) => {
+    const b = await el.boundingBox();
+    expect(b.width).toBeGreaterThanOrEqual(min);
+    expect(Math.abs(b.height - b.width * 1.5)).toBeLessThanOrEqual(1.5);
+  };
   try {
     await page.goto(`/people/${pid}`);
     await expect(page.locator("h2.page-title")).toHaveText(name);
     await idle(page);
-    const bar = page.locator(".person-bar");
+    const bar = page.locator(".person-hero");
     await expect(bar.locator(".avatar-letter")).toHaveAttribute("data-letter", "E");
+    await portrait(bar.locator(".avatar-letter"), 160);              // the placeholder is a portrait too
+    // Beside the person's links and About, under the title.
+    const [pic, links] = [await bar.locator(".avatar-edit").boundingBox(), await bar.locator(".person-links").boundingBox()];
+    expect(pic.x + pic.width).toBeLessThan(links.x);
+    expect((await page.locator("h2.page-title").boundingBox()).y).toBeLessThan(pic.y);
 
     // Upload: a 600x400 picture, half red, half blue, made by a canvas.
     await page.getByRole("button", { name: `Add a picture of ${name}` }).click();
@@ -757,6 +769,7 @@ test("Person: upload a picture, pick one from a post, remove it", async ({ page,
     const view = dialog.getByRole("group", { name: /^Crop/ });
     await expect(view.locator("img")).toBeVisible();
     const box = await view.boundingBox();
+    expect([Math.round(box.width), Math.round(box.height)]).toEqual([200, 300]);     // the frame is 2:3
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 4 });   // towards the red half
@@ -769,17 +782,47 @@ test("Person: upload a picture, pick one from a post, remove it", async ({ page,
     const big = bar.locator("img.avatar-img");
     await expect(big).toHaveAttribute("src", `/media/avatars/${uploaded}.webp`);
     await expect.poll(() => loaded(big)).toBe(true);
+    await portrait(big, 160);
+    expect(await big.evaluate(el => [el.naturalWidth, el.naturalHeight])).toEqual([267, 400]);  // 2:3, never enlarged
     await idle(page);
 
-    // On their Creators card, in the letter's place and size.
+    // On their Creators card: a portrait in Portraits (the default), the
+    // letter's round place in Compact; the view kept through a reload.
+    const filtered = async () => {
+      await page.getByRole("textbox", { name: "Filter creators" }).fill(name);
+      await expect(page.locator(".person-card", { hasText: name })).toHaveCount(1);
+    };
     await page.goto("/creators");
-    await page.getByRole("textbox", { name: "Filter creators" }).fill(name);
+    await filtered();
     const card = page.locator(".person-card", { hasText: name });
+    const views = page.getByRole("group", { name: "Show people as" });
+    await expect(views.getByRole("button", { name: "Portraits" })).toHaveAttribute("aria-pressed", "true");
+    const tall = card.locator("img.avatar-img");
+    await expect(tall).toHaveAttribute("src", `/media/avatars/${uploaded}-300.webp`);
+    await expect(tall).toHaveAttribute("loading", "lazy");
+    await expect.poll(() => loaded(tall)).toBe(true);
+    await portrait(tall, 150);
+    // The card's buttons sit clear of its count.
+    const count = await card.locator(".creator-count").boundingBox();
+    for (const b of await card.locator(".portrait-actions .icon-btn").all()) {
+      const r = await b.boundingBox();
+      expect(r.x >= count.x + count.width || r.y >= count.y + count.height || r.y + r.height <= count.y).toBe(true);
+    }
+    await views.getByRole("button", { name: "Compact" }).click();
     const small = card.locator("img.avatar-img");
     await expect(small).toHaveAttribute("src", `/media/avatars/${uploaded}-96.webp`);
     await expect.poll(() => loaded(small)).toBe(true);
     const size = await small.boundingBox();
     expect([Math.round(size.width), Math.round(size.height)]).toEqual([36, 36]);
+    await page.reload();
+    await filtered();
+    await expect(views.getByRole("button", { name: "Compact" })).toHaveAttribute("aria-pressed", "true");
+    await expect(small).toHaveAttribute("src", `/media/avatars/${uploaded}-96.webp`);
+    await views.getByRole("button", { name: "Portraits" }).click();
+    await page.reload();
+    await filtered();
+    await expect(views.getByRole("button", { name: "Portraits" })).toHaveAttribute("aria-pressed", "true");
+    await expect(tall).toHaveAttribute("src", `/media/avatars/${uploaded}-300.webp`);
     await idle(page);
 
     // One of their posts' pictures, cropped in the middle.

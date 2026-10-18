@@ -2391,7 +2391,12 @@ def serve_avatar(file):
     found = avatars.file_name(file)
     if found is None:
         abort(404)
-    resp = _send(avatars.path(config.load()["data_directory"], found[0], small=found[1]), media=False)
+    base, (name, kind) = config.load()["data_directory"], found
+    target = avatars.path(base, name, kind)
+    # A picture saved before portraits has no card file: its large one, a square, stands in.
+    if kind == "card" and not os.path.isfile(target):
+        target = avatars.path(base, name)
+    resp = _send(target, media=False)
     resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     return resp
 

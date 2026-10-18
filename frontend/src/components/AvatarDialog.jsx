@@ -2,12 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getAvatarChoices, removeAvatar, setAvatar, uploadAvatar } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
-import { centered, clampOffset, cropOf, MAX_UPLOAD, MAX_ZOOM, zoomTo } from "../lib/avatar";
+import { ASPECT, centered, clampOffset, coverScale, cropOf, MAX_UPLOAD, MAX_ZOOM, zoomTo } from "../lib/avatar";
 import { fmtShortDate } from "../lib/fmt";
 import ConfirmDialog from "./ConfirmDialog";
 import Icon from "./Icon";
 
-const VIEW = 240;                                   // the crop square, px
+const VW = 200, VH = VW * ASPECT;                   // the crop portrait, px (2:3)
+// The round chips' square in it, as avatars.py cuts it: as wide, a fifth
+// of the height it leaves out above it.
+const CHIP_TOP = (VH - VW) * 0.2;
 const STEP = 12;                                    // px an arrow key moves the picture
 
 // "2024-05-01_10-00-00" (an instaloader file name's date, UTC) as a time.
@@ -16,9 +19,11 @@ function picDate(at) {
   return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) / 1000 : null;
 }
 
-/* The square to keep: the picture dragged under a round window, zoomed
+/* The portrait to keep: the picture dragged under a 2:3 window, zoomed
    with the slider, the wheel or + and -, moved with the arrow keys. Starts
-   on the middle. onCrop(state) gets { w, h, view, zoom, ox, oy } (lib/avatar). */
+   where the backend's default crop is (the middle across, the upper part
+   of a tall picture). A dashed ring shows what the round chips keep.
+   onCrop(state) gets { w, h, vw, vh, zoom, ox, oy } (lib/avatar). */
 function Cropper({ src, state, onCrop }) {
   const viewRef = useRef(null);
   const drag = useRef(null);
@@ -42,7 +47,7 @@ function Cropper({ src, state, onCrop }) {
   function onLoad(e) {
     const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
     if (!w || !h) return;
-    const s = { w, h, view: VIEW, zoom: 1 };
+    const s = { w, h, vw: VW, vh: VH, zoom: 1 };
     onCrop({ ...s, ...centered(s) });
   }
 
@@ -60,13 +65,13 @@ function Cropper({ src, state, onCrop }) {
     else if (e.key === "-") { e.preventDefault(); onCrop(zoomTo(s, s.zoom / 1.15)); }
   }
 
-  const scale = state ? (VIEW / Math.min(state.w, state.h)) * state.zoom : 0;
+  const scale = state ? coverScale(state) : 0;
   return (
     <div className="avatar-crop">
       <div
         ref={viewRef}
         className={`avatar-crop-view${state ? "" : " is-loading"}`}
-        style={{ width: VIEW, height: VIEW }}
+        style={{ width: VW, height: VH }}
         tabIndex={0}
         role="group"
         aria-label="Crop: drag the picture, or use the arrow keys; + and - zoom"
@@ -93,7 +98,8 @@ function Cropper({ src, state, onCrop }) {
           style={state ? { left: state.ox, top: state.oy, width: state.w * scale, height: state.h * scale }
                        : { visibility: "hidden" }}
         />
-        <span className="avatar-crop-ring" aria-hidden="true" />
+        <span className="avatar-crop-frame" aria-hidden="true" />
+        <span className="avatar-crop-chip" aria-hidden="true" style={{ top: CHIP_TOP, width: VW, height: VW }} />
       </div>
       <label className="avatar-crop-zoom">
         <span>Zoom</span>
@@ -106,15 +112,15 @@ function Cropper({ src, state, onCrop }) {
 
 /* "Change picture" on a person's page (docs/API.md "Profile pictures"): a
    picture uploaded (picked, dropped or pasted), one of their posts', or the
-   profile picture instaloader saved for them (one click); the first two
-   cropped square here. Remove takes theirs away. Mount it when it opens.
+   profile picture instaloader saved for them (one click, the backend's
+   default crop; or Adjust); framed here as a 2:3 portrait. Remove takes theirs away. Mount it when it opens.
 
    Props: person, onChanged(), onClose */
 export default function AvatarDialog({ person: p, onChanged, onClose }) {
   const toast = useToast();
   const load = useCallback(() => getAvatarChoices(p.id), [p.id]);
   const choices = useApi(load, 0);
-  const [picked, setPicked] = useState(null);       // { src, file } or { src, media }
+  const [picked, setPicked] = useState(null);       // { src, file }, { src, media } or { src, profilePic }
   const [crop,   setCrop]   = useState(null);       // the Cropper's state, once the picture loaded
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState(null);
@@ -166,7 +172,8 @@ export default function AvatarDialog({ person: p, onChanged, onClose }) {
   const save = () => {
     if (!picked || !crop) return;
     const box = cropOf(crop);
-    run(() => (picked.file ? uploadAvatar(p.id, picked.file, box) : setAvatar(p.id, { media: picked.media }, box)),
+    run(() => (picked.file ? uploadAvatar(p.id, picked.file, box)
+               : setAvatar(p.id, picked.profilePic ? { profile_pic: picked.profilePic } : { media: picked.media }, box)),
         "Picture saved.");
   };
 
@@ -213,15 +220,22 @@ export default function AvatarDialog({ person: p, onChanged, onClose }) {
               <h4 className="link-group-title">Profile picture saved by instaloader</h4>
               <div className="avatar-profile-pics">
                 {pics.map((f, i) => (
-                  <button key={f.key} type="button" className={`avatar-profile-pic${i === 0 ? " is-newest" : ""}`}
-                          disabled={busy}
-                          title={`${f.name}${f.account?.handle ? ` (@${f.account.handle})` : ""}`}
-                          onClick={() => run(() => setAvatar(p.id, { profile_pic: f.key }), "Profile picture set.")}>
-                    <img src={f.url} alt="" loading="lazy" />
-                    <span>{i === 0 ? "Use the newest" : "Use this one"}
-                      {picDate(f.at) && <span className="creator-sub"> · {fmtShortDate(picDate(f.at))}</span>}
-                    </span>
-                  </button>
+                  <span key={f.key} className={`avatar-profile-pic${i === 0 ? " is-newest" : ""}`}>
+                    <button type="button" className="avatar-profile-use" disabled={busy}
+                            title={`${f.name}${f.account?.handle ? ` (@${f.account.handle})` : ""}`}
+                            onClick={() => run(() => setAvatar(p.id, { profile_pic: f.key }), "Profile picture set.")}>
+                      <img src={f.url} alt="" loading="lazy" />
+                      <span>{i === 0 ? "Use the newest" : "Use this one"}
+                        {picDate(f.at) && <span className="creator-sub"> · {fmtShortDate(picDate(f.at))}</span>}
+                      </span>
+                    </button>
+                    {/* Instaloader's is square: one click keeps its middle; Adjust frames it here. */}
+                    <button type="button" className="btn-ghost avatar-profile-adjust" disabled={busy}
+                            aria-label={`Adjust ${i === 0 ? "the newest profile picture" : f.name} before using it`}
+                            onClick={() => { setError(null); setCrop(null); setPicked({ src: f.url, profilePic: f.key }); }}>
+                      Adjust
+                    </button>
+                  </span>
                 ))}
               </div>
             </div>

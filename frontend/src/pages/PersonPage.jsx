@@ -377,39 +377,55 @@ export default function PersonPage() {
         </>}
       />
       <div className="card person-page">
-        <div className="person-bar">
-          {/* Their picture, first on the line: in the page's head it would
-              move the title off where every page has it (#93). */}
-          <button type="button" className="avatar-edit" onClick={() => setPicture(true)}
+        {/* Their portrait (2:3, as Stash shows a performer) beside who they
+            are, at the top of the card: in the page's head it would move
+            the title off where every page has it (#93). */}
+        <div className="person-hero">
+          <button type="button" className="avatar-edit is-portrait" onClick={() => setPicture(true)}
                   title={p.avatar ? "Change picture" : "Add a picture"}
                   aria-label={p.avatar ? `Change ${p.name}'s picture` : `Add a picture of ${p.name}`}>
             <PersonAvatar person={p} size="large" />
-            <span className="avatar-edit-badge" aria-hidden="true"><Icon name="pencil" size={11} /></span>
+            <span className="avatar-edit-badge" aria-hidden="true"><Icon name="pencil" size={13} /></span>
           </button>
-          <nav className="person-links" aria-label={`${p.name} across the app`}>
-            <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
-            <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
-            <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
-            <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
-            <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
-          </nav>
+          <div className="person-hero-main">
+            <div className="person-bar">
+              <nav className="person-links" aria-label={`${p.name} across the app`}>
+                <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
+                <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
+                <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
+                <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
+                <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
+              </nav>
 
-          <div className="person-new">
-            {fresh?.count > 0 && (
-              <>
-                <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
-                      title="Their posts indexed since you last marked them seen">
-                  {fmtInt(fresh.count)} new
-                </Link>
-                <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
-                        title="Their new posts stop being new; everyone else's stay">
-                  <Icon name="check" size={14} /> Mark seen
-                </button>
-              </>
-            )}
-            {newApi.data && (
-              <MuteButton muted={muted} whom={{ person: p.id }} name={p.name} onDone={() => { newApi.reload(); started(); }} />
-            )}
+              <div className="person-new">
+                {fresh?.count > 0 && (
+                  <>
+                    <Link to={`/?${new URLSearchParams({ person: p.id, new: "1" })}`} className="side-badge side-new-inline"
+                          title="Their posts indexed since you last marked them seen">
+                      {fmtInt(fresh.count)} new
+                    </Link>
+                    <button type="button" className="btn-secondary" disabled={busy} onClick={() => markMineSeen(fresh)}
+                            title="Their new posts stop being new; everyone else's stay">
+                      <Icon name="check" size={14} /> Mark seen
+                    </button>
+                  </>
+                )}
+                {newApi.data && (
+                  <MuteButton muted={muted} whom={{ person: p.id }} name={p.name} onDone={() => { newApi.reload(); started(); }} />
+                )}
+              </div>
+            </div>
+
+            <PersonAbout
+              person={p}
+              attributes={attrApi.data}
+              draft={about}
+              onDraft={changes => setAbout(a => ({ ...a, ...changes }))}
+              dirty={aboutDirty.length > 0}
+              busy={busy}
+              onSave={() => save(aboutChanges, () => { setAbout({}); attrApi.reload(); })}
+              onDiscard={() => setAbout({})}
+            />
           </div>
         </div>
 
@@ -489,17 +505,6 @@ export default function PersonPage() {
         </section>
 
         <PersonLinks person={p} onChanged={reload} onDirty={setLinkEdits} onAddDirty={setNewLink} />
-
-        <PersonAbout
-          person={p}
-          attributes={attrApi.data}
-          draft={about}
-          onDraft={changes => setAbout(a => ({ ...a, ...changes }))}
-          dirty={aboutDirty.length > 0}
-          busy={busy}
-          onSave={() => save(aboutChanges, () => { setAbout({}); attrApi.reload(); })}
-          onDiscard={() => setAbout({})}
-        />
 
         <section className="person-section">
           <h3 className="card-title">Notes</h3>
