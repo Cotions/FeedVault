@@ -608,6 +608,49 @@ test("Creators: an account's Make creator makes it a person, and the page stays"
   }
 });
 
+// Select mode in Portraits: the whole card is one button, its count line
+// included (a click there toggles it), with nothing interactive inside it;
+// shift-click selects the cards between. Three people made for the test,
+// deleted after.
+test("Creators: in Portraits, a click anywhere on a card selects it, shift-click a range", async ({ page, request }) => {
+  const tag = `E2E select ${Date.now()}`;
+  const ids = [];
+  try {
+    for (const n of ["a", "b", "c"]) {
+      const r = await (await request.post("/api/people", { headers: H, data: { name: `${tag} ${n}` } })).json();
+      ids.push(r.person.id);
+    }
+    await openPage(page, { name: "Creators", path: "/creators" });
+    await expect(page.getByRole("group", { name: "Show people as" }).getByRole("button", { name: "Portraits" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("textbox", { name: "Filter creators" }).fill(tag);
+    const cards = page.locator(".person-card.is-portrait", { hasText: tag });
+    await expect(cards).toHaveCount(3);
+    await page.getByRole("button", { name: "Select", exact: true }).click();
+    const mains = cards.locator("> button.creator-main");
+    await expect(mains).toHaveCount(3);
+    // The count line is inside the card's button, and nothing interactive is.
+    await expect(cards.locator("> .person-stats")).toHaveCount(0);
+    await expect(mains.locator(".person-stats")).toHaveCount(3);
+    await expect(mains.locator("a, button, input, [tabindex]")).toHaveCount(0);
+    // A click on the first card's count, then shift on the last one's: all three.
+    await cards.nth(0).locator(".creator-count").click();
+    await expect(mains.nth(0)).toHaveAttribute("aria-pressed", "true");
+    await expect(mains.nth(1)).toHaveAttribute("aria-pressed", "false");
+    await cards.nth(2).locator(".creator-count").click({ modifiers: ["Shift"] });
+    for (let i = 0; i < 3; i++) await expect(mains.nth(i)).toHaveAttribute("aria-pressed", "true");
+    // Again on a count: that card only goes.
+    await cards.nth(1).locator(".creator-count").click();
+    await expect(mains.nth(1)).toHaveAttribute("aria-pressed", "false");
+    await expect(mains.nth(0)).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    await expect(cards.locator("> a.creator-main")).toHaveCount(3);
+    await idle(page);
+  } finally {
+    for (const id of ids) await request.delete(`/api/people/${id}`, { headers: H });
+  }
+});
+
 test("Creators: One creator each makes a person per selected account", async ({ page, request }) => {
   const chosen = (await unlinkedAccounts(request)).slice(0, 2);
   expect(chosen).toHaveLength(2);

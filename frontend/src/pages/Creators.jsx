@@ -185,6 +185,15 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
       )}
     </>
   );
+  // A portrait's last line: the count. Under its link, with the card's
+  // buttons at its right; in select mode, inside the card's button, so a
+  // click anywhere on the card toggles it (there are no buttons then).
+  const stats = portrait && (
+    <span className="person-stats">
+      <span className="creator-count" title={plural(p.count, "post")}>{fmtInt(p.count)}</span>
+      <span className="creator-sub">{fmtBytes(p.bytes)}</span>
+    </span>
+  );
   const actions = !selectMode && (
     <>
       <SeenButton fresh={fresh} name={p.name} onSeen={onSeen} />
@@ -201,17 +210,13 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
       {selectMode ? (
         <button type="button" className="creator-main" aria-pressed={selected} onClick={e => onToggle(e.shiftKey)}>
           {body}
+          {stats}
         </button>
       ) : (
-        <Link to={personPath(p.id)} className="creator-main" title={`Open ${p.name}`}>{body}</Link>
-      )}
-      {/* A portrait's last line, under its link: the count, and the buttons
-          at its right (a row of their own on a phone). */}
-      {portrait && (
-        <span className="person-stats">
-          <span className="creator-count" title={plural(p.count, "post")}>{fmtInt(p.count)}</span>
-          <span className="creator-sub">{fmtBytes(p.bytes)}</span>
-        </span>
+        <>
+          <Link to={personPath(p.id)} className="creator-main" title={`Open ${p.name}`}>{body}</Link>
+          {stats}
+        </>
       )}
       {portrait ? actions && <span className="portrait-actions">{actions}</span> : actions}
       <CardScriptWarnings sync={sync} />
