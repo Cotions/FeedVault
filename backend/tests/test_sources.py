@@ -13,7 +13,7 @@ import userdata
 ALICE = owner("alice.example", 111, "Alice Example")
 TS = 1717243200                                     # 2024-06-01 12:00 UTC
 OPTS = {"full_history": False, "session": None, "content": None, "media": "all", "since": None, "first_posts": None,
-        "script": None, "schedule": "off"}
+        "script": None, "metadata": None, "schedule": "off"}
 
 
 def get(client, url, status=200):
@@ -129,7 +129,8 @@ def test_options_content_media_since_first_posts():
 def test_choices():
     assert sources.choices("instaloader", "instagram", "carol.cooks") == {
         "content": ["posts", "reels", "stories", "highlights", "tagged"], "content_default": ["posts"],
-        "login": ["stories", "highlights", "tagged"], "media": True, "since": True, "first_posts": False}
+        "login": ["stories", "highlights", "tagged"], "media": True, "since": True, "first_posts": False,
+        "metadata": ["full", "slim", "none"]}
     assert sources.choices("gallery-dl", "twitter", "https://x.com/someone")["content"] == \
         ["timeline", "media", "tweets", "with_replies"]
     for target in ["https://x.com/someone/media", "https://x.com/someone/with_replies"]:
@@ -138,7 +139,8 @@ def test_choices():
         ["media"]
     assert sources.choices("gallery-dl", "reddit", "https://reddit.com/user/someone")["content"] == []
     assert sources.choices("yt-dlp", "tiktok", "https://tiktok.com/@a") == {
-        "content": [], "content_default": [], "login": [], "media": False, "since": True, "first_posts": True}
+        "content": [], "content_default": [], "login": [], "media": False, "since": True, "first_posts": True,
+        "metadata": ["full", "none"]}
 
 
 # ---------------------------------------------------------------------------

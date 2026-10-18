@@ -190,7 +190,7 @@ def tick(now=None):
         held, last = dict(_held), dict(_last)
     due = []
     for r in rows:
-        every = sources.stored_options(r)["schedule"]
+        every = sources.stored_options(r, cfg)["schedule"]
         if every not in INTERVALS or r["id"] in busy or health.paused(sources.last_result(r)):
             continue
         at = max(due_at(every, r["last_sync_at"], sources.last_result(r)), held.get(r["id"], 0))

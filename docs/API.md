@@ -213,8 +213,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60 }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "slim_metadata": false }` |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "slim_metadata": true }` (see [instaloader metadata](#instaloader-metadata)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "source_defaults": [block, …] }` (see [Download defaults](#download-defaults)) |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/profiles` | `{ "active": "default", "profiles": [profile, …] }`, see [Profiles](#profiles) |
 | POST | `/api/profiles` | body `{ "name", "data_directory", "media_roots": [...] }` → `{ "ok": true, "profile": profile, "active", "profiles" }`: a new profile, not switched to; see [Profiles](#profiles) |
 | POST | `/api/profiles/<id>` | body `{ "name" }` → `{ "ok": true, "active", "profiles" }`: renames it |
@@ -253,8 +253,8 @@ jobs) and its own media roots (each with its own `.feedvault-trash`).
 Exactly one is active, and every other route of this file reads and writes
 the active one. The rest of the config is shared by all profiles: tool
 paths, the instaloader, gallery-dl and yt-dlp settings, link routing,
-`check_updates`, `desktop_notifications`, `bio_import`, `slim_metadata` and
-`schedules_paused` (one switch for all: only the active profile's schedules
+`check_updates`, `desktop_notifications`, `bio_import`, the download defaults
+(`source_defaults`) and `schedules_paused` (one switch for all: only the active profile's schedules
 run anyway). So is the scripts folder.
 
 `config.json` keeps them as `"profiles": [{ "id", "name", "data_directory",
@@ -1688,9 +1688,14 @@ no person yet.
   "account": { "platform": "instagram", "id": "somebody" },
   "person": { "id": 3, "name": "Some Body" },
   "options": { "full_history": false, "session": null, "content": ["posts", "reels"], "media": "all",
-               "since": "2024-01-01", "first_posts": null, "script": null, "schedule": "daily" },
+               "since": "2024-01-01", "first_posts": null, "script": null, "metadata": null, "schedule": "daily" },
+  "overrides": ["content", "since"],
+  "defaults": { "full_history": false, "session": null, "content": null, "media": "all", "since": null,
+                "first_posts": null, "script": null, "metadata": null, "schedule": "daily" },
+  "metadata": { "mode": "full", "inherited": "full", "setting": "full" },
   "choices": { "content": ["posts", "reels", "stories", "highlights", "tagged"], "content_default": ["posts"],
-               "login": ["stories", "highlights", "tagged"], "media": true, "since": true, "first_posts": false },
+               "login": ["stories", "highlights", "tagged"], "media": true, "since": true, "first_posts": false,
+               "metadata": ["full", "slim", "none"] },
   "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait a while before syncing again",
@@ -1717,7 +1722,11 @@ no person yet.
 - `account`: the indexed account the source belongs to (an alias is
   replaced by the id it stands for), or `null`. `person`: the account's
   person, else the person the source was added to, else `null`.
-- `options`:
+- `options`: what its syncs use, option by option: the source's own value
+  when it sets one (`overrides` names those), else its platform's
+  [download default](#download-defaults), else the default below.
+  `defaults`: what it would have without any of its own (the form shows
+  them as "Default: …"). A source stores only its `overrides`.
   - `full_history`: `false` (default): the first sync starts after the
     newest post FeedVault already has for the account, see below. `true`:
     the next sync walks the whole profile and downloads every post not in
@@ -1746,6 +1755,11 @@ no person yet.
     back to `null` once a sync succeeds, like `full_history`, and `since`
     set to the day of the oldest post that sync added or listed (see
     [What a source downloads](#what-a-source-downloads)).
+  - `metadata`: `null` (default: the tool's setting, see
+    [Metadata modes](#metadata-modes)), or one of `choices.metadata`:
+    `"full"`, `"slim"` (instaloader only) or `"none"`. `metadata.mode` is
+    the one its syncs use, `metadata.inherited` the one it would have
+    without its own, `metadata.setting` the tool's.
   - `schedule`: `"off"` (default), `"hourly"`, `"daily"` or `"weekly"`: how
     often the scheduler syncs the source (see [Schedules](#schedules)).
     Stories last 24 hours: options whose `content` turns `stories` on (it
@@ -1764,8 +1778,9 @@ no person yet.
 - `choices`: what this source's options can be, for the form: `content`
   (empty when the link itself picks what is downloaded: a gallery-dl link
   that is not the profile's own page, any yt-dlp link), `content_default`,
-  `login` (those of `content` that need a logged-in session), and whether
-  `media`, `since` and `first_posts` can be set.
+  `login` (those of `content` that need a logged-in session), whether
+  `media`, `since` and `first_posts` can be set, and the `metadata` modes
+  of its tool.
 - `last_sync_at`: when the last sync ended (any outcome), or `null`.
 - `last_result`: how it ended, or `null` before the first sync:
   - `state`: the job's (`done`, `failed`, `cancelled`, `interrupted`)
@@ -1875,10 +1890,11 @@ no person yet.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
-| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `session`: the tool's session setting, which a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }`; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or a [browser profile](#browser-profiles) in `options.session`, set from another site (see [Security rules](#security-rules)) |
+| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "defaults": {…}, "metadata": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `defaults`: the options a new source starts from, its platform's [download defaults](#download-defaults); `metadata`: as a source's; `session`: the one a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` (an option left out, or sent as its platform's default, is not stored: it follows the default); 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or a [browser profile](#browser-profiles) in `options.session`, set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…} }` (the keys sent change) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent; 403 from another site (see [Security rules](#security-rules)) |
+| POST | `/api/sources/<id>` | body `{ "options": {…}, "reset": true \| ["media", …] }` (the keys sent change; one sent equal to what it inherits stops being its own; `reset`: those options, or all with `true`, follow the defaults again, before `options` applies) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent or reset; 403 from another site (see [Security rules](#security-rules)) |
+| POST | `/api/source-defaults/apply` | body `{ "tool": "gallery-dl", "platform": "twitter", "option": "media" }` → `{ "ok": true, "applied": 3, "skipped": 1 }`: every source of that tool and platform that sets that option itself stops doing so and follows the [download default](#download-defaults); those syncing now are skipped (but for `schedule`). 400 for another option than the defaults'; 403 from another site |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
 | POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site |
 | DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site |
@@ -2050,8 +2066,9 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
 - **Metadata on.** instaloader writes each post's JSON beside its media,
   compressed (`.json.xz`; syncs before this asked for plain `.json`, and a
   folder may hold both), so new posts get captions, stats and the
-  account's numeric id. With `slim_metadata` on, the files a sync wrote
-  are slimmed when it ends, see [instaloader metadata](#instaloader-metadata).
+  account's numeric id. In the `slim` [metadata mode](#metadata-modes) the
+  files a sync wrote are slimmed when it ends, see
+  [instaloader metadata](#instaloader-metadata); in `none` it writes none.
   The folder's name becomes an alias of that id (see [People](#people)),
   so old filename-only posts and new ones are one account.
 - **Names like the folder's.** `--filename-pattern` is detected from the
@@ -2081,9 +2098,11 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
 
 ### instaloader settings
 
-`GET /api/config` has `"instaloader": { "session": {…}, "pause": 60 }`;
-`POST /api/config` with `{ "instaloader": { "session": {…}, "pause": 60 } }`
-(either key may be left out; any other key there is refused) changes them.
+`GET /api/config` has `"instaloader": { "session": {…}, "pause": 60,
+"metadata": "full" }`; `POST /api/config` with `{ "instaloader": {
+"session": {…}, "pause": 60, "metadata": "slim" } }` (any key may be left
+out; any other key there is refused) changes them. `metadata`: see
+[Metadata modes](#metadata-modes).
 A refused value answers `{ "ok": false, "error" }` with a 200, as every
 `POST /api/config` error does.
 
@@ -2293,6 +2312,96 @@ stored value that is not valid counts as the default (no flag).
   A script that goes missing or is refused later fails the source's next
   sync, never falling back to the tool's command.
 
+### Metadata modes
+
+What each tool writes beside the media it downloads. One mode per tool in
+its settings (`"metadata"`, default `"full"`), and a source's own in its
+`options.metadata` (`null`: the tool's, or its platform's
+[download default](#download-defaults)). Saves follow the mode of the
+folder they go to. A change applies to new downloads only: the files
+already there stay as they are (the "Slim existing metadata" job aside).
+
+| Mode | instaloader | gallery-dl | yt-dlp |
+|---|---|---|---|
+| `full` (default) | each post's JSON (`.json.xz`) and caption (`.txt`) | `--write-metadata`: a JSON beside each file | `--write-info-json --write-thumbnail` |
+| `slim` | as `full`, the JSON slimmed when the job ends ([instaloader metadata](#instaloader-metadata)) | — | — |
+| `none` | `--no-metadata-json --no-captions`; new files named `{target}-{date_utc:%Y-%m-%d}-{shortcode}` whatever the folder held | no `--write-metadata`; `-f "{category} {retweet_id\|tweet_id\|post_id\|id} {num:>02}{date:? //%Y%m%d-%H%M%S}.{extension}"` | `--no-write-info-json --no-write-thumbnail --embed-metadata --embed-chapters --embed-thumbnail --no-embed-info-json --remux-video webm>mkv`; `-o "%(uploader_id)s-%(upload_date)s-%(id)s [%(extractor_key)s %(channel_id,uploader_id)s].%(ext)s"` (TikTok and others: `uploader_id` first) |
+
+In `none`, posts are read from their file names (tool `"<tool>
+(filenames)"`): the platform, the post's id and number, the date, and the
+account (the name's, else the folder's). yt-dlp's title, description,
+uploader name and link are read back from the video with ffprobe when it
+is there (`ffprobe -show_entries format_tags`, 10 s at most per file). The
+thumbnail is inside the video (webm is remuxed to mkv first, losslessly:
+webm takes none); no thumbnail file is left. gallery-dl files get no exif:
+writing it would need another tool.
+
+What `none` loses:
+
+- instaloader: captions, hashtags, likes and comments counts, location,
+  the account's numeric id (the folder's name is the account), and the
+  story / highlight / tagged distinction (they read as posts).
+- gallery-dl: captions, hashtags, counts, the author's display name, the
+  "Retweeted by" note of a retweet (it is indexed as the original), and
+  Instagram's post link.
+- yt-dlp: likes, views and comments counts, the thumbnail file, and the
+  title and description without ffprobe; YouTube videos longer than
+  `youtube_max_seconds` are still not downloaded, but one already there is
+  no longer recognised as too long when indexed.
+
+What keeps working: gallery-dl's and yt-dlp's download archives (the tools
+write them; a trashed post adds its yt-dlp line, and gallery-dl's entries
+from the staged metadata of a save), instaloader's stamps, the account a
+post belongs to, duplicates, the Trash and the save's gathering of files.
+
+### Download defaults
+
+The options a source does not set itself follow its platform's download
+defaults: one block per tool and platform (gallery-dl × twitter, bluesky,
+tiktok, instagram, …; instaloader × instagram; yt-dlp × youtube, tiktok,
+…), in config.json as `"source_defaults": { "gallery-dl": { "twitter": {
+"content": ["media"], "schedule": "daily" } } }`, only the options set.
+Set once, every source of that platform that does not set an option
+follows it from its next sync; one that does keeps its own. New sources
+start from them (the form shows them filled in), and those added without
+options (a person's profiles, a suggestion, the userscript) set nothing.
+But from another site (the userscript): a source added from there does
+not inherit a default `script`, nor a default `session` naming a browser
+profile; it gets `null` for them as its own (the dashboard alone picks
+those, see [Security rules](#security-rules)).
+
+`GET /api/config` has `"source_defaults": [block, …]`, one per tool and
+platform the routing table routes to, a source has, or defaults are set
+for:
+
+```json
+{ "tool": "gallery-dl", "platform": "twitter", "choices": {…},
+  "defaults": { "session": null, "content": ["media"], "media": "all", "since": null, "first_posts": null,
+                "script": null, "metadata": null, "schedule": "daily" },
+  "set": ["content", "schedule"], "sources": 41,
+  "overrides": { "session": 0, "content": 3, "media": 0, "since": 1, "first_posts": 0, "script": 0,
+                 "metadata": 0, "schedule": 2 } }
+```
+
+`choices` as a source's (for the platform's own page), `defaults` every
+option (the built-in value where none is set), `set` those set, `sources`
+how many sources it has, `overrides` how many of them set each option
+themselves (`POST /api/source-defaults/apply` makes them follow).
+
+`POST /api/config` with `{ "source_defaults": { tool: { platform: {
+option: value } } } }` replaces the blocks sent (`null` or `{}` removes
+one); the options are a source's but `full_history` (a one-off), checked
+as a source's (a 200 `{ "ok": false, "error" }` for a value refused, a
+script that does not exist or runs another tool, or content that needs a
+login the tool's setting does not have). A value equal to the built-in one
+is not kept. A `first_posts` default applies to a source's first sync only;
+a `content` one to sources whose link does not pick what is downloaded. A
+hand-edited value that is not valid is skipped.
+
+Stored options from before were every option: those equal to the built-in
+defaults then became inherited (migration 26), the others stay the
+source's own, so nothing changed until a default is set.
+
 ### Account health
 
 A source's `health` (see [Sources](#sources)) is kept with its sync state:
@@ -2398,9 +2507,10 @@ running is never queued again).
 ### gallery-dl and yt-dlp settings
 
 `GET /api/config` has `"gallery-dl": { "session": {…}, "pause": 30,
-"ignore_config": false }` and `"yt-dlp": { "session": {…}, "pause": 30,
-"ignore_config": false }`; `POST /api/config` with either (`session`,
-`pause` and/or `ignore_config`) changes it.
+"ignore_config": false, "metadata": "full" }` and `"yt-dlp": { "session":
+{…}, "pause": 30, "ignore_config": false, "metadata": "full" }`; `POST
+/api/config` with either (`session`, `pause`, `ignore_config` and/or
+`metadata`, see [Metadata modes](#metadata-modes)) changes it.
 
 | `session` | Flags | What it means |
 |---|---|---|
@@ -2750,13 +2860,16 @@ slim file is written xz-compressed, a few hundred bytes.
 What is removed cannot be put back: for a post Instagram no longer has, it
 is gone.
 
-- **New files.** `slim_metadata` (config, default `false`; `POST
-  /api/config`): when `true`, the instaloader metadata a sync, a save or an
-  instaloader source's script wrote is slimmed when the download ends,
+- **New files.** instaloader's `slim` [metadata mode](#metadata-modes)
+  (the setting, `"instaloader": { "metadata": "slim" }`, or a source's
+  own): the instaloader metadata a sync, a save or an instaloader
+  source's script wrote is slimmed when the download ends,
   before the folder is indexed. The job's log says `N files of metadata
   slimmed, … freed`; a file that could not be rewritten gets a log line
-  (`could not slim <path>: …`) and does not change how the job ended. Off,
-  new files are compressed and whole.
+  (`could not slim <path>: …`) and does not change how the job ended. In
+  `full`, new files are compressed and whole. It was a switch before,
+  `slim_metadata` (config): `true` reads as `slim`, and the next
+  `POST /api/config` writes it as the mode and drops the old key.
 - **The files on disk.** Job kind `slim-metadata`, group `instaloader`
   (never while instaloader runs), started with `POST /api/jobs`. `mode`
   `preview` changes nothing; `apply` rewrites every instaloader metadata

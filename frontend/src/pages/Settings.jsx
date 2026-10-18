@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders, saveSourceDefaults, applySourceDefault } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED, SLIM_KIND, slimJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { JobLog } from "./Jobs";
-import { fmtAgo, fmtBytes, fmtFullDate, plural } from "../lib/fmt";
+import { fmtAgo, fmtBytes, fmtFullDate, platformLabel, plural } from "../lib/fmt";
+import { formError, formOf, optionsOf } from "../lib/sourceOptions";
+import { SourceOptions, ToolBadge } from "../components/Sources";
+import PlatformIcon from "../components/PlatformIcon";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
@@ -759,12 +762,36 @@ function InstaloaderCard({ saved, onSaved, onDirty }) {
   );
 }
 
-/* Settings → Sync: instaloader's metadata files (slim.py). New ones arrive
-   compressed and whole; the switch slims them as each sync or save ends. The
-   button slims the ones already on disk: a first job counts them and changes
-   nothing, the dialog says what goes for good, a second job does it. Both
-   are read from the shared jobs poll, so they survive leaving the page. */
-function MetadataCard({ on, onSaved }) {
+/* Each tool's metadata mode (docs/API.md "Metadata files"): [mode, label,
+   what it does, and with none what is lost]. */
+const METADATA_MODES = {
+  instaloader: [
+    ["full", "Full", "Instagram's whole answer beside each post, compressed (.json.xz)."],
+    ["slim", "Slim", "The same, slimmed to what FeedVault reads (a few hundred bytes) as each sync or save ends."],
+    ["none", "None", "Media only, named with the date and shortcode (no .json.xz, no caption .txt). Lost: captions, "
+      + "hashtags, counts, location, the numeric account id (the folder is the account), stories show as posts."],
+  ],
+  "gallery-dl": [
+    ["full", "Full", "A JSON beside each file."],
+    ["none", "None", "Files only, named with the site, post id, number and date. Lost: captions, hashtags, counts, "
+      + "retweet and quote notes, profile bios for suggestions; the folder is the account, and trashing a post adds "
+      + "no gallery-dl archive entry (its sync already did)."],
+  ],
+  "yt-dlp": [
+    ["full", "Full", "An info JSON and a thumbnail beside each video."],
+    ["none", "None", "The video alone: title, date, description, link, chapters and thumbnail embedded in it "
+      + "(webm becomes mkv), read back with ffprobe when there is one. Lost: counts, hashtags beyond the text, "
+      + "the YouTube length check when indexing (the sync still skips long videos)."],
+  ],
+};
+
+/* Settings → Sync: each tool's metadata files, and instaloader's slimmed
+   (slim.py). New ones arrive compressed and whole; slim slims them as
+   each sync or save ends. The button slims the ones already on disk: a
+   first job counts them and changes nothing, the dialog says what goes
+   for good, a second job does it. Both are read from the shared jobs
+   poll, so they survive leaving the page. ``current``: {tool: mode}. */
+function MetadataCard({ current, onSaved }) {
   const { list, started } = useJobs();
   const [busy,   setBusy]   = useState(false);
   const [msg,    setMsg]    = useState(null);
@@ -782,11 +809,11 @@ function MetadataCard({ on, onSaved }) {
     : !counted ? { ok: false, text: `Not counted: ${answer.message || answer.state}.` }
     : { ok: !counted.failures, text: `Nothing to slim: ${plural(counted.checked, "instaloader metadata file")} checked, ${counted.checked === 1 ? "it is" : "all"} slim and compressed already.${unread}` };
 
-  async function set(value) {
+  async function set(tool, mode) {
     setBusy(true);
     setMsg(null);
     try {
-      const r = await saveSettings({ slim_metadata: value });
+      const r = await saveSettings({ [tool]: { metadata: mode } });
       if (r?.ok === false) setMsg({ ok: false, text: r.error || "Save failed." });
       else onSaved();
     } catch (e) {
@@ -826,20 +853,33 @@ function MetadataCard({ on, onSaved }) {
   const more = (apply?.result?.failures ?? 0) - failed.length;
   return (
     <div className="card" id="slim-metadata">
-      <div className="card-title">Instagram metadata (instaloader)</div>
+      <div className="card-title">Metadata files</div>
       <p className="page-lede">
-        instaloader saves all Instagram says about a post in a JSON beside it: tens of kilobytes, most of it nothing
-        FeedVault reads. New ones are saved compressed (<code>.json.xz</code>). A slim one holds only what FeedVault
-        reads, in a few hundred bytes.
+        What each tool writes beside the media it downloads, for the sources that do not choose for themselves
+        (their Options, or <a href="#download-defaults" className="text-link">Download defaults</a>). It changes new
+        downloads only: the files already there stay as they are.
       </p>
-      <label className="dl-toggle">
-        <input type="checkbox" checked={on} disabled={busy} onChange={e => set(e.target.checked)} />
-        <span>Slim new metadata after each sync and save <span className="dim">(off: compressed, nothing removed)</span></span>
-      </label>
+      <div className="metadata-modes">
+        {Object.entries(METADATA_MODES).map(([tool, modes]) => (
+          <fieldset key={tool} className="metadata-tool">
+            <legend>{tool}</legend>
+            {modes.map(([m, label, effect]) => (
+              <label key={m} className="insta-mode">
+                <input type="radio" name={`${tool}-metadata`} checked={(current[tool] || "full") === m} disabled={busy}
+                       onChange={() => set(tool, m)} />
+                <span>
+                  <b>{label}</b>
+                  <span className="creator-sub">{effect}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        ))}
+      </div>
       <div className="slim-existing">
         <p className="page-lede">
-          The files already in your media roots stay as they are until you slim them here. This counts them first,
-          and changes nothing until you confirm.
+          instaloader&rsquo;s metadata files already in your media roots stay as they are until you slim them here.
+          This counts them first, and changes nothing until you confirm.
         </p>
         <div className="settings-actions">
           <button type="button" className="btn-secondary" onClick={count} disabled={counting || working}>
@@ -883,6 +923,157 @@ function MetadataCard({ on, onSaved }) {
           fetched again. Pictures, videos, captions and comments files are not touched.
         </p>
       </ConfirmDialog>
+    </div>
+  );
+}
+
+// The options of a source by name, for "Apply to all sources" (docs/API.md "Download defaults").
+const DEFAULT_NAMES = {
+  session: "Login", content: "Download", media: "Media", since: "Not older than", first_posts: "First sync",
+  script: "Command", metadata: "Metadata files", schedule: "Schedule",
+};
+
+/* One platform's download defaults: the options form a source has (no
+   full history: a one-off), saved for every source of that tool and
+   platform that does not set an option itself; and per option, how many
+   sources do, with "Apply to all sources" to make them follow it. */
+function DefaultsBlock({ block, config, open, onToggle, onSaved, onDirty }) {
+  const { tool, platform, choices } = block;
+  const name = `Download defaults: ${platformLabel(platform)} (${tool})`;
+  const saved = formOf(block.defaults, choices);
+  const [form, setForm] = useState(saved);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [applying, setApplying] = useState(null);   // the option "Apply to all sources" asks about
+  const [dlgErr, setDlgErr] = useState(null);
+  const toast = useToast();
+  const sent = f => { const rest = optionsOf(f, choices); delete rest.full_history; return rest; };
+  const dirty = JSON.stringify(sent(form)) !== JSON.stringify(sent(saved));
+  useReportDirty(onDirty, name, dirty);
+  const problem = formError(form, choices);
+  const session = (config[tool] || {}).session;
+  const own = Object.entries(block.overrides).filter(([, n]) => n > 0);
+
+  async function save() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await saveSourceDefaults(tool, platform, sent(form));
+      if (r?.ok) onSaved();
+      else setMsg({ ok: false, text: r?.error || "Save failed." });
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function apply() {
+    setBusy(true);
+    setDlgErr(null);
+    try {
+      const r = await applySourceDefault(tool, platform, applying);
+      if (!r?.ok) { setDlgErr(r?.error || "Could not apply it."); return; }
+      toast(`${plural(r.applied, "source")} now follow${r.applied === 1 ? "s" : ""} the default ${DEFAULT_NAMES[applying].toLowerCase()}`
+        + (r.skipped ? `; ${plural(r.skipped, "syncing now")} left as ${r.skipped === 1 ? "it is" : "they are"}.` : "."));
+      setApplying(null);
+      onSaved();
+    } catch (err) {
+      setDlgErr(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <details className="defaults-block" data-defaults={`${tool}:${platform}`} open={open}
+             onToggle={e => onToggle(e.currentTarget.open)}>
+      <summary>
+        <PlatformIcon platform={platform} />
+        <b>{platformLabel(platform)}</b>
+        <ToolBadge tool={tool} />
+        <span className="dim defaults-count">
+          {plural(block.sources, "source")}
+          {block.set.length ? ` · ${plural(block.set.length, "default")} set` : " · built-in defaults"}
+        </span>
+      </summary>
+      <div className="defaults-body">
+        <SourceOptions tool={tool} platform={platform} target={null} choices={choices} session={session} form={form}
+                       onChange={f => { setForm(f); setMsg(null); }} editor metadata={{ setting: config[tool]?.metadata }} />
+        {own.length > 0 && (
+          <ul className="defaults-own">
+            {own.map(([k, n]) => (
+              <li key={k}>
+                <span>{DEFAULT_NAMES[k]}: {plural(n, "source")} set{n === 1 ? "s" : ""} its own</span>
+                <button type="button" className="btn-link" disabled={busy || dirty}
+                        title={dirty ? "Save the defaults first" : "Remove their own choice: they follow this default"}
+                        onClick={() => { setDlgErr(null); setApplying(k); }}>Apply to all sources…</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="settings-actions">
+          <button type="button" className="btn-primary" disabled={busy || !dirty || !!problem} onClick={save}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+          <button type="button" className="btn-ghost" disabled={busy || !dirty} onClick={() => setForm(saved)}>Undo</button>
+        </div>
+        {(problem || msg) && <div className={`msg ${msg?.ok ? "ok" : "err"}`} role="alert">{problem || msg.text}</div>}
+      </div>
+      <ConfirmDialog
+        open={!!applying}
+        busy={busy}
+        error={dlgErr}
+        title={applying ? `Apply the default ${DEFAULT_NAMES[applying].toLowerCase()} to ${plural(block.overrides[applying], "source")}?` : ""}
+        confirmLabel={applying ? `Apply to ${plural(block.overrides[applying], "source")}` : "Apply"}
+        onConfirm={apply}
+        onCancel={() => setApplying(null)}
+      >
+        {applying && (
+          <p>
+            {plural(block.overrides[applying], `${platformLabel(platform)} source`)} synced with {tool}{" "}
+            {block.overrides[applying] === 1 ? "has" : "have"} {DEFAULT_NAMES[applying].toLowerCase()} set on{" "}
+            {block.overrides[applying] === 1 ? "itself" : "themselves"}. Their own choice is removed: from their next
+            sync they follow this default, and any change to it. A source syncing right now keeps its own.
+          </p>
+        )}
+      </ConfirmDialog>
+    </details>
+  );
+}
+
+/* Settings → Sync: the options a new source starts from, per platform and
+   tool, and that every source not setting an option itself follows. */
+function DownloadDefaultsCard({ blocks, config, onSaved, onDirty }) {
+  const ref = useRef(null);
+  const location = useLocation();
+  // Which folds are open: kept here, as a saved block is drawn anew.
+  const [opened, setOpened] = useState(() => new Set());
+  const toggle = (id, open) => setOpened(s => {
+    if (s.has(id) === open) return s;
+    const next = new Set(s);
+    if (open) next.add(id);
+    else next.delete(id);
+    return next;
+  });
+  useEffect(() => {
+    if (location.hash === "#download-defaults") ref.current?.scrollIntoView({ block: "start" });
+  }, [location.hash, location.key]);
+  return (
+    <div className="card" id="download-defaults" ref={ref}>
+      <div className="card-title">Download defaults</div>
+      <p className="page-lede">
+        What a source downloads when it does not choose for itself. Set a platform once: every source of it that
+        does not set an option in its own Options follows it from its next sync, and new sources (added one by one,
+        from a person, a suggestion or the userscript) start from it. An option a source sets stays its own.
+      </p>
+      <div className="defaults-list">
+        {blocks.map(b => (
+          <DefaultsBlock key={`${b.tool}:${b.platform}:${JSON.stringify(b.defaults)}`} block={b} config={config}
+                         open={opened.has(`${b.tool}:${b.platform}`)} onToggle={o => toggle(`${b.tool}:${b.platform}`, o)}
+                         onSaved={onSaved} onDirty={onDirty} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -1175,7 +1366,7 @@ const TABS = [
   { id: "about",      label: "About",      icon: "info" },
 ];
 // Cards linked to from elsewhere (/settings#downloaders), and their tab.
-const ANCHORS = { downloaders: "downloads", "bio-import": "downloads" };
+const ANCHORS = { downloaders: "downloads", "bio-import": "downloads", "download-defaults": "sync", "slim-metadata": "sync" };
 
 function tabOf(hash) {
   const h = hash.replace(/^#/, "");
@@ -1245,7 +1436,10 @@ export default function Settings() {
                 <SchedulesCard paused={config.schedules_paused === true} onSaved={reload} />
                 <DesktopCard on={config.desktop_notifications === true} onSaved={reload} />
                 <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} onDirty={onDirty} />
-                <MetadataCard on={config.slim_metadata === true} onSaved={reload} />
+                <MetadataCard current={Object.fromEntries(["instaloader", "gallery-dl", "yt-dlp"].map(t => [t, config[t]?.metadata]))}
+                              onSaved={reload} />
+                <DownloadDefaultsCard blocks={config.source_defaults || []}
+                                      config={config} onSaved={reload} onDirty={onDirty} />
                 {Object.keys(COOKIE_TOOLS).map(t => (
                   <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
                                saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} onDirty={onDirty} />

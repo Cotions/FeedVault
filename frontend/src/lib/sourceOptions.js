@@ -48,6 +48,25 @@ export function mediaEffect(tool, media) {
 
 export const FIRST_POSTS_MAX = 10000;
 
+// The metadata files a sync writes beside the media (docs/API.md "Metadata
+// files"): [mode, label, effect]; slim is instaloader's only. METADATA_LOST:
+// what "none" gives up, per tool.
+export const METADATA = [
+  ["full", "full", "the tool's own metadata files beside each post"],
+  ["slim", "slim", "instaloader's, slimmed to what FeedVault reads"],
+  ["none", "none", "no files beside the media: posts are read from their file names"],
+];
+export const METADATA_LOST = {
+  instaloader: "no captions, hashtags, counts, location or numeric account id; stories read as posts",
+  "gallery-dl": "no captions, hashtags, counts or retweet notes; the account is its folder's",
+  "yt-dlp": "title, description and link stay inside the video (read with ffprobe); no counts, no thumbnail file",
+};
+export const metadataLabel = m => METADATA.find(([v]) => v === m)?.[1] || m;
+export function metadataEffect(tool, m) {
+  if (m === "none") return `${METADATA[2][2]}; ${METADATA_LOST[tool] || ""}`;
+  return METADATA.find(([v]) => v === m)?.[2] || "";
+}
+
 // How often the scheduler syncs a source (docs/API.md "Schedules"): [value, label, effect].
 export const SCHEDULES = [
   ["off", "off", "only when you click Sync"],
@@ -95,7 +114,50 @@ export function formOf(options, choices) {
     schedule: o.schedule || "off",
     script: o.script || "",
     session: o.session || null,
+    metadata: o.metadata || "",
   };
+}
+
+// The form's fields (docs/API.md "Download defaults": an option a source
+// does not set follows them), and the form keys each is made of.
+export const FIELDS = ["content", "media", "since", "first", "session", "script", "metadata", "schedule"];
+const FIELD_KEYS = { first: ["first", "count"] };
+const fieldValue = (form, f) => JSON.stringify((FIELD_KEYS[f] || [f]).map(k => {
+  const v = form[k];
+  return Array.isArray(v) ? [...v].sort() : v;
+}));
+
+/* Whether a form field differs from the one ``defaults`` (formOf of what
+   the source inherits) has: the source then sets it itself. */
+export const fieldOverridden = (form, defaults, f) => !!defaults && fieldValue(form, f) !== fieldValue(defaults, f);
+
+/* The form with field ``f`` back to its default (saved, it is inherited again). */
+export function resetField(form, defaults, f) {
+  const out = { ...form };
+  for (const k of FIELD_KEYS[f] || [f]) out[k] = defaults[k];
+  return out;
+}
+
+/* The fields of a form that differ from its defaults. */
+export const overriddenFields = (form, defaults) => FIELDS.filter(f => fieldOverridden(form, defaults, f));
+
+/* What a field's default is, for its "Default: …" line. ``setting``: the
+   tool's metadata setting, for a metadata default that follows it. */
+export function defaultText(f, defaults, platform, tool, setting) {
+  const d = defaults;
+  if (f === "content") return d.content.map(k => kindLabel(platform, k)).join(", ");
+  if (f === "media") return MEDIA.find(([v]) => v === d.media)?.[1] || d.media;
+  if (f === "since") return d.since ? `not older than ${d.since}` : "no limit";
+  if (f === "first") return d.first === "last" ? `only the last ${d.count} posts` : "new posts";
+  if (f === "session") {
+    const s = d.session;
+    if (!s) return "as in Settings";
+    return s.mode === "none" ? "no login" : s.mode === "cookies" ? `${s.browser}’s login` : `session of ${s.user}`;
+  }
+  if (f === "script") return d.script ? `script ${d.script}` : `${tool}’s own command`;
+  if (f === "metadata") return metadataLabel(d.metadata || setting || "full");
+  if (f === "schedule") return d.schedule;
+  return "";
 }
 
 /* The first problem with the form, or null. */
@@ -122,7 +184,7 @@ export function formError(form, choices, now = new Date()) {
    (only last_posts is refused once a source has synced). */
 export function optionsOf(form, choices, firstSync = true) {
   const out = { media: choices?.media ? form.media : "all", since: form.since || null, schedule: form.schedule,
-                script: form.script || null, session: form.session || null };
+                script: form.script || null, session: form.session || null, metadata: form.metadata || null };
   if (choices?.content?.length) out.content = choices.content.filter(k => form.content.includes(k));
   out.full_history = form.first === "full";
   if (firstSync) out.first_posts = form.first === "last" ? Number(form.count) : null;

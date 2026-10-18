@@ -551,12 +551,38 @@ def _migrate_25(conn):
     conn.execute("ALTER TABLE people ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
 
 
+# What every option of a source was before download defaults (version 26):
+# a frozen copy of sources.BUILTIN as it was then.
+_OPTIONS_25 = {"full_history": False, "session": None, "content": None, "media": "all", "since": None,
+               "first_posts": None, "script": None, "schedule": "off"}
+
+
+def _migrate_26(conn):
+    """A source stores only the options it sets itself, as {"v": 2, option:
+    value}; any other follows its platform's download defaults
+    (sources.py). Options stored before had every key: those equal to what
+    they were by default then become inherited, the rest stay as set. So
+    nothing changes until a default is set in Settings."""
+    for sid, text in conn.execute("SELECT id, options FROM sources").fetchall():
+        try:
+            stored = json.loads(text or "{}")
+        except ValueError:
+            stored = {}
+        if not isinstance(stored, dict):
+            stored = {}
+        if stored.get("v") == 2:
+            continue
+        kept = {k: v for k, v in stored.items() if k in _OPTIONS_25 and v != _OPTIONS_25[k]}
+        conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps({"v": 2, **kept}), sid))
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
-              _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25]
+              _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
+              _migrate_26]
 
 BACKUPS_KEPT = 3
 

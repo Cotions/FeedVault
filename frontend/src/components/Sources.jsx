@@ -8,7 +8,8 @@ import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
 import { healthBadge, lastGood, loginText } from "../lib/health";
 import { fmtAgo, fmtFullDate, fmtIn, fmtInt, platformLabel, safeUrl } from "../lib/fmt";
 import {
-  FIRST_POSTS_MAX, MEDIA, SCHEDULES, firstPostsEach, formError, formOf, kindEffect, kindLabel, mediaEffect, needsLogin,
+  FIRST_POSTS_MAX, MEDIA, SCHEDULES, defaultText, fieldOverridden, firstPostsEach, formError, formOf, kindEffect, kindLabel,
+  mediaEffect, metadataEffect, metadataLabel, needsLogin, overriddenFields, resetField,
   optionsOf, optionsSummary, scheduleShort, scheduleText, scriptHref, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
@@ -148,6 +149,25 @@ export function SourceHealth({ source: s, job, onSaved }) {
   );
 }
 
+// Option keys (docs/API.md "What a source downloads") as the form names them.
+const OPTION_NAMES = {
+  full_history: "full history", session: "login", content: "content", media: "media", since: "not older than",
+  first_posts: "last posts", script: "command", metadata: "metadata files", schedule: "schedule",
+};
+
+/* Whether a source follows its platform's download defaults, or sets
+   some options itself ("custom", which ones in its title). */
+export function InheritBadge({ source: s }) {
+  const own = s.overrides || [];
+  if (!own.length) return <span className="source-inherit dim" title="Every option follows Settings → Download defaults">defaults</span>;
+  return (
+    <span className="chip source-inherit is-set"
+          title={`Set on this source: ${own.map(k => OPTION_NAMES[k] || k).join(", ")}. The rest follow Settings → Download defaults.`}>
+      custom
+    </span>
+  );
+}
+
 /* One source: its profile, what it downloads, tool, folder, schedule, last
    sync, Options, Sync and Remove. ``onSaved``: after its options changed. */
 export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = false }) {
@@ -162,7 +182,10 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
           {sourceName(s)}
           {s.person && !s.account && <span className="creator-sub"> · first sync not done yet</span>}
         </span>
-        {summary && <span className="source-summary" title={`What it downloads: ${summary}`}>{summary}</span>}
+        <span className="source-summary-line">
+          {summary && <span className="source-summary" title={`What it downloads: ${summary}`}>{summary}</span>}
+          <InheritBadge source={s} />
+        </span>
         <ScriptWarning source={s} />
         <ScheduleLine source={s} />
         <SourceHealth source={s} job={job} onSaved={onSaved} />
@@ -192,16 +215,48 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
   );
 }
 
+/* Beside a field's name: "default" when it is what the source inherits
+   (Settings → Download defaults), else "set here", the default, and Reset. */
+function Inherit({ f, form, defaults, onChange, platform, tool, setting }) {
+  if (!defaults) return null;
+  if (!fieldOverridden(form, defaults, f)) return <span className="source-default dim">default</span>;
+  return (
+    <span className="source-default is-set">
+      set here · default: {defaultText(f, defaults, platform, tool, setting)}
+      <button type="button" className="btn-link" onClick={() => onChange(resetField(form, defaults, f))}
+              title="Follow Settings → Download defaults for this">Reset</button>
+    </span>
+  );
+}
+
 /* What a source downloads, as far as its tool and platform let it choose:
    content kinds, images or videos, a date floor and the first sync. Each
    with what it does in one line. ``firstSync``: the source has not synced
-   yet (last N posts is for its first sync only). */
-export function SourceOptions({ tool, platform, target, choices, session, form, onChange, firstSync = true }) {
+   yet (last N posts is for its first sync only). ``defaults``: the form of
+   what it inherits, to mark each field as default or set here (with a
+   Reset); none on a new source's form, which starts from them.
+   ``metadata``: {inherited, setting}, the modes for the Metadata files
+   choice. ``editor``: a platform's download defaults (Settings), which
+   have no full history (a one-off) and no "Default" of their own. */
+export function SourceOptions({ tool, platform, target, choices, session, form, onChange, firstSync = true,
+                                defaults = null, metadata = null, editor = false }) {
   const id = useId();
   const each = firstPostsEach(tool, form.content, platform, target);
   const set = patch => onChange({ ...form, ...patch });
   const login = needsLogin(form, choices, session);
   const toggle = k => onChange(toggleKind(form, k));
+  const mark = f => <Inherit f={f} form={form} defaults={defaults} onChange={onChange} platform={platform} tool={tool}
+                             setting={metadata?.setting} />;
+  const setting = metadata?.setting || "full";
+  // The Metadata files choice: what it inherits first ("Default (…)"),
+  // then what Settings → Sync says (null), then each mode.
+  const modes = choices.metadata || [];
+  const metaFirst = defaults ? defaults.metadata : "";
+  const metaOptions = [
+    [metaFirst, defaults ? `Default (${metadataLabel(defaults.metadata || setting)})` : `as in Settings → Sync (${metadataLabel(setting)})`],
+    ...(metaFirst !== "" ? [["", `as in Settings → Sync (${metadataLabel(setting)})`]] : []),
+    ...modes.filter(m => m !== metaFirst).map(m => [m, metadataLabel(m)]),
+  ];
   // A script runs instead of the tool's command: the choices before the
   // picker are not used (its note says so), so they are dimmed and
   // disabled while one is picked; the schedule still is (#149). Download
@@ -214,7 +269,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
     <div className="source-options">
       {choices.content.length > 0 && (
         <fieldset {...(login.length ? { className: "source-opt" } : unused)}>
-          <legend>Download</legend>
+          <legend>Download {mark("content")}</legend>
           {choices.content.map(k => (
             <label key={k} className="source-opt-line">
               <input type="checkbox" checked={form.content.includes(k)} onChange={() => toggle(k)} />
@@ -232,7 +287,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
       )}
       {choices.media && (
         <fieldset {...unused}>
-          <legend>Media</legend>
+          <legend>Media {mark("media")}</legend>
           {MEDIA.map(([v, label]) => (
             <label key={v} className="source-opt-line">
               <input type="radio" name={`${id}-media`} checked={form.media === v} onChange={() => set({ media: v })} />
@@ -242,7 +297,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
         </fieldset>
       )}
       <fieldset {...unused}>
-        <legend>Not older than</legend>
+        <legend>Not older than {mark("since")}</legend>
         <label className="source-opt-line">
           <input type="date" min="1970-01-01" max={today()} value={form.since} aria-label="Not older than"
                  onChange={e => set({ since: e.target.value })} />
@@ -251,16 +306,18 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
         </label>
       </fieldset>
       <fieldset {...unused}>
-        <legend>{firstSync ? "First sync" : "Next sync"}</legend>
+        <legend>{firstSync ? "First sync" : "Next sync"} {mark("first")}</legend>
         <label className="source-opt-line">
           <input type="radio" name={`${id}-first`} checked={form.first === "new"} onChange={() => set({ first: "new" })} />
           <b>new posts</b>
           <span className="dim">stops at the newest post FeedVault already has from this profile</span>
         </label>
-        <label className="source-opt-line">
-          <input type="radio" name={`${id}-first`} checked={form.first === "full"} onChange={() => set({ first: "full" })} />
-          <b>full history</b><span className="dim">walks the whole profile, once</span>
-        </label>
+        {!editor && (
+          <label className="source-opt-line">
+            <input type="radio" name={`${id}-first`} checked={form.first === "full"} onChange={() => set({ first: "full" })} />
+            <b>full history</b><span className="dim">walks the whole profile, once</span>
+          </label>
+        )}
         {firstSync && choices.first_posts && (
           <label className="source-opt-line">
             <input type="radio" name={`${id}-first`} checked={form.first === "last"}
@@ -277,10 +334,22 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
           </label>
         )}
       </fieldset>
-      <SessionPicker value={form.session} onChange={session => set({ session })} unused={unused} />
-      <ScriptPicker tool={tool} value={form.script} onChange={script => set({ script })} />
+      <SessionPicker value={form.session} onChange={session => set({ session })} unused={unused} mark={mark("session")} />
+      <ScriptPicker tool={tool} value={form.script} onChange={script => set({ script })} mark={mark("script")} />
+      {modes.length > 1 && (
+        <fieldset {...unused}>
+          <legend>Metadata files {mark("metadata")}</legend>
+          <label className="source-opt-line">
+            <select className="sort-select" aria-label="Metadata files a sync writes" value={form.metadata}
+                    onChange={e => set({ metadata: e.target.value })}>
+              {metaOptions.map(([v, label]) => <option key={v || "setting"} value={v}>{label}</option>)}
+            </select>
+            <span className="dim">{metadataEffect(tool, form.metadata || setting)}</span>
+          </label>
+        </fieldset>
+      )}
       <fieldset className="source-opt">
-        <legend>Schedule</legend>
+        <legend>Schedule {mark("schedule")}</legend>
         {SCHEDULES.map(([v, label, effect]) => (
           <label key={v} className="source-opt-line">
             <input type="radio" name={`${id}-schedule`} checked={form.schedule === v} onChange={() => set({ schedule: v })} />
@@ -302,12 +371,12 @@ const SESSION_EFFECT = {
   cookies: "this source\u2019s own: the tool reads that browser\u2019s cookies itself",
   login: "this source\u2019s own saved instaloader session",
 };
-function SessionPicker({ value, onChange, unused }) {
+function SessionPicker({ value, onChange, unused, mark = null }) {
   const mode = value?.mode || "";
   const pick = m => onChange(m === "" ? null : m === "cookies" ? cookiesSession("firefox", "") : m === "none" ? { mode: m } : value);
   return (
     <fieldset {...unused}>
-      <legend>Login</legend>
+      <legend>Login {mark}</legend>
       <label className="source-opt-line">
         <select className="sort-select" aria-label="Login a sync uses" value={mode} onChange={e => pick(e.target.value)}>
           <option value="">as in Settings</option>
@@ -341,7 +410,7 @@ function scriptLabel(sc) {
    listed apart and cannot be picked; one gone from disk, refused or running
    another tool stays shown when it is the current one, with why its syncs
    fail. */
-function ScriptPicker({ tool, value, onChange }) {
+function ScriptPicker({ tool, value, onChange, mark = null }) {
   const { data, error } = useApi(getScripts);
   const scripts = data?.scripts || [];
   const current = scripts.find(sc => sc.id === value);
@@ -359,7 +428,7 @@ function ScriptPicker({ tool, value, onChange }) {
   );
   return (
     <fieldset className="source-opt">
-      <legend>Command</legend>
+      <legend>Command {mark}</legend>
       <label className="source-opt-line">
         <select className="sort-select script-pick" value={value} onChange={e => onChange(e.target.value)}
                 aria-label="Command a sync runs" disabled={!data && !value}>
@@ -425,6 +494,10 @@ export function ScriptWarning({ source: s, name = null }) {
 export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   const toast = useToast();
   const [form, setForm] = useState(() => formOf(s.options, s.choices));
+  // What it inherits: a choice equal to it is saved as inherited (it then
+  // follows Settings → Download defaults), any other as its own.
+  const defaults = formOf(s.defaults, s.choices);
+  const own = overriddenFields(form, defaults);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const firstSync = !s.last_sync_at || s.options.first_posts != null;
@@ -471,8 +544,18 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
         initialFocus={focus}
       >
         <div ref={focus} tabIndex={-1}>
+          <div className="source-inherits" role="status">
+            <span className="dim">
+              {own.length ? `${own.length} choice${own.length === 1 ? "" : "s"} set here; the rest follow`
+                : "Every choice follows"}{" "}
+              <Link to="/settings#download-defaults" className="text-link">Download defaults</Link>
+              {" "}for {platformLabel(s.platform)} ({s.tool}).
+            </span>
+            <button type="button" className="btn-link" disabled={!own.length} onClick={() => setForm(defaults)}
+                    title="Every choice back to its default; Save to keep it">Reset all to default</button>
+          </div>
           <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
-                         onChange={setForm} firstSync={firstSync} />
+                         onChange={setForm} firstSync={firstSync} defaults={defaults} metadata={s.metadata} />
         </div>
       </ConfirmDialog>
       <DiscardDialog open={asking || unsaved.asking}
@@ -558,7 +641,9 @@ export function AddSource({ person = null, onAdded, onDirty }) {
   const text = target.trim();
   const resolved = useResolved(text);
   const kind = resolved?.ok ? `${resolved.tool}:${resolved.platform}:${resolved.choices.content.join(",")}` : null;
-  const form = kind && (forms[kind] || formOf(null, resolved.choices));
+  // A new source starts from its platform's download defaults; what stays
+  // equal to them is not stored, so it follows them later.
+  const form = kind && (forms[kind] || formOf(resolved.defaults, resolved.choices));
   const problem = form && formError(form, resolved.choices);
   const login = form ? needsLogin(form, resolved.choices, resolved.session) : [];
 
@@ -616,7 +701,7 @@ export function AddSource({ person = null, onAdded, onDirty }) {
       )}
       {form && resolved.source == null && (
         <SourceOptions tool={resolved.tool} platform={resolved.platform} target={resolved.target} choices={resolved.choices}
-                       session={resolved.session} form={form}
+                       session={resolved.session} form={form} metadata={resolved.metadata}
                        onChange={f => { setForms(fs => ({ ...fs, [kind]: f })); setError(null); }} />
       )}
       {(error || problem || resolved?.ok === false) && (

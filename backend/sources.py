@@ -24,6 +24,7 @@ from datetime import date
 from urllib.parse import urlsplit
 
 import browsers
+import config
 import db
 import health
 import people
@@ -330,28 +331,43 @@ FIRST_POSTS_MAX = 10000
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # How often the scheduler syncs a source (scheduler.py); off by default.
 SCHEDULES = ("off", "hourly", "daily", "weekly")
+# Which metadata files a sync writes beside the media (sync.metadata_flags):
+# full (the tool's own), slim (instaloader's, slimmed after the run:
+# slim.py), none (nothing beside the media; yt-dlp embeds it in the file).
+METADATA = {"instaloader": ("full", "slim", "none"), "gallery-dl": ("full", "none"), "yt-dlp": ("full", "none")}
 # Last: stored_options applies the keys in this order, and a stored
 # schedule wins over the one content's stories would pick.
-OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts", "script", "schedule")
+OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts", "script", "metadata",
+               "schedule")
+# What a platform's download defaults (Settings → Download defaults) can
+# set: every option but full history, which is a one-off.
+DEFAULT_KEYS = OPTION_KEYS[1:]
 # A script's id (scripts.py): a file's name without its suffix, or a built-in's.
 SCRIPT_ID_RE = re.compile(r"(?:builtin:)?[a-z0-9_-]{1,64}")
 LOGIN_REFUSED = ("{kinds} need a logged-in session: choose one for this source, or set one in "
                  "Settings → Sync")
+# Every option as a source has it when neither it nor its platform's
+# defaults say otherwise.
+BUILTIN = {"full_history": False, "session": None, "content": None, "media": "all", "since": None,
+           "first_posts": None, "script": None, "metadata": None, "schedule": "off"}
 
 
-def choices(tool, platform, target):
+def choices(tool, platform, target, defaults=False):
     """What the options of a source can be: {content (the kinds it can
     fetch, empty when the link picks), content_default, login (kinds that
     need a logged-in session), media, since, first_posts (whether each can
-    be set)}."""
+    be set), metadata (the modes its tool has)}. ``defaults``: a platform's
+    download defaults, which offer the kinds of a profile's own page
+    whatever the target (a source whose link picks ignores them)."""
     kinds = CONTENT.get((tool, platform), ())
-    if tool == "gallery-dl" and kinds:
+    if tool == "gallery-dl" and kinds and not defaults:
         page = _PROFILE_PAGES[platform]
         if not isinstance(target, str) or not page.fullmatch(urlsplit(target).path):
             kinds = ()
     return {"content": list(kinds), "content_default": list(DEFAULT_CONTENT[(tool, platform)]) if kinds else [],
             "login": [k for k in kinds if platform == "instagram" and k in LOGIN_CONTENT],
-            "media": tool in MEDIA_TOOLS, "since": True, "first_posts": tool in FIRST_POSTS_TOOLS}
+            "media": tool in MEDIA_TOOLS, "since": True, "first_posts": tool in FIRST_POSTS_TOOLS,
+            "metadata": list(METADATA.get(tool, ("full",)))}
 
 
 def _since(value):
@@ -365,10 +381,12 @@ def _since(value):
     return value if date(1970, 1, 1) <= day <= date.today() else None
 
 
-def parse_options(value, base=None, tool="instaloader", platform="instagram", target=None, stories_daily=True):
+def parse_options(value, base=None, tool="instaloader", platform="instagram", target=None, stories_daily=True,
+                  defaults=False):
     """A source's options merged over ``base``: (options, None), or (None,
     error) when ``value`` is malformed or asks for what the source cannot
-    do (see choices). The options:
+    do (see choices; ``defaults``: what a platform's defaults can). The
+    options:
 
     - full_history: bool, the next sync walks everything instead of
       starting after what is already there;
@@ -383,11 +401,12 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
     - script: null (the tool's own command), else the id of a script its
       sync runs instead (scripts.py; whether it exists is checked when it
       runs, and by the API when it is set);
+    - metadata: null (the tool's setting), else full, slim (instaloader
+      only) or none: which metadata files its syncs write (METADATA);
     - schedule: off, hourly, daily or weekly. Stories last 24 h: content
       that turns them on makes an off schedule daily, unless ``value``
       sends a schedule too (``stories_daily`` False: never)."""
-    out = {"full_history": False, "session": None, "content": None, "media": "all", "since": None,
-           "first_posts": None, "script": None, "schedule": "off", **(base or {})}
+    out = {**BUILTIN, **(base or {})}
     if value is None:
         return out, None
     if not isinstance(value, dict):
@@ -395,7 +414,7 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
     unknown = set(value) - set(OPTION_KEYS)
     if unknown:
         return None, f"unknown option {sorted(unknown)[0]!r}: options are {', '.join(OPTION_KEYS)}"
-    can = choices(tool, platform, target)
+    can = choices(tool, platform, target, defaults)
     if "full_history" in value:
         if not isinstance(value["full_history"], bool):
             return None, "full_history must be true or false"
@@ -449,6 +468,10 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
                                                 and SCRIPT_ID_RE.fullmatch(value["script"])):
             return None, "script must be null or a script's id"
         out["script"] = value["script"]
+    if "metadata" in value:
+        if value["metadata"] is not None and value["metadata"] not in can["metadata"]:
+            return None, f"metadata must be null or one of: {', '.join(can['metadata'])}"
+        out["metadata"] = value["metadata"]
     if "schedule" in value:
         if value["schedule"] not in SCHEDULES:
             return None, f"schedule must be one of: {', '.join(SCHEDULES)}"
@@ -458,9 +481,182 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
     return out, None
 
 
-def clean_options(value, base=None, tool="instaloader", platform="instagram", target=None, stories_daily=True):
+def clean_options(value, base=None, tool="instaloader", platform="instagram", target=None, stories_daily=True,
+                  defaults=False):
     """parse_options' options, or None when malformed."""
-    return parse_options(value, base, tool, platform, target, stories_daily)[0]
+    return parse_options(value, base, tool, platform, target, stories_daily, defaults)[0]
+
+
+# ---------------------------------------------------------------------------
+# Download defaults and what a source inherits
+# ---------------------------------------------------------------------------
+#
+# config ``source_defaults``: {tool: {platform: {option: value}}}, set in
+# Settings → Download defaults. A source stores only its overrides: the
+# options it sets itself, as {"v": 2, option: value, ...} (OVERRIDES). Any
+# other option is inherited: its platform's default when there is one,
+# else BUILTIN. So a default changed in Settings reaches every source that
+# does not set that option, at its next sync. Options as stored before
+# (every key, no "v") are read as overrides of what differs from BUILTIN.
+
+OVERRIDES = 2                                  # "v" of a source's options as stored now
+_PLATFORM_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
+
+
+def defaults_of(cfg, tool, platform):
+    """The download defaults set for ``tool`` on ``platform`` ({option:
+    value}, only those set), each checked again (config.json can be edited
+    by hand): one that is malformed is left out."""
+    block = ((cfg or {}).get("source_defaults") or {})
+    block = block.get(tool) if isinstance(block, dict) else None
+    block = block.get(platform) if isinstance(block, dict) else None
+    if not isinstance(block, dict):
+        return {}
+    out, where = {}, {"tool": tool, "platform": platform, "target": None, "defaults": True}
+    for key in DEFAULT_KEYS:
+        got = clean_options({key: block[key]}, **where, stories_daily=False) if key in block else None
+        if got is not None:
+            out[key] = got[key]
+    return out
+
+
+def clean_defaults(value, current=None):
+    """The download defaults from POST /api/config ({tool: {platform:
+    {option: value}}}), merged over ``current`` per tool and platform (a
+    platform sent replaces its block; null or {} removes it), or (None,
+    error). An option equal to BUILTIN is not kept: no default."""
+    if not isinstance(value, dict) or set(value) - set(TOOLS):
+        return None, f"source_defaults must be {{ tool: {{ platform: {{ option: value }} }} }}, tools: {', '.join(TOOLS)}"
+    out = {t: dict(p) for t, p in (current or {}).items() if t in TOOLS and isinstance(p, dict)}
+    for tool, platforms in value.items():
+        if not isinstance(platforms, dict) or len(platforms) > ROUTES_MAX:
+            return None, f"{tool}: send {{ platform: {{ option: value }} }}"
+        for platform, block in platforms.items():
+            if not isinstance(platform, str) or not _PLATFORM_RE.fullmatch(platform) \
+                    or (tool == "instaloader" and platform != PLATFORM[tool]):
+                return None, f"{tool}: not a platform it downloads from: {str(platform)[:64]}"
+            if block is None or block == {}:
+                out.get(tool, {}).pop(platform, None)
+                continue
+            if not isinstance(block, dict):
+                return None, f"{tool} {platform}: send {{ option: value }}"
+            if set(block) - set(DEFAULT_KEYS):
+                return None, f"{tool} {platform}: defaults are {', '.join(DEFAULT_KEYS)}"
+            options, error = parse_options(block, tool=tool, platform=platform, stories_daily=False, defaults=True)
+            if error:
+                return None, f"{tool} {platform}: {error}"
+            kept = {k: options[k] for k in DEFAULT_KEYS if k in block and options[k] != BUILTIN[k]}
+            if kept:
+                out.setdefault(tool, {})[platform] = kept
+            else:
+                out.get(tool, {}).pop(platform, None)
+    return {t: p for t, p in out.items() if p}, None
+
+
+def _stored(src):
+    """The overrides a source row stores, as stored (unchecked): {option:
+    value}. Options stored before overrides (no "v") keep what differs from
+    BUILTIN; anything else is inherited."""
+    try:
+        stored = json.loads(src["options"] or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    if stored.get("v") == OVERRIDES:
+        return {k: v for k, v in stored.items() if k in OPTION_KEYS}
+    return {k: v for k, v in stored.items() if k in OPTION_KEYS and v != BUILTIN[k]}
+
+
+def _resolve(src, stored, cfg):
+    """(options, overridden keys): ``stored`` (a row's overrides) over its
+    platform's defaults over BUILTIN, option by option, each checked again:
+    a malformed value is skipped. Of the defaults, only what the source can
+    have: its kinds (none when its link picks), and "last N" only before
+    its first sync (it is for that one) and never with full history."""
+    where = {"tool": src["tool"], "platform": src["platform"], "target": src["target"]}
+    out = clean_options(None, **where)
+    defaults = defaults_of(cfg, src["tool"], src["platform"])
+    can = choices(**where)
+    overridden = []
+    for key in OPTION_KEYS:
+        if key in stored:
+            got = clean_options({key: stored[key]}, out, **where, stories_daily=False)
+            if got is not None:
+                out = got
+                overridden.append(key)
+                continue
+        if key not in defaults:
+            continue
+        if key == "content" and not can["content"]:
+            continue
+        if key == "first_posts" and (src["last_sync_at"] is not None or out["full_history"]):
+            continue
+        out = clean_options({key: defaults[key]}, out, **where, stories_daily=False) or out
+    return out, overridden
+
+
+def stored_options(src, cfg=None):
+    """A stored source's options as its syncs use them: its overrides, else
+    its platform's defaults (``cfg``: the config, read when not given),
+    else BUILTIN; each checked again one by one, a malformed value skipped
+    (sources.json can be edited by hand). A source stored without a
+    schedule has the default one: its stories do not pick one."""
+    return _resolve(src, _stored(src), cfg if cfg is not None else config.load())[0]
+
+
+def inherited(src, cfg=None):
+    """What a source's options would be with no overrides: what each
+    option it does not set follows."""
+    return _resolve(src, {}, cfg if cfg is not None else config.load())[0]
+
+
+def overridden(src, cfg=None):
+    """The options a source sets itself (valid ones), in OPTION_KEYS order."""
+    return _resolve(src, _stored(src), cfg if cfg is not None else config.load())[1]
+
+
+def overrides_of(options, base):
+    """The options to store for a source: those of ``options`` that differ
+    from ``base`` (what it would inherit), as stored ({"v": 2, ...})."""
+    return {"v": OVERRIDES, **{k: options[k] for k in OPTION_KEYS if k in options and options[k] != base[k]}}
+
+
+DEFAULT_PAIRS = (("instaloader", "instagram"), ("gallery-dl", "twitter"), ("gallery-dl", "bluesky"),
+                 ("gallery-dl", "tiktok"), ("gallery-dl", "instagram"), ("yt-dlp", "youtube"), ("yt-dlp", "tiktok"))
+
+
+def default_blocks(conn, cfg):
+    """The (tool, platform) pairs Settings shows download defaults for: those
+    the routing table routes to, those of a source, those with defaults
+    set; each with its choices and its defaults (BUILTIN with the
+    defaults over it), and how many sources set each option themselves."""
+    table = routes(cfg)
+    # Those a link can be routed to either way (Settings → Link routing)
+    # are always there, so a platform's defaults can be set before it is.
+    pairs = set(DEFAULT_PAIRS)
+    pairs |= {(tool, PLATFORM.get(tool) or platform_of(host)) for host, tool in table.items()}
+    rows = conn.execute("SELECT * FROM sources").fetchall()
+    pairs |= {(r["tool"], r["platform"]) for r in rows if r["tool"] in TOOLS}
+    stored = (cfg.get("source_defaults") or {}) if isinstance(cfg.get("source_defaults"), dict) else {}
+    pairs |= {(t, p) for t, ps in stored.items() if t in TOOLS and isinstance(ps, dict) for p in ps
+              if isinstance(p, str) and _PLATFORM_RE.fullmatch(p)}
+    counts = {}
+    for r in rows:
+        for key in overridden(r, cfg):
+            k = (r["tool"], r["platform"], key)
+            counts[k] = counts.get(k, 0) + 1
+    out = []
+    for tool, platform in sorted(pairs, key=lambda p: (TOOLS.index(p[0]), p[1])):
+        if tool == "instaloader" and platform != PLATFORM[tool]:
+            continue
+        set_ = defaults_of(cfg, tool, platform)
+        out.append({"tool": tool, "platform": platform,
+                    "choices": choices(tool, platform, None, defaults=True),
+                    "defaults": {**{k: BUILTIN[k] for k in DEFAULT_KEYS}, **set_}, "set": sorted(set_),
+                    "sources": sum(1 for r in rows if (r["tool"], r["platform"]) == (tool, platform)),
+                    "overrides": {k: counts.get((tool, platform, k), 0) for k in DEFAULT_KEYS}})
+    return out
 
 
 def login_refused(options, platform, session):
@@ -505,17 +701,23 @@ def _owner(conn, row, accounts):
     return key, None
 
 
-def _public(conn, row, accounts, active):
+def _public(conn, row, accounts, active, cfg=None):
     key, person = _owner(conn, row, accounts)
     result = last_result(row)
     job = active.get(row["id"])
+    cfg = cfg if cfg is not None else config.load()
+    options, overrides = _resolve(row, _stored(row), cfg)
     return {
         "id": row["id"], "tool": row["tool"], "platform": row["platform"], "target": row["target"],
         "url": row["target"] if row["tool"] != "instaloader" else db.profile_url(row["platform"], row["target"]),
         "folder": row["folder"],
         "account": {"platform": key[0], "id": key[1]} if key else None,
         "person": person,
-        "options": stored_options(row),
+        "options": options,
+        # The options it sets itself; any other follows "defaults": what
+        # it inherits (its platform's download defaults, else BUILTIN).
+        "overrides": overrides,
+        "defaults": inherited(row, cfg),
         "choices": choices(row["tool"], row["platform"], row["target"]),
         "created_at": row["created_at"], "last_sync_at": row["last_sync_at"],
         "last_job_id": row["last_job_id"],
@@ -523,23 +725,6 @@ def _public(conn, row, accounts, active):
         "health": health.public(result, row["last_sync_at"], failures(result), row["target"]),
         "job": job,
     }
-
-
-def stored_options(src):
-    """A stored source's options, checked again one by one: a malformed
-    value gets its default and the others stay (sources.json can be edited
-    by hand). A source stored without a schedule has none: its stories do
-    not pick one."""
-    try:
-        stored = json.loads(src["options"] or "{}")
-    except ValueError:
-        stored = None
-    where = {"tool": src["tool"], "platform": src["platform"], "target": src["target"]}
-    out = clean_options(None, **where)
-    for key in OPTION_KEYS:
-        if isinstance(stored, dict) and key in stored:
-            out = clean_options({key: stored[key]}, out, **where, stories_daily=False) or out
-    return out
 
 
 def get(conn, sid, active=None):
@@ -553,9 +738,9 @@ def row(conn, sid):
 
 def listing(conn, roots, active=None):
     """Every source, by target, and the folders that could be one."""
-    accounts = db.accounts(conn)
+    accounts, cfg = db.accounts(conn), config.load()
     rows = conn.execute("SELECT * FROM sources ORDER BY target, tool").fetchall()
-    return {"sources": [_public(conn, r, accounts, active or {}) for r in rows],
+    return {"sources": [_public(conn, r, accounts, active or {}, cfg) for r in rows],
             "suggestions": suggestions(conn, roots)}
 
 
@@ -761,7 +946,9 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
     """A new source. ``target``: checked (check_target). ``folder``: an
     existing folder inside a media root, or None for resolve()'s default.
     ``account``: (platform, id) of an indexed account, else found from the
-    folder's posts when it has some."""
+    folder's posts when it has some. ``options``: what it downloads (see
+    update: what equals its platform's defaults is inherited), or None:
+    everything inherited."""
     if tool not in TOOLS:
         raise Refused(f"tool must be one of: {', '.join(TOOLS)}")
     if not roots:
@@ -813,11 +1000,13 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
                       f"such as {default}")
     if person_id is not None and not people.exists(conn, person_id):
         raise Refused("no such person")
+    base = inherited(new_row(tool, platform, target))
+    stored = overrides_of(options, base) if options is not None else {"v": OVERRIDES}
     with conn:
         sid = conn.execute(
             "INSERT INTO sources(person_id, platform, author_id, tool, target, folder, options, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (person_id, platform, key[1] if key else None, tool, target, real, json.dumps(options), now)).lastrowid
+            (person_id, platform, key[1] if key else None, tool, target, real, json.dumps(stored), now)).lastrowid
     return sid
 
 
@@ -862,19 +1051,50 @@ def _folder_account(conn, platform, folder, roots):
     return key if key in accounts else None
 
 
-def update(conn, sid, options, keys=None):
-    """Store a source's options. ``keys``: only these change, in one
-    statement over what is stored, so a sync's end (full history, last N)
-    and a schedule changed meanwhile never undo each other."""
+def new_row(tool, platform, target):
+    """What _resolve reads of a source not stored yet."""
+    return {"tool": tool, "platform": platform, "target": target, "last_sync_at": None, "options": None}
+
+
+def update(conn, sid, options, keys=None, cfg=None):
+    """Store a source's options (as its syncs would use them): an option
+    equal to what it inherits is stored as inherited, so it follows its
+    platform's defaults from then on; any other is its override.
+    ``keys``: only these change, in one statement over what is stored, so
+    a sync's end (full history, last N) and a schedule changed meanwhile
+    never undo each other."""
+    src = row(conn, sid)
+    if src is None:
+        return
+    cfg = cfg if cfg is not None else config.load()
+    base = inherited(src, cfg)
     with conn:
         if keys is None:
-            conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps(options), sid))
+            conn.execute("UPDATE sources SET options = ? WHERE id = ?",
+                         (json.dumps(overrides_of(options, base)), sid))
             return
-        paths = [a for k in keys for a in (f"$.{k}", json.dumps(options[k]))]
+        # Options stored before overrides are rewritten whole first.
+        whole = overrides_of({**_resolve(src, _stored(src), cfg)[0], **{k: options[k] for k in keys}}, base)
+        kept = [k for k in keys if options[k] != base[k]]
+        gone = [k for k in keys if options[k] == base[k]]
+        paths = [a for k in kept for a in (f"$.{k}", json.dumps(options[k]))]
         conn.execute(
             "UPDATE sources SET options = CASE WHEN json_valid(options) AND json_type(options) = 'object' "
-            f"THEN json_set(options{', ?, json(?)' * len(keys)}) ELSE ? END WHERE id = ?",
-            (*paths, json.dumps(options), sid))
+            "AND json_extract(options, '$.v') = ? "
+            f"THEN json_set(json_remove(options{', ?' * len(gone)}){', ?, json(?)' * len(kept)}) "
+            "ELSE ? END WHERE id = ?",
+            (OVERRIDES, *(f"$.{k}" for k in gone), *paths, json.dumps(whole), sid))
+
+
+def reset(conn, sid, keys=None):
+    """Drop a source's overrides of ``keys`` (None: all of them): it
+    inherits those options again."""
+    src = row(conn, sid)
+    if src is None:
+        return
+    left = {k: v for k, v in _stored(src).items() if keys is not None and k not in keys}
+    with conn:
+        conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps({"v": OVERRIDES, **left}), sid))
 
 
 def last_result(row):
@@ -934,9 +1154,9 @@ def resume_tool(conn, tool):
     counting blocking results towards a stop, that use the tool's session
     (none of their own): that session changed in Settings, the count starts
     again. Returns their ids."""
-    ids = []
+    ids, cfg = [], config.load()
     for r in conn.execute("SELECT * FROM sources WHERE tool = ? ORDER BY id", (tool,)).fetchall():
-        if health.blocking(last_result(r)) and stored_options(r)["session"] is None:
+        if health.blocking(last_result(r)) and stored_options(r, cfg)["session"] is None:
             resume(conn, r["id"])
             ids.append(r["id"])
     return ids
