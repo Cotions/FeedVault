@@ -423,6 +423,14 @@ or any other you type), a country, and labels of your own ("cosplay",
 flag and labels on their card, filters people by gender, country and
 label, and its search box matches them too.
 
+A person can have a **profile picture**: click the round initial at the top
+of their page, then upload one (or drop or paste it), pick a picture from
+their posts, or take the profile picture instaloader saved beside them, and
+drag and zoom to crop it square. It shows on their card, their page and in
+the person pickers. Nothing is fetched for it; it is saved again as a small
+WebP in the data directory (`avatars/`), never in the media folders, and
+kept with the person's other data through an index rebuild.
+
 Each sync that brought posts or failed also leaves an entry under the
 sidebar's **Notifications** bell ("12 new from X", "X: account not found");
 an entry opens exactly the posts that sync brought, or the source. A

@@ -720,3 +720,94 @@ test("Person: gender, country and a label, and Creators filters by them", async 
     await request.delete(`/api/people/${pid}`, { headers: H });
   }
 });
+
+// A person's picture: one uploaded (a picture drawn in the page, cropped
+// by a drag), shown on their page and their Creators card; then one of
+// their posts' pictures; then Remove, back to the letter. The person, made
+// for the test with an account linked to nobody, is deleted after (and
+// their picture's files with them).
+test("Person: upload a picture, pick one from a post, remove it", async ({ page, request }) => {
+  const [a] = (await unlinkedAccounts(request)).filter(x => x.count > 0);
+  expect(a).toBeTruthy();
+  const name = `E2E picture ${Date.now()}`;
+  const r = await (await request.post("/api/people", { headers: H, data: { name, accounts: [{ platform: a.platform, id: a.id }] } })).json();
+  const pid = r.person.id;
+  const person = async () => (await (await request.get(`/api/people/${pid}`, { headers: H })).json());
+  const loaded = img => img.evaluate(el => el.complete && el.naturalWidth > 0);
+  try {
+    await page.goto(`/people/${pid}`);
+    await expect(page.locator("h2.page-title")).toHaveText(name);
+    await idle(page);
+    const bar = page.locator(".person-bar");
+    await expect(bar.locator(".avatar-letter")).toHaveAttribute("data-letter", "E");
+
+    // Upload: a 600x400 picture, half red, half blue, made by a canvas.
+    await page.getByRole("button", { name: `Add a picture of ${name}` }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText(`${name}'s picture`);
+    const png = await page.evaluate(() => {
+      const c = document.createElement("canvas");
+      c.width = 600; c.height = 400;
+      const g = c.getContext("2d");
+      g.fillStyle = "#d01010"; g.fillRect(0, 0, 300, 400);
+      g.fillStyle = "#1010d0"; g.fillRect(300, 0, 300, 400);
+      return c.toDataURL("image/png").split(",")[1];
+    });
+    await dialog.getByLabel("Picture file").setInputFiles({ name: "me.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") });
+    const view = dialog.getByRole("group", { name: /^Crop/ });
+    await expect(view.locator("img")).toBeVisible();
+    const box = await view.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 4 });   // towards the red half
+    await page.mouse.up();
+    await dialog.getByRole("button", { name: "Save picture" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".toast", { hasText: "Picture saved." })).toBeVisible();
+    const uploaded = (await person()).avatar;
+    expect(uploaded).toMatch(/^[0-9a-f]{20}$/);
+    const big = bar.locator("img.avatar-img");
+    await expect(big).toHaveAttribute("src", `/media/avatars/${uploaded}.webp`);
+    await expect.poll(() => loaded(big)).toBe(true);
+    await idle(page);
+
+    // On their Creators card, in the letter's place and size.
+    await page.goto("/creators");
+    await page.getByRole("textbox", { name: "Filter creators" }).fill(name);
+    const card = page.locator(".person-card", { hasText: name });
+    const small = card.locator("img.avatar-img");
+    await expect(small).toHaveAttribute("src", `/media/avatars/${uploaded}-96.webp`);
+    await expect.poll(() => loaded(small)).toBe(true);
+    const size = await small.boundingBox();
+    expect([Math.round(size.width), Math.round(size.height)]).toEqual([36, 36]);
+    await idle(page);
+
+    // One of their posts' pictures, cropped in the middle.
+    await page.goto(`/people/${pid}`);
+    await expect(page.locator("h2.page-title")).toHaveText(name);
+    await page.getByRole("button", { name: `Change ${name}'s picture` }).click();
+    await dialog.locator(".avatar-media").first().click();
+    await expect(view.locator("img")).toBeVisible();
+    await dialog.getByRole("button", { name: "Save picture" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await person()).avatar).not.toBe(uploaded);
+    const picked = (await person()).avatar;
+    expect(picked).toMatch(/^[0-9a-f]{20}$/);
+    await expect(big).toHaveAttribute("src", `/media/avatars/${picked}.webp`);
+    // The uploaded one is no one's now: gone.
+    expect((await request.get(`/media/avatars/${uploaded}.webp`)).status()).toBe(404);
+    await idle(page);
+
+    // Remove: the letter again.
+    await page.getByRole("button", { name: `Change ${name}'s picture` }).click();
+    await dialog.getByRole("button", { name: "Remove picture" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator(".toast", { hasText: "Picture removed." })).toBeVisible();
+    await expect(bar.locator(".avatar-letter")).toBeVisible();
+    await expect(bar.locator("img.avatar-img")).toHaveCount(0);
+    expect((await person()).avatar).toBeNull();
+    await idle(page);
+  } finally {
+    await request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});

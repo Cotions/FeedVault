@@ -19,6 +19,7 @@ import sqlite3
 import string
 import unicodedata
 
+import avatars
 import db
 import links as web_links           # saved web links; "links" below are person_accounts rows
 import organize
@@ -89,10 +90,12 @@ def clean_labels(value):
 
 
 def restore_row(row):
-    """A people.json row as the API would store it: a gender or country it
-    would refuse (the file edited by hand) is dropped, not the person."""
+    """A people.json row as the API would store it: a gender, country or
+    picture name it would refuse (the file edited by hand) is dropped, not
+    the person."""
     return {**row, "gender": clean_gender(row.get("gender") or "") or "",
-            "country": clean_country(row.get("country") or "") or ""}
+            "country": clean_country(row.get("country") or "") or "",
+            "avatar": avatars.clean_name(row.get("avatar") or "") or ""}
 
 
 def restore_label(row):
@@ -267,6 +270,7 @@ def _person(row, accounts, labels):
     return {
         "id": row["id"], "name": row["name"], "notes": row["notes"], "created_at": row["created_at"],
         "gender": row["gender"], "country": row["country"], "labels": labels,
+        "avatar": row["avatar"] or None,
         "accounts": accounts,
         "platforms": sorted({a["platform"] for a in accounts}),
         "count": sum(a["count"] for a in accounts),
@@ -422,8 +426,9 @@ def _set_labels(conn, pid, labels, now):
             conn.execute("INSERT INTO person_labels(person_id, label, at) VALUES (?, ?, ?)", (pid, name, now))
 
 
-def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=None, now=0):
-    """Change what is given; None leaves it as it is."""
+def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=None, now=0, avatar=None):
+    """Change what is given; None leaves it as it is (``avatar``: '' for none;
+    the caller drops the files of the one replaced, avatars.drop_unused)."""
     if name is not None and not _name_free(conn, name, but=(pid,)):
         raise Refused("a person with that name exists")
     try:
@@ -438,6 +443,8 @@ def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=N
                 conn.execute("UPDATE people SET country = ? WHERE id = ?", (country, pid))
             if labels is not None:
                 _set_labels(conn, pid, labels, now)
+            if avatar is not None:
+                conn.execute("UPDATE people SET avatar = ? WHERE id = ?", (avatar, pid))
     except sqlite3.IntegrityError:              # the name, taken by another request since the check
         raise Refused("a person with that name exists")
     return person(conn, pid)
@@ -473,8 +480,9 @@ def link(conn, pid, add, remove, now):
 def merge(conn, ids, name, accounts, now):
     """Fold several people (and accounts) into the first id: its links,
     notes and name stay, the others' accounts, sources and saved web links
-    move to it and they are gone. Labels are put together; the gender and
-    the country are those of the first person (in ``ids``) that has one."""
+    move to it and they are gone. Labels are put together; the gender, the
+    country and the picture are those of the first person (in ``ids``) that
+    has one (the caller drops the files of the others', avatars.drop_unused)."""
     keep = ids[0]
     if name is not None and not _name_free(conn, name, but=ids):
         raise Refused("a person with that name exists")
@@ -492,8 +500,8 @@ def merge(conn, ids, name, accounts, now):
             conn.execute("UPDATE OR IGNORE person_labels SET person_id = ? WHERE person_id = ?", (keep, other))
             conn.execute("DELETE FROM people WHERE id = ?", (other,))
         _attach(conn, keep, accounts, now)
-        conn.execute("UPDATE people SET notes = ?, gender = ?, country = ? WHERE id = ?",
-                     ("\n\n".join(notes)[:MAX_NOTES], first("gender"), first("country"), keep))
+        conn.execute("UPDATE people SET notes = ?, gender = ?, country = ?, avatar = ? WHERE id = ?",
+                     ("\n\n".join(notes)[:MAX_NOTES], first("gender"), first("country"), first("avatar"), keep))
         if name is not None:
             conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, keep))
     return person(conn, keep)

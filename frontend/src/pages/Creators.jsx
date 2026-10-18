@@ -13,6 +13,7 @@ import {
 } from "../lib/people";
 import Icon from "../components/Icon";
 import PlatformIcon from "../components/PlatformIcon";
+import PersonAvatar from "../components/PersonAvatar";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
 import SelectionBar from "../components/SelectionBar";
@@ -140,7 +141,7 @@ function PersonCard({ person: p, index, settled, selectMode, selected, onToggle,
   const where = countryName(p.country);
   const body = (
     <>
-      <span className="avatar-letter" aria-hidden="true">{(p.name || "?").charAt(0).toUpperCase()}</span>
+      <PersonAvatar person={p} />
       <span className="creator-id">
         <span className="creator-name">
           {p.country && <span className="person-flag" role="img" aria-label={where} title={where}>{countryFlag(p.country)}</span>}

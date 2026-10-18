@@ -3,6 +3,7 @@
 Run from source with ./run.sh, or directly: python backend/app.py
 """
 import atexit
+import io
 import os
 import stat
 import shutil
@@ -22,6 +23,7 @@ from werkzeug.security import safe_join
 from zlib import adler32
 
 import archives
+import avatars
 import biofetch
 import browsers
 import config
@@ -1024,10 +1026,12 @@ def merge_people():
     if found != set(ids):
         return jsonify({"ok": False, "error": "no such person"}), 404
     muted = any(news.is_muted(conn, person=i) for i in ids)
+    pictures = _avatars_of(conn, ids)
     try:
         p = people.merge(conn, ids, name, accounts, int(time.time()))
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    avatars.drop_unused(conn, config.load()["data_directory"], pictures)
     if muted:                                  # a muted one's accounts stay muted in the one they join
         news.mute(conn, True, person=p["id"])
     _people_changed(names=True)
@@ -1116,9 +1120,111 @@ def delete_person(pid):
     conn = db.connect()
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
+    pictures = _avatars_of(conn, [pid])
     n = people.delete(conn, pid)
+    avatars.drop_unused(conn, config.load()["data_directory"], pictures)
     _people_changed(names=True)
     return jsonify({"ok": True, "unlinked": n})
+
+
+def _avatars_of(conn, ids):
+    return [r[0] for r in conn.execute(
+        f"SELECT avatar FROM people WHERE id IN ({', '.join('?' for _ in ids)}) AND avatar != ''", ids)]
+
+
+@app.get("/api/people/<int:pid>/avatar/choices")
+def avatar_choices(pid):
+    """What a person's picture can be made from, on this machine: the
+    profile pictures instaloader saved for their accounts, and the newest
+    pictures of their posts."""
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    pics = avatars.profile_pics(conn, pid, _roots())
+    return jsonify({
+        "profile_pics": [{"key": f["key"], "name": f["name"], "at": f["at"], "account": f["account"],
+                          "url": f"/media/people/{pid}/profile-pic/{f['key']}"} for f in pics],
+        "media": [{**m, "thumb": f"/media/{m['id']}/thumb"} for m in avatars.media(conn, pid)],
+    })
+
+
+def _set_avatar(conn, pid, name):
+    """The person's picture becomes ``name`` ('' for none); the files of the
+    one it replaces go when no one else has it."""
+    old = _avatars_of(conn, [pid])
+    p = people.update(conn, pid, avatar=name)
+    avatars.drop_unused(conn, config.load()["data_directory"], old)
+    userdata.changed("people")
+    return p
+
+
+def _upload_crop():
+    """An upload's crop, from the query (x, y, size), or None."""
+    if not any(k in request.args for k in ("x", "y", "size")):
+        return None
+    try:
+        crop = {k: float(request.args.get(k, "")) for k in ("x", "y", "size")}
+    except ValueError:
+        raise avatars.Refused("crop must be x, y and size, fractions of the picture from 0 to 1")
+    return avatars.clean_crop(crop)
+
+
+def _avatar_source(conn, pid, body, roots):
+    """The file of avatar_choices a JSON body names ({media} or
+    {profile_pic}), opened, or raises avatars.Refused."""
+    media_id, key = body.get("media"), body.get("profile_pic")
+    if media_id is not None:
+        if not _ids([media_id]):
+            raise avatars.Refused("media must be a media id")
+        src = avatars.media_source(conn, pid, media_id)
+    elif isinstance(key, str):
+        src = next((f["path"] for f in avatars.profile_pics(conn, pid, roots) if f["key"] == key), None)
+        if src is None:
+            raise avatars.Refused("no such profile picture; reload")
+    else:
+        raise avatars.Refused("send the picture as the body, or JSON with media or profile_pic")
+    f = avatars.open_in_roots(src, roots)
+    if f is None:
+        raise avatars.Refused("that file is not in a media folder any more")
+    return f
+
+
+@app.post("/api/people/<int:pid>/avatar")
+def set_avatar(pid):
+    """A person's picture: the request's body is the picture itself (an
+    image/* or application/octet-stream type; the crop in the query: x, y,
+    size), or JSON naming one of avatar_choices ({media} or {profile_pic},
+    and an optional crop)."""
+    kind = (request.mimetype or "").lower()
+    upload = kind.startswith("image/") or kind == "application/octet-stream"
+    body = None if upload else _body()
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    cfg = config.load()
+    try:
+        if upload:
+            crop = _upload_crop()
+            try:
+                data = avatars.read_upload(request.stream, request.content_length)
+            except avatars.TooLarge as e:
+                return jsonify({"ok": False, "error": str(e)}), 413
+            name = avatars.make(cfg["data_directory"], io.BytesIO(data), crop)
+        else:
+            crop = avatars.clean_crop(body.get("crop"))
+            with _avatar_source(conn, pid, body, cfg["media_roots"]) as f:
+                name = avatars.make(cfg["data_directory"], f, crop)
+    except avatars.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "person": _set_avatar(conn, pid, name)})
+
+
+@app.delete("/api/people/<int:pid>/avatar")
+def remove_avatar(pid):
+    conn = db.connect()
+    if not people.exists(conn, pid):
+        return jsonify({"ok": False, "error": "no such person"}), 404
+    return jsonify({"ok": True, "person": _set_avatar(conn, pid, "")})
 
 
 @app.post("/api/people/<int:pid>/accounts")
@@ -2276,6 +2382,29 @@ def serve_copy_thumb(copy_id):
     if first["kind"] == "image":
         return _send(first["path"], roots=cfg["media_roots"])
     abort(404)
+
+
+@app.get("/media/avatars/<file>")
+def serve_avatar(file):
+    """A person's picture (avatars.py), from FeedVault's own files. Its name
+    is a hash of it: a new picture is a new URL, so it is cached for good."""
+    found = avatars.file_name(file)
+    if found is None:
+        abort(404)
+    resp = _send(avatars.path(config.load()["data_directory"], found[0], small=found[1]), media=False)
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    return resp
+
+
+@app.get("/media/people/<int:pid>/profile-pic/<key>")
+def serve_profile_pic(pid, key):
+    """One of the profile pictures avatar_choices offers, to show it: only a
+    file found for that person, inside a media root."""
+    conn, roots = db.connect(), _roots()
+    if not people.exists(conn, pid):
+        abort(404)
+    found = next((f["path"] for f in avatars.profile_pics(conn, pid, roots) if f["key"] == key), None)
+    return _send(found, roots=roots)
 
 
 @app.get("/trash/<key>/thumb")

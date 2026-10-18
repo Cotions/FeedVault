@@ -103,10 +103,13 @@ register("collection_posts", "collection_posts", ("collection", "post_id", "posi
 # People by name, before the accounts linked to them, which are keyed by
 # platform and author id (a person missing from people.json is created again).
 # Their gender and country with them, cleaned as the API would (a file
-# edited by hand keeps the person, not a country that is not one).
-register("people", "people", ("name", "notes", "created_at", "gender", "country"), "name",
-         insert=("INSERT OR IGNORE INTO people(id, name, notes, created_at, gender, country) "
-                 "VALUES (:id, :name, COALESCE(:notes, ''), COALESCE(:created_at, 0), :gender, :country)",),
+# edited by hand keeps the person, not a country that is not one), and their
+# picture by the name of its files (avatars.py: in <data_dir>/avatars/,
+# which a rebuild leaves where it is).
+register("people", "people", ("name", "notes", "created_at", "gender", "country", "avatar"), "name",
+         insert=("INSERT OR IGNORE INTO people(id, name, notes, created_at, gender, country, avatar) "
+                 "VALUES (:id, :name, COALESCE(:notes, ''), COALESCE(:created_at, 0), :gender, :country, "
+                 ":avatar)",),
          clean=people.restore_row, ids=True)
 # A person's labels by person name (after people), apart from post tags.
 register("person_labels", "person_labels", ("person", "label", "at"), ("person", "label"),
