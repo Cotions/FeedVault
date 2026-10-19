@@ -9,6 +9,7 @@ import pytest
 from conftest import H
 from test_source_options import X, after, build, post, set_stored
 
+import app as app_module
 import config
 import db
 import sources
@@ -90,16 +91,61 @@ def test_a_new_source_stores_only_what_differs(env, client):
     assert p["ok"]
 
 
-def test_saving_a_value_equal_to_the_default_follows_it(env, client):
-    s = add(client, X, options={"media": "videos"})
+def test_a_pinned_option_stays_pinned_when_the_default_catches_up(env, client):
+    """Pinned to images, the default becomes images, a save sends the whole
+    form: the pin stays, so a later default (videos) does not move it."""
+    defaults(client, "gallery-dl", "twitter", {"media": "all"})
+    s = add(client, X, options={"media": "images"})
     url = f"/api/sources/{s['id']}"
-    defaults(client, "gallery-dl", "twitter", {"media": "videos"})
-    # It was set before the default: it stays set until saved again equal to it.
-    assert get(client, url)["overrides"] == ["media"]
-    r = post(client, url, {"options": {"media": "videos", "since": "2024-01-01"}})
-    assert r["source"]["overrides"] == ["since"]
+    assert s["overrides"] == ["media"]
     defaults(client, "gallery-dl", "twitter", {"media": "images"})
+    shown = get(client, url)["options"]
+    assert shown["media"] == "images"
+    r = post(client, url, {"options": {**shown, "since": "2024-01-01"}})
+    assert r["source"]["overrides"] == ["media", "since"] and stored(s["id"])["media"] == "images"
+    defaults(client, "gallery-dl", "twitter", {"media": "videos"})
     assert get(client, url)["options"]["media"] == "images"
+
+
+def test_a_stale_form_does_not_pin_the_old_default(env, client):
+    """The form opened when the default was "all", the default changed,
+    then the form saved another field: media keeps following the default."""
+    s = add(client, X)
+    url = f"/api/sources/{s['id']}"
+    assert get(client, url)["options"]["media"] == "all"
+    defaults(client, "gallery-dl", "twitter", {"media": "images"})
+    # The form sends only the fields changed since it opened (frontend changesOf).
+    r = post(client, url, {"options": {"since": "2024-01-01"}})
+    assert r["source"]["overrides"] == ["since"]
+    defaults(client, "gallery-dl", "twitter", {"media": "videos"})
+    assert get(client, url)["options"]["media"] == "videos"
+
+
+def test_a_change_is_set_even_to_the_default_and_reset_inherits(env, client):
+    defaults(client, "gallery-dl", "twitter", {"media": "videos"})
+    s = add(client, X, options={"media": "images"})
+    url = f"/api/sources/{s['id']}"
+    # Changed to what the default is now: set, so it stays when the default moves.
+    r = post(client, url, {"options": {"media": "videos"}})
+    assert r["source"]["overrides"] == ["media"]
+    defaults(client, "gallery-dl", "twitter", {"media": "images"})
+    assert get(client, url)["options"]["media"] == "videos"
+    # Sent as it is now: nothing changes, it stays set.
+    assert post(client, url, {"options": {"media": "videos"}})["source"]["overrides"] == ["media"]
+    # Only Reset makes it inherited again.
+    r = post(client, url, {"reset": ["media"], "options": {"media": "videos"}})
+    assert r["source"]["overrides"] == ["media"]       # reset, then set again in the same request
+    r = post(client, url, {"reset": ["media"]})
+    assert r["source"]["overrides"] == [] and r["source"]["options"]["media"] == "images"
+
+
+def test_a_save_writes_only_the_options_that_changed(env, client):
+    """What was written meanwhile (another tab, a sync's end) and not sent stays."""
+    s = add(client, X, options={"since": "2024-01-01"})
+    url = f"/api/sources/{s['id']}"
+    set_stored(s["id"], {"v": 2, "since": "2024-01-01", "schedule": "weekly"})
+    post(client, url, {"options": {"media": "images"}})
+    assert stored(s["id"]) == {"v": 2, "since": "2024-01-01", "schedule": "weekly", "media": "images"}
 
 
 def test_reset_one_option_or_all(env, client):
@@ -184,9 +230,18 @@ def test_first_posts_default_is_for_a_first_sync_only(env, client):
     s = add(client, X)
     assert after(build(s), "--post-range") == "1-30"
     conn = db.connect()
-    with conn:
-        conn.execute("UPDATE sources SET last_sync_at = 1 WHERE id = ?", (s["id"],))
-    assert "--post-range" not in build(s)
+    # A first sync that failed, or was cancelled, leaves it a first sync.
+    for result in ({"state": "failed", "ok_at": None}, {"state": "cancelled"}, None):
+        with conn:
+            conn.execute("UPDATE sources SET last_sync_at = 1, last_result = ? WHERE id = ?",
+                         (json.dumps(result) if result else None, s["id"]))
+        assert after(build(s), "--post-range") == "1-30", result
+        assert get(client, f"/api/sources/{s['id']}")["options"]["first_posts"] == 30
+    # One that worked (now, or before a failed one) ends it.
+    for result in ({"state": "done"}, {"state": "failed", "ok_at": 1}):
+        with conn:
+            conn.execute("UPDATE sources SET last_result = ? WHERE id = ?", (json.dumps(result), s["id"]))
+        assert "--post-range" not in build(s), result
 
 
 @pytest.mark.parametrize("legacy, overrides", [
@@ -202,3 +257,38 @@ def test_a_legacy_row_overrides_only_what_differs_from_builtin(env, client, lega
     got = get(client, f"/api/sources/{s['id']}")
     assert got["overrides"] == overrides
     assert got["options"]["media"] == (legacy["media"] if "media" in overrides else "videos")
+
+
+FROM_X = {**H, "Origin": "https://x.com", "Sec-Fetch-Site": "cross-site"}
+COOKIES = {"mode": "cookies", "browser": "firefox"}
+
+
+def test_another_site_gets_no_login_and_sees_no_defaults(env, client):
+    """The userscript adds and syncs sources: one it adds has no login,
+    whatever the defaults or the tool's setting say, now or later; it never
+    reads what a source inherits, nor which login or script it uses."""
+    defaults(client, "gallery-dl", "twitter", {"session": COOKIES, "media": "images"})
+    r = client.get("/api/sources/resolve?url=https://x.com/someone", headers=FROM_X).get_json()
+    assert r["ok"] and r["tool"] == "gallery-dl"
+    assert not {"defaults", "session", "metadata"} & set(r)
+    r = client.post("/api/sources", json={"target": X}, headers=FROM_X)
+    assert r.status_code == 200, r.get_json()
+    s = r.get_json()["source"]
+    assert not {"defaults", "session", "metadata", "script_warning"} & set(s)
+    assert s["options"]["session"] is None and s["options"]["script"] is None and s["dashboard_only"] is False
+    assert stored(s["id"])["session"] == {"mode": "none"} and "script" in stored(s["id"])
+    # The dashboard sees it all: no login, set on it; media inherited.
+    mine = get(client, f"/api/sources/{s['id']}")
+    assert mine["options"]["session"] == {"mode": "none"} and mine["session"]["mode"] == "none"
+    assert "session" in mine["overrides"] and mine["options"]["media"] == "images"
+    # A later login default does not reach it.
+    defaults(client, "gallery-dl", "twitter", {"session": {**COOKIES, "browser": "chrome"}})
+    assert get(client, f"/api/sources/{s['id']}")["session"]["mode"] == "none"
+    # One the dashboard added, with the login it inherits: read from there
+    # without it, and its sync only starts from the dashboard.
+    own = add(client, "https://x.com/other")
+    assert get(client, f"/api/sources/{own['id']}")["session"]["mode"] == "cookies"
+    r = client.get(f"/api/sources/{own['id']}", headers=FROM_X).get_json()
+    assert r["options"]["session"] is None and "session" not in r and "defaults" not in r and r["dashboard_only"]
+    r = client.post(f"/api/sources/{own['id']}/sync", headers=FROM_X)
+    assert r.status_code == 403 and r.get_json()["error"] == app_module.FOREIGN_LOGIN

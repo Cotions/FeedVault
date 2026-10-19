@@ -1086,6 +1086,11 @@ def test_the_old_switch_reads_as_slim_and_moves_on_the_next_save(env, client):
     set_config(slim_metadata=False)
     post(client, "/api/config", {"instaloader": {"metadata": "full"}})
     assert "slim_metadata" not in config.load() and slim.enabled() is False
+    # Sent, it is refused, saying what replaced it; nothing is saved.
+    for value in (True, False):
+        r = client.post("/api/config", json={"slim_metadata": value, "check_updates": True}, headers=H)
+        assert r.status_code == 400 and "instaloader: { metadata" in r.get_json()["error"]
+    assert "check_updates" not in config.load() or config.load()["check_updates"] is False
 
 
 def synced(env, client, fake):

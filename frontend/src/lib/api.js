@@ -387,8 +387,11 @@ export function resolveSource(url, opts, tool) { return get(`/api/sources/resolv
 //   account?, options? } → { ok, source }
 export function createSource(body) { return post("/api/sources", body); }
 // options: { full_history?, session?, content?, media?, since?, first_posts?, script?, metadata?, schedule? }
-// (one equal to what it inherits follows its platform's download defaults) → { ok, source }
-export function updateSource(id, options) { return post(`/api/sources/${seg(id)}`, { options }); }
+// (one changed is set on the source; one sent as it is stays as it was), reset?: [option keys] or true
+// (those follow its platform's download defaults again) → { ok, source }
+export function updateSource(id, options, reset) {
+  return post(`/api/sources/${seg(id)}`, reset ? { options, reset } : { options });
+}
 // One platform's download defaults ({ option: value }; {} for none) → { ok, config } or { ok: false, error }
 export function saveSourceDefaults(tool, platform, defaults) {
   return post("/api/config", { source_defaults: { [tool]: { [platform]: defaults } } });

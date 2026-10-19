@@ -9,7 +9,7 @@ import { healthBadge, lastGood, loginText } from "../lib/health";
 import { fmtAgo, fmtFullDate, fmtIn, fmtInt, platformLabel, safeUrl } from "../lib/fmt";
 import {
   FIRST_POSTS_MAX, MEDIA, SCHEDULES, defaultText, fieldOverridden, firstPostsEach, formError, formOf, kindEffect, kindLabel,
-  mediaEffect, metadataEffect, metadataLabel, needsLogin, overriddenFields, resetField,
+  FIELDS, changesOf, fieldOwn, fieldsOf, mediaEffect, metadataEffect, metadataLabel, needsLogin, resetField,
   optionsOf, optionsSummary, scheduleShort, scheduleText, scriptHref, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
@@ -216,14 +216,16 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
 }
 
 /* Beside a field's name: "default" when it is what the source inherits
-   (Settings → Download defaults), else "set here", the default, and Reset. */
-function Inherit({ f, form, defaults, onChange, platform, tool, setting }) {
+   (Settings → Download defaults), else "set here", the default, and Reset.
+   ``own``: whether it is set (the source's form says), else whether it
+   differs from the default; ``onReset``: Reset, else the default's value. */
+function Inherit({ f, form, defaults, onChange, platform, tool, setting, own = null, onReset = null }) {
   if (!defaults) return null;
-  if (!fieldOverridden(form, defaults, f)) return <span className="source-default dim">default</span>;
+  if (!(own ? own(f) : fieldOverridden(form, defaults, f))) return <span className="source-default dim">default</span>;
   return (
     <span className="source-default is-set">
       set here · default: {defaultText(f, defaults, platform, tool, setting)}
-      <button type="button" className="btn-link" onClick={() => onChange(resetField(form, defaults, f))}
+      <button type="button" className="btn-link" onClick={() => (onReset ? onReset(f) : onChange(resetField(form, defaults, f)))}
               title="Follow Settings → Download defaults for this">Reset</button>
     </span>
   );
@@ -237,16 +239,18 @@ function Inherit({ f, form, defaults, onChange, platform, tool, setting }) {
    Reset); none on a new source's form, which starts from them.
    ``metadata``: {inherited, setting}, the modes for the Metadata files
    choice. ``editor``: a platform's download defaults (Settings), which
-   have no full history (a one-off) and no "Default" of their own. */
+   have no full history (a one-off) and no "Default" of their own.
+   ``own``(field) and ``onReset``(field): a source's form, which knows
+   what the source sets (see Inherit); picking "Default" resets too. */
 export function SourceOptions({ tool, platform, target, choices, session, form, onChange, firstSync = true,
-                                defaults = null, metadata = null, editor = false }) {
+                                defaults = null, metadata = null, editor = false, own = null, onReset = null }) {
   const id = useId();
   const each = firstPostsEach(tool, form.content, platform, target);
   const set = patch => onChange({ ...form, ...patch });
   const login = needsLogin(form, choices, session);
   const toggle = k => onChange(toggleKind(form, k));
   const mark = f => <Inherit f={f} form={form} defaults={defaults} onChange={onChange} platform={platform} tool={tool}
-                             setting={metadata?.setting} />;
+                             setting={metadata?.setting} own={own} onReset={onReset} />;
   const setting = metadata?.setting || "full";
   // The Metadata files choice: what it inherits first ("Default (…)"),
   // then what Settings → Sync says (null), then each mode.
@@ -341,11 +345,13 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
           <legend>Metadata files {mark("metadata")}</legend>
           <label className="source-opt-line">
             <select className="sort-select" aria-label="Metadata files a sync writes" value={form.metadata}
-                    onChange={e => set({ metadata: e.target.value })}>
+                    onChange={e => (defaults && onReset && e.target.value === metaFirst
+                      ? onReset("metadata") : set({ metadata: e.target.value }))}>
               {metaOptions.map(([v, label]) => <option key={v || "setting"} value={v}>{label}</option>)}
             </select>
             <span className="dim">{metadataEffect(tool, form.metadata || setting)}</span>
           </label>
+          {metadata?.ffmpeg === false && (form.metadata || (defaults?.metadata ?? "") || setting) === "none" && <NoFfmpeg />}
         </fieldset>
       )}
       <fieldset className="source-opt">
@@ -358,6 +364,17 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
         ))}
       </fieldset>
     </div>
+  );
+}
+
+/* yt-dlp's "none" embeds the metadata with ffmpeg: with none found its
+   syncs write the files (full) instead, and say so in their log. */
+export function NoFfmpeg() {
+  return (
+    <span className="dl-warn" role="note">
+      ffmpeg not found: yt-dlp writes the metadata files (full) instead until FeedVault finds it, see{" "}
+      <Link to="/settings#downloaders" className="text-link">Settings → Downloaders</Link>.
+    </span>
   );
 }
 
@@ -493,11 +510,26 @@ export function ScriptWarning({ source: s, name = null }) {
    with it has worked. */
 export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   const toast = useToast();
-  const [form, setForm] = useState(() => formOf(s.options, s.choices));
-  // What it inherits: a choice equal to it is saved as inherited (it then
-  // follows Settings → Download defaults), any other as its own.
+  const [initial] = useState(() => formOf(s.options, s.choices));
+  const [form, setForm] = useState(initial);
+  // What it inherits, and what it sets itself: only a field changed here
+  // is saved as set (even to its default: it then stays when the default
+  // changes), only one reset as inherited; the others stay as they are.
   const defaults = formOf(s.defaults, s.choices);
-  const own = overriddenFields(form, defaults);
+  const [setBefore] = useState(() => fieldsOf(s.overrides));
+  const [resets, setResets] = useState(() => new Set());
+  const isOwn = f => fieldOwn(f, form, initial, setBefore, resets);
+  const own = FIELDS.filter(isOwn);
+  // A field changed again after its Reset is set again.
+  const change = next => {
+    const edited = FIELDS.filter(f => JSON.stringify(resetField({}, next, f)) !== JSON.stringify(resetField({}, form, f)));
+    if (edited.some(f => resets.has(f))) setResets(new Set([...resets].filter(f => !edited.includes(f))));
+    setForm(next);
+  };
+  const resetOne = f => {
+    setForm(resetField(form, defaults, f));
+    setResets(new Set([...resets, f]));
+  };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const firstSync = !s.last_sync_at || s.options.first_posts != null;
@@ -507,8 +539,8 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   // every other form does since #125/#132 (#149). Compared as they would
   // be saved, so ticking a box off and on again is no change.
   const [asking, setAsking] = useState(false);
-  const changed = JSON.stringify(optionsOf(form, s.choices, firstSync))
-    !== JSON.stringify(optionsOf(formOf(s.options, s.choices), s.choices, firstSync));
+  const changes = changesOf(form, initial, setBefore, resets, s.choices, firstSync);
+  const changed = !!changes;
   const cancel = () => (changed ? setAsking(true) : onClose());
   // A link in it ("See Scripts", "Settings → Sync"), Back or Forward ask
   // the same before the app leaves the page with them (#153).
@@ -518,7 +550,7 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await updateSource(s.id, optionsOf(form, s.choices, firstSync));
+      const r = changes ? await updateSource(s.id, changes.options, changes.reset) : { ok: true, source: s };
       if (!r?.ok) { setError(r?.error || "Could not save."); return; }
       toast(`${sourceName(s)}: options saved.`);
       onSaved?.(r.source);
@@ -551,11 +583,13 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
               <Link to="/settings#download-defaults" className="text-link">Download defaults</Link>
               {" "}for {platformLabel(s.platform)} ({s.tool}).
             </span>
-            <button type="button" className="btn-link" disabled={!own.length} onClick={() => setForm(defaults)}
+            <button type="button" className="btn-link" disabled={!own.length}
+                    onClick={() => { setForm(defaults); setResets(new Set(FIELDS)); }}
                     title="Every choice back to its default; Save to keep it">Reset all to default</button>
           </div>
           <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
-                         onChange={setForm} firstSync={firstSync} defaults={defaults} metadata={s.metadata} />
+                         onChange={change} firstSync={firstSync} defaults={defaults} metadata={s.metadata}
+                         own={isOwn} onReset={resetOne} />
         </div>
       </ConfirmDialog>
       <DiscardDialog open={asking || unsaved.asking}

@@ -484,7 +484,10 @@ def test_a_source_with_a_script_stays_refused_to_the_page(env, client, fake, pro
     as_page(client, "POST", f"/api/sources/{src['id']}", H, {"options": {"script": script}})
     r = as_page(client, "POST", f"/api/sources/{src['id']}/sync", headers, status=403)
     assert "only FeedVault's own dashboard" in r["error"]
-    assert as_page(client, "GET", f"/api/sources/{src['id']}", headers)["options"]["script"] == script
+    # It sees that only the dashboard syncs it, not which script.
+    seen = as_page(client, "GET", f"/api/sources/{src['id']}", headers)
+    assert seen["options"]["script"] is None and seen["dashboard_only"] is True
+    assert as_page(client, "GET", f"/api/sources/{src['id']}", H)["options"]["script"] == script   # kept
     for method, url in [("GET", "/api/scripts"), ("GET", f"/api/scripts/{script}"),
                         ("POST", f"/api/scripts/{script}/run")]:
         as_page(client, method, url, headers, {"url": link} if method == "POST" else None, status=403)
@@ -507,7 +510,7 @@ def test_saving_from_the_page_works_as_from_anywhere(env, client, fake):
 # Metadata mode none
 # ---------------------------------------------------------------------------
 
-def test_saved_with_no_metadata_files_when_the_folder_has_none(env, client, fake):
+def test_saved_with_no_metadata_files_when_the_folder_has_none(env, client, fake, ffmpeg):
     """The tool's setting none: the save names its files as a sync does then
     and leaves no JSON beside them; its archive entries still come from
     the staged metadata, so the next sync skips it."""

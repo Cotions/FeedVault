@@ -118,7 +118,7 @@ def test_resolve_endpoint(env, client):
                  "folder": str(env["media"] / "tiktok" / "someone"), "source": None,
                  "choices": sources.choices("yt-dlp", "tiktok", "https://tiktok.com/@someone"),
                  "defaults": {k: sources.BUILTIN[k] for k in sources.OPTION_KEYS},
-                 "metadata": {"mode": "full", "inherited": "full", "setting": "full"},
+                 "metadata": {"mode": "full", "inherited": "full", "setting": "full", "ffmpeg": False},
                  "session": {"mode": "none"}}
     r = get(client, "/api/sources/resolve?url=x.com/someone/media")
     assert (r["tool"], r["platform"], r["target"]) == ("gallery-dl", "twitter", "https://x.com/someone/media")

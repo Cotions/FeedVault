@@ -50,7 +50,8 @@ def lines(job):
 def test_full_is_the_default_and_changes_nothing(env, client):
     for target, tool in [("carol.cooks", "instaloader"), (X, None), (YOUTUBE, None)]:
         s = add(client, target, tool)
-        assert s["metadata"] == {"mode": "full", "inherited": "full", "setting": "full"}
+        assert s["metadata"] == {"mode": "full", "inherited": "full", "setting": "full",
+                                 **({"ffmpeg": False} if target == YOUTUBE else {})}
     args = build(add(client, "dave.draws", "instaloader"))
     assert "--no-metadata-json" not in args and "--no-captions" not in args
     args = build(add(client, "https://x.com/other"))
@@ -60,7 +61,7 @@ def test_full_is_the_default_and_changes_nothing(env, client):
     assert after(args, "-o").endswith(sync.YT_DLP_NAME)
 
 
-def test_none_per_tool(env, client):
+def test_none_per_tool(env, client, ffmpeg):
     setting(instaloader="none", gallery_dl="none", yt_dlp="none")
     s = add(client, "carol.cooks", "instaloader")
     assert s["metadata"] == {"mode": "none", "inherited": "none", "setting": "none"}
@@ -172,7 +173,7 @@ def ffprobe_on(env):
 
 
 @pytest.mark.parametrize("probe", [True, False])
-def test_yt_dlp_none_sync(env, client, tools, probe):
+def test_yt_dlp_none_sync(env, client, tools, ffmpeg, probe):
     if probe:
         ffprobe_on(env)
     videos = [{"id": "vid00000001", "ts": TS, "title": "First one", "description": "About #cats", "duration": 30},
@@ -195,7 +196,37 @@ def test_yt_dlp_none_sync(env, client, tools, probe):
     assert sync_now(client, s["id"])["result"]["added"] == 0
 
 
-def test_tiktok_none_name_and_handle(env, client, tools):
+def test_yt_dlp_none_without_ffmpeg_writes_the_files(env, client, tools):
+    """No ffmpeg found: embedding would fail every video (never archived,
+    downloaded again each sync), so the sync writes the files (full), says
+    so in its log, and the next one downloads nothing again."""
+    videos = [{"id": "vid00000001", "ts": TS, "title": "First one", "description": "", "duration": 30}]
+    tools["dl"].write_text(json.dumps({"accounts": {YOUTUBE: yt_account(YOUTUBE, videos)}, "fail": None}))
+    setting(yt_dlp="none")
+    assert get(client, "/api/config")["ffmpeg"] is False
+    s = add(client, YOUTUBE)
+    assert get(client, f"/api/sources/{s['id']}")["metadata"]["ffmpeg"] is False
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done", lines(job)
+    assert "--embed-metadata" not in job["argv"] and "--write-info-json" in job["argv"]
+    assert "--ffmpeg-location" not in job["argv"]
+    assert any(sync.NO_FFMPEG in line for line in lines(job)), lines(job)
+    assert any(n.endswith(".info.json") for n in files(env["media"]))
+    assert get(client, "/api/posts/youtube/vid00000001")["text"] == "First one"
+    assert sync_now(client, s["id"])["result"]["added"] == 0
+
+
+def test_yt_dlp_none_passes_the_ffmpeg_it_finds(env, client, tools, ffmpeg):
+    tools["dl"].write_text(json.dumps({"accounts": {YOUTUBE: yt_account(YOUTUBE, [])}, "fail": None}))
+    setting(yt_dlp="none")
+    s = add(client, YOUTUBE)
+    assert get(client, f"/api/sources/{s['id']}")["metadata"]["ffmpeg"] is True
+    job = sync_now(client, s["id"])
+    assert after(job["argv"], "--ffmpeg-location") == ffmpeg and "--embed-metadata" in job["argv"]
+    assert not any(sync.NO_FFMPEG in line for line in lines(job))
+
+
+def test_tiktok_none_name_and_handle(env, client, tools, ffmpeg):
     videos = [{"id": "7300000000000000001", "ts": TS, "title": "tt", "description": "tt", "duration": 9}]
     tools["dl"].write_text(json.dumps({"accounts": {TIKTOK: yt_account(TIKTOK, videos)}, "fail": None}))
     setting(yt_dlp="none")
@@ -237,6 +268,28 @@ def test_gallery_dl_names(tmp_path):
     assert (s.kind, len(s.media), s.posted_at) == ("carousel", 2, TS + DAY)
     assert {v.author_handle, v.tool} == {"someone", gallery_dl.FILENAMES}
     assert "holiday 2024 1.jpg" not in r.claimed and "notes.txt" not in r.claimed
+
+
+def test_gallery_dl_names_need_the_ids_and_date_it_writes(tmp_path):
+    """Only sync.GALLERY_DL_BARE's names, each category's ids in their own
+    shape: someone's own files that start with a category stay theirs."""
+    folder = tmp_path / "Someone"
+    posts = ["twitter 1800000000000000001 01 20240601-120000.jpg",
+             "bluesky 3kxyzabcde22a 01 20240601-120000.jpg",
+             "reddit 1abc2de 01 20240601-120000.png"]
+    others = ["flickr trip 1.jpg", "twitter cat 2.png", "threads day 3.mp4",
+              "twitter 12345 01 20240601-120000.jpg",                  # too short for a snowflake
+              "twitter 1800000000000000002 01.jpg",                    # no date: FeedVault writes one
+              "twitter 1800000000000000003 1 20240601-120000.jpg",     # the number has two digits
+              "bluesky 3kxyzabcde22 01 20240601-120000.jpg",           # a TID has 13 characters
+              "tiktok 73000000001 00 20240601-120000.mp4",
+              "redgifs happysillygoose 01 20240601-120000.mp4"]        # no id shape: not read
+    touch(folder, *posts, *others)
+    r = gallery_dl.parse_filenames(str(tmp_path), str(folder), os.listdir(folder))
+    assert sorted(p.post_id for p in r.posts) == ["1800000000000000001", "1abc2de", "3kxyzabcde22a"]
+    assert r.claimed == set(posts)
+    for n in others:
+        assert gallery_dl._BARE_RE.fullmatch(n) is None, n
 
 
 def test_yt_dlp_names_and_tags(env, tmp_path, monkeypatch):

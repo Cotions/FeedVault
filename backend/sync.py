@@ -164,6 +164,7 @@ import people
 import scanner
 import slim
 import sources
+import thumbs
 import trash
 import userdata
 from parsers import is_media, yt_dlp
@@ -379,6 +380,24 @@ def yt_dlp_name(mode, youtube=False):
 def yt_dlp_metadata_flags(mode):
     """yt-dlp's flags for what it writes beside a video."""
     return list(YT_DLP_EMBED) if mode == "none" else ["--write-info-json", "--write-thumbnail"]
+
+
+NO_FFMPEG = "ffmpeg not found: metadata files written beside the videos (full) instead of none, until it is"
+
+
+def yt_dlp_mode(mode):
+    """The metadata mode a yt-dlp run uses for ``mode``: none embeds with
+    ffmpeg, so with none found (Settings → Downloaders) it writes the
+    files (full) instead. Embedding would fail every video, which yt-dlp
+    then never records in its archive: each sync would download it again."""
+    return "full" if mode == "none" and thumbs.ffmpeg_path() is None else mode
+
+
+def ffmpeg_flags(mode):
+    """The ffmpeg yt-dlp embeds with: the one FeedVault finds (the path set
+    in Settings, which yt-dlp would not look for), for none."""
+    path = thumbs.ffmpeg_path() if mode == "none" else None
+    return ["--ffmpeg-location", path] if path else []
 
 
 def gallery_dl_metadata_flags(mode):
@@ -1587,10 +1606,10 @@ def _build_yt_dlp(params):
     stop = ordered and not options["full_history"]
     floor = _floor(options)
     day = "%04d%02d%02d" % floor if floor else None
-    mode = metadata_of("yt-dlp", options, cfg)
+    mode = yt_dlp_mode(metadata_of("yt-dlp", options, cfg))
     return {"tool": "yt-dlp", "rescan": folder, "args": [
         *config_flags("yt-dlp", cfg),
-        *yt_dlp_metadata_flags(mode),
+        *yt_dlp_metadata_flags(mode), *ffmpeg_flags(mode),
         "--download-archive", archives.path("yt-dlp", cfg["data_directory"]),
         *(["--break-on-existing"] if stop else []),
         # Nothing older than the floor; where the listing is newest first, stop at the first older video.
@@ -1623,6 +1642,9 @@ def _start_archive(tool):
             note(f"first sync: only the newest {options['first_posts']} posts{each}")
         if options["since"]:
             note(f"nothing before {options['since']}")
+        if tool == "yt-dlp" and metadata_of(tool, options) == "none" \
+                and ("--embed-metadata" not in argv if argv is not None else yt_dlp_mode("none") != "none"):
+            note(NO_FFMPEG)
         if src["last_sync_at"] is not None:
             return
         if src["author_id"] is None:

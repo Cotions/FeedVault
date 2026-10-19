@@ -141,6 +141,37 @@ export function resetField(form, defaults, f) {
 /* The fields of a form that differ from its defaults. */
 export const overriddenFields = (form, defaults) => FIELDS.filter(f => fieldOverridden(form, defaults, f));
 
+// The option keys each field saves (the others: their own name).
+const FIELD_OPTIONS = { first: ["full_history", "first_posts"] };
+export const fieldOptions = f => FIELD_OPTIONS[f] || [f];
+
+/* The fields a source sets itself, from its "overrides" (option keys). */
+export const fieldsOf = overrides => new Set(FIELDS.filter(f => fieldOptions(f).some(k => (overrides || []).includes(k))));
+
+/* Whether a source's form field is set on the source, once saved: it was
+   (``own``, fieldsOf its overrides) or it changed since the form opened
+   (``initial``), and it was not reset since (``resets``). A value equal
+   to the default can be set: it then stays when the default changes. */
+export const fieldOwn = (f, form, initial, own, resets) =>
+  !resets.has(f) && (own.has(f) || fieldValue(form, f) !== fieldValue(initial, f));
+
+/* What a source's form saves (POST /api/sources/<id>): ``options``, the
+   fields changed since it opened, and ``reset``, the option keys of those
+   it set and that were reset since; null when there is nothing. Any other
+   field is not sent: it stays set or inherited as it was, so a form opened
+   before a default changed does not pin the old default. */
+export function changesOf(form, initial, own, resets, choices, firstSync = true) {
+  const all = optionsOf(form, choices, firstSync);
+  const options = {};
+  for (const f of FIELDS) {
+    if (resets.has(f) || fieldValue(form, f) === fieldValue(initial, f)) continue;
+    for (const k of fieldOptions(f)) if (k in all) options[k] = all[k];
+  }
+  const reset = FIELDS.filter(f => resets.has(f) && own.has(f)).flatMap(fieldOptions);
+  if (!Object.keys(options).length && !reset.length) return null;
+  return reset.length ? { options, reset } : { options };
+}
+
 /* What a field's default is, for its "Default: …" line. ``setting``: the
    tool's metadata setting, for a metadata default that follows it. */
 export function defaultText(f, defaults, platform, tool, setting) {

@@ -418,8 +418,8 @@ async function watchJob(jobId, still, shown, onUpdate) {
 // Sync profile button: adds the profile's source (after asking, in the
 // button itself) unless there is one, then syncs it. Which tool, link and
 // folder: FeedVault's answer for the profile (GET /api/sources/resolve,
-// its link routing). A source that runs a script is only synced from the
-// dashboard: the button says so and links there.
+// its link routing). A source that runs a script or logs in is only synced
+// from the dashboard ("dashboard_only"): the button says so and links there.
 // ---------------------------------------------------------------------------
 
 // name -> { state: "checking" | "idle" | "confirm" | "sending" | "queued" | "running" | "done"
@@ -476,7 +476,7 @@ function paintProfile() {
     else if (s.state === "running") out.push(button("busy", "Syncing…", null, `Job #${s.job.id}`));
     else if (s.state === "offline") out.push(button("offline", "FeedVault is not running — retry", () => clickProfile(name)));
     else if (s.state === "dashboard") {
-      const n = note(s.message || "This profile's source runs a script, which only FeedVault's own dashboard can start.");
+      const n = note(s.message || "This profile's source runs a script or logs in, which only FeedVault's own dashboard can start.");
       n.append(el("br"), dashboardLink(s.source));
       out.push(button("dashboard", "Sync from FeedVault", null), n);
       return out;
@@ -513,8 +513,8 @@ async function checkProfile(name) {
     }
     src = got.body;
   }
-  setProfile(name, { state: src?.options?.script ? "dashboard" : "idle", source: src, resolved, checked: true });
-  if (src?.job && !src.options?.script) followSync(name, src.job.id);   // already syncing: show it
+  setProfile(name, { state: src?.dashboard_only ? "dashboard" : "idle", source: src, resolved, checked: true });
+  if (src?.job && !src.dashboard_only) followSync(name, src.job.id);   // already syncing: show it
 }
 
 function clickProfile(name) {
@@ -543,7 +543,7 @@ async function syncSource(name, sid) {
     const got = await api("GET", `/api/sources/${encodeURIComponent(sid)}`);
     if (got?.body?.job) { followSync(name, got.body.job.id); return; }
   }
-  // Refused to this page (a source that runs a script): the dashboard can.
+  // Refused to this page (a source that runs a script or logs in): the dashboard can.
   if (r.status === 403) { setProfile(name, { state: "dashboard", message: b.error || null }); return; }
   if (!b.ok) { setProfile(name, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
   followSync(name, b.job.id);

@@ -399,21 +399,42 @@ def parse_dir(root, dirpath, names):
 # --- files with no metadata -------------------------------------------------
 #
 # A sync with metadata mode "none" writes no JSON: the files are named as
-# sync.GALLERY_DL_BARE has it, "<category> <post id> <num>[ <date>].<ext>"
-# (the date UTC, %Y%m%d-%H%M%S), which is all such a post has. Its account
-# is its folder's, as for instaloader's filename-only posts: the folder's
-# name, lowercase, as author id and handle (people.refresh_aliases links it
-# to the account's id where the folder has posts with metadata too).
+# sync.GALLERY_DL_BARE has it, "<category> <post id> <num> <date>.<ext>"
+# (the number 01 on, 00 a cover; the date UTC, %Y%m%d-%H%M%S), which is all
+# such a post has. Its account is its folder's, as for instaloader's
+# filename-only posts: the folder's name, lowercase, as author id and handle
+# (people.refresh_aliases links it to the account's id where the folder has
+# posts with metadata too).
 
-_BARE_RE = re.compile(r"(?P<category>[a-z0-9][a-z0-9_.-]*) (?P<id>[A-Za-z0-9_.:-]+) (?P<num>\d{1,4})"
-                      r"(?: (?P<date>\d{8}-\d{6}))?\.(?P<ext>[A-Za-z0-9]+)")
-_SIDE_EXT = {"mp3", "m4a", "aac", "ogg", "opus", "wav", "vtt", "srt"}
 # Only gallery-dl's categories (the platforms FeedVault syncs with it, and
-# others it often downloads from): a name of someone's own that happens to
-# fit ("holiday 2024 1.jpg") stays theirs, on the Unmatched page.
-BARE_CATEGORIES = {"twitter", "bluesky", "tiktok", "instagram", "reddit", "pixiv", "tumblr", "deviantart",
-                   "kemonoparty", "patreon", "fanbox", "pinterest", "imgur", "redgifs", "weibo", "mastodon",
-                   "threads", "facebook", "vsco", "danbooru", "gelbooru", "flickr", "artstation"}
+# others a route may send to it), each with its post ids' own shape: a name
+# of someone's own that happens to fit ("holiday 2024 1.jpg", "twitter cat
+# 2.png") stays theirs, on the Unmatched page. A category whose ids have no
+# shape to tell them by (redgifs' words, a mastodon instance's own name) is
+# not read from names at all.
+_BARE_IDS = {
+    "twitter": r"\d{15,20}",                   # a snowflake (tweets since late 2010)
+    "bluesky": r"[2-7a-j][2-7a-z]{12}",        # a TID, the post's rkey
+    "tiktok": r"\d{18,20}",
+    "instagram": r"\d{15,20}",                 # the media's pk
+    "reddit": r"[0-9a-z]{5,8}",                # base 36
+    "pixiv": r"\d{5,10}",
+    "tumblr": r"\d{8,20}",
+    "flickr": r"\d{9,12}",
+    "imgur": r"[A-Za-z0-9]{5,7}",
+    "patreon": r"\d{6,12}",
+    "fanbox": r"\d{4,12}",
+    "danbooru": r"\d{1,9}",
+    "gelbooru": r"\d{1,9}",
+}
+BARE_CATEGORIES = set(_BARE_IDS)
+# Exactly sync.GALLERY_DL_BARE's names: the number two digits at least, and
+# the date, which every post of these categories has ("twitter None 01.jpg":
+# the post had none of the id keys).
+_BARE_RE = re.compile(r"(?=(?:" + "|".join(f"{c} {i}" for c, i in _BARE_IDS.items()) + r") )"
+                      r"(?P<category>[a-z]+) (?P<id>[A-Za-z0-9]+) (?P<num>\d{2,4})"
+                      r" (?P<date>\d{8}-\d{6})\.(?P<ext>[A-Za-z0-9]+)")
+_SIDE_EXT = {"mp3", "m4a", "aac", "ogg", "opus", "wav", "vtt", "srt"}
 FILENAMES = TOOL + " (filenames)"
 # The post's link, from what its names say.
 _BARE_URLS = {
@@ -445,9 +466,8 @@ def parse_filenames(root, dirpath, names):
     for n in names:
         m = _BARE_RE.fullmatch(n)
         ext = m["ext"].lower() if m else None
-        if m is None or m["category"] not in BARE_CATEGORIES or m["id"] == "None" \
-                or (ext not in IMAGE_EXT and ext not in VIDEO_EXT and ext not in _SIDE_EXT):
-            continue                           # "None": the post had none of the id keys
+        if m is None or (ext not in IMAGE_EXT and ext not in VIDEO_EXT and ext not in _SIDE_EXT):
+            continue
         g = groups.setdefault((m["category"], m["id"]), {"date": None, "nums": {}})
         g["date"] = g["date"] or m["date"]
         g["nums"].setdefault(int(m["num"]), []).append(n)

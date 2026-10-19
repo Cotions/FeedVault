@@ -347,8 +347,10 @@ not running". Several saves in a row queue up (at most 20 at once,
 A profile page gets a **Sync profile** button: it syncs the profile's
 source, or first adds one (it asks, in the button itself, naming the tool and
 folder), and links to the person or account in FeedVault. A source that runs
-a script is only synced from the dashboard: the button says so and links
-there.
+a script, or one whose sync logs in (browser cookies, an instaloader
+session), is only synced from the dashboard: the button says so and links
+there. A source the button adds downloads without a login, whatever your
+download defaults or tool settings say.
 
 ## Jobs and tools
 
@@ -406,7 +408,9 @@ X once changes the next sync of every X source you have not customised. A
 source's Options shows each field as "default" or "set here" with a Reset, and
 "Reset all to default"; the source list marks the ones with options of their
 own as "custom". New sources start from the defaults, and an option you leave
-as it is keeps following them. "Apply to all sources" next to a default makes
+as it is keeps following them. An option you change on a source stays its
+own, even when a default later comes to equal it, until you Reset it.
+"Apply to all sources" next to a default makes
 the sources that set that option themselves follow it too (it asks first, with
 how many).
 
@@ -416,7 +420,9 @@ the media: **full** (the tool's own metadata files, as before), **slim**
 files beside the media: posts are read from their names, which then carry the
 post's id and date; yt-dlp embeds the title, description, chapters and
 thumbnail in the video, read back with ffprobe). A source's Options can pick
-its own. With none, captions, hashtags and counts are not kept (see
+its own. yt-dlp needs ffmpeg for none: without it, its syncs write the files
+(full) and say so in their log. With none, captions, hashtags and counts are
+not kept (see
 [docs/API.md](docs/API.md#metadata-modes) for the full list). It applies to
 new downloads only.
 

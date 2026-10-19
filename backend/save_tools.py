@@ -165,13 +165,15 @@ def _build(params, platform):
     # With no metadata files (the setting), named and embedded as such a
     # sync's: the metadata is still written, only to find the owner, and
     # left in the saving folder (_place).
-    bare = sync.metadata_of(tool, {}, cfg) == "none"
+    # yt-dlp embeds with ffmpeg: with none found, a full save (sync.yt_dlp_mode).
+    mode = sync.metadata_of(tool, {}, cfg)
+    bare = (sync.yt_dlp_mode(mode) if tool == "yt-dlp" else mode) == "none"
     if tool == "gallery-dl":
         args = [*sync.config_flags(tool, cfg), "--write-metadata",
                 *(["-f", sync.GALLERY_DL_BARE] if bare else []), "-D", stage]
     else:
-        flags = ["--write-info-json", *[f for f in sync.YT_DLP_EMBED if f != "--no-write-info-json"]] if bare \
-            else ["--write-info-json", "--write-thumbnail"]
+        flags = ["--write-info-json", *[f for f in sync.YT_DLP_EMBED if f != "--no-write-info-json"],
+                 *sync.ffmpeg_flags("none")] if bare else ["--write-info-json", "--write-thumbnail"]
         # The output template is %-formatted: a % in the folder is doubled.
         args = [*sync.config_flags(tool, cfg), *flags, "--no-playlist",
                 "-o", os.path.join(stage.replace("%", "%%"), sync.yt_dlp_name("none" if bare else "full"))]

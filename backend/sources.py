@@ -568,6 +568,14 @@ def _stored(src):
     return {k: v for k, v in stored.items() if k in OPTION_KEYS and v != BUILTIN[k]}
 
 
+def synced_ok(src):
+    """Whether a sync of the source has worked (ended done) once: a failed
+    or cancelled first sync leaves it a first sync, for "last N"."""
+    if src["last_sync_at"] is None:
+        return False
+    return health.public(last_result(src), src["last_sync_at"], 0)["ok_at"] is not None
+
+
 def _resolve(src, stored, cfg):
     """(options, overridden keys): ``stored`` (a row's overrides) over its
     platform's defaults over BUILTIN, option by option, each checked again:
@@ -590,7 +598,7 @@ def _resolve(src, stored, cfg):
             continue
         if key == "content" and not can["content"]:
             continue
-        if key == "first_posts" and (src["last_sync_at"] is not None or out["full_history"]):
+        if key == "first_posts" and (synced_ok(src) or out["full_history"]):
             continue
         out = clean_options({key: defaults[key]}, out, **where, stories_daily=False) or out
     return out, overridden
@@ -942,13 +950,15 @@ def suggestions(conn, roots):
 # Changes (the caller notes userdata)
 # ---------------------------------------------------------------------------
 
-def create(conn, roots, tool, target, folder, person_id, account, options, now, table=None):
+def create(conn, roots, tool, target, folder, person_id, account, options, now, table=None, pin=()):
     """A new source. ``target``: checked (check_target). ``folder``: an
     existing folder inside a media root, or None for resolve()'s default.
     ``account``: (platform, id) of an indexed account, else found from the
     folder's posts when it has some. ``options``: what it downloads (see
     update: what equals its platform's defaults is inherited), or None:
-    everything inherited."""
+    everything inherited. ``pin``: options set on it even when equal to
+    what it inherits (one another site created has no script or login,
+    whatever the defaults say later)."""
     if tool not in TOOLS:
         raise Refused(f"tool must be one of: {', '.join(TOOLS)}")
     if not roots:
@@ -1002,6 +1012,7 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
         raise Refused("no such person")
     base = inherited(new_row(tool, platform, target))
     stored = overrides_of(options, base) if options is not None else {"v": OVERRIDES}
+    stored.update({k: options[k] for k in pin if options is not None})
     with conn:
         sid = conn.execute(
             "INSERT INTO sources(person_id, platform, author_id, tool, target, folder, options, created_at) "
@@ -1084,6 +1095,29 @@ def update(conn, sid, options, keys=None, cfg=None):
             f"THEN json_set(json_remove(options{', ?' * len(gone)}){', ?, json(?)' * len(kept)}) "
             "ELSE ? END WHERE id = ?",
             (OVERRIDES, *(f"$.{k}" for k in gone), *paths, json.dumps(whole), sid))
+
+
+def write(conn, sid, pin, drop=()):
+    """What a source's form saves: ``pin`` ({option: value}, those the
+    user changed) become its overrides, even one equal to what it inherits
+    now, so a later default does not move it; ``drop`` (those reset) are
+    inherited again. Any other stays as it was, set or inherited: a form
+    opened before a default changed does not pin the old one. In one
+    statement over what is stored, as update() with ``keys``."""
+    src = row(conn, sid)
+    if src is None:
+        return
+    drop = [k for k in drop if k not in pin]
+    # Options stored before overrides are rewritten whole first.
+    whole = {"v": OVERRIDES, **{k: v for k, v in _stored(src).items() if k not in drop}, **pin}
+    paths = [a for k, v in pin.items() for a in (f"$.{k}", json.dumps(v))]
+    with conn:
+        conn.execute(
+            "UPDATE sources SET options = CASE WHEN json_valid(options) AND json_type(options) = 'object' "
+            "AND json_extract(options, '$.v') = ? "
+            f"THEN json_set(json_remove(options{', ?' * len(drop)}){', ?, json(?)' * len(pin)}) "
+            "ELSE ? END WHERE id = ?",
+            (OVERRIDES, *(f"$.{k}" for k in drop), *paths, json.dumps(whole), sid))
 
 
 def reset(conn, sid, keys=None):

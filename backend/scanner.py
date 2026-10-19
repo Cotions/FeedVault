@@ -198,9 +198,10 @@ def _files_in(dirpath):
         return None
 
 
-def _read_folder(conn, roots, root, dirpath, names, fresh, started, report, seen_meta):
+def _read_folder(conn, roots, root, dirpath, names, fresh, started, report, seen_meta, later):
     """Parse and index one folder's files (under db.write_lock). Returns
-    what it found besides the posts, as a _Folder."""
+    what it found besides the posts, as a _Folder; the posts to read their
+    media files for (_enrich, once the lock is let go) go in ``later``."""
     out = _Folder()
     names, leading = _leading_out(roots, dirpath, names)
     out.unmatched.extend((path, *_size_mtime(path), reason) for path, reason in leading)
@@ -219,7 +220,7 @@ def _read_folder(conn, roots, root, dirpath, names, fresh, started, report, seen
     # all while the root's part of the index is built from nothing.
     first_seen = 0 if fresh else int(time.time())
     for post in result.posts:
-        _index_post(conn, post, started, report, seen_meta, out.unmatched, out.copies, first_seen)
+        _index_post(conn, post, started, report, seen_meta, out.unmatched, out.copies, first_seen, later)
     for n in names:
         if n not in result.claimed and parsers.is_media(n):
             path = os.path.join(dirpath, n)
@@ -270,13 +271,17 @@ def _scan(roots):
 
     def read(root, dirpath):
         """One folder, under db.write_lock, listed again there: a delete may
-        have moved files since os.walk listed it."""
+        have moved files since os.walk listed it. Returns the posts for
+        _enrich."""
+        later = []
         names = _files_in(dirpath)
         if names is None:
             found.pop(dirpath, None)
-            return
-        found[dirpath] = _read_folder(conn, roots, root, dirpath, names, fresh[root], started, report, seen_meta)
+            return later
+        found[dirpath] = _read_folder(conn, roots, root, dirpath, names, fresh[root], started, report, seen_meta,
+                                      later)
         conn.commit()
+        return later
 
     walked = []                                # the roots walked
     for root in roots:
@@ -292,16 +297,18 @@ def _scan(roots):
             if all(n.startswith(".") for n in filenames):
                 continue
             with db.write_lock:
-                read(root, dirpath)
+                later = read(root, dirpath)
+            _enrich(conn, later, started)
             db.write_lock.let_in()            # a delete or a restore waiting goes now
 
     with db.write_lock:
         # The folders others changed while it ran: read again (one made
         # after os.walk listed its parent is read for the first time).
+        later = []
         for d in sorted(_dirty):
             root = _root_of(d, walked)
             if root is not None and os.path.isdir(d) and _walked(root, d):
-                read(root, d)
+                later += read(root, d)
             elif d in found and not os.path.isdir(d):
                 del found[d]
         unmatched, copies, profiles, account_files = [], [], [], []
@@ -321,6 +328,7 @@ def _scan(roots):
                          unmatched)
         conn.executemany("DELETE FROM meta WHERE key = ?", [(BUILDING + root,) for root in walked])
         conn.commit()
+    _enrich(conn, later, started)
     _changed(dict.fromkeys(restored + changed + (["decisions"] if trashed else [])))   # their decisions went too
     report["unmatched"] = len(unmatched)
     report["finished_at"] = int(time.time())
@@ -380,10 +388,36 @@ def _size_mtime(path):
     return size, mtime
 
 
-def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_seen):
+def _bare(tool):
+    """Whether a post of this tool was rebuilt from file names, with no
+    metadata file (parsers' parse_filenames: "<tool> (filenames)")."""
+    return tool.endswith(" (filenames)")
+
+
+def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_seen, later):
     mtime, size = _stat(post.meta_path)
-    existing = conn.execute("SELECT meta_path, meta_mtime, meta_size, missing, side_files FROM posts WHERE id = ?",
-                            (post.id,)).fetchone()
+    existing = conn.execute("SELECT meta_path, meta_mtime, meta_size, missing, side_files, tool FROM posts "
+                            "WHERE id = ?", (post.id,)).fetchone()
+    moved = existing and existing["meta_path"] != post.meta_path and existing["meta_path"] not in post.side_files
+
+    # A post read from its metadata file over the same post rebuilt from a
+    # file name (a sync in mode "none", then one with metadata): it takes
+    # that row's place, the post upgraded where it is (its id, first_seen,
+    # tags, collections and saves kept), not a copy of it. The other way,
+    # the name never stands in for the metadata, even gone: a copy, or
+    # nothing when it is the post's own file (its metadata file deleted:
+    # the post stays as it was read, missing).
+    if moved and _bare(existing["tool"]) != _bare(post.tool):
+        if _bare(post.tool):
+            own = conn.execute("SELECT 1 FROM media WHERE post_id = ? AND path = ?",
+                               (post.id, post.media[0].path)).fetchone() if post.media else None
+            if own:
+                return
+            unmatched.append((post.meta_path, size, mtime,
+                              f"duplicate of {post.id} ({existing['meta_path']})"))
+            copies.append((post, mtime))
+            return
+        moved = False
 
     # The same post downloaded twice into different folders: first one wins
     # while its file still exists; the copy is reported, not indexed, and
@@ -391,8 +425,7 @@ def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_see
     # was indexed from is now one of its side files (instaloader's .json
     # beside a newer .json.xz of the same name): the same copy, read from
     # the other file.
-    if (existing and existing["meta_path"] != post.meta_path and existing["meta_path"] not in post.side_files
-            and (existing["meta_path"] in seen_meta or os.path.exists(existing["meta_path"]))):
+    if moved and (existing["meta_path"] in seen_meta or os.path.exists(existing["meta_path"])):
         unmatched.append((post.meta_path, size, mtime,
                           f"duplicate of {post.id} ({existing['meta_path']})"))
         copies.append((post, mtime))
@@ -411,13 +444,45 @@ def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_see
                                            (post.id,))}
         if have == {m.path for m in post.media}:
             return                             # nothing changed
-    if post.enrich is not None:
-        try:
-            post.enrich(post)                  # what the media file itself says (ParsedPost.enrich)
-        except Exception as e:                 # the post as its name gives it
-            print(f"[scan] {post.meta_path}: could not read its embedded metadata: {e}")
     outcome = db.upsert_post(conn, post, mtime, size, now, first_seen)
     report[outcome] += 1
+    if post.enrich is not None:
+        later.append(post)                     # read once db.write_lock is let go (_enrich)
+
+
+def _enrich(conn, posts, now):
+    """What the media files themselves say (ParsedPost.enrich: ffprobe) for
+    posts just indexed, written over them. Not under db.write_lock: a probe
+    can take seconds a file, and a delete or a restore must not wait for
+    it. A post changed meanwhile (trashed, or replaced by the same post
+    read from its metadata file) is left as it is."""
+    done = []
+    for post in posts:
+        try:
+            post.enrich(post)
+        except Exception as e:                 # the post as its name gives it
+            print(f"[scan] {post.meta_path}: could not read its embedded metadata: {e}")
+            continue
+        done.append(post)
+    if not done:
+        return
+    with db.write_lock:
+        for post in done:
+            row = conn.execute("SELECT meta_path, meta_mtime, meta_size, tool, missing FROM posts WHERE id = ?",
+                               (post.id,)).fetchone()
+            if row is None or (row["meta_path"], row["tool"], row["missing"]) != (post.meta_path, post.tool, 0) \
+                    or row["meta_mtime"] is None:
+                continue
+            # The metadata file's mtime and size as indexed: the next scan
+            # finds nothing changed.
+            db.upsert_post(conn, post, row["meta_mtime"], row["meta_size"], now)
+        conn.commit()
+
+
+def _enrich_apart(posts, now):
+    """_enrich in a thread of its own (its own connection), for a caller
+    that holds db.write_lock (a restore): it writes once that is let go."""
+    _enrich(db.connect(), posts, now)
 
 
 def _mark_missing(conn, seen_meta, roots=()):
@@ -459,17 +524,22 @@ def index_dirs(roots, dirs, new=False, since=None):
     after a download (``new``: the posts it adds are new). With ``since`` (a
     download's start), the report also counts the media files changed since
     that no parser could read (``unread``)."""
+    later = []
     with db.write_lock:
-        report, changed = index_dirs_locked(roots, dirs, new, since)
+        report, changed = index_dirs_locked(roots, dirs, new, since, later)
+    _enrich(db.connect(), later, int(time.time()))
     _changed(changed)
     hashing.kick()                             # files back from the trash may need hashing again
     return report
 
 
-def index_dirs_locked(roots, dirs, new=False, since=None):
+def index_dirs_locked(roots, dirs, new=False, since=None, later=None):
     """index_dirs, under db.write_lock held by the caller (a restore).
     Returns (report, the user tables changed): the caller hands those to
-    _changed, and calls hashing.kick, once the lock is released."""
+    _changed, and calls hashing.kick, once the lock is released. The posts
+    to read their media files for go in ``later``, for the caller to
+    _enrich once the lock is released; without it, a thread does."""
+    pending = [] if later is None else later
     touched(dirs)                              # a scan under way reads them again
     conn = db.connect()
     now = int(time.time())
@@ -492,7 +562,7 @@ def index_dirs_locked(roots, dirs, new=False, since=None):
         read.add(d)
         seen = set()
         for post in result.posts:
-            _index_post(conn, post, now, report, seen, unmatched, copies, first_seen)
+            _index_post(conn, post, now, report, seen, unmatched, copies, first_seen, pending)
         indexed.extend(seen)
         conn.execute(f"DELETE FROM unmatched WHERE path IN ({', '.join('?' for _ in result.claimed) or 'NULL'})",
                      [os.path.join(d, n) for n in result.claimed])
@@ -510,4 +580,6 @@ def index_dirs_locked(roots, dirs, new=False, since=None):
     db.save_account_files(conn, account_files, prune=False, dirs=read)
     changed = people.refresh_aliases(conn)
     conn.commit()
+    if later is None and pending:
+        threading.Thread(target=_enrich_apart, args=(pending, now), daemon=True, name="enrich").start()
     return report, changed

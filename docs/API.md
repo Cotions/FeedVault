@@ -70,11 +70,17 @@ browser from reading or changing the library; they are not a login.
   - `POST /api/saved`
   - `POST /api/save`
   - `GET /api/jobs/<id>`
-  - `GET /api/sources/resolve`
-  - `POST /api/sources` (403 when it sets an `options.script`, or a browser
-    profile in `options.session`)
-  - `GET /api/sources/<id>`
-  - `POST /api/sources/<id>/sync` (403 when the source runs a script)
+  - `GET /api/sources/resolve` (without `defaults`, `session` and
+    `metadata`)
+  - `POST /api/sources` (403 when it sets an `options.script`, or any
+    `options.session` but `{ "mode": "none" }`; the source gets no script
+    and no login as its own, see [Download defaults](#download-defaults))
+  - `GET /api/sources/<id>` (without `defaults`, `session`, `metadata` and
+    `script_warning`, and with `options.script` and `options.session`
+    `null`; `"dashboard_only": true` when its syncs only start from the
+    dashboard: it runs a script or logs in)
+  - `POST /api/sources/<id>/sync` (403 when the source runs a script, or
+    its sync would use a login: cookies or a saved session)
 
   Every other `/api/*` request from another site, whatever its method
   (`HEAD` and `OPTIONS` included), a path no route has, and any route added
@@ -1891,14 +1897,14 @@ no person yet.
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
 | GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "defaults": {…}, "metadata": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `defaults`: the options a new source starts from, its platform's [download defaults](#download-defaults); `metadata`: as a source's; `session`: the one a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` (an option left out, or sent as its platform's default, is not stored: it follows the default); 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or a [browser profile](#browser-profiles) in `options.session`, set from another site (see [Security rules](#security-rules)) |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` (an option left out, or sent as its platform's default, is not stored: it follows the default); 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or an `options.session` other than `{ "mode": "none" }` (a [browser profile](#browser-profiles) included), set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…}, "reset": true \| ["media", …] }` (the keys sent change; one sent equal to what it inherits stops being its own; `reset`: those options, or all with `true`, follow the defaults again, before `options` applies) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent or reset; 403 from another site (see [Security rules](#security-rules)) |
+| POST | `/api/sources/<id>` | body `{ "options": {…}, "reset": true \| ["media", …] }` (an option sent with another value than it has now becomes its own, even one equal to its default; one sent as it is now, or not sent, stays as it was, set or inherited; `reset`: those options, or all with `true`, follow the defaults again, before `options` applies) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent or reset; 403 from another site (see [Security rules](#security-rules)) |
 | POST | `/api/source-defaults/apply` | body `{ "tool": "gallery-dl", "platform": "twitter", "option": "media" }` → `{ "ok": true, "applied": 3, "skipped": 1 }`: every source of that tool and platform that sets that option itself stops doing so and follows the [download default](#download-defaults); those syncing now are skipped (but for `schedule`). 400 for another option than the defaults'; 403 from another site |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
 | POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site |
 | DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site |
-| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }` (already `failed`, with the reason, for a script that cannot run, see [Scripts](#scripts) "On a source"); 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script and the request comes from another site; 404 for an unknown id |
+| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }` (already `failed`, with the reason, for a script that cannot run, see [Scripts](#scripts) "On a source"); 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script or would sync with a login and the request comes from another site; 404 for an unknown id |
 | POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors`; 403 from another site |
 
 Every `/api/sources/<id>…` call answers 404 `{ "ok": false, "error": "no
@@ -2334,7 +2340,22 @@ uploader name and link are read back from the video with ffprobe when it
 is there (`ffprobe -show_entries format_tags`, 10 s at most per file). The
 thumbnail is inside the video (webm is remuxed to mkv first, losslessly:
 webm takes none); no thumbnail file is left. gallery-dl files get no exif:
-writing it would need another tool.
+writing it would need another tool. Only names of that exact shape are
+read so: the category with its real id format (twitter, instagram and
+tiktok digits, a bluesky TID, …), a two-digit number and the date;
+categories without a reliable id format are not read from names.
+
+yt-dlp embeds with ffmpeg, passed as `--ffmpeg-location` (the one
+FeedVault finds, see [Tools](#tools)). With none found, a yt-dlp sync or
+save in `none` writes the files as `full` instead, and its log says
+`ffmpeg not found: …` (embedding would fail every video, which yt-dlp
+then never records in its archive). `GET /api/config` has `"ffmpeg":
+true|false`, and a yt-dlp source's `metadata.ffmpeg` the same (the other
+tools have none), for the dashboard to warn.
+
+A post first read from its names whose metadata file appears later
+(another mode, a save) is the same post: indexed again with its
+metadata, keeping its id and when it was first seen.
 
 What `none` loses:
 
@@ -2365,10 +2386,19 @@ Set once, every source of that platform that does not set an option
 follows it from its next sync; one that does keeps its own. New sources
 start from them (the form shows them filled in), and those added without
 options (a person's profiles, a suggestion, the userscript) set nothing.
+An option a source sets stays set until it is reset (`reset` in `POST
+/api/sources/<id>`, or Reset and "Reset all to default" in its Options,
+where picking "Default" resets too), even when the default comes to
+equal it: a later default does not move it. Saving its Options writes
+only the options changed there: one sent as it is now stays set or
+inherited as it was, so a form opened before a default changed does not
+pin the old one.
+
 But from another site (the userscript): a source added from there does
-not inherit a default `script`, nor a default `session` naming a browser
-profile; it gets `null` for them as its own (the dashboard alone picks
-those, see [Security rules](#security-rules)).
+not inherit a default `script`, nor any login: it gets `"script": null`
+and `"session": { "mode": "none" }` as its own, whatever the defaults or
+the tool's setting say then or later (the dashboard alone picks those,
+see [Security rules](#security-rules)).
 
 `GET /api/config` has `"source_defaults": [block, …]`, one per tool and
 platform the routing table routes to, a source has, or defaults are set
@@ -2394,7 +2424,8 @@ one); the options are a source's but `full_history` (a one-off), checked
 as a source's (a 200 `{ "ok": false, "error" }` for a value refused, a
 script that does not exist or runs another tool, or content that needs a
 login the tool's setting does not have). A value equal to the built-in one
-is not kept. A `first_posts` default applies to a source's first sync only;
+is not kept. A `first_posts` default applies until a sync of the source
+has worked (ended `done`; a failed or cancelled first one leaves it);
 a `content` one to sources whose link does not pick what is downloaded. A
 hand-edited value that is not valid is skipped.
 
@@ -2869,7 +2900,8 @@ is gone.
   (`could not slim <path>: …`) and does not change how the job ended. In
   `full`, new files are compressed and whole. It was a switch before,
   `slim_metadata` (config): `true` reads as `slim`, and the next
-  `POST /api/config` writes it as the mode and drops the old key.
+  `POST /api/config` writes it as the mode and drops the old key. Sent
+  in `POST /api/config`, it is a 400 naming `instaloader.metadata`.
 - **The files on disk.** Job kind `slim-metadata`, group `instaloader`
   (never while instaloader runs), started with `POST /api/jobs`. `mode`
   `preview` changes nothing; `apply` rewrites every instaloader metadata

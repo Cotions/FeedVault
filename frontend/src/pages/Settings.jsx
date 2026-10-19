@@ -8,7 +8,7 @@ import { useToast } from "../lib/toast";
 import { JobLog } from "./Jobs";
 import { fmtAgo, fmtBytes, fmtFullDate, platformLabel, plural } from "../lib/fmt";
 import { formError, formOf, optionsOf } from "../lib/sourceOptions";
-import { SourceOptions, ToolBadge } from "../components/Sources";
+import { NoFfmpeg, SourceOptions, ToolBadge } from "../components/Sources";
 import PlatformIcon from "../components/PlatformIcon";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -791,7 +791,8 @@ const METADATA_MODES = {
    first job counts them and changes nothing, the dialog says what goes
    for good, a second job does it. Both are read from the shared jobs
    poll, so they survive leaving the page. ``current``: {tool: mode}. */
-function MetadataCard({ current, onSaved }) {
+/* ``ffmpeg``: whether FeedVault finds one: yt-dlp's none embeds with it. */
+function MetadataCard({ current, ffmpeg = true, onSaved }) {
   const { list, started } = useJobs();
   const [busy,   setBusy]   = useState(false);
   const [msg,    setMsg]    = useState(null);
@@ -873,6 +874,7 @@ function MetadataCard({ current, onSaved }) {
                 </span>
               </label>
             ))}
+            {tool === "yt-dlp" && current[tool] === "none" && !ffmpeg && <NoFfmpeg />}
           </fieldset>
         ))}
       </div>
@@ -1437,7 +1439,7 @@ export default function Settings() {
                 <DesktopCard on={config.desktop_notifications === true} onSaved={reload} />
                 <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} onDirty={onDirty} />
                 <MetadataCard current={Object.fromEntries(["instaloader", "gallery-dl", "yt-dlp"].map(t => [t, config[t]?.metadata]))}
-                              onSaved={reload} />
+                              ffmpeg={config.ffmpeg !== false} onSaved={reload} />
                 <DownloadDefaultsCard blocks={config.source_defaults || []}
                                       config={config} onSaved={reload} onDirty={onDirty} />
                 {Object.keys(COOKIE_TOOLS).map(t => (

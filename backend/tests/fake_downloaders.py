@@ -56,7 +56,8 @@ the flags FeedVault passes, newest post first:
   ``--no-write-thumbnail``, ``--embed-metadata`` (the title, description,
   uploader and link appended to the video as a FAKETAGS line that
   fake_ffprobe reads back; ``--embed-thumbnail``, ``--embed-chapters``,
-  ``--no-embed-info-json`` and ``--remux-video`` change nothing else). A
+  ``--no-embed-info-json``, ``--remux-video`` and ``--ffmpeg-location``
+  change nothing else). A
   YouTube channel also gets its playlist info JSON. ``pinned`` videos are
   listed first, as TikTok lists a profile's pinned videos. With
   ``--cookies-from-browser`` (or ``config_cookies``: cookies from the
@@ -417,6 +418,7 @@ def yt_dlp_main(argv):
     ap.add_argument("--no-write-info-json", dest="write_info_json", action="store_false")
     ap.add_argument("--no-write-thumbnail", dest="write_thumbnail", action="store_false")
     ap.add_argument("--remux-video")
+    ap.add_argument("--ffmpeg-location")
     ap.add_argument("--download-archive")
     ap.add_argument("-o", default="%(title)s [%(id)s].%(ext)s")
     ap.add_argument("--match-filters")

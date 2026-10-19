@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  defaultText, fieldOverridden, formError, formOf, mediaEffect, metadataEffect, needsLogin, optionsOf, optionsSummary,
+  changesOf, defaultText, fieldOverridden, fieldOwn, fieldsOf, formError, formOf, mediaEffect, metadataEffect, needsLogin, optionsOf, optionsSummary,
   overriddenFields, resetField, scheduleShort, scheduleText, today, toggleKind,
 } from "../src/lib/sourceOptions.js";
 
@@ -147,4 +147,29 @@ test("metadata modes say what none loses", () => {
   assert.match(metadataEffect("instaloader", "slim"), /slimmed/);
   assert.equal(formOf({ metadata: "none" }, IG).metadata, "none");
   assert.equal(optionsOf({ ...formOf(null, IG), metadata: "" }, IG).metadata, null);
+});
+
+test("a source's form saves only what changed, and resets only what was reset", () => {
+  // Media pinned to images; the default became images since: untouched, nothing is sent.
+  const opened = formOf({ media: "images", schedule: "off" }, IG);
+  const set = fieldsOf(["media"]);
+  assert.deepEqual([...set], ["media"]);
+  assert.equal(changesOf(opened, opened, set, new Set(), IG), null);
+  assert.equal(fieldOwn("media", opened, opened, set, new Set()), true);
+  // Another field changed: only it is sent; media stays set, unsent.
+  const daily = { ...opened, schedule: "daily" };
+  assert.deepEqual(changesOf(daily, opened, set, new Set(), IG), { options: { schedule: "daily" } });
+  assert.equal(fieldOwn("schedule", daily, opened, set, new Set()), true);
+  // Reset: media is sent as reset, not as a value.
+  const reset = new Set(["media"]);
+  assert.deepEqual(changesOf({ ...opened, media: "all" }, opened, set, reset, IG), { options: {}, reset: ["media"] });
+  assert.equal(fieldOwn("media", { ...opened, media: "all" }, opened, set, reset), false);
+  // A stale form (opened when the default was "all"): an untouched field is never sent.
+  const stale = formOf({ media: "all" }, IG);
+  assert.deepEqual(changesOf({ ...stale, since: "2024-01-01" }, stale, new Set(), new Set(), IG),
+                   { options: { since: "2024-01-01" } });
+  // The first-sync field saves both of its keys; last N only while it is the first sync.
+  const first = changesOf({ ...stale, first: "full" }, stale, new Set(), new Set(), YT, false);
+  assert.deepEqual(first, { options: { full_history: true } });
+  assert.deepEqual(fieldsOf(["first_posts"]), new Set(["first"]));
 });
