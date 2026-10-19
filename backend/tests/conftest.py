@@ -160,6 +160,20 @@ def env(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def ffmpeg(tmp_path, monkeypatch):
+    """A fake ffmpeg FeedVault finds (thumbs.ffmpeg_path): yt-dlp's metadata
+    mode none embeds with it (sync.yt_dlp_mode; the fake yt-dlp does not
+    run it). Run for a video frame, it makes none (exit 1)."""
+    import thumbs
+    exe = tmp_path / "ffmpeg-bin" / "ffmpeg"
+    exe.parent.mkdir()
+    exe.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(1)\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(thumbs, "ffmpeg_path", lambda: str(exe))
+    return str(exe)
+
+
+@pytest.fixture
 def client(env):
     import app as app_module
     app_module.app.testing = True

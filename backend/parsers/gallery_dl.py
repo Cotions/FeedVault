@@ -394,3 +394,124 @@ def parse_dir(root, dirpath, names):
         result.claimed |= {e[0] for e in entries} | {e[2] for e in entries if e[2]}
     result.profiles = list(profiles.values())
     return result
+
+
+# --- files with no metadata -------------------------------------------------
+#
+# A sync with metadata mode "none" writes no JSON: the files are named as
+# sync.GALLERY_DL_BARE has it, "<category> <post id> <num> <date>.<ext>"
+# (the number 01 on, 00 a cover; the date UTC, %Y%m%d-%H%M%S), which is all
+# such a post has. Its account is its folder's, as for instaloader's
+# filename-only posts: the folder's name, lowercase, as author id and handle
+# (people.refresh_aliases links it to the account's id where the folder has
+# posts with metadata too).
+
+# Only gallery-dl's categories (the platforms FeedVault syncs with it, and
+# others a route may send to it), each with its post ids' own shape: a name
+# of someone's own that happens to fit ("holiday 2024 1.jpg", "twitter cat
+# 2.png") stays theirs, on the Unmatched page. A category whose ids have no
+# shape to tell them by (redgifs' words, a mastodon instance's own name) is
+# not read from names at all.
+_BARE_IDS = {
+    "twitter": r"\d{15,20}",                   # a snowflake (tweets since late 2010)
+    "bluesky": r"[2-7a-j][2-7a-z]{12}",        # a TID, the post's rkey
+    "tiktok": r"\d{18,20}",
+    "instagram": r"\d{15,20}",                 # the media's pk
+    "reddit": r"[0-9a-z]{5,8}",                # base 36
+    "pixiv": r"\d{5,10}",
+    "tumblr": r"\d{8,20}",
+    "flickr": r"\d{9,12}",
+    "imgur": r"[A-Za-z0-9]{5,7}",
+    "patreon": r"\d{6,12}",
+    "fanbox": r"\d{4,12}",
+    "danbooru": r"\d{1,9}",
+    "gelbooru": r"\d{1,9}",
+}
+BARE_CATEGORIES = set(_BARE_IDS)
+# Exactly sync.GALLERY_DL_BARE's names: the number two digits at least, and
+# the date, which every post of these categories has ("twitter None 01.jpg":
+# the post had none of the id keys). A fanbox post can have none (its
+# extractor sets date to None when publishedDatetime does not parse): such a
+# file is left unmatched, as "fanbox 2024 01.jpg" may be the user's own.
+_BARE_RE = re.compile(r"(?=(?:" + "|".join(f"{c} {i}" for c, i in _BARE_IDS.items()) + r") )"
+                      r"(?P<category>[a-z]+) (?P<id>[A-Za-z0-9]+) (?P<num>\d{2,4})"
+                      r" (?P<date>\d{8}-\d{6})\.(?P<ext>[A-Za-z0-9]+)")
+_SIDE_EXT = {"mp3", "m4a", "aac", "ogg", "opus", "wav", "vtt", "srt"}
+FILENAMES = TOOL + " (filenames)"
+# The post's link, from what its names say.
+_BARE_URLS = {
+    "twitter": lambda pid, handle: f"https://x.com/{handle or 'i'}/status/{pid}",
+    "tiktok": lambda pid, handle: f"https://www.tiktok.com/@{handle}/video/{pid}" if handle else None,
+    "bluesky": lambda pid, handle: f"https://bsky.app/profile/{handle}/post/{pid}" if handle else None,
+}
+
+
+def _bare_date(text, path):
+    """The time a name says (UTC), else the file's mtime."""
+    if text:
+        try:
+            return int(datetime.strptime(text, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc).timestamp())
+        except ValueError:
+            pass
+    try:
+        return int(os.path.getmtime(path))
+    except OSError:
+        return None
+
+
+def parse_filenames(root, dirpath, names):
+    """Posts rebuilt from the names of files gallery-dl wrote with no
+    metadata (sync.GALLERY_DL_BARE), for the files no parser with metadata
+    claimed (parsers.PARSERS)."""
+    result = DirResult()
+    groups = {}                                # (category, post id) -> {date, nums: {num: [names]}}
+    for n in names:
+        m = _BARE_RE.fullmatch(n)
+        ext = m["ext"].lower() if m else None
+        if m is None or (ext not in IMAGE_EXT and ext not in VIDEO_EXT and ext not in _SIDE_EXT):
+            continue
+        g = groups.setdefault((m["category"], m["id"]), {"date": None, "nums": {}})
+        g["date"] = g["date"] or m["date"]
+        g["nums"].setdefault(int(m["num"]), []).append(n)
+    if not groups:
+        return result
+    inside = os.path.normpath(dirpath) != os.path.normpath(root)
+    handle = os.path.basename(os.path.normpath(dirpath)).lower() if inside else None
+    for (category, pid), g in sorted(groups.items()):
+        media, sides = [], []
+        photos = any(ext_of(n) in IMAGE_EXT for num, ns in g["nums"].items() if num > 0 for n in ns)
+        for num in sorted(g["nums"]):
+            files = sorted(g["nums"][num])
+            videos = [f for f in files if ext_of(f) in VIDEO_EXT]
+            images = [f for f in files if ext_of(f) in IMAGE_EXT]
+            sides += [f for f in files if f not in videos and f not in images]
+            if videos:
+                # A picture of the same name is its thumbnail (a TikTok cover, an X preview).
+                poster = os.path.join(dirpath, images[0]) if images else None
+                media.append(Media(len(media) + 1, "video", os.path.join(dirpath, videos[0]), poster))
+                sides += videos[1:] + images[1:]
+            elif images and num == 0 and photos:
+                sides += images                # a slideshow's cover, before its photos
+            elif images:
+                media.append(Media(len(media) + 1, "image", os.path.join(dirpath, images[0])))
+                sides += images[1:]
+        result.claimed |= {n for ns in g["nums"].values() for n in ns}
+        if not media:
+            continue                           # music alone: nothing to show
+        url = _BARE_URLS.get(category)
+        result.posts.append(ParsedPost(
+            platform=category,
+            post_id=pid,
+            url=url(pid, handle) if url else None,
+            kind="carousel" if len(media) > 1 else media[0].kind,
+            author_id=handle,
+            author_handle=handle,
+            author_name=None,
+            posted_at=_bare_date(g["date"], media[0].path),
+            text="",
+            meta_path=media[0].path,
+            tool=FILENAMES,
+            media=media,
+            side_files=[os.path.join(dirpath, n) for n in sorted(sides)],
+        ))
+    return result

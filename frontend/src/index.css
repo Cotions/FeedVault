@@ -2046,10 +2046,25 @@ code.profile-row-path:not(.dim) { color: var(--text-dim); }
 .settings-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .info-cookies { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
 .info-cookies .page-lede { margin-bottom: 0; }
-/* Settings → Sync, Instagram metadata: the clean-up of the files on disk, under the switch */
+/* Settings → Sync, Metadata files: the clean-up of the files on disk, under the switch */
 .slim-existing { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
 .slim-existing .page-lede { margin-bottom: 0; }
 .slim-existing .settings-actions { flex-wrap: wrap; }
+/* Settings → Sync, Metadata files: one column of modes per tool, side by
+   side while they fit. */
+.metadata-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 22px; }
+.metadata-tool { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.metadata-tool legend { padding: 0; margin-bottom: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted); }
+/* Settings → Sync, Download defaults: a fold per platform and tool. */
+.defaults-list { display: flex; flex-direction: column; gap: 8px; }
+.defaults-block { border: 1px solid var(--border-soft); border-radius: 8px; padding: 0 12px; }
+.defaults-block > summary { display: flex; align-items: center; gap: 8px; padding: 10px 0; cursor: pointer; min-width: 0; }
+.defaults-block > summary .tool-chip { flex: none; }
+.defaults-count { margin-left: auto; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.defaults-body { padding: 4px 0 12px; display: flex; flex-direction: column; gap: 12px; }
+.defaults-own { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.defaults-own li { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; }
+.defaults-own .btn-link { min-height: 26px; }
 .slim-failed { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .slim-failed code { overflow-wrap: anywhere; }
 .scan-running { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
@@ -3736,6 +3751,23 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-row > .platform-icon, .person-account > .platform-icon { margin-inline: 6px; }
 .source-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
 .source-summary { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* What it downloads, then whether it follows its platform's download
+   defaults: the summary is cut, the badge never. */
+.source-summary-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.source-inherit { flex: none; font-size: 11px; white-space: nowrap; }
+.source-inherit.is-set { padding: 0 6px; color: var(--blue); border-color: rgba(120, 170, 255, 0.4); }
+/* Beside a field's name in the options form: "default", or "set here",
+   the default and Reset (in normal case: the legend is uppercase). */
+.source-default {
+  margin-left: 8px; font-size: 11px; font-weight: 400; letter-spacing: 0; text-transform: none;
+}
+.source-default.is-set { color: var(--blue); }
+.source-default .btn-link { margin-left: 6px; font-size: 11px; }
+.source-inherits {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px;
+  margin-bottom: 12px; font-size: 12px;
+}
+.source-inherits .btn-link { min-height: 26px; }
 .source-schedule {
   display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;

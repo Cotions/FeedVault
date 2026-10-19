@@ -1,6 +1,6 @@
 """instaloader's metadata slimmed and compressed: the slim form
 (parsers.instaloader.slim), folders holding ``.json`` and ``.json.xz``, the
-clean-up job (slim.py) and the ``slim_metadata`` setting."""
+clean-up job (slim.py) and instaloader's ``slim`` metadata mode."""
 import collections
 import copy
 import dataclasses
@@ -1055,18 +1055,42 @@ def test_a_job_kind_that_runs_in_the_app(env, runner):
 # The setting
 # ---------------------------------------------------------------------------
 
-def test_the_setting_is_off_by_default_and_a_boolean(env, client):
-    assert get(client, "/api/config")["slim_metadata"] is False and slim.enabled() is False
-    for bad in ("yes", 1, None, [True]):
-        r = client.post("/api/config", json={"slim_metadata": bad}, headers=H).get_json()
-        assert r["ok"] is False and r["error"] == "slim_metadata must be true or false"
-    assert "slim_metadata" not in config.load() or config.load()["slim_metadata"] is False
-    r = post(client, "/api/config", {"slim_metadata": True})
-    assert r["ok"] and get(client, "/api/config")["slim_metadata"] is True and slim.enabled()
-    post(client, "/api/config", {"slim_metadata": False})
-    assert get(client, "/api/config")["slim_metadata"] is False
+def test_the_mode_is_full_by_default_and_slim_is_instaloaders_only(env, client):
+    cfg = get(client, "/api/config")
+    assert cfg["instaloader"]["metadata"] == "full" and "slim_metadata" not in cfg and slim.enabled() is False
+    for body in ({"instaloader": {"metadata": "yes"}}, {"instaloader": {"metadata": None}},
+                 {"instaloader": {"metadata": True}}, {"gallery-dl": {"metadata": "slim"}},
+                 {"yt-dlp": {"metadata": "slim"}}):
+        r = client.post("/api/config", json=body, headers=H).get_json()
+        assert r["ok"] is False and r["error"].startswith("metadata must be one of: full"), body
+    assert "metadata" not in (config.load().get("instaloader") or {})
+    r = post(client, "/api/config", {"instaloader": {"metadata": "slim"}})
+    assert r["ok"] and get(client, "/api/config")["instaloader"]["metadata"] == "slim" and slim.enabled()
+    post(client, "/api/config", {"instaloader": {"metadata": "none"}})
+    assert get(client, "/api/config")["instaloader"]["metadata"] == "none" and slim.enabled() is False
+    for tool in ("gallery-dl", "yt-dlp"):
+        assert post(client, "/api/config", {tool: {"metadata": "none"}})["config"][tool]["metadata"] == "none"
+
+
+def test_the_old_switch_reads_as_slim_and_moves_on_the_next_save(env, client):
     set_config(slim_metadata="true")                               # a config.json edited by hand: only true is on
     assert slim.enabled() is False
+    set_config(slim_metadata=True, instaloader={"pause": 5})
+    assert slim.enabled() and get(client, "/api/config")["instaloader"]["metadata"] == "slim"
+    # Any save writes it as the mode, the old key goes; the rest stays as it was.
+    post(client, "/api/config", {"check_updates": False})
+    cfg = config.load()
+    assert "slim_metadata" not in cfg and cfg["instaloader"] == {"pause": 5, "metadata": "slim"}
+    assert slim.enabled()
+    # Off, it was full: nothing is written but the old key goes.
+    set_config(slim_metadata=False)
+    post(client, "/api/config", {"instaloader": {"metadata": "full"}})
+    assert "slim_metadata" not in config.load() and slim.enabled() is False
+    # Sent, it is refused, saying what replaced it; nothing is saved.
+    for value in (True, False):
+        r = client.post("/api/config", json={"slim_metadata": value, "check_updates": True}, headers=H)
+        assert r.status_code == 400 and "instaloader: { metadata" in r.get_json()["error"]
+    assert "check_updates" not in config.load() or config.load()["check_updates"] is False
 
 
 def synced(env, client, fake):
@@ -1099,7 +1123,7 @@ def test_setting_on_a_sync_slims_what_it_wrote(env, client, fake):
     os.utime(old / "2020-01-01_00-00-00_UTC.json", (1577836800, 1577836800))
     before = tree(old)
     time.sleep(1.1)                                               # a job's start is a whole second
-    set_config(slim_metadata=True)
+    set_config(instaloader={**config.load().get("instaloader", {}), "metadata": "slim"})
     s, job, folder, metas = synced(env, client, fake)
     for name, data in metas.items():
         assert parser.slim(data) == data, name
@@ -1120,7 +1144,7 @@ def test_setting_on_a_sync_slims_what_it_wrote(env, client, fake):
 
 
 def test_setting_on_a_failure_does_not_fail_the_sync(env, client, fake, monkeypatch):
-    set_config(slim_metadata=True)
+    set_config(instaloader={**config.load().get("instaloader", {}), "metadata": "slim"})
     monkeypatch.setattr(slim, "_place", lambda tmp, todo: (_ for _ in ()).throw(OSError(5, "Input/output error")))
     s, job, folder, metas = synced(env, client, fake)
     assert job["result"]["added"] == 5
@@ -1150,7 +1174,7 @@ def test_setting_off_a_save_leaves_the_metadata_complete(env, client, fake):
 
 
 def test_setting_on_a_save_slims_its_metadata(env, client, fake, capsys):
-    set_config(slim_metadata=True)
+    set_config(instaloader={**config.load().get("instaloader", {}), "metadata": "slim"})
     job, data = saved(env, client, fake)
     assert "edge_sidecar_to_children" not in data["node"] and parser.slim(data) == data
     assert "[save] CSAVEME0001: 1 file of metadata slimmed" in capsys.readouterr().out

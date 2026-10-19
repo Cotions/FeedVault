@@ -220,3 +220,45 @@ def test_saved_posts_filled_from_the_save_jobs_kept(tmp_path, monkeypatch):
     conn = sqlite3.connect(path)
     assert conn.execute("SELECT post_id, saved_at FROM saved_posts").fetchall() == [("instagram:SAVED1", 5)]
     conn.close()
+
+
+def test_source_options_become_overrides(tmp_path, monkeypatch):
+    """Migration 26: a source keeps only the options it set itself (those not
+    as they were by default), so it follows its platform's download defaults
+    for the rest; nothing changes in what it syncs."""
+    import json
+    import sources
+    path = str(tmp_path / "feedvault.db")
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:25])
+    db.migrate(path)
+    conn = sqlite3.connect(path)
+    every = {"full_history": False, "session": None, "content": None, "media": "all", "since": None,
+             "first_posts": None, "script": None, "schedule": "off"}
+    rows = [
+        json.dumps(every),                                                   # as the form saved it: nothing set
+        json.dumps({**every, "media": "images", "schedule": "daily", "content": ["media"]}),
+        json.dumps({"since": "2024-01-01"}),                                 # older rows: only some keys
+        json.dumps({**every, "session": {"mode": "none"}, "first_posts": 20, "argv": ["-x"]}),
+        "{}", "not json", "[1]",
+        json.dumps({"v": 2, "media": "videos"}),                             # already stored as overrides
+    ]
+    for i, text in enumerate(rows):
+        conn.execute("INSERT INTO sources(platform, tool, target, folder, options, created_at) "
+                     "VALUES ('twitter', 'gallery-dl', ?, '/m', ?, 1)", (f"https://x.com/a{i}", text))
+    conn.commit()
+    conn.close()
+    monkeypatch.undo()
+    db.migrate(path)
+    conn = sqlite3.connect(path)
+    got = [json.loads(t) for (t,) in conn.execute("SELECT options FROM sources ORDER BY id")]
+    conn.close()
+    assert got == [
+        {"v": 2},
+        {"v": 2, "media": "images", "schedule": "daily", "content": ["media"]},
+        {"v": 2, "since": "2024-01-01"},
+        {"v": 2, "session": {"mode": "none"}, "first_posts": 20},
+        {"v": 2}, {"v": 2}, {"v": 2},
+        {"v": 2, "media": "videos"},
+    ]
+    # The frozen defaults of migration 26 are BUILTIN's before metadata modes.
+    assert db._OPTIONS_25 == {k: v for k, v in sources.BUILTIN.items() if k != "metadata"}

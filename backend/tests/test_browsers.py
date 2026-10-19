@@ -309,10 +309,13 @@ def test_another_site_cannot_name_a_profile(firefox, env, client):
         r = client.post("/api/sources", json={**body, "options": {"session": {**cookies, "profile": profile}}},
                         headers=FOREIGN)
         assert r.status_code == 403 and r.get_json() == {"ok": False, "error": app_module.FOREIGN_REFUSED}
+    # Nor any login: a browser's cookies without a profile, a saved session.
+    for session in (cookies, {**cookies, "profile": None}, {"mode": "login", "user": "me"}):
+        r = client.post("/api/sources", json={**body, "options": {"session": session}}, headers=FOREIGN)
+        assert r.status_code == 403 and r.get_json() == {"ok": False, "error": app_module.FOREIGN_REFUSED}
     assert client.get("/api/sources", headers=H).get_json()["sources"] == []
-    # Without one it adds as before, and the dashboard may name one.
-    for headers, session in ((FOREIGN, cookies), (FOREIGN, {**cookies, "profile": None}),
-                             (H, {**cookies, "profile": "test"})):
+    # No login it adds as before, and the dashboard may name a profile.
+    for headers, session in ((FOREIGN, {"mode": "none"}), (FOREIGN, None), (H, {**cookies, "profile": "test"})):
         r = client.post("/api/sources", json={**body, "options": {"session": session}}, headers=headers)
         assert r.status_code == 200 and r.get_json()["ok"] is True, r.get_json()
         sid = r.get_json()["source"]["id"]

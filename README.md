@@ -214,9 +214,9 @@ instaloader --load-cookies firefox some_profile    # a whole profile
 
 - instaloader writes each post's metadata compressed (`.json.xz`). Plain `.json`
   (`--no-compress-json`) is read too, and a folder may hold both. Most of such a
-  file is nothing FeedVault reads: Settings → Sync → Instagram metadata can slim
-  the files you have, and the new ones as they arrive (what is removed is gone
-  for good)
+  file is nothing FeedVault reads: Settings → Sync → Metadata files can slim
+  the files you have, and the new ones as they arrive (instaloader's "slim"
+  mode; what is removed is gone for good)
 - `--load-cookies <browser>` reuses your browser session instead of a password login.
   It needs instaloader's optional `browser_cookie3` module, which a plain
   install leaves out: `pipx install 'instaloader[browser_cookie3]'`, or
@@ -347,8 +347,10 @@ not running". Several saves in a row queue up (at most 20 at once,
 A profile page gets a **Sync profile** button: it syncs the profile's
 source, or first adds one (it asks, in the button itself, naming the tool and
 folder), and links to the person or account in FeedVault. A source that runs
-a script is only synced from the dashboard: the button says so and links
-there.
+a script, or one whose sync logs in (browser cookies, an instaloader
+session), is only synced from the dashboard: the button says so and links
+there. A source the button adds downloads without a login, whatever your
+download defaults or tool settings say.
 
 ## Jobs and tools
 
@@ -398,6 +400,31 @@ videos only, nothing older than a date, and for gallery-dl and yt-dlp a first
 sync that fetches only the last N posts. Stories, highlights and tagged posts
 need an Instagram login (**Settings → Sync**). The source shows a summary
 such as "posts, reels · since 2024-01-01".
+
+**Settings → Sync → Download defaults** holds those options once per site and
+tool (X with gallery-dl, Instagram with instaloader, YouTube with yt-dlp, …).
+Every source follows them for each option it does not set itself, so setting
+X once changes the next sync of every X source you have not customised. A
+source's Options shows each field as "default" or "set here" with a Reset, and
+"Reset all to default"; the source list marks the ones with options of their
+own as "custom". New sources start from the defaults, and an option you leave
+as it is keeps following them. An option you change on a source stays its
+own, even when a default later comes to equal it, until you Reset it.
+"Apply to all sources" next to a default makes
+the sources that set that option themselves follow it too (it asks first, with
+how many).
+
+**Settings → Sync → Metadata files** picks, per tool, what is written beside
+the media: **full** (the tool's own metadata files, as before), **slim**
+(instaloader only: its files slimmed to what FeedVault reads) or **none** (no
+files beside the media: posts are read from their names, which then carry the
+post's id and date; yt-dlp embeds the title, description, chapters and
+thumbnail in the video, read back with ffprobe). A source's Options can pick
+its own. yt-dlp needs ffmpeg for none: without it, its syncs write the files
+(full) and say so in their log. With none, captions, hashtags and counts are
+not kept (see
+[docs/API.md](docs/API.md#metadata-modes) for the full list). It applies to
+new downloads only.
 
 A source can also sync on its own: its **Schedule** option is off (default),
 hourly, daily or weekly (daily as soon as you turn its stories on, since they

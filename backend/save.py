@@ -9,8 +9,10 @@ downloads into a folder of its own in the data directory (``saving/<shortcode>``
 files named ``{shortcode}``). When it exits, the post's JSON names its owner,
 and the files move to the owner's folder (owner_folder), named the way that
 folder's files are (sync.detect_pattern), never over a file already there.
-With ``slim_metadata`` on, its JSON is slimmed there (slim.py). That folder
-is then indexed.
+The folder's metadata mode (sync.folder_metadata) says what goes with them:
+slim, its JSON is slimmed there (slim.py); none, only the media move, named
+as sync.DATED (the parser reads the post from its names), the JSON and
+caption left in staging. That folder is then indexed.
 
 A post whose owner had no folder goes to ``<first root>/_saved``; once the
 owner gets an instaloader source, its next sync first moves it into the
@@ -162,12 +164,22 @@ def _place(code, stage, roots, note):
     pattern, _ = sync.detect_pattern(folder)
     handle = post.author_handle if isinstance(post.author_handle, str) \
         and sources._HANDLE_RE.fullmatch(post.author_handle) else None
-    base = base_name(pattern, handle, code, post.posted_at)
+    mode = sync.folder_metadata(conn, "instaloader", folder)
+    if mode == "none" and (handle is None or sources.in_saved(folder, roots)):
+        # Read from its names alone, a post is the folder's account's: in
+        # _saved it would be nobody's, and gather moves only what has metadata.
+        note("metadata kept: the post's owner has no folder yet" if handle else
+             "metadata kept: no handle to name its files after")
+        mode = "full"
+    bare = mode == "none"
+    base = base_name(sync.DATED if bare else pattern, handle, code, post.posted_at)
     moved = kept = 0
     metas = []
     for name in sorted(os.listdir(stage)):
         if not name.startswith(code):
             continue
+        if bare and (parser._meta_base(name) is not None or name[len(code):] in parser._SIDE_SUFFIXES):
+            continue                           # left in staging, removed with it
         src, dst = os.path.join(stage, name), os.path.join(folder, base + name[len(code):])
         if os.path.lexists(dst):
             kept += 1                          # never over a file already there
@@ -176,7 +188,7 @@ def _place(code, stage, roots, note):
         moved += 1
         if parser._meta_base(name) is not None:
             metas.append(dst)
-    slim.files(metas, roots, note)             # when the setting is on
+    slim.files(metas, roots, note, on=mode == "slim")
     note(f"{moved} file{'' if moved == 1 else 's'} moved to {folder}"
          + (f"; {kept} already there, kept as they were" if kept else ""))
     key = people.canonical(conn, "instagram", post.author_id) if post.author_id else None

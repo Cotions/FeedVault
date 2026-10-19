@@ -3,7 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  formError, formOf, mediaEffect, needsLogin, optionsOf, optionsSummary, scheduleShort, scheduleText, today, toggleKind,
+  changesOf, defaultText, fieldOverridden, fieldOwn, fieldsOf, formError, formOf, mediaEffect, metadataEffect, needsLogin, optionsOf, optionsSummary,
+  overriddenFields, resetField, scheduleShort, scheduleText, today, toggleKind,
 } from "../src/lib/sourceOptions.js";
 
 const IG = { content: ["posts", "reels", "stories", "highlights", "tagged"], content_default: ["posts"],
@@ -13,7 +14,7 @@ const NOW = new Date(2026, 9, 2, 12);
 
 test("defaults from no options", () => {
   assert.deepEqual(formOf(null, IG), { content: ["posts"], media: "all", since: "", first: "new", count: "",
-                                    schedule: "off", script: "", session: null });
+                                    schedule: "off", script: "", session: null, metadata: "" });
   assert.equal(formOf({ script: "my-insta" }, IG).script, "my-insta");
   assert.deepEqual(formOf({ first_posts: 50, full_history: false }, YT).first, "last");
 });
@@ -38,10 +39,10 @@ test("options sent", () => {
                  schedule: "daily" };
   assert.deepEqual(optionsOf(form, IG), { media: "images", since: "2024-01-01", content: ["posts", "stories"],
                                            full_history: false, first_posts: null, schedule: "daily",
-                                           script: null, session: null });
+                                           script: null, session: null, metadata: null });
   assert.deepEqual(optionsOf({ ...form, first: "last", count: "20" }, YT),
                    { media: "all", since: "2024-01-01", full_history: false, first_posts: 20, schedule: "daily",
-                     script: null, session: null });
+                     script: null, session: null, metadata: null });
   assert.equal("first_posts" in optionsOf(form, YT, false), false);
   assert.equal(optionsOf({ ...form, script: "builtin:yt-dlp-channel" }, YT).script, "builtin:yt-dlp-channel");
 });
@@ -121,4 +122,54 @@ test("schedule line", () => {
                "daily · skipped: gallery-dl was not found");
   assert.equal(scheduleShort(s, now), "in 3 h");
   assert.equal(scheduleShort({ schedule: { ...sch, next_at: 0 } }, now), "due");
+});
+
+test("fields set on a source against its download defaults", () => {
+  const defaults = formOf({ content: ["posts", "reels"], media: "videos", schedule: "daily" }, IG);
+  const form = { ...defaults, content: ["reels", "posts"], since: "2024-01-01", schedule: "weekly" };
+  // The order of the kinds is not a change.
+  assert.equal(fieldOverridden(form, defaults, "content"), false);
+  assert.deepEqual(overriddenFields(form, defaults), ["since", "schedule"]);
+  assert.deepEqual(overriddenFields(resetField(form, defaults, "since"), defaults), ["schedule"]);
+  // The last N posts is one field of two form values.
+  const last = { ...defaults, first: "last", count: "20" };
+  assert.deepEqual(overriddenFields(last, defaults), ["first"]);
+  assert.deepEqual(resetField(last, defaults, "first"), defaults);
+  // No defaults (a new source's form): nothing is marked.
+  assert.equal(fieldOverridden(form, null, "since"), false);
+  assert.equal(defaultText("since", defaults, "instagram", "instaloader"), "no limit");
+  assert.equal(defaultText("metadata", defaults, "instagram", "instaloader", "slim"), "slim");
+  assert.equal(defaultText("script", defaults, "instagram", "instaloader"), "instaloader’s own command");
+});
+
+test("metadata modes say what none loses", () => {
+  assert.match(metadataEffect("yt-dlp", "none"), /^no files beside the media.*ffprobe/);
+  assert.match(metadataEffect("instaloader", "slim"), /slimmed/);
+  assert.equal(formOf({ metadata: "none" }, IG).metadata, "none");
+  assert.equal(optionsOf({ ...formOf(null, IG), metadata: "" }, IG).metadata, null);
+});
+
+test("a source's form saves only what changed, and resets only what was reset", () => {
+  // Media pinned to images; the default became images since: untouched, nothing is sent.
+  const opened = formOf({ media: "images", schedule: "off" }, IG);
+  const set = fieldsOf(["media"]);
+  assert.deepEqual([...set], ["media"]);
+  assert.equal(changesOf(opened, opened, set, new Set(), IG), null);
+  assert.equal(fieldOwn("media", opened, opened, set, new Set()), true);
+  // Another field changed: only it is sent; media stays set, unsent.
+  const daily = { ...opened, schedule: "daily" };
+  assert.deepEqual(changesOf(daily, opened, set, new Set(), IG), { options: { schedule: "daily" } });
+  assert.equal(fieldOwn("schedule", daily, opened, set, new Set()), true);
+  // Reset: media is sent as reset, not as a value.
+  const reset = new Set(["media"]);
+  assert.deepEqual(changesOf({ ...opened, media: "all" }, opened, set, reset, IG), { options: {}, reset: ["media"] });
+  assert.equal(fieldOwn("media", { ...opened, media: "all" }, opened, set, reset), false);
+  // A stale form (opened when the default was "all"): an untouched field is never sent.
+  const stale = formOf({ media: "all" }, IG);
+  assert.deepEqual(changesOf({ ...stale, since: "2024-01-01" }, stale, new Set(), new Set(), IG),
+                   { options: { since: "2024-01-01" } });
+  // The first-sync field saves both of its keys; last N only while it is the first sync.
+  const first = changesOf({ ...stale, first: "full" }, stale, new Set(), new Set(), YT, false);
+  assert.deepEqual(first, { options: { full_history: true } });
+  assert.deepEqual(fieldsOf(["first_posts"]), new Set(["first"]));
 });

@@ -386,8 +386,21 @@ export function resolveSource(url, opts, tool) { return get(`/api/sources/resolv
 // { tool?, target (a profile link, or an Instagram name with tool "instaloader"), folder?, person?,
 //   account?, options? } → { ok, source }
 export function createSource(body) { return post("/api/sources", body); }
-// options: { full_history?, session?, content?, media?, since?, first_posts? } → { ok, source }
-export function updateSource(id, options) { return post(`/api/sources/${seg(id)}`, { options }); }
+// options: { full_history?, session?, content?, media?, since?, first_posts?, script?, metadata?, schedule? }
+// (one changed is set on the source; one sent as it is stays as it was), reset?: [option keys] or true
+// (those follow its platform's download defaults again). ``pin``: every option sent is set as sent
+// (the Options dialog sends only the fields the user changed) → { ok, source }
+export function updateSource(id, options, reset, pin = false) {
+  return post(`/api/sources/${seg(id)}`, { options, ...(reset ? { reset } : {}), ...(pin ? { pin } : {}) });
+}
+// One platform's download defaults ({ option: value }; {} for none) → { ok, config } or { ok: false, error }
+export function saveSourceDefaults(tool, platform, defaults) {
+  return post("/api/config", { source_defaults: { [tool]: { [platform]: defaults } } });
+}
+// Every source of tool on platform that sets option itself follows the default → { ok, applied, skipped }
+export function applySourceDefault(tool, platform, option) {
+  return post("/api/source-defaults/apply", { tool, platform, option });
+}
 // The folder, files and posts stay → { ok }; 409 while its sync is queued or running
 export function deleteSource(id) { return del(`/api/sources/${seg(id)}`); }
 // → { ok, job } or { ok: false, error } (already queued, cannot be synced)

@@ -2118,6 +2118,15 @@ def test_the_userscripts_origin_cannot_run_a_script(client, folder, runner, sour
     job = sync_now(client, other["id"], headers=headers)["job"]
     assert job["kind"] == "instaloader-sync"
     ended(job["id"])
+    # A script set as the platform's download default is not inherited from there either:
+    # the source has the tool's own command as its own choice (its schedule would run it unasked).
+    r = client.post("/api/config", json={"source_defaults": {"instaloader": {"instagram": {"script": "mine"}}}},
+                    headers=H).get_json()
+    assert r["ok"], r
+    s = add_source(client, "erin.eats", headers=headers, schedule="hourly").get_json()["source"]
+    assert s["options"]["script"] is None and "script" in s["overrides"]
+    s = add_source(client, "fay.films").get_json()["source"]
+    assert s["options"]["script"] == "mine" and s["overrides"] == []
 
 
 def test_sync_all_reads_the_scripts_folder_once(client, folder, runner, source, monkeypatch):

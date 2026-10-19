@@ -852,7 +852,7 @@ def test_archive_file_kept_intact_by_concurrent_appends(env):
 def test_tool_settings_in_config(env, client):
     cfg = get(client, "/api/config")
     for tool in ("gallery-dl", "yt-dlp"):
-        assert cfg[tool] == {"session": {"mode": "none"}, "pause": 30, "ignore_config": False}
+        assert cfg[tool] == {"session": {"mode": "none"}, "pause": 30, "ignore_config": False, "metadata": "full"}
     assert cfg["youtube_max_seconds"] == 180
     r = post(client, "/api/config", {"gallery-dl": {"session": {"mode": "cookies", "browser": "firefox"}},
                                       "youtube_max_seconds": 600})
@@ -866,9 +866,9 @@ def test_tool_settings_in_config(env, client):
     assert config.load()["youtube_max_seconds"] == 600
     # The pause, each tool its own, as instaloader's.
     r = post(client, "/api/config", {"yt-dlp": {"pause": 0}, "gallery-dl": {"pause": 3600}})
-    assert r["config"]["yt-dlp"] == {"session": {"mode": "none"}, "pause": 0, "ignore_config": False}
+    assert r["config"]["yt-dlp"] == {"session": {"mode": "none"}, "pause": 0, "ignore_config": False, "metadata": "full"}
     assert r["config"]["gallery-dl"] == {"session": {"mode": "cookies", "browser": "firefox"}, "pause": 3600,
-                                         "ignore_config": False}
+                                         "ignore_config": False, "metadata": "full"}
     for bad in [-1, 3601, "5", True, None, 1.5]:
         assert post(client, "/api/config", {"yt-dlp": {"pause": bad}})["ok"] is False, bad
     assert config.load()["yt-dlp"]["pause"] == 0
