@@ -613,29 +613,52 @@ def duplicates_status():
     return jsonify(hashing.status())
 
 
+def _trash_entry(t):
+    """A member to trash: its id (the whole member), or { member, items: [idx] }
+    (just those items of a post) → (member id, None or [idx]), or None."""
+    if isinstance(t, str):
+        return t, None
+    if (isinstance(t, dict) and isinstance(t.get("member"), str) and isinstance(t.get("items"), list)
+            and 0 < len(t["items"]) <= 1000
+            and all(isinstance(i, int) and not isinstance(i, bool) for i in t["items"])):
+        return t["member"], t["items"]
+    return None
+
+
 def _choice(c):
-    return isinstance(c, dict) and isinstance(c.get("group"), str) and isinstance(c.get("keep"), str)
+    """{ group, keep } or { group, trash: [entry] } → what duplicates.resolve takes, or None."""
+    if not isinstance(c, dict) or not isinstance(c.get("group"), str):
+        return None
+    if "trash" not in c:
+        return {"group": c["group"], "keep": c["keep"]} if isinstance(c.get("keep"), str) else None
+    if not isinstance(c["trash"], list) or len(c["trash"]) > 1000:
+        return None
+    entries = [_trash_entry(t) for t in c["trash"]]
+    if None in entries or len({mid for mid, _ in entries}) != len(entries):
+        return None
+    return {"group": c["group"], "trash": dict(entries)}
 
 
 @app.post("/api/duplicates/resolve")
 def duplicates_resolve():
     body = _body()
     choices = body.get("groups") if "groups" in body else [body]
-    if not isinstance(choices, list) or not choices or len(choices) > 500 or not all(map(_choice, choices)):
-        return jsonify({"ok": False, "error": "send { group, keep } or groups: [{ group, keep }] (at most 500)"}), 400
+    choices = [_choice(c) for c in choices] if isinstance(choices, list) else None
+    if not choices or len(choices) > 500 or None in choices:
+        return jsonify({"ok": False, "error": "send { group, keep } or { group, trash: [member id or "
+                        "{ member, items }] }, or groups: [those] (at most 500)"}), 400
     threshold = _threshold(body.get("threshold"))
     if threshold is None:
         return jsonify({"ok": False, "error": THRESHOLD_ERROR}), 400
     cfg = config.load()
-    report = duplicates.resolve([(c["group"], c["keep"]) for c in choices],
-                                cfg["media_roots"], cfg["data_directory"], threshold=threshold)
+    report = duplicates.resolve(choices, cfg["media_roots"], cfg["data_directory"], threshold=threshold)
     if report.get("posts"):
         userdata.changed("decisions")          # a trashed post takes its decision along, or hands it on
     for name in report.pop("carried", []):
         userdata.changed(name)
-    if report.get("posts") or report.get("copies"):
+    if report.get("posts") or report.get("copies") or report.get("media"):
         print(f"[duplicates] resolved {len(report['resolved'])} groups: {len(report['posts'])} posts, "
-              f"{len(report['copies'])} copies, {report['files']} files → trash")
+              f"{len(report['copies'])} copies, {len(report['media'])} items, {report['files']} files → trash")
     return jsonify(report)
 
 
