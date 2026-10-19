@@ -723,28 +723,50 @@ def _owner(conn, row, accounts):
     return key, None
 
 
-def _sync_owner(conn, row, accounts, roots=None):
+def _sync_owner(conn, row, accounts, cache=None):
     """_owner, for Don't sync: a source not tied to an account yet (its
-    first sync not done) stands for its folder's account (_folder_account),
-    and that account's person when it has no person of its own."""
+    first sync not done) stands for the account create() found for it
+    (_first_sync_account), and that account's person when it has no person
+    of its own. ``cache``: one dict a caller going through many sources
+    passes to each call (see _first_sync_account)."""
     key, person = _owner(conn, row, accounts)
-    if key is None and row["author_id"] is None and row["folder"]:
-        roots = roots if roots is not None else config.load()["media_roots"]
-        real = inside_root(row["folder"], roots)
-        key = _folder_account(conn, row["platform"], real, roots) if real else None
+    if key is None and row["author_id"] is None:
+        key = _first_sync_account(conn, row, accounts, {} if cache is None else cache)
         if key is not None and person is None:
             person = (accounts.get(key) or {}).get("person")
     return key, person
 
 
-def not_synced(conn, row, accounts=None, flags=None, roots=None):
-    """Whether a source row is not synced: its account (its folder's, before
-    its first sync), the person it shows with, or the person it was added
-    to, is set to Don't sync (nosync.py). ``flags``: nosync.flags, read
-    once by a caller going through many."""
+def _first_sync_account(conn, row, accounts, cache):
+    """The account a source not tied to one yet stands for, as create()
+    finds it: its folder's (_folder_account), else the one with its link's
+    handle (_handle_account), so one whose folder is still empty counts too.
+    ``cache`` keeps the media roots (read once) and each answer, so going
+    through every source costs one lookup per folder."""
+    if "roots" not in cache:
+        cache["roots"] = config.load()["media_roots"]
+    roots = cache["roots"]
+    platform, tool, target = row["platform"], row["tool"], row["target"]
+    k = ("first-sync", platform, tool, row["folder"], target)
+    if k not in cache:
+        real = inside_root(row["folder"], roots) if row["folder"] else None
+        key = _folder_account(conn, platform, real, roots, accounts) if real else None
+        if key is None:
+            key = _handle_account(conn, platform, target if tool == "instaloader" else profile_handle(target),
+                                  accounts)
+        cache[k] = key
+    return cache[k]
+
+
+def not_synced(conn, row, accounts=None, flags=None, cache=None):
+    """Whether a source row is not synced: its account (before its first
+    sync, the one create() found for it), the person it shows with, or the
+    person it was added to, is set to Don't sync (nosync.py). ``accounts``,
+    ``flags`` (nosync.flags) and ``cache`` (_sync_owner): read once by a
+    caller going through many."""
     accounts = accounts if accounts is not None else db.accounts(conn)
     keys, pids = flags if flags is not None else nosync.flags(conn)
-    key, person = _sync_owner(conn, row, accounts, roots)
+    key, person = _sync_owner(conn, row, accounts, cache)
     if key is not None and key in keys:
         return True
     if row["author_id"] is not None and (row["platform"], row["author_id"]) in keys:
@@ -771,7 +793,7 @@ def not_synced_error(conn, row, accounts=None):
     return NOT_SYNCED.format(who=who)
 
 
-def _public(conn, row, accounts, active, cfg=None, flags=None):
+def _public(conn, row, accounts, active, cfg=None, flags=None, cache=None):
     key, person = _owner(conn, row, accounts)
     result = last_result(row)
     job = active.get(row["id"])
@@ -796,7 +818,7 @@ def _public(conn, row, accounts, active, cfg=None, flags=None):
         "health": health.public(result, row["last_sync_at"], failures(result), row["target"]),
         "job": job,
         # Its account or person is set to Don't sync: kept, never synced.
-        "no_sync": not_synced(conn, row, accounts, flags),
+        "no_sync": not_synced(conn, row, accounts, flags, cache),
     }
 
 
@@ -812,8 +834,9 @@ def row(conn, sid):
 def listing(conn, roots, active=None):
     """Every source, by target, and the folders that could be one."""
     accounts, cfg, flags = db.accounts(conn), config.load(), nosync.flags(conn)
+    cache = {"roots": cfg["media_roots"]}
     rows = conn.execute("SELECT * FROM sources ORDER BY target, tool").fetchall()
-    return {"sources": [_public(conn, r, accounts, active or {}, cfg, flags) for r in rows],
+    return {"sources": [_public(conn, r, accounts, active or {}, cfg, flags, cache) for r in rows],
             "suggestions": suggestions(conn, roots)}
 
 
@@ -826,21 +849,21 @@ def of_person(conn, pid):
 
 def of_account(conn, platform, author_id):
     """The ids of the sources of an account (canonical, or an alias of it),
-    a source not tied to an account yet counted as its folder's (_sync_owner)."""
+    a source not tied to an account yet counted as create() found it (_sync_owner)."""
     key = people.canonical(conn, platform, author_id)
-    accounts, roots = db.accounts(conn), config.load()["media_roots"]
+    accounts, cache = db.accounts(conn), {}
     return [r["id"] for r in conn.execute("SELECT * FROM sources WHERE platform = ? ORDER BY target, tool",
                                           (platform,)).fetchall()
-            if _sync_owner(conn, r, accounts, roots)[0] == key]
+            if _sync_owner(conn, r, accounts, cache)[0] == key]
 
 
 def of_person_all(conn, pid):
     """The ids of the sources Don't sync set on a person stops (not_synced):
     of_person's, those added to them whose account is someone else's, and
-    those not tied to an account yet whose folder's account is theirs."""
-    accounts, roots = db.accounts(conn), config.load()["media_roots"]
+    those not tied to an account yet whose account (_sync_owner) is theirs."""
+    accounts, cache = db.accounts(conn), {}
     return [r["id"] for r in conn.execute("SELECT * FROM sources ORDER BY target, tool").fetchall()
-            if r["person_id"] == pid or (_sync_owner(conn, r, accounts, roots)[1] or {}).get("id") == pid]
+            if r["person_id"] == pid or (_sync_owner(conn, r, accounts, cache)[1] or {}).get("id") == pid]
 
 
 def account_folder(conn, platform, author_id, roots):
@@ -1152,32 +1175,37 @@ def existing(conn, tool, target, folder=None):
     return row[0] if row else None
 
 
-def _handle_account(conn, platform, handle):
+def _handle_account(conn, platform, handle, accounts=None):
     """The indexed account whose handle (any it had) is a link's profile
     name, when exactly one has it: posts downloaded before, into another
-    folder, so the first sync does not fetch them again."""
+    folder, so the first sync does not fetch them again. ``accounts``:
+    db.accounts, when the caller has it."""
     if not handle:
         return None
     handle = handle.lower()
-    found = [key for key, a in db.accounts(conn).items() if key[0] == platform and handle in
+    accounts = accounts if accounts is not None else db.accounts(conn)
+    found = [key for key, a in accounts.items() if key[0] == platform and handle in
              {h.lower() for h in [a["handle"], *a["handles"]] if isinstance(h, str)}]
     return found[0] if len(found) == 1 else None
 
 
-def _folder_account(conn, platform, folder, roots):
+def _folder_account(conn, platform, folder, roots, accounts=None):
     """The account of a profile folder's posts: its name as filename-only
     posts carry it, canonical (the numeric id once metadata names it), else
-    the account with the most posts in it."""
-    accounts = db.accounts(conn)
+    the account with the most posts in it. ``accounts``: db.accounts, when
+    the caller has it."""
+    accounts = accounts if accounts is not None else db.accounts(conn)
     if _top(os.path.join(folder, "x"), roots) == folder:
         key = people.canonical(conn, platform, os.path.basename(folder).lower())
         if key in accounts:
             return key
     prefix = folder.rstrip(os.sep) + os.sep
+    # The paths under the folder, as a range of meta_path's unique index
+    # ("/" + 1 is "0"); "+" keeps the planner off the platform index.
     found = conn.execute(
-        "SELECT author_id, COUNT(*) FROM posts WHERE platform = ? AND author_id IS NOT NULL "
-        "AND substr(meta_path, 1, ?) = ? GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1",
-        (platform, len(prefix), prefix)).fetchone()
+        "SELECT author_id, COUNT(*) FROM posts WHERE +platform = ? AND +author_id IS NOT NULL "
+        "AND meta_path >= ? AND meta_path < ? GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1",
+        (platform, prefix, prefix[:-1] + chr(ord(os.sep) + 1))).fetchone()
     key = people.canonical(conn, platform, found[0]) if found else None
     return key if key in accounts else None
 

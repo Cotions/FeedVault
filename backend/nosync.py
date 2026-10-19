@@ -14,7 +14,10 @@ Off by default. While it is on:
 
 Every sync kind (each tool's, and a source's own script) builds through
 sync.synced_source, which refuses a source set to Don't sync: no route,
-POST /api/jobs included, queues one. What stays allowed are the user's
+POST /api/jobs included, queues one. Each builds and queues under
+sync._submitting (sync.sync, sync.sync_all, sync.submit), the lock the
+switch is set under (app.py), so it never lands between the check and the
+queueing. What stays allowed are the user's
 deliberate one-off actions that are not a source's sync: saving one post
 (POST /api/save) and running a script by hand with an explicit link or
 target (POST /api/scripts/<id>/run).

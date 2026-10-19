@@ -1769,6 +1769,16 @@ def _job(src, scheduled=False, scripts_ok=True):
     return KINDS[src["tool"]], params
 
 
+def submit(kind, params):
+    """jobs.submit, for POST /api/jobs: a sync kind built and queued under
+    _submitting, as sync() does, so Don't sync (set under it, app.py) never
+    lands between its check (synced_source) and its queueing."""
+    if kind in KINDS.values():
+        with _submitting:
+            return jobs.submit(kind, params)
+    return jobs.submit(kind, params)
+
+
 def sync(sid, scheduled=False, scripts_ok=True):
     """Queue one source's sync: the job's public dict. Raises Busy, Refused
     (see _job), or jobs.BadRequest when the source cannot be synced.
@@ -1801,12 +1811,12 @@ def sync_all(only=None, scripts_ok=True):
     with _submitting, scripts.read_once():
         busy = active()
         conn = db.connect()
-        accounts, flags = db.accounts(conn), nosync.flags(conn)
+        accounts, flags, cache = db.accounts(conn), nosync.flags(conn), {}
         for src in conn.execute("SELECT * FROM sources ORDER BY target, id").fetchall():
             sid = src["id"]
             if only is not None and sid not in only:
                 continue
-            if sources.not_synced(conn, src, accounts, flags):
+            if sources.not_synced(conn, src, accounts, flags, cache):
                 not_synced += 1
                 continue
             if sid in busy:

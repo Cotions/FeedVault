@@ -4,6 +4,7 @@ no schedule; a source it has already is kept; the library is unchanged.
 No tool runs here: jobs.submit is a recorder."""
 import json
 import os
+import threading
 
 import pytest
 
@@ -365,6 +366,83 @@ def test_the_switch_is_set_while_no_sync_can_be_queued(library, client, monkeypa
     import nosync
     held = []
     real = nosync.set_on
-    monkeypatch.setattr(nosync, "set_on", lambda *a, **k: held.append(sync._submitting.locked()) or real(*a, **k))
+    monkeypatch.setattr(nosync, "set_on", lambda *a, **k: held.append(taken_elsewhere(sync._submitting)) or real(*a, **k))
     switch(client, {"account": CAROL, "no_sync": True})
     assert held == [True]
+
+
+def taken_elsewhere(lock):
+    """Whether another thread is kept out of ``lock`` now: it tries for it."""
+    got = []
+
+    def probe():
+        ok = lock.acquire(timeout=0.2)
+        got.append(ok)
+        if ok:
+            lock.release()
+    t = threading.Thread(target=probe)
+    t.start()
+    t.join(5)
+    return got == [False]
+
+
+def test_a_sync_from_the_jobs_route_is_checked_and_queued_as_one_step(library, client):
+    """POST /api/jobs builds a sync kind under sync._submitting, as Sync
+    does: the switch set meanwhile (under the same lock) is seen by its
+    check, and nothing is queued."""
+    import nosync
+    s = add_suggested(client, "carol.cooks")["source"]
+    out = []
+    body = {"kind": "instaloader-sync", "params": {"source": str(s["id"])}}
+    with sync._submitting:
+        t = threading.Thread(target=lambda: out.append(client.post("/api/jobs", json=body, headers=H)))
+        t.start()
+        t.join(0.3)
+        assert t.is_alive() and out == []       # it waits for the lock
+        nosync.set_on(db.connect(), True, account=(CAROL["platform"], CAROL["id"]))
+    t.join(10)
+    assert not t.is_alive()
+    assert out[0].status_code == 400 and "Don't sync" in out[0].get_json()["error"]
+    assert jobs.active() == []
+    assert not taken_elsewhere(sync._submitting)
+
+
+def test_a_source_whose_folder_is_still_empty_stands_for_its_handles_account(env, client, submitted):
+    """Added before its account was known, into a folder still empty: the
+    account with its handle (as create() would find it now) covers it."""
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "fern.knits",
+                                      "folder": str(env["media"] / "fern_new")})["source"]
+    assert s["account"] is None
+    write_post(env["media"] / "fern.knits", "FERNPOST0001", TS, owner("fern.knits", 999))
+    scanner.scan(env["roots"])
+    fern = {"platform": "instagram", "id": "999"}
+    assert get(client, f"/api/sources/{s['id']}")["no_sync"] is False
+    assert switch(client, {"account": fern, "no_sync": True}, 409)["sources"] == 1
+    switch(client, {"account": fern, "no_sync": True, "confirm": True})
+    assert get(client, f"/api/sources/{s['id']}")["no_sync"] is True
+    assert post(client, f"/api/sources/{s['id']}/sync", status=409)["no_sync"] is True
+    assert post(client, "/api/sources/sync-all")["not_synced"] == 1 and submitted == []
+    # Every sync kind's build (POST /api/jobs's too; jobs.submit is a recorder here).
+    with pytest.raises(jobs.BadRequest, match="@fern.knits is set to Don't sync"):
+        sync.synced_source({"source": str(s["id"])})
+
+
+def test_sources_before_their_first_sync_cost_one_lookup_each(env, client, monkeypatch):
+    """Going through many (the listing, Sync all, the scheduler): the media
+    roots read once, each source's folder looked up once."""
+    import sources
+    ids = [post(client, "/api/sources", {"tool": "instaloader", "target": f"new.{i}"})["source"]["id"]
+           for i in range(4)]
+    conn = db.connect()
+    rows = [sources.row(conn, i) for i in ids]
+    loads, lookups = [], []
+    real_load, real_folder = config.load, sources._folder_account
+    monkeypatch.setattr(sources.config, "load", lambda *a, **k: loads.append(1) or real_load(*a, **k))
+    monkeypatch.setattr(sources, "_folder_account", lambda *a, **k: lookups.append(a[2]) or real_folder(*a, **k))
+    cache = {}
+    for _ in range(2):
+        assert [sources.not_synced(conn, r, cache=cache) for r in rows] == [False] * 4
+    assert len(loads) == 1 and len(lookups) == 4
+    loads.clear(), lookups.clear()
+    assert len(get(client, "/api/sources")["sources"]) == 4
+    assert len(lookups) == 4

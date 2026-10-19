@@ -188,7 +188,7 @@ def tick(now=None):
         return []
     conn = db.connect()
     rows = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
-    accounts, flags = db.accounts(conn), nosync.flags(conn)
+    accounts, flags, owners = db.accounts(conn), nosync.flags(conn), {"roots": cfg["media_roots"]}
     busy = sync.active()
     platform = {r["id"]: r["platform"] for r in rows}
     taken = {platform.get(sid) for sid in busy}
@@ -198,7 +198,7 @@ def tick(now=None):
     for r in rows:
         every = sources.stored_options(r, cfg)["schedule"]
         if every not in INTERVALS or r["id"] in busy or health.paused(sources.last_result(r)) \
-                or sources.not_synced(conn, r, accounts, flags):
+                or sources.not_synced(conn, r, accounts, flags, owners):
             continue
         at = max(due_at(every, r["last_sync_at"], sources.last_result(r)), held.get(r["id"], 0))
         if at <= now:

@@ -1758,9 +1758,10 @@ no person yet.
 - `account`: the indexed account the source belongs to (an alias is
   replaced by the id it stands for), or `null`. `person`: the account's
   person, else the person the source was added to, else `null`.
-- `no_sync`: its account (before its first sync, its folder's account),
-  the person it shows under, or the person it was added to is set to
-  [Don't sync](#dont-sync): the source is kept but never synced.
+- `no_sync`: its account (before its first sync, its folder's account,
+  else the one with its link's handle), the person it shows under, or the
+  person it was added to is set to [Don't sync](#dont-sync): the source is
+  kept but never synced.
 - `options`: what its syncs use, option by option: the source's own value
   when it sets one (`overrides` names those), else its platform's
   [download default](#download-defaults), else the default below.
@@ -2557,7 +2558,8 @@ userscript's routes, see [Security rules](#security-rules)).
 A source counts as its account's, and as the person it shows under; one
 added to a person set to Don't sync stays not synced even when its account
 is linked to someone else. One not tied to an account yet (its first sync
-not done) counts as its folder's account.
+not done) counts as its folder's account, else, its folder still empty, as
+the account with its link's handle.
 
 A person who leaves keeps nothing syncing that did not: when a person set
 to Don't sync is deleted, or an account leaves them (unlinked, added to

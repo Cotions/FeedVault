@@ -8,7 +8,7 @@ import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
 import { platformLabel, authorFeedPath, fmtBytes, fmtInt, plural } from "../lib/fmt";
 import {
-  accountKey, accountRef, accountText, attributeChoices, attributeFiltersOn, attributesMatch, countryFlag, countryName, filtersOn,
+  accountKey, accountRef, mergeSet, mergeStopping, accountText, attributeChoices, attributeFiltersOn, attributesMatch, countryFlag, countryName, filtersOn,
   matchedFormer, matches, NO_FILTERS, notSynced, personPath, personText, suggestName, syncFilter, syncMatch,
 } from "../lib/people";
 import Icon from "../components/Icon";
@@ -596,6 +596,10 @@ export default function Creators() {
   // button), else the selection.
   const mergePeopleList = merge?.account ? [] : chosenPeople;
   const mergeAccounts = merge?.account ? [merge.account] : chosenAccounts;
+  // The merge's Don't sync warning holds for the set it was given for: a
+  // person or account added or dropped since, and it is asked again.
+  const mergeKey = mergeSet(mergePeopleList, mergeAccounts);
+  const stopping = mergeStopping(merge, mergeKey);
 
   function reload() { setVersion(v => v + 1); }
   // Don't sync changed: the cards, and the sources marked Not synced.
@@ -671,11 +675,11 @@ export default function Creators() {
         return;
       }
       const r = chosenPeople.length
-        ? await mergePeople(chosenPeople.map(p => p.id), { name, accounts, confirm: !!merge.stopping })
+        ? await mergePeople(chosenPeople.map(p => p.id), { name, accounts, confirm: stopping > 0 })
         : await createPerson(name, accounts);
       // One of them is set to Don't sync: the one kept will be, so their
       // sources that sync now would stop. Said in the dialog; Merge again goes on.
-      if (r?.confirm && !merge.stopping) { setMerge(m => ({ ...m, stopping: r.sources, error: null })); return; }
+      if (r?.confirm && !stopping) { setMerge(m => ({ ...m, stopping: r.sources, stoppingFor: mergeKey, error: null })); return; }
       if (!r?.ok) { setMerge(m => ({ ...m, error: r?.error || "Could not merge." })); return; }
       setMerge(null);
       sel.exit();
@@ -1037,10 +1041,10 @@ export default function Creators() {
             {mergeAccounts.length > 0 && `${mergeAccounts.length} account${mergeAccounts.length === 1 ? "" : "s"} get linked. `}
             Posts and files are not touched.
           </p>
-          {merge?.stopping > 0 && (
+          {stopping > 0 && (
             <p className="msg merge-nosync" role="status">
-              One of them is set to Don&apos;t sync, so the person they become is too: {plural(merge.stopping, "source")}{" "}
-              that {merge.stopping === 1 ? "syncs" : "sync"} now will stop syncing (kept, not deleted). Merge again to go on.
+              One of them is set to Don&apos;t sync, so the person they become is too: {plural(stopping, "source")}{" "}
+              that {stopping === 1 ? "syncs" : "sync"} now will stop syncing (kept, not deleted). Merge again to go on.
             </p>
           )}
           <label className="dialog-field">

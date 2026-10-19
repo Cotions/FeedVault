@@ -37,6 +37,15 @@ export function matchedFormer(a, query) {
 export const accountKey = a => `${a.platform}:${a.id}`;
 export const accountRef = a => ({ platform: a.platform, id: a.id });
 
+// What a merge is of (its people and accounts), in any order: the key its
+// Don't sync warning is kept under.
+export const mergeSet = (people, accounts) =>
+  [...people.map(p => `person:${p.id}`), ...accounts.map(accountKey)].sort().join(" ");
+
+// How many sources the merge's Don't sync warning said would stop, while it
+// is still about the same set (else 0: it is asked again).
+export const mergeStopping = (merge, set) => (merge?.stoppingFor === set && merge.stopping) || 0;
+
 // A default name for a new person: the most used display name, else a handle.
 export function suggestName(accounts) {
   const names = {};

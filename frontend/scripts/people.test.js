@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   attributeChoices, attributeFiltersOn, attributesMatch, cleanGender, countryFlag, countryName, countryOptions, filtersOn,
-  NO_FILTERS, notSynced, personText, sameLabels, syncFilter, syncMatch, withLabel,
+  mergeSet, mergeStopping, NO_FILTERS, notSynced, personText, sameLabels, syncFilter, syncMatch, withLabel,
 } from "../src/lib/people.js";
 
 const person = (over = {}) => ({ name: "Someone", gender: "", country: "", labels: [], accounts: [], ...over });
@@ -108,4 +108,18 @@ test("the country picker: an exact code first, then names that start with the te
   assert.equal(all.length, 5);
   assert.deepEqual(all.map(c => c.name), [...all.map(c => c.name)].sort((a, b) => a.localeCompare(b)));
   assert.equal(countryOptions(codes, "zzzz").length, 0);
+});
+
+test("a merge's Don't sync warning holds for the set it was given for only", () => {
+  const a = { platform: "instagram", id: "1" }, b = { platform: "x", id: "2" };
+  const set = mergeSet([{ id: 3 }, { id: 7 }], [a]);
+  assert.equal(set, mergeSet([{ id: 7 }, { id: 3 }], [a]));
+  const merge = { name: "N", stopping: 2, stoppingFor: set };
+  assert.equal(mergeStopping(merge, set), 2);
+  // A person or an account added or dropped since: asked again.
+  assert.equal(mergeStopping(merge, mergeSet([{ id: 3 }], [a])), 0);
+  assert.equal(mergeStopping(merge, mergeSet([{ id: 3 }, { id: 7 }], [a, b])), 0);
+  assert.equal(mergeStopping(merge, mergeSet([{ id: 3 }, { id: 9 }], [a])), 0);
+  assert.equal(mergeStopping({ name: "N" }, set), 0);
+  assert.equal(mergeStopping(null, set), 0);
 });

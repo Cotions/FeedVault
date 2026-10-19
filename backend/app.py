@@ -415,8 +415,8 @@ def set_no_sync():
 def _no_sync_ask(conn, ids, body):
     """The 409 that asks before sources ``ids`` stop syncing (those not
     stopped already), until the body has ``"confirm": true``; else None."""
-    accounts, flags = db.accounts(conn), nosync.flags(conn)
-    stopping = [sid for sid in ids if not sources.not_synced(conn, sources.row(conn, sid), accounts, flags)]
+    accounts, flags, cache = db.accounts(conn), nosync.flags(conn), {}
+    stopping = [sid for sid in ids if not sources.not_synced(conn, sources.row(conn, sid), accounts, flags, cache)]
     if not stopping or body.get("confirm") is True:
         return None
     n = len(stopping)
@@ -2425,7 +2425,7 @@ def start_job():
     if body.get("kind") in scripts.JOB_KINDS:  # the origin check is theirs
         return jsonify({"ok": False, "error": "start it with POST /api/scripts/<id>/run, or a source's Sync"}), 400
     try:
-        job = jobs.submit(body.get("kind"), body.get("params"))
+        job = sync.submit(body.get("kind"), body.get("params"))
     except jobs.BadRequest as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     print(f"[jobs] #{job['id']} {job['kind']} queued")
