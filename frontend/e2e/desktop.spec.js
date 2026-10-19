@@ -811,8 +811,10 @@ test("Person: upload a picture, pick one from a post, remove it", async ({ page,
     await dialog.getByLabel("Picture file").setInputFiles({ name: "me.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") });
     const view = dialog.getByRole("group", { name: /^Crop/ });
     await expect(view.locator("img")).toBeVisible();
+    // Measured once the dialog's rise (a 0.98 scale at first) has ended.
+    const frame = async () => { const b = await view.boundingBox(); return [Math.round(b.width), Math.round(b.height)]; };
+    await expect.poll(frame).toEqual([200, 300]);                                      // the frame is 2:3
     const box = await view.boundingBox();
-    expect([Math.round(box.width), Math.round(box.height)]).toEqual([200, 300]);     // the frame is 2:3
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 4 });   // towards the red half
