@@ -44,26 +44,85 @@ function differsText(g, memberId) {
   return g.differs.filter(d => d.member === memberId).map(d => (REASONS[d.reason] || (i => `item ${i} ${d.reason}`))(d.idx)).join(" · ");
 }
 
-// How many items trashing every member but `keep` would lose. In a content
-// group, any file of a trashed member the kept one does not hold (by hash).
-// In a copies group differences are against the post: a trashed copy loses
-// what it has that the post lacks or holds differently, and keeping a copy
-// loses the post's version of whatever that copy lacks or holds differently.
-function lostItems(g, keep) {
-  if (g.kind === "similar") return g.differs.filter(d => d.member !== keep).length;
-  if (g.kind === "content") {
-    const held = new Set(g.members.find(m => m.id === keep)?.items.filter(i => i.hash).map(i => `${i.size}:${i.hash}`));
-    return g.members.filter(m => m.id !== keep)
-      .reduce((n, m) => n + m.items.filter(i => !i.hash || !held.has(`${i.size}:${i.hash}`)).length, 0);
+/* What a group's resolve does, member by member: "keep" it, trash just its
+   "picture" (the item that makes it a duplicate; the rest of the post
+   stays), or trash the whole "post" (every item of it, also those no other
+   member has). The plan holds what was picked; modes() says what it comes
+   to, as a picture only goes when a member that stays holds it too. */
+const fileKey = i => `${i.size}:${i.hash}`;
+
+// The items "just the picture" trashes: in a similar group the one that
+// matched, while another member is kept whole to show it; in a content
+// group those a kept member holds too (by hash). None when only the whole
+// member can go: a copies group holds one post twice, a single item takes
+// its post along anyway, and a carousel shared item for item is all match.
+function pictureItems(g, m, plan) {
+  if (g.kind === "copies" || m.type !== "post" || m.items.length < 2) return [];
+  const kept = g.members.filter(x => x.id !== m.id && (plan[x.id] || "keep") === "keep");
+  let idxs;
+  if (g.kind === "similar") idxs = kept.length && m.match != null ? [m.match] : [];
+  else {
+    const held = new Set(kept.flatMap(x => x.items.filter(i => i.hash).map(fileKey)));
+    idxs = m.items.filter(i => i.hash && held.has(fileKey(i))).map(i => i.idx);
   }
-  return g.differs.filter(d => (d.member === keep ? d.reason !== "extra" : d.reason !== "missing")).length;
+  return idxs.length < m.items.length ? idxs : [];
+}
+
+// Today's default: keep the suggested member, and of each other one trash
+// just the picture where it can, else all of it.
+function defaultPlan(g) {
+  const base = { [g.suggested]: "keep" };
+  return Object.fromEntries(g.members.map(m => [m.id, m.id === g.suggested ? "keep"
+    : pictureItems(g, m, base).length ? "picture" : "post"]));
+}
+
+// The trash mode a member's checkbox turns on: its picture when it can.
+const trashMode = (g, m, plan) => (pictureItems(g, m, plan).length ? "picture" : "post");
+
+// { [member id]: { mode, items, bytes } }: what the plan comes to.
+function modes(g, plan) {
+  return Object.fromEntries(g.members.map(m => {
+    const mode = plan[m.id] || "keep";
+    if (mode === "post") return [m.id, { mode, items: m.items.map(i => i.idx), bytes: m.bytes }];
+    const items = mode === "picture" ? pictureItems(g, m, plan) : [];
+    if (!items.length) return [m.id, { mode: "keep", items, bytes: 0 }];
+    return [m.id, { mode, items, bytes: m.items.reduce((n, i) => n + (items.includes(i.idx) ? i.size || 0 : 0), 0) }];
+  }));
+}
+
+// How many items found nowhere else the plan loses. Only a member trashed
+// whole can lose any: a picture trashed alone is held (or, in a similar
+// group, looked like) by a member that stays. Similar groups say per item
+// what nothing else resembles. Otherwise an item of a member trashed whole
+// is lost unless a member that stays holds the same file (by hash): in a
+// copies group that is the post's version of what a kept copy lacks or
+// holds differently, or what a trashed copy holds that the rest lack.
+function lostItems(g, md) {
+  const whole = id => md[id]?.mode === "post";
+  if (g.kind === "similar") return g.differs.filter(d => whole(d.member)).length;
+  const held = new Set(g.members.filter(m => !whole(m.id))
+    .flatMap(m => m.items.filter(i => i.hash && !md[m.id].items.includes(i.idx)).map(fileKey)));
+  return g.members.filter(m => whole(m.id))
+    .reduce((n, m) => n + m.items.filter(i => !i.hash || !held.has(fileKey(i))).length, 0);
+}
+
+// "2 pictures + 1 post": what a plan trashes, in words.
+function planWords(g, md) {
+  const items = g.members.reduce((n, m) => n + (md[m.id].mode === "picture" ? md[m.id].items.length : 0), 0);
+  const whole = g.members.filter(m => md[m.id].mode === "post").length;
+  return [
+    items > 0 && plural(items, g.kind === "similar" ? "picture" : "item"),
+    whole > 0 && (g.kind === "copies" ? plural(whole, "copy", "copies") : plural(whole, "post")),
+  ].filter(Boolean).join(" + ");
 }
 
 const matchOf = m => m.items.find(i => i.idx === m.match) || m.items[0];
 const resolution = i => (i?.width && i?.height ? `${i.width}×${i.height}` : null);
 
-function Member({ m, group, chosen, onChoose, onView, disabled }) {
+function Member({ m, group, md, picture, onTrash, onMode, onView, disabled }) {
   const [broken, setBroken] = useState(false);
+  const { mode, items } = md;
+  const unit = m.type === "copy" ? "copy" : "post";
   const suggested = group.suggested === m.id;
   const diff = differsText(group, m.id);
   const who = m.post?.author?.handle ? `@${m.post.author.handle}` : null;
@@ -72,11 +131,12 @@ function Member({ m, group, chosen, onChoose, onView, disabled }) {
   const match = posts ? matchOf(m) : null;
   const when = posts ? `posted ${fmtShortDate(m.posted_at)}` : `saved ${fmtShortDate(m.saved_at)}`;
   const files = plural(m.files, "file");
+  const pictureWord = group.kind === "similar" ? "picture" : items.length === 1 ? "item" : `${items.length} items`;
   return (
-    <label className={`big-file dup-member${chosen ? " is-chosen" : ""}`}>
+    <label className={`big-file dup-member is-${mode}`}>
       <span
         className={`big-file-link${onView ? " is-viewable" : ""}`}
-        onClick={onView ? e => { e.preventDefault(); onView(); } : undefined}
+        onClick={onView ? e => { if (e.target.type === "checkbox") return; e.preventDefault(); onView(); } : undefined}
         title={onView ? "View full size and compare" : undefined}
       >
         {m.thumb_url && !broken ? (
@@ -85,15 +145,26 @@ function Member({ m, group, chosen, onChoose, onView, disabled }) {
           <span className="big-file-ph"><Icon name={m.items[0]?.kind === "video" ? "play" : "image"} size={26} /></span>
         )}
         <input
-          type="radio"
-          className="dup-radio"
-          name={`keep-${group.id}`}
-          checked={chosen}
-          onChange={() => onChoose(m.id)}
+          type="checkbox"
+          className="dup-trash-check"
+          checked={mode !== "keep"}
+          onChange={e => onTrash(m.id, e.target.checked)}
           disabled={disabled}
-          aria-label={`Keep ${m.folder}`}
+          aria-label={`Trash ${m.folder}`}
+          title={mode === "keep" ? "Kept: tick to trash it" : "Marked for the trash: untick to keep it"}
         />
         <span className="trash-badges">
+          {mode === "keep" ? (
+            <span className="trash-badge dup-badge-keep">keep</span>
+          ) : mode === "picture" ? (
+            <span className="trash-badge dup-badge-trash" title={`Only this ${group.kind === "similar" ? "picture" : "item"} goes: the rest of the post stays`}>
+              trash {pictureWord}
+            </span>
+          ) : (
+            <span className="trash-badge dup-badge-trash" title={`The whole ${unit} goes, every item of it`}>
+              trash {unit} · {files}
+            </span>
+          )}
           {suggested && <span className="trash-badge dup-badge-suggested" title="The suggested copy to keep">suggested</span>}
           {m.kept && <span className="trash-badge dup-badge-kept" title="Marked kept in Review">kept</span>}
           {m.type === "copy" && <span className="trash-badge" title="Not in the feed: an extra copy of the post">copy</span>}
@@ -113,6 +184,20 @@ function Member({ m, group, chosen, onChoose, onView, disabled }) {
           </span>
         )}
         {diff && <span className="dup-diff">{diff}</span>}
+        {mode !== "keep" && picture > 0 && (
+          <span className="dup-mode" role="group" aria-label={`What of ${m.folder} to trash`}>
+            <button type="button" className={mode === "picture" ? "is-on" : ""} aria-pressed={mode === "picture"}
+              onClick={() => onMode(m.id, "picture")} disabled={disabled}
+              title={`Trash only the ${group.kind === "similar" ? "matching picture" : "items another kept post holds"}: the rest of the post stays`}>
+              {group.kind === "similar" ? "Picture" : picture > 1 ? "Shared items" : "Shared item"}
+            </button>
+            <button type="button" className={mode === "post" ? "is-on" : ""} aria-pressed={mode === "post"}
+              onClick={() => onMode(m.id, "post")} disabled={disabled}
+              title={`Trash every item of the post (${files})`}>
+              Whole post
+            </button>
+          </span>
+        )}
       </span>
     </label>
   );
@@ -120,16 +205,35 @@ function Member({ m, group, chosen, onChoose, onView, disabled }) {
 
 function Group({ g, index, busy, selectMode, selectable: canSelect, selected, onToggle, onResolve, onDismiss }) {
   const [viewing, setViewing] = useState(null);       // index of the member open in the compare view
-  const [keep, setKeep] = useState(g.suggested);
-  const [seenSuggested, setSeenSuggested] = useState(g.suggested);
-  if (g.suggested !== seenSuggested) {               // a reload changed the suggestion: follow it
-    setSeenSuggested(g.suggested);
-    setKeep(g.suggested);
+  const [plan, setPlan] = useState(() => defaultPlan(g));
+  const [seen, setSeen] = useState(`${g.id}:${g.suggested}`);
+  if (`${g.id}:${g.suggested}` !== seen) {           // a reload changed the members or the suggestion: start over
+    setSeen(`${g.id}:${g.suggested}`);
+    setPlan(defaultPlan(g));
   }
-  const kept = g.members.find(m => m.id === keep) || g.members[0];
-  const frees = g.members.reduce((n, m) => n + (m.id === kept.id ? 0 : m.bytes), 0);
-  const others = g.members.length - 1;
+  // Select mode resolves with the suggested member: show that, not the plan.
+  const md = modes(g, selectMode ? Object.fromEntries(g.members.map(m => [m.id, m.id === g.suggested ? "keep" : "post"])) : plan);
+  const frees = g.members.reduce((n, m) => n + md[m.id].bytes, 0);
+  const lost = lostItems(g, md);
+  const words = planWords(g, md);
+  const whole = g.members.filter(m => md[m.id].mode === "post").length;
+  const parts = g.members.filter(m => md[m.id].mode === "picture").length;
+  const allGo = whole === g.members.length;
   const selectable = selectMode && canSelect;
+
+  const setMode = (id, mode) => setPlan(p => ({ ...p, [id]: mode }));
+  const setTrash = (id, on) => setPlan(p => ({ ...p, [id]: on ? trashMode(g, g.members.find(m => m.id === id), p) : "keep" }));
+  // Compare's "Keep only this one": it stays, every other member goes.
+  const keepOnly = id => setPlan(() => {
+    const base = { [id]: "keep" };
+    return Object.fromEntries(g.members.map(m => [m.id, m.id === id ? "keep" : trashMode(g, m, base)]));
+  });
+  const why = g.pending ? "Wait until every file is hashed"
+    : !words ? "Tick the members to trash first"
+    : allGo ? "Keep one member at least: untick one"
+    : `Move ${words} to the trash. A post trashed whole goes with every item of it${lost ? `, ${plural(lost, "item")} found nowhere else among them` : ""}`;
+  const choice = { group: g.id, trash: g.members.filter(m => md[m.id].mode !== "keep")
+    .map(m => (md[m.id].mode === "post" ? m.id : { member: m.id, items: md[m.id].items })) };
 
   function toggle(ev) {
     ev.stopPropagation();
@@ -178,18 +282,28 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
             <button
               type="button"
               className="btn-danger-soft"
-              onClick={() => onResolve(g, kept.id)}
-              disabled={busy || g.pending}
-              title={g.pending ? "Wait until every file is hashed" : `Keep ${kept.folder}, move the ${others === 1 ? "other one" : `other ${others}`} to the trash`}
+              onClick={() => onResolve(g, choice, { words, bytes: frees, lost, whole, parts })}
+              disabled={busy || g.pending || !words || allGo}
+              title={why}
             >
-              <Icon name="trash" size={14} />Keep this, trash the rest · {fmtBytes(frees)}
+              <Icon name="trash" size={14} />Trash selected · {fmtBytes(frees)}
             </button>
           </>
         )}
       </div>
+      {!selectMode && (
+        <p className={`dup-plan${lost ? " is-lossy" : ""}`}>
+          {!words ? "Nothing marked for the trash: tick a member to trash it."
+            : allGo ? "Every member is marked for the trash: keep one at least."
+            : <>Trashes {words} · {fmtBytes(frees)} · {lost
+              ? <><Icon name="warn" size={13} />loses {plural(lost, "item")} found nowhere else</>
+              : "loses nothing found nowhere else"}</>}
+        </p>
+      )}
       <div className="dup-members" onClick={selectable ? toggle : undefined}>
         {g.members.map((m, i) => (
-          <Member key={m.id} m={m} group={g} chosen={m.id === kept.id} onChoose={setKeep} disabled={busy || selectMode}
+          <Member key={m.id} m={m} group={g} md={md[m.id]} picture={pictureItems(g, m, plan).length}
+            onTrash={setTrash} onMode={setMode} disabled={busy || selectMode}
             onView={g.kind === "similar" && !selectMode ? () => setViewing(i) : undefined} />
         ))}
       </div>
@@ -197,9 +311,10 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
         <Compare
           g={g}
           at={viewing}
-          keep={kept.id}
+          md={md}
           onMove={step => setViewing(v => (v + step + g.members.length) % g.members.length)}
-          onKeep={id => setKeep(id)}
+          onTrash={setTrash}
+          onKeepOnly={keepOnly}
           onClose={() => setViewing(null)}
         />
       )}
@@ -265,9 +380,10 @@ function Dismissed({ items, busy, onRestore, startOpen }) {
 }
 
 /* Full-size side-by-side for a similar group: one member at a time, ←/→
-   between them, Esc closes. "Keep this one" only picks the radio; trashing
-   still goes through the group's button and its confirmation. */
-function Compare({ g, at, keep, onMove, onKeep, onClose }) {
+   between them, Esc closes. Keep, Trash and Keep only this one only change
+   the group's plan; trashing still goes through the group's button and its
+   confirmation. */
+function Compare({ g, at, md, onMove, onTrash, onKeepOnly, onClose }) {
   const boxRef = useRef(null);
   const [broken, setBroken] = useState(null);   // the url that failed to load (file gone, unreadable)
   const m = g.members[at];
@@ -280,7 +396,7 @@ function Compare({ g, at, keep, onMove, onKeep, onClose }) {
     return () => restoreFocus(prev);
   }, []);
 
-  // Keep this one goes once clicked, and focus with it, onto <body>
+  // Keep or Trash this one goes once clicked, and focus with it, onto <body>
   // (#136): back to the box, where the keys below are heard. Should it
   // get there some other way, they are heard on the document too.
   useLayoutEffect(() => { if (focusLost()) boxRef.current?.focus({ preventScroll: true }); });
@@ -351,11 +467,23 @@ function Compare({ g, at, keep, onMove, onKeep, onClose }) {
           {m.post && <Link to={postPath(m.post)} className="text-link">Open post</Link>}
           <span className="dup-member-sub">← → to switch · Esc to close</span>
           <div className="page-head-spacer" />
-          {keep === m.id ? (
-            <span className="dup-state is-identical"><Icon name="check" size={13} />keeping this one</span>
+          {md[m.id].mode === "keep" ? (
+            <>
+              <span className="dup-state is-identical"><Icon name="check" size={13} />keeping this one</span>
+              <button type="button" className="btn-secondary" onClick={() => onTrash(m.id, true)}>Trash this one</button>
+            </>
           ) : (
-            <button type="button" className="btn-secondary" onClick={() => onKeep(m.id)}>Keep this one</button>
+            <>
+              <span className="dup-state is-trash"><Icon name="trash" size={13} />
+                {md[m.id].mode === "picture" ? "trashing this picture" : "trashing the whole post"}
+              </span>
+              <button type="button" className="btn-secondary" onClick={() => onTrash(m.id, false)}>Keep this one</button>
+            </>
           )}
+          {g.members.some(x => x.id !== m.id && md[x.id].mode === "keep") || md[m.id].mode !== "keep" ? (
+            <button type="button" className="btn-secondary" onClick={() => onKeepOnly(m.id)}
+              title="Keep this one and mark every other member for the trash">Keep only this one</button>
+          ) : null}
         </div>
       </div>
     </div>,
@@ -408,7 +536,7 @@ export default function Duplicates() {
   // the groups when a pass ends, and when it goes on to its next phase:
   // copies and same-content groups are settled once the byte hashes are
   // (partial, then full), not at the end of the fingerprints after them,
-  // which kept Keep this disabled for the rest of a long pass (#149).
+  // which kept Trash selected disabled for the rest of a long pass (#149).
   const hashing = !!status?.running;
   useEffect(() => {
     let alive = true;
@@ -455,7 +583,7 @@ export default function Duplicates() {
 
   /* ── Actions ─────────────────────────────────────────── */
   const [busy,     setBusy]     = useState(false);
-  const [confirm,  setConfirm]  = useState(null);    // { choices, count, bytes, lost } awaiting confirmation
+  const [confirm,  setConfirm]  = useState(null);    // { choices, count, bytes, lost, one… } awaiting confirmation
   const [dlgError, setDlgError] = useState(null);
   const [errors,   setErrors]   = useState(null);
   const sel = useSelection(identical, { resetKey: `${kind}:${withReposts}`, escapeBlocked: !!confirm });
@@ -482,7 +610,7 @@ export default function Duplicates() {
       setConfirm(null);
       drop(r.resolved || []);
       if (r.errors?.length) setErrors(r.errors);
-      const moved = (r.posts?.length ?? 0) + (r.copies?.length ?? 0);
+      const moved = (r.posts?.length ?? 0) + (r.copies?.length ?? 0) + (r.media?.length ?? 0);
       toast(`Moved ${plural(moved, "duplicate")} to the trash (${fmtBytes(r.bytes ?? 0)}). Restore from the Trash page.`);
       if (r.skipped?.length) toast(`${plural(r.skipped.length, "group")} skipped: ${r.skipped[0].error}`, "err");
       reload();
@@ -493,16 +621,15 @@ export default function Duplicates() {
     }
   }
 
-  // One click for an identical group; a group that differs asks first when
-  // the members to trash hold something the kept one lacks. A similar group
-  // always asks: its posts only look alike.
-  function resolveOne(g, keep) {
-    const lost = lostItems(g, keep);
-    const bytes = g.members.reduce((n, m) => n + (m.id === keep ? 0 : m.bytes), 0);
-    const choices = [{ group: g.id, keep }];
-    if (g.kind !== "similar" && (g.identical || lost === 0)) { run(choices); return; }
+  // One click when nothing found nowhere else goes; a plan that loses such
+  // items (only a post trashed whole can) asks first. A similar group always
+  // asks: its posts only look alike.
+  function resolveOne(g, choice, { words, bytes, lost, whole, parts }) {
+    const choices = [choice];
+    if (g.kind !== "similar" && lost === 0) { run(choices); return; }
     setDlgError(null);
-    setConfirm({ choices, count: 1, bytes, lost, similar: g.kind === "similar", others: g.members.length - 1 });
+    setConfirm({ choices, count: 1, bytes, lost, one: true, similar: g.kind === "similar", words, whole, parts,
+      unit: g.kind === "copies" ? "copy" : "post" });
   }
 
   function askBulk() {
@@ -630,7 +757,7 @@ export default function Duplicates() {
         </div>
       )}
       <p className="page-lede">
-        {k.lede} Keeping one moves the others to the trash, so you can restore them from{" "}
+        {k.lede} Tick what to trash in each group: a whole post goes with every item of it, a picture alone leaves the rest of its post. It all moves to the trash, so you can restore it from{" "}
         <Link to="/trash" className="text-link">Trash</Link>.{" "}
         {similar
           ? "Pictures are fingerprinted in the background after each scan; click one to compare them full size."
@@ -717,25 +844,32 @@ export default function Duplicates() {
         danger
         busy={busy}
         error={dlgError}
-        title={confirm?.similar ? `Trash ${plural(confirm.others, "other post")}?`
-          : confirm?.lost ? "Trash copies that differ?" : `Resolve ${plural(confirm?.count ?? 0, "group")}?`}
+        title={confirm?.one ? `Trash ${confirm.words}?` : `Resolve ${plural(confirm?.count ?? 0, "group")}?`}
         confirmLabel={`Move ${fmtBytes(confirm?.bytes ?? 0)} to the trash`}
         onConfirm={() => run(confirm.choices)}
         onCancel={() => setConfirm(null)}
       >
-        {confirm?.similar ? (
-          <p>
-            These posts only <strong>look</strong> alike: their files differ, and each has its own caption and
-            author. {confirm.others === 1 ? "The other post goes" : `The ${fmtInt(confirm.others)} other posts go`} to
-            the trash ({fmtBytes(confirm.bytes)})
-            {confirm.lost > 0 && <>, with <strong>{plural(confirm.lost, "item")}</strong> that nothing in the kept post
-            resembles</>}. You can restore them from the Trash page.
-          </p>
-        ) : confirm?.lost ? (
-          <p>
-            The members to trash hold <strong>{plural(confirm.lost, "item")}</strong> the one you keep does not
-            have. They go to the trash with the rest ({fmtBytes(confirm.bytes)}), where you can still restore them.
-          </p>
+        {confirm?.one ? (
+          <>
+            {confirm.similar && (
+              <p>
+                These posts only <strong>look</strong> alike: their files differ, and each has its own caption and
+                author.
+              </p>
+            )}
+            <p>
+              {confirm.whole > 0 && <>
+                A {confirm.unit} trashed whole goes with <strong>every item</strong> of it, not only the one that
+                matched{confirm.lost > 0
+                  ? <>: that is <strong className="dup-warn">{plural(confirm.lost, "item")} found nowhere else</strong>{confirm.similar ? " (nothing in the posts you keep resembles them)" : ""}.</>
+                  : "; the members you keep hold all of it."}{" "}
+              </>}
+              {confirm.parts > 0 && <>
+                A {confirm.similar ? "picture" : "shared item"} trashed on its own leaves the rest of its post in place.{" "}
+              </>}
+              Everything goes to the trash ({fmtBytes(confirm.bytes)}), where you can restore it.
+            </p>
+          </>
         ) : (
           <p>
             For each of the <strong>{plural(confirm?.count ?? 0, "identical group")}</strong>, the suggested copy is

@@ -669,6 +669,133 @@ def test_resolve_never_follows_a_symlink_out_of_the_roots(env, client, tmp_path)
     assert outside.exists() and os.path.islink(copy_base + ".jpg")
 
 
+def resolve(client, body):
+    r = client.post("/api/duplicates/resolve", json=body, headers=H)
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()
+
+
+def three_reposts(env):
+    """The same picture posted by alice, then bob, then carol."""
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    for folder, code, dt, who in (("bob", "R9", 99, owner("bob", 222)), ("carol", "S7", 999, owner("carol", 333))):
+        b = write_post(env["media"] / folder, code, TS + dt, who, "image")
+        shutil.copyfile(a + ".jpg", b + ".jpg")
+    run_scan(env)
+    hashing.run_pass(db.connect())
+
+
+def test_resolve_trash_picked_members_only(env, client):
+    """Of a group of three, trash one: the other two stay, and the group shrinks."""
+    three_reposts(env)
+    client.post("/api/tags/apply", json={"posts": ["instagram:R9"], "add": ["red"]}, headers=H)
+    g = listing(client, "content")["groups"][0]
+    assert g["suggested"] == "instagram:P1" and len(g["members"]) == 3
+    r = resolve(client, {"group": g["id"], "trash": ["instagram:R9"]})
+    assert r["ok"] and r["posts"] == ["instagram:R9"] and r["resolved"] == [] and r["skipped"] == []
+    # the suggested member takes on the tags of the post trashed for it
+    assert client.get("/api/posts/instagram/P1", headers=H).get_json()["tags"] == ["red"]
+    assert client.get("/api/posts/instagram/S7", headers=H).get_json()["tags"] == []
+    [g] = listing(client, "content")["groups"]
+    assert [m["id"] for m in g["members"]] == ["instagram:P1", "instagram:S7"]
+    # one at least must stay, and only members of the group go
+    r = resolve(client, {"group": g["id"], "trash": ["instagram:P1", "instagram:S7"]})
+    assert r["ok"] is False and r["skipped"][0]["error"] == "keep at least one member" and r["files"] == 0
+    r = resolve(client, {"group": g["id"], "trash": ["instagram:R9"]})
+    assert r["skipped"][0]["error"] == "a member to trash is not in this group"
+    r = resolve(client, {"group": g["id"], "trash": []})
+    assert r["skipped"][0]["error"] == "pick at least one member to trash"
+    r = resolve(client, {"group": g["id"], "trash": ["instagram:P1"]})
+    assert r["ok"] and r["resolved"] == [g["id"]] and r["posts"] == ["instagram:P1"]
+    assert listing(client, "content")["total"] == 0
+
+
+def test_resolve_trash_keeps_what_another_group_keeps(env, client):
+    """Every member a trash list leaves in place is kept: another group of
+    the same call may not trash it."""
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    b = write_post(env["media"] / "bob", "R9", TS + 99, owner("bob", 222), "image")
+    shutil.copyfile(a + ".jpg", b + ".jpg")
+    shutil.copytree(env["media"] / "alice", env["media"] / "alicee")
+    run_scan(env)
+    hashing.run_pass(db.connect())
+    cg = listing(client)["groups"][0]
+    tg = listing(client, "content")["groups"][0]
+    copy = cg["members"][1]["id"]
+    r = resolve(client, {"groups": [{"group": cg["id"], "trash": [copy]},                 # P1 stays
+                                    {"group": tg["id"], "trash": ["instagram:P1"]}]})   # would trash it
+    assert r["resolved"] == [cg["id"]] and r["skipped"][0]["group"] == tg["id"]
+    assert os.path.exists(a + ".jpg") and r["posts"] == []
+
+
+def test_resolve_trash_one_item_keeps_the_post(env, client):
+    """A carousel holding the picture of another post: only that item goes,
+    the post and its other items stay, and the item can be restored."""
+    a = write_post(env["media"] / "alice", "P1", TS, ALICE, "image")
+    b = write_post(env["media"] / "bob", "C2", TS + 99, owner("bob", 222), "carousel", slides=[False, False, False])
+    shutil.copyfile(a + ".jpg", b + "_2.jpg")
+    run_scan(env)
+    hashing.run_pass(db.connect())
+    client.post("/api/tags/apply", json={"posts": ["instagram:C2"], "add": ["blue"]}, headers=H)
+    g = listing(client, "content")["groups"][0]
+    assert {m["id"] for m in g["members"]} == {"instagram:P1", "instagram:C2"}
+    r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:C2", "items": [2]}]})
+    assert r["ok"] and r["resolved"] == [g["id"]] and r["posts"] == [] and len(r["media"]) == 1
+    assert not os.path.exists(b + "_2.jpg") and os.path.exists(b + "_1.jpg") and os.path.exists(b + "_3.jpg")
+    post = client.get("/api/posts/instagram/C2", headers=H).get_json()
+    assert [m["idx"] for m in post["media"]] == [1, 3]
+    # nothing was trashed whole: no tags carried over
+    assert client.get("/api/posts/instagram/P1", headers=H).get_json()["tags"] == []
+    assert listing(client, "content")["total"] == 0
+    [e] = client.get("/api/trash/items", headers=H).get_json()["entries"]
+    r = client.post("/api/trash/restore", json={"keys": [e["key"]]}, headers=H).get_json()
+    assert r["errors"] == [] and os.path.exists(b + "_2.jpg")
+    post = client.get("/api/posts/instagram/C2", headers=H).get_json()
+    assert [m["idx"] for m in post["media"]] == [1, 2, 3]
+
+
+def test_resolve_items_rules(env, client):
+    """Every item of a post is the whole post; a copy goes whole; a changed
+    file or an unknown item refuses the group."""
+    three_reposts(env)
+    g = listing(client, "content")["groups"][0]
+    r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:P1", "items": [5]}]})
+    assert r["skipped"][0]["error"] == "an item to trash is not in its post"
+    r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:P1", "items": [1]},
+                                                     {"member": "instagram:R9", "items": [1]},
+                                                     "instagram:S7"]})
+    assert r["skipped"][0]["error"] == "keep at least one member"
+    t = time.time() + 10
+    os.utime(next(p for p in (env["media"] / "bob").iterdir() if p.suffix == ".jpg"), (t, t))
+    r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:R9", "items": [1]}]})
+    assert "a file changed" in r["skipped"][0]["error"] and r["files"] == 0
+    hashing.run_pass(db.connect())
+    g = listing(client, "content")["groups"][0]
+    r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:R9", "items": [1]}]})
+    assert r["ok"] and r["posts"] == ["instagram:R9"]           # its only item: the post goes with it
+
+
+def test_resolve_a_copy_goes_whole(env, client):
+    hashed_copies(env, slides=[False, False])
+    g = listing(client)["groups"][0]
+    copy = g["members"][1]["id"]
+    r = resolve(client, {"group": g["id"], "trash": [{"member": copy, "items": [1]}]})
+    assert r["skipped"][0]["error"] == "the same post twice: a member goes whole, not item by item"
+    r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:P1", "items": [1]}]})
+    assert r["skipped"][0]["error"] == "the same post twice: a member goes whole, not item by item"
+
+
+def test_resolve_trash_bad_bodies(env, client):
+    for body in ({"group": "g", "trash": "x"}, {"group": "g", "trash": [1]},
+                 {"group": "g", "trash": [{"member": "m", "items": []}]},
+                 {"group": "g", "trash": [{"member": "m", "items": [True]}]},
+                 {"group": "g", "trash": [{"member": "m"}]},
+                 {"group": "g", "trash": ["m", {"member": "m", "items": [1]}]},
+                 {"groups": [{"group": "g", "trash": ["m"]}, 5]}):
+        r = client.post("/api/duplicates/resolve", json=body, headers=H)
+        assert r.status_code == 400 and r.get_json()["ok"] is False, body
+
+
 def test_dismiss(env, client):
     hashed_copies(env, kind="image")
     g = listing(client)["groups"][0]

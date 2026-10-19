@@ -150,7 +150,7 @@ test("Duplicates: while files are hashed, the summary says so, not that reposts 
 
 // #149: copies groups are settled once the byte hashes are; the pass then
 // fingerprints pictures for a long time. The page reloads its groups when
-// the pass goes on to its next phase, not only when it ends, so Keep this
+// the pass goes on to its next phase, not only when it ends, so Trash selected
 // is offered as soon as it can be. Status and pending are changed in the
 // browser only.
 test("Duplicates: a group hashed during a pass can be kept before the pass ends", async ({ page }) => {
@@ -165,11 +165,82 @@ test("Duplicates: a group hashed during a pass can be kept before the pass ends"
     await route.fulfill({ response: res, json: body });
   });
   await openPage(page, { name: "Duplicates", path: "/duplicates" });
-  const keep = groupOf(page, g.copy).getByRole("button", { name: /^Keep this, trash the rest/ });
+  const keep = groupOf(page, g.copy).getByRole("button", { name: /^Trash selected/ });
   await expect(keep).toBeDisabled();
   await expect(keep).toHaveAttribute("title", "Wait until every file is hashed");
   phase = "dhash";                                   // whole files done: fingerprints next, still running
   await expect(keep).toBeEnabled({ timeout: 8_000 });
   await expect(page.locator(".dup-status")).toContainText("Fingerprinting pictures");
+  await idle(page);
+});
+
+// A similar group of four carousels where one picture each matches and
+// every other item is found nowhere else: by default only the matching
+// pictures go, the posts and their other items stay. Trashing a post whole
+// says what it loses and asks first. The group and the resolve are made up
+// in the browser: nothing is trashed.
+function carousels() {
+  const members = [0, 1, 2, 3].map(n => ({
+    id: `instagram:SIM${n}`, type: "post", post_id: `instagram:SIM${n}`,
+    post: { id: `instagram:SIM${n}`, platform: "instagram", shortcode: `SIM${n}`, author: { handle: `poster${n}` } },
+    folder: `/vault/poster${n}`, meta_path: `/vault/poster${n}/p.json`, thumb_url: null,
+    items: Array.from({ length: 6 + n }, (_, i) => ({ idx: i + 1, kind: "image", size: 1_000_000, path: `/vault/poster${n}/p_${i + 1}.jpg`,
+      hash: null, width: 1080, height: 1350, url: null, thumb_url: null })),
+    files: 6 + n, bytes: (6 + n) * 1_000_000, saved_at: 1727500000, posted_at: 1727400000 + n, match: 2, kept: false,
+    paths: [], author: `poster${n}`,
+  }));
+  const differs = members.flatMap(m => m.items.filter(i => i.idx !== 2).map(i => ({ member: m.id, idx: i.idx, reason: "only here" })));
+  return { id: "f".repeat(20), kind: "similar", key: "k", members, identical: false, pending: false, differs, distance: 2,
+    suggested: members[0].id, frees: 0, bytes: 0, repost: true };
+}
+
+test("Duplicates: trash just the matching pictures of a similar group, or a whole post after a warning", async ({ page }) => {
+  const g = carousels();
+  let sent = null;
+  await page.route(url => url.pathname === "/api/duplicates" && url.searchParams.get("kind") === "similar", route =>
+    route.fulfill({ json: { kind: "similar", threshold: 6, total: 1, reposts: 1, identical: 0, pending: 0, frees: 0,
+      identical_frees: 0, dismissed: 0, groups: [g] } }));
+  await page.route(url => url.pathname === "/api/duplicates/resolve", route => {
+    sent = route.request().postDataJSON();
+    return route.fulfill({ json: { ok: true, resolved: [g.id], skipped: [], posts: [], copies: [], media: [1, 2], files: 2,
+      bytes: 2_000_000, errors: [] } });
+  });
+  await openPage(page, { name: "Duplicates", path: "/duplicates" });
+  await page.getByRole("tab", { name: "Looks the same" }).click();
+  const group = page.locator("section.dup-group");
+  const cards = group.locator(".dup-member");
+  await expect(cards).toHaveCount(4);
+  await expect(cards.nth(0)).toHaveClass(/is-keep/);
+  for (const n of [1, 2, 3]) await expect(cards.nth(n)).toHaveClass(/is-picture/);
+  await expect(cards.nth(1).locator(".dup-badge-trash")).toHaveText("trash picture");
+  const plan = group.locator(".dup-plan");
+  await expect(plan).toHaveText("Trashes 3 pictures · 2.9 MB · loses nothing found nowhere else");
+  const button = group.getByRole("button", { name: /^Trash selected/ });
+  await expect(button).toHaveText("Trash selected · 2.9 MB");
+
+  // the second post whole: 8 files, 7 of them found nowhere else
+  await cards.nth(2).getByRole("button", { name: "Whole post" }).click();
+  await expect(cards.nth(2)).toHaveClass(/is-post/);
+  await expect(cards.nth(2).locator(".dup-badge-trash")).toHaveText("trash post · 8 files");
+  await expect(plan).toHaveClass(/is-lossy/);
+  await expect(plan).toHaveText("Trashes 2 pictures + 1 post · 9.5 MB · loses 7 items found nowhere else");
+  await button.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("7 items found nowhere else");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  expect(sent).toBeNull();
+
+  // none ticked: nothing to send
+  for (const n of [1, 2, 3]) await cards.nth(n).getByRole("checkbox").uncheck();
+  await expect(button).toBeDisabled();
+  await expect(button).toHaveAttribute("title", "Tick the members to trash first");
+
+  // two pictures: they go after the similar group's confirmation
+  for (const n of [1, 3]) await cards.nth(n).getByRole("checkbox").check();
+  await button.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: /^Move .* to the trash$/ }).click();
+  await expect.poll(() => sent).not.toBeNull();
+  expect(sent.groups).toEqual([{ group: g.id, trash: [{ member: "instagram:SIM1", items: [2] }, { member: "instagram:SIM3", items: [2] }] }]);
+  expect(sent.threshold).toBe(6);
   await idle(page);
 });

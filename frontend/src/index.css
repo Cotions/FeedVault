@@ -2238,6 +2238,7 @@ code.profile-row-path:not(.dim) { color: var(--text-dim); }
 .modal-title { font-family: var(--display); font-size: 17px; font-weight: 800; letter-spacing: -0.3px; }
 .confirm-body { font-size: 13.5px; line-height: 1.6; color: var(--text-dim); }
 .confirm-body strong { color: #ffd0d2; }
+.confirm-body p + p { margin-top: 8px; }
 .modal .msg { margin-top: 0; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
@@ -2775,16 +2776,37 @@ a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline
   gap: 12px;
 }
 .dup-member { cursor: pointer; }
-.dup-member.is-chosen {
-  border-color: var(--glow);
-  box-shadow: 0 0 0 2px rgba(var(--glow-rgb), 0.45);
+/* Marked for the trash: red, a whole post more so than a lone picture. */
+.dup-member.is-picture { border-color: rgba(229, 72, 77, 0.6); }
+.dup-member.is-post {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+  background: rgba(229, 72, 77, 0.08);
 }
+.dup-member.is-post .big-file-link img { opacity: 0.6; }
+.dup-member.is-picture:hover, .dup-member.is-post:hover { border-color: var(--danger); }
 .dup-group.is-selecting .dup-member { cursor: inherit; }
-.dup-radio {
+.dup-trash-check {
   position: absolute; top: 8px; left: 8px; z-index: 3;
   width: 18px; height: 18px; margin: 0;
-  accent-color: var(--glow);
+  accent-color: var(--danger-fill);
 }
+.dup-badge-keep { color: #a5f0bf; border-color: rgba(74, 222, 128, 0.4); }
+.dup-badge-trash { color: #ffb3b5; background: rgba(30, 8, 10, 0.88); border-color: rgba(229, 72, 77, 0.55); }
+.dup-plan { margin: -4px 0 10px; font-size: 12.5px; color: var(--text-dim); display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.dup-plan.is-lossy, .dup-warn { color: #ffd59a; }
+.dup-state.is-trash { color: #ffb3b5; background: rgba(229, 72, 77, 0.1); border: 1px solid rgba(229, 72, 77, 0.4); }
+/* Picture or whole post, for a member marked for the trash. */
+.dup-mode { display: flex; margin-top: 5px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.dup-mode > button {
+  flex: 1; min-width: 0; padding: 3px 4px;
+  font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-dim); background: transparent; border: 0; cursor: pointer;
+}
+.dup-mode > button + button { border-left: 1px solid var(--border); }
+.dup-mode > button.is-on { color: #fff; background: var(--danger-fill); }
+.dup-mode > button:hover:not(:disabled):not(.is-on) { color: var(--text); background: var(--bg-soft); }
+.dup-mode > button:focus-visible { outline: 2px solid var(--glow); outline-offset: -2px; }
 .dup-badge-suggested { color: var(--accent-text); border-color: rgba(var(--glow-rgb), 0.35); }
 .dup-badge-kept { color: var(--glow); border-color: rgba(var(--glow-rgb), 0.5); }
 .dup-member-foot { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px 8px; min-width: 0; }

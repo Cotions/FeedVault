@@ -161,8 +161,9 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
     """Move posts, media items and extra copies (db.save_copies) to the trash.
 
     ``pick(conn)``, when given, runs under the write lock before anything
-    moves and returns the (post ids, copy ids) to delete instead, so a caller
-    can check the index and the files in the same lock as the move."""
+    moves and returns the (post ids, copy ids) to delete instead, or (post
+    ids, copy ids, media ids), so a caller can check the index and the files
+    in the same lock as the move."""
     report = {"ok": True, "posts": [], "media": [], "copies": [], "files": 0, "bytes": 0, "errors": [],
               "batch": uuid.uuid4().hex}
     if not db.write_lock.acquire(timeout=30):
@@ -171,7 +172,8 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
     try:
         conn = db.connect()
         if pick is not None:
-            post_ids, copy_ids = pick(conn)
+            post_ids, copy_ids, *rest = pick(conn)
+            media_ids = rest[0] if rest else media_ids
         for cid in dict.fromkeys(copy_ids):
             copy = db.copy_row(conn, cid)
             if copy is not None:

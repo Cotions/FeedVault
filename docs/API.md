@@ -862,7 +862,7 @@ A picture that cannot be decoded is tried again only when its file changes.
 |---|---|---|
 | GET | `/api/duplicates?kind=&offset=&limit=&threshold=` | groups of one kind, see below |
 | GET | `/api/duplicates/status` | the hashing worker's progress, see below |
-| POST | `/api/duplicates/resolve` | body `{ "group": "…", "keep": "…" }`, or `{ "groups": [{ "group": "…", "keep": "…" }, …] }` (at most 500), plus `"threshold"` for a similar group: trashes every other member, see below |
+| POST | `/api/duplicates/resolve` | body `{ "group": "…", "keep": "…" }` (trash every other member) or `{ "group": "…", "trash": ["member id", { "member": "…", "items": [2] }, …] }` (trash just those, or just those items of a post), or `{ "groups": [those, …] }` (at most 500), plus `"threshold"` for a similar group; see below |
 | POST | `/api/duplicates/dismiss` | body `{ "group": "…" }`, plus `"threshold"` for a similar group → `{ "ok": true }`: "not a duplicate", until restored |
 | DELETE | `/api/duplicates/dismiss` | body `{ "group": "…" }` (a dismissal's `id`) → `{ "ok": true }`: forgets the dismissal, the group shows again (the dashboard's **Undo** and **Restore**); 404 when there is no such dismissal |
 | GET | `/api/duplicates/dismissed?kind=` | `{ "dismissed": [dismissal, …] }`, newest first, of one kind or (no `kind`) all; see below |
@@ -965,35 +965,60 @@ files with a content hash, `fingerprinted` those with a perceptual hash,
 `finished_at` when the last complete pass ended, `errors` the last 20
 files that could not be read.
 
-`POST /api/duplicates/resolve` keeps one member of each group and moves
-every other one to the trash, exactly like `/api/delete` (a copy's files go
-the same way, with a `copy` field in the manifest, so the Trash page lists
-and restores it). Under the same lock as the move, each group is rebuilt
-from the index and checked first, and refused (listed in `skipped`, nothing
-of it moved) when:
+`POST /api/duplicates/resolve` moves members of each group to the trash,
+exactly like `/api/delete` (a copy's files go the same way, with a `copy`
+field in the manifest, so the Trash page lists and restores it). A member
+goes **whole**: a post with every item of it, also the ones no other member
+has. Each group says what goes:
+
+- `"keep": "<member id>"`: every other member, whole (the dashboard's bulk
+  "Keep suggested, trash the rest").
+- `"trash": [...]`: just these, one entry per member. A member id trashes
+  that member whole; `{ "member": "<post id>", "items": [idx, …] }` trashes
+  just those items of a post (as `/api/delete` with `media`), the post and
+  its other items stay. An item list that names every item of the post is
+  the whole post (its last item takes the post anyway). Items are for
+  `content` and `similar` groups only: a `copies` group holds one post
+  twice, so its members go whole.
+
+Under the same lock as the move, each group is rebuilt from the index and
+checked first, and refused (listed in `skipped`, nothing of it moved) when:
 
 - it no longer exists with these members (a scan or another resolve
   changed it): reload;
-- the member to keep is not in the group;
+- the member to keep, a member to trash or an item to trash is not in the
+  group (or its post);
+- `trash` is empty, or would trash every member whole (one at least must
+  stay; a member that only loses items stays);
+- items are asked of a copy, or in a `copies` group;
 - it is still being hashed;
 - a file of any member changed (size or mtime) since it was hashed;
-- a file of the member to keep is gone;
-- a member to trash is the one kept in another group of the same call;
+- a file of a member that stays is gone;
+- a member to trash whole is one another group of the same call keeps
+  (every member that group does not trash whole);
 - it is a similar group sent along with other groups (similar groups are
   resolved one at a time).
 
-When the kept member is a copy and the post is trashed, the copy becomes the
-post at once, and the post's "keep" decision moves with it.
+What stays has one heir: the suggested member if it stays, else the first
+that does. The heir takes on the tags and collections of the posts trashed
+whole for it (theirs stay, for a restore; posts that only lose items keep
+theirs and pass nothing on). When the heir is a copy and the post is
+trashed, the copy becomes the post at once, and the post's "keep" decision
+moves with it (the other copies left stay copies of it).
 
 ```json
 { "ok": true, "resolved": ["4c1d9e0b7a2f3e5d6c8b"],
   "skipped": [{ "group": "…", "error": "a file changed since it was hashed; wait for the next pass" }],
-  "posts": ["instagram:R9…"], "copies": [3], "files": 7, "bytes": 10485760, "errors": [] }
+  "posts": ["instagram:R9…"], "copies": [3], "media": [812], "files": 7, "bytes": 10485760, "errors": [] }
 ```
 
-`errors` lists files that could not be moved, as in `/api/delete`. `ok` is
-`false` only when nothing could be done (every group skipped, a bad body,
-or a scan held the index for more than 30 s).
+`posts`, `copies` and `media` are what was moved (`media`: media ids of
+items trashed on their own). `resolved` lists the groups where every member
+but one had something trashed: they are gone from the list. A group that
+kept more members untouched only shrinks (its id changes with its
+members): reload. `errors` lists files that could not be moved, as in
+`/api/delete`. `ok` is `false` only when nothing could be done (every group
+skipped or failed, a bad body, or a scan held the index for more than 30 s).
 
 `POST /api/duplicates/dismiss` stores the group as "not a duplicate". It is
 user data, written to `<data_directory>/userdata/dismissed_duplicates.json`

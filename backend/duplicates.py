@@ -661,23 +661,54 @@ def dismissed_copies(conn):
     return out
 
 
-def _check(g, keep, keepers, hashes):
-    """Why this group cannot be resolved keeping ``keep`` right now, or None."""
+def _plan(g, choice):
+    """What a choice trashes in group ``g``: {member id: None for the whole
+    member, or the set of its item idx}. ``keep`` trashes every other member
+    whole. An item list that covers all of a member's items is the whole
+    member: trashing a post's last item takes the post anyway."""
+    if "keep" in choice:
+        return {m["id"]: None for m in g["members"] if m["id"] != choice["keep"]}
+    members = {m["id"]: m for m in g["members"]}
+    plan = {}
+    for mid, idxs in choice["trash"].items():
+        m = members.get(mid)
+        whole = idxs is None or (m is not None and set(idxs) >= {i["idx"] for i in m["items"]})
+        plan[mid] = None if whole else set(idxs)
+    return plan
+
+
+def _check(g, choice, keepers, hashes):
+    """Why this group cannot be resolved as ``choice`` asks right now, or None."""
     if g is None:
         return "this group changed since it was loaded; reload"
-    member = next((m for m in g["members"] if m["id"] == keep), None)
-    if member is None:
-        return "the member to keep is not in this group"
+    members = {m["id"]: m for m in g["members"]}
+    if "keep" in choice:
+        if choice["keep"] not in members:
+            return "the member to keep is not in this group"
+    elif not choice["trash"]:
+        return "pick at least one member to trash"
+    plan = _plan(g, choice)
+    for mid, idxs in plan.items():
+        m = members.get(mid)
+        if m is None:
+            return "a member to trash is not in this group"
+        if idxs is not None and (g["kind"] == "copies" or m["type"] != "post"):
+            return "the same post twice: a member goes whole, not item by item"
+        if idxs is not None and not idxs <= {i["idx"] for i in m["items"]}:
+            return "an item to trash is not in its post"
+    whole = {mid for mid, idxs in plan.items() if idxs is None}
+    if len(whole) == len(members):
+        return "keep at least one member"
     if g["pending"]:
         return "still being hashed; try again when hashing is done"
-    if any(m["id"] in keepers for m in g["members"] if m is not member):
-        return "a member to trash is the one kept in another group"
+    if whole & keepers:
+        return "a member to trash is kept in another group"
     for m in g["members"]:
         for i in m["items"]:
             now = hashing.stat(i["path"])
             if now is None:
-                if m is member:
-                    return f"a file of the member to keep is gone: {i['path']}"
+                if m["id"] not in whole:
+                    return f"a file of a member to keep is gone: {i['path']}"
                 continue                        # already gone: nothing to move
             h = hashes.get(i["path"])
             if h is not None and (h[0], h[1]) != now:
@@ -686,46 +717,70 @@ def _check(g, keep, keepers, hashes):
 
 
 def resolve(choices, roots, data_dir, threshold=SIMILAR_DEFAULT):
-    """Keep one member of each group and trash the others. ``choices`` is
-    [(group id, member id to keep)]; similar groups (found at ``threshold``)
-    only one at a time, never in bulk. Every group is rebuilt and checked
-    under the same lock as the move (see _check); a group that fails is
-    skipped whole."""
+    """Trash some members of each group, or some items of them, and keep the
+    rest. ``choices`` is [{"group": id, "keep": member id}] (every other
+    member goes, whole) or [{"group": id, "trash": {member id: None | [idx]}}]
+    (each member whole, or just those items of a post; one member at least
+    must stay whole). Similar groups (found at ``threshold``) only one at a
+    time, never in bulk. Every group is rebuilt and checked under the same
+    lock as the move (see _check); a group that fails is skipped whole. A
+    group is resolved once every member but one had something trashed;
+    otherwise it only shrinks."""
     skipped, planned, promote, carry = [], [], [], []
 
     def pick(conn):
         hashes = _hashes(conn)
         current = {g["id"]: g for g in all_groups(conn, "copies", hashes=hashes)}
         for kind in ("content", "similar"):                   # built only when asked for
-            if any(gid not in current for gid, _ in choices):
+            if any(c["group"] not in current for c in choices):
                 current.update((g["id"], g) for g in all_groups(conn, kind, hashes=hashes, threshold=threshold))
-        keepers = {keep for _, keep in choices}
-        posts, copies = [], []
-        for gid, keep in choices:
+        # Whatever a choice does not trash whole is kept: no other choice may trash it.
+        keepers = set()
+        for c in choices:
+            g = current.get(c["group"])
+            if "keep" in c:
+                keepers.add(c["keep"])
+            elif g is not None:
+                plan = _plan(g, c)
+                keepers.update(m["id"] for m in g["members"] if m["id"] not in plan or plan[m["id"]] is not None)
+        posts, copies, media = [], [], []
+        for c in choices:
+            gid = c["group"]
             g = current.get(gid)
-            error = _check(g, keep, keepers, hashes)
+            error = _check(g, c, keepers, hashes)
             if not error and g["kind"] == "similar" and len(choices) > 1:
                 error = "similar groups are resolved one at a time"
             if error:
                 skipped.append({"group": gid, "error": error})
                 continue
-            others = [m for m in g["members"] if m["id"] != keep]
-            posts += [m["post_id"] for m in others if m["type"] == "post"]
-            copies += [m["copy_id"] for m in others if m["type"] == "copy"]
-            planned.append((gid, others))
-            kept = next(m for m in g["members"] if m["id"] == keep)
-            carry.extend((m["post_id"], kept["post_id"]) for m in others
+            plan = _plan(g, c)
+            whole = [m for m in g["members"] if m["id"] in plan and plan[m["id"]] is None]
+            parts = [m for m in g["members"] if plan.get(m["id"])]
+            left = [m for m in g["members"] if m not in whole]
+            posts += [m["post_id"] for m in whole if m["type"] == "post"]
+            copies += [m["copy_id"] for m in whole if m["type"] == "copy"]
+            ids = [r["id"] for m in parts for r in conn.execute(
+                f"SELECT id FROM media WHERE post_id = ? AND missing = 0 AND idx IN ({', '.join('?' * len(plan[m['id']]))})",
+                (m["post_id"], *sorted(plan[m["id"]])))]
+            media += ids
+            planned.append((gid, whole, set(ids), len(g["members"]) - len(plan)))
+            # Of the members left, the suggested one (else the first) takes on
+            # the tags and collections of the posts trashed whole, and becomes
+            # the post if it is a copy whose post is trashed: one heir, not several.
+            kept = next((m for m in left if m["id"] == g["suggested"]), left[0])
+            carry.extend((m["post_id"], kept["post_id"]) for m in whole
                          if m["type"] == "post" and m["post_id"] != kept["post_id"])
             if kept["type"] == "copy":
                 promote.append((kept["post_id"], kept["folder"], kept["kept"]))
-        return posts, copies
+        return posts, copies, media
 
     report = trash.delete([], [], roots, data_dir, pick=pick)
-    report.pop("media", None)
     if "error" in report:
         return {**report, "resolved": [], "skipped": skipped}
     gone = set(report["posts"]) | {f"copy:{c}" for c in report["copies"]}
-    resolved = [gid for gid, others in planned if all(m["id"] in gone for m in others)]
+    done = [(gid, untouched) for gid, whole, ids, untouched in planned
+            if all(m["id"] in gone for m in whole) and ids <= set(report["media"])]
+    resolved = [gid for gid, untouched in done if untouched <= 1]
 
     # A kept copy whose post went to the trash becomes the post now, not at
     # the next scan, and takes the post's decision with it.
@@ -738,5 +793,5 @@ def resolve(choices, roots, data_dir, threshold=SIMILAR_DEFAULT):
     # the posts trashed for it (theirs stay, in case they are restored).
     carried = [(src, dst) for src, dst in carry if src in report["posts"]]
     report["carried"] = organize.carry_over(db.connect(), carried) if carried else []
-    return {**report, "ok": bool(resolved) or not (skipped or report["errors"]),
+    return {**report, "ok": bool(done) or not (skipped or report["errors"]),
             "resolved": resolved, "skipped": skipped}
