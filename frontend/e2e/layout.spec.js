@@ -320,8 +320,7 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
 // The person page and the Links page line up, with the stress person (no
 // source, two links with a long title, address, notes and name), at
 // 1280x800, 1440x900 and 1920x1080:
-//  - Mute and Don't sync are on the line of Feed … Trash, the last at the
-//    right edge of the sections.
+//  - Mute is on the line of Feed … Trash, at the right edge of the sections.
 //  - Every section after the first is set apart by a rule, below the one
 //    before it; the empty Sources says so in a line, not a 48px gap.
 //  - The link-in-bio import is a box inside Accounts, as wide as the Add a
@@ -335,7 +334,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
   test.skip(testInfo.project.name === "layout-zoom", "measured at three desktop sizes");
   const problems = [];
   const near = (a, b, px = 1) => Math.abs(a - b) <= px;
-  await openUrl(page, `/people/${S.person}`, pg => pg.locator(".person-new button:not(.nosync-toggle)"));
+  await openUrl(page, `/people/${S.person}`, pg => pg.locator(".person-new button"));
   await stillPage(page);
   for (const s of LINE_SIZES) {
     await page.setViewportSize({ width: s.width, height: s.height });
@@ -344,8 +343,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
     const m = await page.evaluate(() => {
       const box = e => e.getBoundingClientRect();
       const nav = box(document.querySelector(".person-links a"));
-      const mute = box(document.querySelector(".person-new button:not(.nosync-toggle)"));
-      const last = box(document.querySelector(".person-new > :last-child"));
+      const mute = box(document.querySelector(".person-new button"));
       const sections = [...document.querySelectorAll(".person-section")];
       // About comes first, beside the portrait at the top of the card.
       const accounts = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Accounts"));
@@ -354,7 +352,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
       const sourcesEmpty = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Sources"))?.querySelector(".empty");
       const title = box(add.querySelector(".link-form-title input")), button = box(add.querySelector(".link-form-actions .btn-primary"));
       return {
-        nav: nav.top + nav.height / 2, mute: mute.top + mute.height / 2, muteRight: last.right, sectionRight: box(accounts).right,
+        nav: nav.top + nav.height / 2, mute: mute.top + mute.height / 2, muteRight: mute.right, sectionRight: box(accounts).right,
         rules: sections.slice(1).map((x, i) => ({ border: parseFloat(style(x).borderTopWidth), top: box(x).top, above: box(sections[i]).bottom })),
         bioInAccounts: accounts.contains(bio), bio: box(bio), add: box(add),
         dashed: [style(bio).borderTopStyle, style(add).borderTopStyle],
@@ -364,7 +362,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
       };
     });
     if (!near(m.nav, m.mute, 2)) problems.push(`${at}: Mute is centred at y=${m.mute}, the Feed … Trash line at y=${m.nav}`);
-    if (!near(m.muteRight, m.sectionRight)) problems.push(`${at}: Don't sync ends at x=${m.muteRight}, the sections at x=${m.sectionRight}`);
+    if (!near(m.muteRight, m.sectionRight)) problems.push(`${at}: Mute ends at x=${m.muteRight}, the sections at x=${m.sectionRight}`);
     m.rules.forEach((r, i) => {
       if (r.border < 1) problems.push(`${at}: section ${i + 2} has no rule above it`);
       if (r.top < r.above - 0.5) problems.push(`${at}: section ${i + 2} (top ${r.top}) overlaps the one before it (bottom ${r.above})`);

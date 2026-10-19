@@ -389,9 +389,22 @@ def _check_accounts(conn, accounts):
 
 def _attach(conn, pid, accounts, now):
     """Link accounts to a person, taking them from any other person (an
-    account belongs to one person). Returns how many links changed."""
+    account belongs to one person). Returns how many links changed.
+
+    One taken from a person set to Don't sync (nosync.py) by one who is not
+    gets the switch of its own, so none of its sources starts syncing (the
+    caller notes userdata's no_sync_accounts, nosync.count_accounts)."""
+    off = {r[0] for r in conn.execute("SELECT person_id FROM no_sync_people")}
     n = 0
     for platform, aid in accounts:
+        if off and pid not in off:
+            owners = {r[0] for r in conn.execute(
+                "SELECT person_id FROM person_accounts WHERE platform = ? AND (author_id = ? OR author_id IN "
+                "(SELECT alias_id FROM account_aliases WHERE platform = ? AND author_id = ?))",
+                (platform, aid, platform, aid))}
+            if owners & off:
+                conn.execute("INSERT OR IGNORE INTO no_sync_accounts(platform, author_id, at) VALUES (?, ?, ?)",
+                             (platform, aid, now))
         # Drop the alias either way, so an account is never linked twice.
         conn.execute("DELETE FROM person_accounts WHERE platform = ? AND author_id IN "
                      "(SELECT alias_id FROM account_aliases WHERE platform = ? AND author_id = ?)",

@@ -12,6 +12,18 @@ Off by default. While it is on:
   suggestion (sources.suggestions);
 - its posts stay in the library exactly as before.
 
+Every sync kind (each tool's, and a source's own script) builds through
+sync.synced_source, which refuses a source set to Don't sync: no route,
+POST /api/jobs included, queues one. What stays allowed are the user's
+deliberate one-off actions that are not a source's sync: saving one post
+(POST /api/save) and running a script by hand with an explicit link or
+target (POST /api/scripts/<id>/run).
+
+Nothing starts syncing behind the user's back: an account that leaves a
+person set to Don't sync (unlinked, linked to someone else, the person
+deleted) gets the switch of its own, and merging people into one set to
+it asks first (409 ``confirm``), as turning it on does.
+
 User data (no_sync_people by person name, no_sync_accounts by platform and
 account id), mirrored by userdata.py; a source's own state is
 sources.not_synced. Another site never reaches the switch (app.py's
@@ -36,6 +48,12 @@ def listing(conn):
     return {"people": [r[0] for r in conn.execute("SELECT person_id FROM no_sync_people ORDER BY person_id")],
             "accounts": [{"platform": r[0], "id": r[1]} for r in conn.execute(
                 "SELECT platform, author_id FROM no_sync_accounts ORDER BY platform, author_id")]}
+
+
+def count_accounts(conn):
+    """How many accounts have the switch of their own: compared before and
+    after a change that may carry it (people._attach), for userdata."""
+    return conn.execute("SELECT COUNT(*) FROM no_sync_accounts").fetchone()[0]
 
 
 def is_on(conn, person=None, account=None):

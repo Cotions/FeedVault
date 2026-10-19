@@ -164,7 +164,7 @@ test("editing a link shows its whole notes", async ({ page }) => {
 // Tab stop (Chromium's focusable scrollers) that went as the field lost focus.
 test("Tab goes on from a person's Add an account picker", async ({ page }) => {
   await page.goto(`/people/${stressData().person}`);
-  await expect(page.locator(".person-new button:not(.nosync-toggle)")).toBeVisible();
+  await expect(page.locator(".person-new button")).toBeVisible();
   await idle(page);
   const picker = page.getByRole("combobox", { name: "Add an account" });
   await picker.focus();

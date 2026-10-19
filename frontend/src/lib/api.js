@@ -298,9 +298,11 @@ export function deletePerson(id) { return del(`/api/people/${seg(id)}`); }
 export function linkAccounts(id, { add = [], remove = [] } = {}) {
   return post(`/api/people/${seg(id)}/accounts`, { add, remove });
 }
-// Folds ids[1..] (and accounts) into ids[0] → { ok, person }
-export function mergePeople(ids, { name, accounts = [] } = {}) {
-  return post("/api/people/merge", { ids, accounts, ...(name ? { name } : {}) });
+// Folds ids[1..] (and accounts) into ids[0] → { ok, person }. One of them
+// set to Don't sync, whose switch would stop sources that sync now, answers
+// { ok: false, confirm: true, sources: n } until sent again with confirm.
+export function mergePeople(ids, { name, accounts = [], confirm = false } = {}) {
+  return post("/api/people/merge", { ids, accounts, ...(name ? { name } : {}), ...(confirm ? { confirm: true } : {}) });
 }
 // What a person's picture can be made from (docs/API.md "Profile pictures"):
 // { profile_pics: [{ key, name, at, account, url }], media: [{ id, post, kind, posted_at, thumb }] }

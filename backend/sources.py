@@ -723,16 +723,33 @@ def _owner(conn, row, accounts):
     return key, None
 
 
-def not_synced(conn, row, accounts=None, flags=None):
-    """Whether a source row is not synced: its account, or the person it
-    shows with, is set to Don't sync (nosync.py). ``flags``: nosync.flags,
-    read once by a caller going through many."""
+def _sync_owner(conn, row, accounts, roots=None):
+    """_owner, for Don't sync: a source not tied to an account yet (its
+    first sync not done) stands for its folder's account (_folder_account),
+    and that account's person when it has no person of its own."""
+    key, person = _owner(conn, row, accounts)
+    if key is None and row["author_id"] is None and row["folder"]:
+        roots = roots if roots is not None else config.load()["media_roots"]
+        real = inside_root(row["folder"], roots)
+        key = _folder_account(conn, row["platform"], real, roots) if real else None
+        if key is not None and person is None:
+            person = (accounts.get(key) or {}).get("person")
+    return key, person
+
+
+def not_synced(conn, row, accounts=None, flags=None, roots=None):
+    """Whether a source row is not synced: its account (its folder's, before
+    its first sync), the person it shows with, or the person it was added
+    to, is set to Don't sync (nosync.py). ``flags``: nosync.flags, read
+    once by a caller going through many."""
     accounts = accounts if accounts is not None else db.accounts(conn)
     keys, pids = flags if flags is not None else nosync.flags(conn)
-    key, person = _owner(conn, row, accounts)
+    key, person = _sync_owner(conn, row, accounts, roots)
     if key is not None and key in keys:
         return True
     if row["author_id"] is not None and (row["platform"], row["author_id"]) in keys:
+        return True
+    if row["person_id"] is not None and row["person_id"] in pids:
         return True
     return person is not None and person["id"] in pids
 
@@ -740,7 +757,11 @@ def not_synced(conn, row, accounts=None, flags=None):
 def not_synced_error(conn, row, accounts=None):
     """NOT_SYNCED for a source row, naming its person or account."""
     accounts = accounts if accounts is not None else db.accounts(conn)
-    key, person = _owner(conn, row, accounts)
+    key, person = _sync_owner(conn, row, accounts)
+    pids = nosync.flags(conn)[1]
+    if row["person_id"] is not None and row["person_id"] in pids and (person is None or person["id"] not in pids):
+        p = conn.execute("SELECT id, name FROM people WHERE id = ?", (row["person_id"],)).fetchone()
+        person = {"id": p["id"], "name": p["name"]} if p else person
     if person is not None:
         who = person["name"]
     elif key is not None and accounts.get(key):
@@ -804,11 +825,22 @@ def of_person(conn, pid):
 
 
 def of_account(conn, platform, author_id):
-    """The ids of the sources of an account (canonical, or an alias of it)."""
+    """The ids of the sources of an account (canonical, or an alias of it),
+    a source not tied to an account yet counted as its folder's (_sync_owner)."""
     key = people.canonical(conn, platform, author_id)
+    accounts, roots = db.accounts(conn), config.load()["media_roots"]
     return [r["id"] for r in conn.execute("SELECT * FROM sources WHERE platform = ? ORDER BY target, tool",
                                           (platform,)).fetchall()
-            if r["author_id"] is not None and people.canonical(conn, r["platform"], r["author_id"]) == key]
+            if _sync_owner(conn, r, accounts, roots)[0] == key]
+
+
+def of_person_all(conn, pid):
+    """The ids of the sources Don't sync set on a person stops (not_synced):
+    of_person's, those added to them whose account is someone else's, and
+    those not tied to an account yet whose folder's account is theirs."""
+    accounts, roots = db.accounts(conn), config.load()["media_roots"]
+    return [r["id"] for r in conn.execute("SELECT * FROM sources ORDER BY target, tool").fetchall()
+            if r["person_id"] == pid or (_sync_owner(conn, r, accounts, roots)[1] or {}).get("id") == pid]
 
 
 def account_folder(conn, platform, author_id, roots):
@@ -1052,8 +1084,12 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
         if key is None:
             key = _handle_account(conn, platform, target if tool == "instaloader" else profile_handle(target))
             # An account known from file names alone (its id is its folder's
-            # name) is that folder's, not the profile's: the first sync finds it.
+            # name) is that folder's, not the profile's: the first sync finds
+            # it. Set to Don't sync, it is refused all the same.
             if key and tool == "instaloader" and not key[1].isdigit():
+                refused = _not_synced_target(conn, key, None)
+                if refused:
+                    raise NotSynced(refused)
                 key = None
     others = folder_owners(conn, real, roots) - {key}
     if others:

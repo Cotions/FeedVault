@@ -11,10 +11,12 @@ import Icon from "./Icon";
    library. Turning it on for one with sources asks first: the backend says
    how many would stop, and this dialog says what that means.
 
-   `on`: its own switch. `inherited`: an account whose person has the switch
-   on, so it is not synced either way: shown on and turned off on the
-   person, not here. `compact`: icon only, for a Creators card. */
-export default function NoSyncButton({ on, inherited = false, whom, name, onDone, compact = false }) {
+   `on`: its own switch. `inherited`: the name of the account's person
+   when their switch is on, so it is not synced either way: shown on, and
+   turned off on the person, not here (the button says so in its title and
+   does nothing; aria-disabled, so the title still shows on hover).
+   `compact`: icon only, for a Creators card. */
+export default function NoSyncButton({ on, inherited = null, whom, name, onDone, compact = false }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState(null);        // { sources: n } while the dialog is open
@@ -41,19 +43,22 @@ export default function NoSyncButton({ on, inherited = false, whom, name, onDone
     }
   }
 
-  const shown = on || inherited;
-  const title = inherited && !on ? `Not synced: their person is set to Don't sync (turn it off on the person)`
+  const blocked = !!inherited;
+  const shown = on || blocked;
+  const title = blocked ? `Not synced: ${inherited} is set to Don't sync. Turn it off on ${inherited} first`
     : on ? `Sync ${name} again: Add source, Sync and schedules come back`
     : `Don't sync ${name}: no source, no Sync, no schedule. What is downloaded stays`;
-  const label = shown ? `Sync ${name} again` : `Don't sync ${name}`;
+  const label = blocked ? `${name} not synced: ${inherited} is set to Don't sync`
+    : shown ? `Sync ${name} again` : `Don't sync ${name}`;
+  const click = blocked ? undefined : () => send();
   const button = compact ? (
-    <button type="button" className={`icon-btn creator-nosync${shown ? " is-on" : ""}`} onClick={() => send()}
-            disabled={busy || (inherited && !on)} title={title} aria-label={label} aria-pressed={shown}>
+    <button type="button" className={`icon-btn creator-nosync${shown ? " is-on" : ""}`} onClick={click}
+            disabled={busy} aria-disabled={blocked || undefined} title={title} aria-label={label} aria-pressed={shown}>
       <Icon name={shown ? "syncOff" : "refresh"} size={15} />
     </button>
   ) : (
     <button type="button" className={`btn-secondary select-toggle nosync-toggle${shown ? " is-on" : ""}`}
-            onClick={() => send()} disabled={busy || (inherited && !on)} title={title} aria-pressed={shown}>
+            onClick={click} disabled={busy} aria-disabled={blocked || undefined} title={title} aria-pressed={shown}>
       <Icon name={shown ? "syncOff" : "refresh"} size={14} /> {shown ? "Not synced" : "Don't sync"}
     </button>
   );

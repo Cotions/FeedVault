@@ -1310,7 +1310,7 @@ A **person**:
 | POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"] }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date) → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, tied to no one |
 | POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted; at most 500 each) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
-| POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }] }` → `{ "ok": true, "person": {…} }`, see below |
+| POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }], "confirm": true }` → `{ "ok": true, "person": {…} }`, see below; 409 `{ "ok": false, "confirm": true, "sources": 2, "error" }` when one of them is set to [Don't sync](#dont-sync) and sources that sync now would stop, until sent with `"confirm": true` |
 
 - An account belongs to one person at most: adding it to a person (create,
   add, merge) takes it from any other. An account that is not in the index
@@ -1758,8 +1758,9 @@ no person yet.
 - `account`: the indexed account the source belongs to (an alias is
   replaced by the id it stands for), or `null`. `person`: the account's
   person, else the person the source was added to, else `null`.
-- `no_sync`: its account or its person is set to [Don't sync](#dont-sync):
-  the source is kept but never synced.
+- `no_sync`: its account (before its first sync, its folder's account),
+  the person it shows under, or the person it was added to is set to
+  [Don't sync](#dont-sync): the source is kept but never synced.
 - `options`: what its syncs use, option by option: the source's own value
   when it sets one (`overrides` names those), else its platform's
   [download default](#download-defaults), else the default below.
@@ -2540,7 +2541,9 @@ is on (on the account itself, or on its person):
 - a source it already has is **kept**, never deleted, and marked
   `"no_sync": true`, but never runs: `POST /api/sources/<id>/sync` answers
   409 with `"no_sync": true`, Sync all and a person's Sync leave it out
-  (`not_synced` counts them), and the scheduler never queues it;
+  (`not_synced` counts them), the scheduler never queues it, and no sync
+  job for it can be started any other way (`POST /api/jobs` with a sync
+  kind answers 400);
 - its posts stay in the library, in the Feed, Review, Storage and every
   page, exactly as before.
 
@@ -2551,10 +2554,23 @@ or running. Turned off, its sources sync again as they did, schedules
 included. Another site can neither read nor set it (it is not in the
 userscript's routes, see [Security rules](#security-rules)).
 
+A source counts as its account's, and as the person it shows under; one
+added to a person set to Don't sync stays not synced even when its account
+is linked to someone else. One not tied to an account yet (its first sync
+not done) counts as its folder's account.
+
 A person who leaves keeps nothing syncing that did not: when a person set
-to Don't sync is deleted, or an account is unlinked from them, those
-accounts get the switch of their own. Merging people keeps it on when any
-of them had it.
+to Don't sync is deleted, or an account leaves them (unlinked, added to
+someone else, or taken by a new person or a merge), that account gets the
+switch of its own. Merging people keeps it on when any of them had it;
+when that would stop sources that sync now, `POST /api/people/merge`
+asks first (409 `{ "ok": false, "confirm": true, "sources": n, "error" }`)
+and merges once sent again with `"confirm": true`.
+
+Deliberate one-off actions that are not a source's sync stay allowed:
+saving one post (`POST /api/save`) and running a script by hand with an
+explicit link or target (`POST /api/scripts/<id>/run`). A script attached
+to a source runs as that source's sync, and is refused as it is.
 
 User data: `no_sync_people` (exported by person name, as `muted_people`;
 deleting the person drops it) and `no_sync_accounts` (by platform and
@@ -3084,7 +3100,7 @@ A **job**:
 |---|---|---|
 | GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "unsorted_links": 3, "notifications": { "unread": 1, "latest": 42, "desktop": false } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `unsorted_links` the number of links tied to no one, see [Links](#links); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
-| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object, a `kind` that is not text, and a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync) |
+| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object, a `kind` that is not text, and a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync), and a sync kind for a source set to [Don't sync](#dont-sync) |
 | GET | `/api/jobs/<id>` | job, or 404 |
 | GET | `/api/jobs/<id>/log?after=<n>` | output lines numbered above `n` (default 0), see below; 404 if unknown |
 | POST | `/api/jobs/<id>/cancel` | → `{ "ok": true, "job": {…} }`; 404 if unknown, 409 if it has already ended, or if its process has exited and it is indexing what it downloaded |

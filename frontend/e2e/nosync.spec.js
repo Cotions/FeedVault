@@ -62,6 +62,13 @@ test("Don't sync: asked first, the source kept and marked, the filter, no overla
     await expect(row.getByRole("button", { name: "Remove" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Profile link, or an Instagram name" })).toHaveCount(0);
     await expect(page.locator(".nosync-toggle")).toHaveAttribute("aria-pressed", "true");
+    // An account of theirs: shown not synced, turned off on the person only, its title says who.
+    const own = page.locator(".person-account .creator-nosync").first();
+    await expect(own).toHaveAttribute("aria-disabled", "true");
+    expect(await own.getAttribute("title")).toContain(`${person.name} is set to Don't sync`);
+    await own.click({ force: true });           // aria-disabled: Playwright would wait for it to be enabled
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect((await (await request.get("/api/no-sync", { headers: H })).json()).accounts).toEqual([]);
     await idle(page);
     await checkSizes(page, testInfo, "person set to Don't sync");
 

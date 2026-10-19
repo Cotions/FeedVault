@@ -396,22 +396,33 @@ def set_no_sync():
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
-    if body["no_sync"]:
-        ids = sources.of_person(conn, person) if person is not None else sources.of_account(conn, *account)
-        active = _sources_active()
-        if any(sid in active for sid in ids):
-            return jsonify({"ok": False, "error": NO_SYNC_BUSY}), 409
-        accounts, flags = db.accounts(conn), nosync.flags(conn)
-        stopping = [sid for sid in ids if not sources.not_synced(conn, sources.row(conn, sid), accounts, flags)]
-        if stopping and body.get("confirm") is not True:
-            n = len(stopping)
-            return jsonify({"ok": False, "confirm": True, "sources": n,
-                            "error": f"{n} source{'' if n == 1 else 's'} would stop syncing (kept, not deleted): "
-                                     "send confirm: true"}), 409
-    changed = nosync.set_on(conn, body["no_sync"], person=person, account=account)
+    # Held from the busy check to the switch: no sync of theirs is queued in between.
+    with sync._submitting:
+        if body["no_sync"]:
+            ids = sources.of_person_all(conn, person) if person is not None else sources.of_account(conn, *account)
+            active = _sources_active()
+            if any(sid in active for sid in ids):
+                return jsonify({"ok": False, "error": NO_SYNC_BUSY}), 409
+            asked = _no_sync_ask(conn, ids, body)
+            if asked:
+                return asked
+        changed = nosync.set_on(conn, body["no_sync"], person=person, account=account)
     if changed:
         userdata.changed(changed)
     return jsonify({"ok": True, "no_sync": nosync.listing(conn)})
+
+
+def _no_sync_ask(conn, ids, body):
+    """The 409 that asks before sources ``ids`` stop syncing (those not
+    stopped already), until the body has ``"confirm": true``; else None."""
+    accounts, flags = db.accounts(conn), nosync.flags(conn)
+    stopping = [sid for sid in ids if not sources.not_synced(conn, sources.row(conn, sid), accounts, flags)]
+    if not stopping or body.get("confirm") is True:
+        return None
+    n = len(stopping)
+    return jsonify({"ok": False, "confirm": True, "sources": n,
+                    "error": f"{n} source{'' if n == 1 else 's'} would stop syncing (kept, not deleted): "
+                             "send confirm: true"}), 409
 
 
 # ---------------------------------------------------------------------------
@@ -1038,6 +1049,7 @@ def create_person():
     if accounts is None:
         return jsonify({"ok": False, "error": _BAD_ACCOUNTS}), 400
     conn, cfg, now = db.connect(), config.load(), int(time.time())
+    carried = nosync.count_accounts(conn)
     try:
         profiles, table = _profiles(body.get("profiles"), conn, cfg)
         if profiles and not cfg["media_roots"]:
@@ -1073,10 +1085,19 @@ def create_person():
                 conn.executemany("DELETE FROM sources WHERE id = ?", [(sid,) for sid in made])
             people.delete(conn, p["id"])
             return jsonify({"ok": False, "error": str(e)}), 400
+    _note_carried(conn, carried)
     _people_changed(names=True)
     if made:
         userdata.changed("sources")
     return jsonify({"ok": True, "person": p, "sources": [_source_or_404(sid) for sid in made]})
+
+
+def _note_carried(conn, before):
+    """userdata's no_sync_accounts, when accounts taken from a person set to
+    Don't sync got the switch of their own (people._attach) since
+    ``before`` (nosync.count_accounts)."""
+    if nosync.count_accounts(conn) != before:
+        userdata.changed("no_sync_accounts")
 
 
 @app.post("/api/people/merge")
@@ -1097,13 +1118,26 @@ def merge_people():
     found = {r[0] for r in conn.execute(f"SELECT id FROM people WHERE id IN ({', '.join('?' for _ in ids)})", ids)}
     if found != set(ids):
         return jsonify({"ok": False, "error": "no such person"}), 404
+    if body.get("confirm") not in (None, True):
+        return jsonify({"ok": False, "error": "confirm must be true"}), 400
     muted = any(news.is_muted(conn, person=i) for i in ids)
     unsynced = any(nosync.is_on(conn, person=i) for i in ids)
+    if unsynced:
+        # The one kept is set to Don't sync: the others' sources, and those
+        # of the accounts added, stop syncing. Asked first, as /api/no-sync does.
+        stopping = {sid for i in ids for sid in sources.of_person_all(conn, i)}
+        for a in accounts:
+            stopping.update(sources.of_account(conn, *a))
+        asked = _no_sync_ask(conn, sorted(stopping), body)
+        if asked:
+            return asked
     pictures = _avatars_of(conn, ids)
+    carried = nosync.count_accounts(conn)
     try:
         p = people.merge(conn, ids, name, accounts, int(time.time()))
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    _note_carried(conn, carried)
     avatars.drop_unused(conn, config.load()["data_directory"], pictures)
     if muted:                                  # a muted one's accounts stay muted in the one they join
         news.mute(conn, True, person=p["id"])
@@ -1321,12 +1355,14 @@ def person_accounts(pid):
     if remove and nosync.is_on(conn, person=pid):
         mine = people.account_set(conn, pid)
         leaving = [people.canonical(conn, *k) for k in remove if tuple(k) in mine]
+    carried = nosync.count_accounts(conn)
     try:
         r = people.link(conn, pid, add, remove, int(time.time()))
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    if r["removed"] and leaving and nosync.carry(conn, leaving):
-        userdata.changed("no_sync_accounts")
+    if r["removed"] and leaving:
+        nosync.carry(conn, leaving)
+    _note_carried(conn, carried)
     if r["added"] or r["removed"]:
         _people_changed()
     return jsonify({"ok": True, **r})

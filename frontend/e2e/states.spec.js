@@ -55,7 +55,7 @@ const VIEWS = [
   ...PAGES.map(p => ({ name: p.name, open: page => open(page, p.name) })),
   { name: "Post", open: page => openUrl(page, postUrl(), ".post-page-head") },
   // Accounts, the link-in-bio import, Sources, Links: with Mute loaded.
-  { name: "Person", open: page => openUrl(page, personUrl(), ".person-new button:not(.nosync-toggle)") },
+  { name: "Person", open: page => openUrl(page, personUrl(), ".person-new button") },
 ];
 
 test.beforeEach(async ({ page }) => { await addProbes(page); });

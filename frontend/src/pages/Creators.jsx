@@ -671,8 +671,11 @@ export default function Creators() {
         return;
       }
       const r = chosenPeople.length
-        ? await mergePeople(chosenPeople.map(p => p.id), { name, accounts })
+        ? await mergePeople(chosenPeople.map(p => p.id), { name, accounts, confirm: !!merge.stopping })
         : await createPerson(name, accounts);
+      // One of them is set to Don't sync: the one kept will be, so their
+      // sources that sync now would stop. Said in the dialog; Merge again goes on.
+      if (r?.confirm && !merge.stopping) { setMerge(m => ({ ...m, stopping: r.sources, error: null })); return; }
       if (!r?.ok) { setMerge(m => ({ ...m, error: r?.error || "Could not merge." })); return; }
       setMerge(null);
       sel.exit();
@@ -1034,6 +1037,12 @@ export default function Creators() {
             {mergeAccounts.length > 0 && `${mergeAccounts.length} account${mergeAccounts.length === 1 ? "" : "s"} get linked. `}
             Posts and files are not touched.
           </p>
+          {merge?.stopping > 0 && (
+            <p className="msg merge-nosync" role="status">
+              One of them is set to Don&apos;t sync, so the person they become is too: {plural(merge.stopping, "source")}{" "}
+              that {merge.stopping === 1 ? "syncs" : "sync"} now will stop syncing (kept, not deleted). Merge again to go on.
+            </p>
+          )}
           <label className="dialog-field">
             <span>Name</span>
             <input

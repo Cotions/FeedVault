@@ -512,12 +512,22 @@ def _source_id(params):
     return int(v)
 
 
-def _build(params):
-    """The argument list, from the stored source and the settings only."""
-    sid = _source_id(params)
-    src = sources.row(db.connect(), sid)
+def synced_source(params):
+    """The source row a sync job is for. Raises jobs.BadRequest when there
+    is none, or when it is set to Don't sync (nosync.py): every sync kind
+    builds through here, so no route (POST /api/jobs included) queues one."""
+    conn = db.connect()
+    src = sources.row(conn, _source_id(params))
     if src is None:
         raise jobs.BadRequest("no such source")
+    if sources.not_synced(conn, src):
+        raise jobs.BadRequest(sources.not_synced_error(conn, src))
+    return src
+
+
+def _build(params):
+    """The argument list, from the stored source and the settings only."""
+    src = synced_source(params)
     if src["tool"] != "instaloader":
         raise jobs.BadRequest(f"a {src['tool']} source cannot be synced yet")
     cfg = config.load()
@@ -1498,10 +1508,7 @@ jobs.register(KIND, label="Sync from Instagram", params=PARAMS,
 def _archive_source(params, tool):
     """(source row, link, folder, cfg) of a gallery-dl or yt-dlp source,
     each checked again. Raises jobs.BadRequest."""
-    sid = _source_id(params)
-    src = sources.row(db.connect(), sid)
-    if src is None:
-        raise jobs.BadRequest("no such source")
+    src = synced_source(params)
     if src["tool"] != tool:
         raise jobs.BadRequest(f"not a {tool} source")
     cfg = config.load()

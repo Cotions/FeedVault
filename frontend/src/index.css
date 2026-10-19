@@ -3899,6 +3899,8 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
    account row or a source kept but never run. */
 .creator-nosync { margin-right: 6px; flex-shrink: 0; }
 .creator-nosync.is-on { color: var(--glow); }
+/* On through the person's switch: turned off there, the title says so. */
+.creator-nosync[aria-disabled="true"], .nosync-toggle[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
 .portrait-actions > .creator-nosync, .person-account > .creator-nosync { margin-right: 0; }
 .nosync-chip { flex: none; gap: 4px; max-width: 100%; color: var(--muted); border-style: dashed; }
 .nosync-chip .icon { flex: none; }

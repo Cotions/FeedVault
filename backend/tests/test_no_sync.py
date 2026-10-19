@@ -247,3 +247,124 @@ def test_it_is_user_data_and_survives_a_rebuild(library, client):
     pid = get(client, "/api/people")[0]["id"]
     assert get(client, "/api/no-sync") == {"people": [pid], "accounts": [DANA]}
     assert suggested(client) == []
+
+
+def test_no_route_queues_the_sync_of_one_not_synced(library, client):
+    """Every sync kind builds through sync.synced_source: POST /api/jobs,
+    the only route that takes a kind and a source id, is refused too, and
+    nothing is queued (each build refuses before any tool is looked for)."""
+    pid = post(client, "/api/people", {"name": "Carol", "accounts": [CAROL]})["person"]["id"]
+    insta = add_suggested(client, "carol.cooks")["source"]
+    x = post(client, "/api/sources", {"target": "https://x.com/carol_cooks", "person": pid})["source"]
+    tt = post(client, "/api/sources", {"target": "https://www.tiktok.com/@carol.cooks", "person": pid})["source"]
+    assert (x["tool"], tt["tool"]) == ("gallery-dl", "yt-dlp")
+    switch(client, {"person": pid, "no_sync": True, "confirm": True})
+    for kind, s in (("instaloader-sync", insta), ("gallery-dl-sync", x), ("yt-dlp-sync", tt)):
+        r = post(client, "/api/jobs", {"kind": kind, "params": {"source": str(s["id"])}}, 400)
+        assert "Carol is set to Don't sync" in r["error"], kind
+    assert jobs.active() == []
+    # A source's own script: its build reads the source the same way.
+    import scripts
+    with pytest.raises(jobs.BadRequest, match="Don't sync"):
+        scripts._source({"source": str(insta["id"]), "target": insta["target"]})
+
+
+def test_an_account_taken_from_a_person_set_to_it_keeps_it(library, client):
+    """Linked to someone else (add, a new person, a merge's accounts), an
+    account of a person set to Don't sync gets the switch of its own."""
+    carol = post(client, "/api/people", {"name": "Carol", "accounts": [CAROL, DANA]})["person"]["id"]
+    switch(client, {"person": carol, "no_sync": True})
+    # Added to another person.
+    other = post(client, "/api/people", {"name": "Other"})["person"]["id"]
+    post(client, f"/api/people/{other}/accounts", {"add": [DANA]})
+    assert get(client, "/api/no-sync")["accounts"] == [DANA]
+    assert account(client, DANA)["person"]["id"] == other and suggested(client) == []
+    # A new person made with it.
+    made = post(client, "/api/people", {"name": "New", "accounts": [CAROL]})["person"]
+    assert made["no_sync"] is False and get(client, "/api/no-sync")["accounts"] == [CAROL, DANA]
+    assert suggested(client) == []
+    # A merge's accounts: back to Carol, then taken by a merge.
+    switch(client, {"account": CAROL, "no_sync": False})
+    post(client, f"/api/people/{carol}/accounts", {"add": [CAROL]})
+    assert get(client, "/api/no-sync")["accounts"] == [DANA]
+    a = post(client, "/api/people", {"name": "A"})["person"]["id"]
+    b = post(client, "/api/people", {"name": "B"})["person"]["id"]
+    post(client, "/api/people/merge", {"ids": [a, b], "accounts": [CAROL]})
+    assert get(client, "/api/no-sync")["accounts"] == [CAROL, DANA]
+    # Written to userdata: the switch survives as the account's own.
+    conn = db.connect()
+    userdata.export(conn, "no_sync_accounts", config.load()["data_directory"])
+    with open(userdata.path(config.load()["data_directory"], "no_sync_accounts")) as f:
+        assert len(json.load(f)["rows"]) == 2
+
+
+def test_a_filename_only_account_is_refused_too(env, client):
+    """An account known from file names alone (its id is its folder's
+    name): a profile of that name is refused before its key is let go."""
+    from fakes import write_filename_post
+    write_filename_post(env["media"] / "erin.paints", "erin.paints", "EEEEEEEEEE1", TS)
+    scanner.scan(env["roots"])
+    erin = {"platform": "instagram", "id": "erin.paints"}
+    assert account(client, erin)["id"] == "erin.paints"
+    switch(client, {"account": erin, "no_sync": True})
+    r = post(client, "/api/sources", {"tool": "instaloader", "target": "erin.paints",
+                                      "folder": str(env["media"] / "elsewhere")}, 409)
+    assert r["no_sync"] is True
+    assert get(client, "/api/sources")["sources"] == []
+
+
+def test_a_source_before_its_first_sync_stands_for_its_folders_account(env, client, submitted):
+    """No account yet (author NULL, no person): its folder's account's switch
+    covers it, counted when asked and refused when synced."""
+    folder = env["media"] / "fern.knits"
+    os.makedirs(folder)
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "fern.knits", "folder": str(folder)})["source"]
+    assert s["account"] is None and s["person"] is None
+    write_post(folder, "FERNPOST0001", TS, owner("fern.knits", 999))
+    scanner.scan(env["roots"])
+    fern = {"platform": "instagram", "id": "999"}
+    r = switch(client, {"account": fern, "no_sync": True}, 409)
+    assert r["sources"] == 1
+    switch(client, {"account": fern, "no_sync": True, "confirm": True})
+    assert get(client, f"/api/sources/{s['id']}")["no_sync"] is True
+    assert post(client, f"/api/sources/{s['id']}/sync", status=409)["no_sync"] is True
+    assert post(client, "/api/sources/sync-all")["not_synced"] == 1 and submitted == []
+
+
+def test_the_person_a_source_was_added_to_counts(library, client, submitted):
+    """A source added to a person set to Don't sync is not synced even when
+    its account is linked to someone else, who is not."""
+    p = post(client, "/api/people", {"name": "P"})["person"]["id"]
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "carol.cooks", "person": p})["source"]
+    q = post(client, "/api/people", {"name": "Q", "accounts": [CAROL]})["person"]["id"]
+    assert get(client, f"/api/sources/{s['id']}")["person"]["id"] == q
+    assert switch(client, {"person": p, "no_sync": True}, 409)["sources"] == 1
+    switch(client, {"person": p, "no_sync": True, "confirm": True})
+    assert get(client, f"/api/sources/{s['id']}")["no_sync"] is True
+    r = post(client, f"/api/sources/{s['id']}/sync", status=409)
+    assert "P is set to Don't sync" in r["error"]
+    assert post(client, f"/api/people/{q}/sync")["not_synced"] == 1 and submitted == []
+
+
+def test_merging_into_a_person_set_to_it_asks_first(library, client):
+    q = post(client, "/api/people", {"name": "Q", "accounts": [CAROL]})["person"]["id"]
+    s = add_suggested(client, "carol.cooks")["source"]
+    p = post(client, "/api/people", {"name": "P"})["person"]["id"]
+    switch(client, {"person": p, "no_sync": True})
+    r = post(client, "/api/people/merge", {"ids": [q, p]}, 409)
+    assert (r["confirm"], r["sources"]) == (True, 1)
+    assert {x["id"] for x in get(client, "/api/people")} == {p, q}
+    post(client, "/api/people/merge", {"ids": [q, p], "confirm": "yes"}, 400)
+    merged = post(client, "/api/people/merge", {"ids": [q, p], "confirm": True})["person"]
+    assert merged["no_sync"] is True and get(client, f"/api/sources/{s['id']}")["no_sync"] is True
+
+
+def test_the_switch_is_set_while_no_sync_can_be_queued(library, client, monkeypatch):
+    """The busy check and the switch under sync._submitting: no sync of
+    theirs is queued in between."""
+    import nosync
+    held = []
+    real = nosync.set_on
+    monkeypatch.setattr(nosync, "set_on", lambda *a, **k: held.append(sync._submitting.locked()) or real(*a, **k))
+    switch(client, {"account": CAROL, "no_sync": True})
+    assert held == [True]
