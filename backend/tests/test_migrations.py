@@ -262,3 +262,34 @@ def test_source_options_become_overrides(tmp_path, monkeypatch):
     ]
     # The frozen defaults of migration 26 are BUILTIN's before metadata modes.
     assert db._OPTIONS_25 == {k: v for k, v in sources.BUILTIN.items() if k != "metadata"}
+
+
+def test_no_sync_tables_added_and_safe_to_run_again(tmp_path, monkeypatch):
+    """Migration 27 (Don't sync, nosync.py): two empty tables on a database
+    in use; what it had stays, and running it again changes nothing."""
+    path = str(tmp_path / "feedvault.db")
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:26])
+    db.migrate(path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO people(name, created_at) VALUES ('Carol', 1)")
+    conn.execute("INSERT INTO sources(platform, author_id, tool, target, folder, created_at) "
+                 "VALUES ('instagram', '777', 'instaloader', 'carol', '/m/carol', 1)")
+    conn.commit()
+    conn.close()
+    monkeypatch.undo()
+    db.migrate(path)
+    assert version(path) == (27, 27) and len(db.MIGRATIONS) == 27
+    assert {"no_sync_people", "no_sync_accounts"} <= tables(path)
+    conn = sqlite3.connect(path, isolation_level=None)
+    assert conn.execute("SELECT COUNT(*) FROM no_sync_people").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM no_sync_accounts").fetchone()[0] == 0
+    conn.execute("INSERT INTO no_sync_people(person_id, at) VALUES (1, 5)")
+    conn.execute("INSERT INTO no_sync_accounts(platform, author_id, at) VALUES ('instagram', '777', 5)")
+    # Again (a file that has them already): nothing lost, nothing added.
+    db._migrate_27(conn)
+    assert conn.execute("SELECT person_id, at FROM no_sync_people").fetchall() == [(1, 5)]
+    assert conn.execute("SELECT platform, author_id, at FROM no_sync_accounts").fetchall() == [("instagram", "777", 5)]
+    assert conn.execute("SELECT target FROM sources").fetchall() == [("carol",)]
+    conn.close()
+    db.migrate(path)                                   # at the latest version: a no-op
+    assert version(path) == (27, 27)

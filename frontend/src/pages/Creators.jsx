@@ -8,8 +8,8 @@ import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
 import { platformLabel, authorFeedPath, fmtBytes, fmtInt, plural } from "../lib/fmt";
 import {
-  accountKey, accountRef, accountText, attributeChoices, attributesMatch, countryFlag, countryName, filtersOn, matchedFormer, matches,
-  NO_FILTERS, personPath, personText, suggestName,
+  accountKey, accountRef, accountText, attributeChoices, attributeFiltersOn, attributesMatch, countryFlag, countryName, filtersOn,
+  matchedFormer, matches, NO_FILTERS, notSynced, personPath, personText, suggestName, syncFilter, syncMatch,
 } from "../lib/people";
 import Icon from "../components/Icon";
 import PlatformIcon from "../components/PlatformIcon";
@@ -19,9 +19,10 @@ import DiscardDialog from "../components/DiscardDialog";
 import SelectionBar from "../components/SelectionBar";
 import Suggestions from "../components/Suggestions";
 import MuteButton from "../components/MuteButton";
+import NoSyncButton from "../components/NoSyncButton";
 import {
-  AddSource, RemoveSourceDialog, ScheduleLine, ScriptWarning, SourceOptionsDialog, SourceRow, SourceStatus, SyncAllBar,
-  SyncButton,
+  AddSource, NotSyncedChip, RemoveSourceDialog, ScheduleLine, ScriptWarning, SourceOptionsDialog, SourceRow, SourceStatus,
+  SyncAllBar, SyncButton,
 } from "../components/Sources";
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
 import { optionsSummary } from "../lib/sourceOptions";
@@ -52,9 +53,11 @@ function freeName(name, people) {
 }
 
 /* A card's sources: which one to show (syncing, else a failed one, else
-   the latest sync), its job, and those not syncing already. */
-function cardSync(sources, jobOf) {
-  if (!sources?.length) return null;
+   the latest sync), its job, and those not syncing already. One set to
+   Don't sync never runs: no status, Sync, Options or warning for it. */
+function cardSync(all, jobOf) {
+  const sources = (all || []).filter(s => !s.no_sync);
+  if (!sources.length) return null;
   const jobs = sources.map(jobOf);
   const job = jobs.find(j => j?.state === "running") || jobs.find(Boolean) || null;
   const shown = sources[jobs.indexOf(job)]
@@ -148,7 +151,8 @@ function CardLabels({ labels }) {
   );
 }
 
-function PersonCard({ person: p, index, settled, portrait, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted, flash }) {
+function PersonCard({ person: p, index, settled, portrait, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted,
+  onNoSync, flash }) {
   const where = countryName(p.country);
   const badges = <><NewBadge count={fresh?.count} /><WarnBadge sync={sync} /></>;
   const body = (
@@ -174,6 +178,12 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
           ))}
         </span>
         <CardLabels labels={p.labels} />
+        {notSynced(p) && (
+          <span className="creator-nosync-line">
+            <NotSyncedChip title={p.no_sync ? `${p.name} is set to Don't sync: nothing is downloaded from them`
+              : "Each of their accounts is set to Don't sync"} />
+          </span>
+        )}
         <CardSyncStatus sync={sync} />
       </span>
       {!portrait && (
@@ -198,6 +208,7 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
     <>
       <SeenButton fresh={fresh} name={p.name} onSeen={onSeen} />
       {muted != null && <MuteButton compact muted={muted} whom={{ person: p.id }} name={p.name} onDone={onMuted} />}
+      <NoSyncButton compact on={!!p.no_sync} whom={{ person: p.id }} name={p.name} onDone={onNoSync} />
       <CardSyncButton sync={sync} onSync={onSync} />
     </>
   );
@@ -274,7 +285,8 @@ function CardOptionsButton({ sync, onEdit }) {
   );
 }
 
-function AccountCard({ account: a, index, settled, query, selectMode, selected, onToggle, sync, onSync, onEdit, onMake, fresh, onSeen, muted, onMuted, flash }) {
+function AccountCard({ account: a, index, settled, query, selectMode, selected, onToggle, sync, onSync, onEdit, onMake, fresh, onSeen, muted, onMuted,
+  onNoSync, flash }) {
   const former = matchedFormer(a, query);
   const sub = `${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}${former ? ` · was @${former}` : ""}`;
   const body = (
@@ -283,6 +295,11 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
       <span className="creator-id">
         <span className="creator-name">@{a.handle || a.id}</span>
         <span className="creator-sub" title={sub}>{sub}</span>
+        {a.no_sync && (
+          <span className="creator-nosync-line">
+            <NotSyncedChip title={`@${a.handle || a.id} is set to Don't sync: nothing is downloaded from it`} />
+          </span>
+        )}
         <CardSyncStatus sync={sync} />
       </span>
       <span className="person-stats">
@@ -329,6 +346,9 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
       {!selectMode && <SeenButton fresh={fresh} name={`@${a.handle || a.id}`} onSeen={onSeen} />}
       {!selectMode && a.id != null && muted != null && (
         <MuteButton compact muted={muted} whom={{ account: accountRef(a) }} name={`@${a.handle || a.id}`} onDone={onMuted} />
+      )}
+      {!selectMode && a.id != null && (
+        <NoSyncButton compact on={!!a.no_sync} whom={{ account: accountRef(a) }} name={`@${a.handle || a.id}`} onDone={onNoSync} />
       )}
       {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
       <CardScriptWarnings sync={sync} />
@@ -390,18 +410,35 @@ const pickedValue = v => (v === "any" ? null : v === "none" ? "" : v.slice(3));
 
 /* Gender, country and label filters for the people, beside the text
    filter: each offers what the people have (with how many), and "not
-   set". One the people give no value for is left out, unless it is on. */
-function AttributeFilters({ people, value, onChange }) {
+   set". One the people give no value for is left out, unless it is on.
+   Sync: synced or set to Don't sync, people and accounts linked to nobody
+   alike; shown once one is not synced, or while it is on. */
+function AttributeFilters({ people, accounts, value, onChange }) {
   const c = useMemo(() => attributeChoices(people), [people]);
+  const off = useMemo(() => people.filter(notSynced).length + accounts.filter(a => !a.person && a.no_sync).length,
+    [people, accounts]);
+  const all = people.length + accounts.filter(a => !a.person).length;
   const fields = [
     { key: "gender", label: "Gender", any: "Any gender", none: "Not set", list: c.genders, text: v => v },
     { key: "country", label: "Country", any: "Any country", none: "Not set", list: c.countries,
       text: v => `${countryFlag(v)} ${countryName(v)}` },
     { key: "label", label: "Label", any: "Any label", none: "No label", list: c.labels, text: v => v },
   ].filter(f => f.list.length || value[f.key] != null);
-  if (!fields.length) return null;
+  const syncShown = off > 0 || value.sync != null;
+  if (!fields.length && !syncShown) return null;
   return (
     <div className="feed-filters creator-filters" role="group" aria-label="Filter people">
+      {syncShown && (
+        <label className="filter">
+          <span>Sync</span>
+          <select className="sort-select" aria-label="Sync" value={value.sync || "any"}
+                  onChange={e => onChange({ ...value, sync: syncFilter(e.target.value) })}>
+            <option value="any">Any</option>
+            <option value="on">Synced ({fmtInt(all - off)})</option>
+            <option value="off">Not synced ({fmtInt(off)})</option>
+          </select>
+        </label>
+      )}
       {fields.map(f => {
         const on = value[f.key];
         // The option of the value on, whatever its case (?label=travel shows "Travel").
@@ -471,6 +508,7 @@ export default function Creators() {
   // person's label links here with ?label=), kept in it as they change.
   const [attrs, setAttrs] = useState(() => ({
     gender: params.get("gender"), country: params.get("country"), label: params.get("label"),
+    sync: syncFilter(params.get("sync")),
   }));
   const attrsOn = filtersOn(attrs);
   const filtering = !!filter || attrsOn;
@@ -507,12 +545,12 @@ export default function Creators() {
     () => peopleAll.filter(p => (!filter || matches(personText(p), filter)) && attributesMatch(p, attrs)),
     [peopleAll, filter, attrs]);
   // An account linked to no one has no gender, country or label: none
-  // passes those filters.
+  // passes those filters. The sync one, by its own switch.
   const unlinked = useMemo(() => {
-    if (attrsOn) return [];
-    const list = (data || []).filter(a => !a.person);
+    if (attributeFiltersOn(attrs)) return [];
+    const list = (data || []).filter(a => !a.person && syncMatch(a, attrs.sync));
     return filter ? list.filter(a => matches(accountText(a), filter)) : list;
-  }, [data, filter, attrsOn]);
+  }, [data, filter, attrs]);
   const total = (data || []).reduce((s, a) => s + (a.count || 0), 0);
   // Each grid renders the lines of cards near the viewport once it has many
   // (lib/windowing.js). The browser's find bar sees those only: the filter
@@ -560,6 +598,9 @@ export default function Creators() {
   const mergeAccounts = merge?.account ? [merge.account] : chosenAccounts;
 
   function reload() { setVersion(v => v + 1); }
+  // Don't sync changed: the cards, and the sources marked Not synced.
+  const sourcesReload = sources.reload;
+  const onNoSync = useCallback(() => { setVersion(v => v + 1); sourcesReload(); }, [sourcesReload]);
 
   // Sources by the card that shows them: a person's (theirs or their
   // accounts'), else an unlinked account's. The rest (no posts yet, no
@@ -785,7 +826,7 @@ export default function Creators() {
         {/* Hidden, not gone, while filtering or selecting: a source being typed stays. */}
         <section className="sources-panel" aria-label="Sources" hidden={sel.active || filtering}>
           <AddSource onAdded={sources.reload} onDirty={setNewSource} />
-          <SyncAllBar count={sourceList.length} syncAll={syncAll} />
+          <SyncAllBar count={sourceList.filter(src => !src.no_sync).length} syncAll={syncAll} />
           {loose.length > 0 && (
             <ul className="source-list">
               {loose.map(src => (
@@ -809,7 +850,7 @@ export default function Creators() {
           <Suggestions data={suggestApi.data} busy={busy} onLink={linkSuggestion} onDismiss={dismiss} />
         )}
 
-        {peopleApi.data && <AttributeFilters people={peopleAll} value={attrs} onChange={changeAttrs} />}
+        {peopleApi.data && <AttributeFilters people={peopleAll} accounts={data || []} value={attrs} onChange={changeAttrs} />}
 
         {error && !data ? (
           <div className="empty">Could not load creators: {error.message}</div>
@@ -850,6 +891,7 @@ export default function Creators() {
                       onSeen={() => markCardSeen(fresh.get(`person:${p.id}`), { person: p.id }, p.name)}
                       muted={mutedSet && mutedSet.has(`person:${p.id}`)}
                       onMuted={onMuted}
+                      onNoSync={onNoSync}
                       flash={flashKey === `person:${p.id}`}
                     />
                   ); }, (height, key) => <Gap key={key} height={height} />)}
@@ -881,6 +923,7 @@ export default function Creators() {
                                                  `@${a.handle || a.id}`)}
                       muted={mutedSet && mutedSet.has(`account:${accountKey(a)}`)}
                       onMuted={onMuted}
+                      onNoSync={onNoSync}
                       flash={a.id != null && flashKey === `account:${accountKey(a)}`}
                     />
                   ); }, (height, key) => <Gap key={key} height={height} />)}

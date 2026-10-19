@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.3.0
+// @version      0.3.1
 // @description  Marks Instagram, X and TikTok posts you already have in FeedVault, and saves the ones you don't
 // @author       Cotions
 // @match        https://www.instagram.com/*
@@ -152,6 +152,7 @@ if (SITE) GM_addStyle(`
   .fv-btn[data-state="done"] { box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.7); }
   .fv-btn[data-state="failed"], .fv-btn[data-state="offline"] { box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.8); }
   .fv-btn[data-state="confirm"], .fv-btn[data-state="dashboard"] { box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.8); }
+  .fv-btn[data-state="nosync"] { box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.35); opacity: 0.7; }
   .fv-note {
     padding: 4px 9px; border-radius: 8px; color: #e8ecf6; background: rgba(10, 12, 17, 0.88);
     font-weight: 400; overflow-wrap: anywhere;
@@ -420,10 +421,12 @@ async function watchJob(jobId, still, shown, onUpdate) {
 // folder: FeedVault's answer for the profile (GET /api/sources/resolve,
 // its link routing). A source that runs a script or logs in is only synced
 // from the dashboard ("dashboard_only"): the button says so and links there.
+// One set to Don't sync in FeedVault (its account or person) offers nothing:
+// FeedVault refuses to add or sync it, and only its dashboard turns that off.
 // ---------------------------------------------------------------------------
 
 // name -> { state: "checking" | "idle" | "confirm" | "sending" | "queued" | "running" | "done"
-//                  | "failed" | "offline" | "dashboard", source, resolved, checked, job, message, error }
+//                  | "failed" | "offline" | "dashboard" | "nosync", source, resolved, checked, job, message, error }
 const profiles = new Map();
 
 function profileName() {
@@ -480,6 +483,11 @@ function paintProfile() {
       n.append(el("br"), dashboardLink(s.source));
       out.push(button("dashboard", "Sync from FeedVault", null), n);
       return out;
+    } else if (s.state === "nosync") {
+      const n = note("Set to Don't sync in FeedVault: it downloads nothing from this profile. Its dashboard can turn that off.");
+      if (s.source) n.append(el("br"), dashboardLink(s.source));
+      out.push(button("nosync", "Not synced in FeedVault", null), n);
+      return out;
     } else if (s.state === "failed") {
       out.push(button("failed", `${sync} — retry`, () => clickProfile(name), s.message || ""),
                note(s.message || "Sync failed", SETTINGS_ERRORS.has(s.error)));
@@ -513,12 +521,14 @@ async function checkProfile(name) {
     }
     src = got.body;
   }
-  setProfile(name, { state: src?.dashboard_only ? "dashboard" : "idle", source: src, resolved, checked: true });
-  if (src?.job && !src.dashboard_only) followSync(name, src.job.id);   // already syncing: show it
+  const off = r.body.no_sync === true || src?.no_sync === true;
+  setProfile(name, { state: off ? "nosync" : src?.dashboard_only ? "dashboard" : "idle", source: src, resolved, checked: true });
+  if (src?.job && !src.dashboard_only && !off) followSync(name, src.job.id);   // already syncing: show it
 }
 
 function clickProfile(name) {
   const s = profiles.get(name);
+  if (s?.state === "nosync") return;           // FeedVault refuses it: nothing to send
   if (s?.source) { syncSource(name, s.source.id); return; }
   if (!s?.checked) { profiles.delete(name); paint(); return; }   // offline, or the check failed: ask again
   setProfile(name, { state: "confirm" });
@@ -529,6 +539,7 @@ async function addAndSync(name) {
   const r = await api("POST", "/api/sources", SITE.addBody(name));
   if (r === null) { setProfile(name, { state: "offline" }); return; }
   const b = r.body || {};
+  if (r.status === 409 && b.no_sync === true) { setProfile(name, { state: "nosync" }); return; }
   if (!b.ok) { setProfile(name, { state: "failed", message: b.error || `FeedVault answered ${r.status}` }); return; }
   setProfile(name, { source: b.source });
   syncSource(name, b.source.id);
@@ -539,6 +550,7 @@ async function syncSource(name, sid) {
   const r = await api("POST", `/api/sources/${encodeURIComponent(sid)}/sync`);
   if (r === null) { setProfile(name, { state: "offline" }); return; }
   const b = r.body || {};
+  if (r.status === 409 && b.no_sync === true) { setProfile(name, { state: "nosync" }); return; }
   if (r.status === 409) {                      // already queued or running: follow that one
     const got = await api("GET", `/api/sources/${encodeURIComponent(sid)}`);
     if (got?.body?.job) { followSync(name, got.body.job.id); return; }

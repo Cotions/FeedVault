@@ -3,8 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  attributeChoices, attributesMatch, cleanGender, countryFlag, countryName, countryOptions, filtersOn, NO_FILTERS,
-  personText, sameLabels, withLabel,
+  attributeChoices, attributeFiltersOn, attributesMatch, cleanGender, countryFlag, countryName, countryOptions, filtersOn,
+  NO_FILTERS, notSynced, personText, sameLabels, syncFilter, syncMatch, withLabel,
 } from "../src/lib/people.js";
 
 const person = (over = {}) => ({ name: "Someone", gender: "", country: "", labels: [], accounts: [], ...over });
@@ -51,6 +51,35 @@ test("the filters: any, not set, or a value (labels and genders without regard t
   assert.equal(attributesMatch(p, { ...NO_FILTERS, label: "" }), false);
   assert.equal(attributesMatch(p, { ...NO_FILTERS, label: "cosplay" }), false);
   assert.equal(filtersOn({ ...NO_FILTERS, label: "" }), true);
+});
+
+test("the sync filter: set to Don't sync, the person, the account, or each account of a person", () => {
+  const off = person({ no_sync: true });
+  const eachOff = person({ accounts: [{ no_sync: true }, { no_sync: true }] });
+  const someOff = person({ accounts: [{ no_sync: true }, { no_sync: false }] });
+  const synced = person({ no_sync: false });
+  const account = { platform: "instagram", id: "1", no_sync: true };
+  assert.equal(filtersOn({ ...NO_FILTERS, sync: "off" }), true);
+  assert.equal(attributeFiltersOn({ ...NO_FILTERS, sync: "off" }), false);
+  for (const p of [off, eachOff]) {
+    assert.equal(notSynced(p), true);
+    assert.equal(attributesMatch(p, { ...NO_FILTERS, sync: "off" }), true);
+    assert.equal(attributesMatch(p, { ...NO_FILTERS, sync: "on" }), false);
+  }
+  for (const p of [someOff, synced, person()]) {
+    assert.equal(notSynced(p), false);
+    assert.equal(attributesMatch(p, { ...NO_FILTERS, sync: "on" }), true);
+    assert.equal(attributesMatch(p, { ...NO_FILTERS, sync: "off" }), false);
+  }
+  // An account linked to nobody: its own switch.
+  assert.equal(syncMatch(account, "off"), true);
+  assert.equal(syncMatch({ ...account, no_sync: false }, "off"), false);
+  assert.equal(syncMatch(account, null), true);
+  // From the address: only on or off.
+  assert.equal(syncFilter("off"), "off");
+  assert.equal(syncFilter("on"), "on");
+  assert.equal(syncFilter("<script>"), null);
+  assert.equal(syncFilter(null), null);
 });
 
 test("what the filters offer: counted, most used first, and how many have none", () => {

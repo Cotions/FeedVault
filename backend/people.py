@@ -264,13 +264,14 @@ def account_set(conn, person_id):
 # Reads
 # ---------------------------------------------------------------------------
 
-def _person(row, accounts, labels):
-    """A person as the API shows it. ``accounts`` are account rows (db.accounts)."""
+def _person(row, accounts, labels, no_sync=False):
+    """A person as the API shows it. ``accounts`` are account rows (db.accounts).
+    ``no_sync``: the person is set to Don't sync (nosync.py)."""
     newest = [a["newest"] for a in accounts if a["newest"] is not None]
     return {
         "id": row["id"], "name": row["name"], "notes": row["notes"], "created_at": row["created_at"],
         "gender": row["gender"], "country": row["country"], "labels": labels,
-        "avatar": row["avatar"] or None,
+        "avatar": row["avatar"] or None, "no_sync": no_sync,
         "accounts": accounts,
         "platforms": sorted({a["platform"] for a in accounts}),
         "count": sum(a["count"] for a in accounts),
@@ -299,7 +300,9 @@ def _linked(conn, rows):
         a = known.get(key)
         if a is None:
             a = {"platform": platform, "id": aid, "handle": None, "name": None, "count": 0, "bytes": 0,
-                 "newest": None, "aliases": [], "person": None, "handles": [], "names": [], "url": None}
+                 "newest": None, "aliases": [], "person": None, "handles": [], "names": [], "url": None,
+                 "no_sync": conn.execute("SELECT 1 FROM no_sync_accounts WHERE platform = ? AND author_id = ?",
+                                         (platform, aid)).fetchone() is not None}
         out[pid].append(a)
     for accounts in out.values():
         accounts.sort(key=lambda a: (-a["count"], a["platform"], a["handle"] or a["id"]))
@@ -320,8 +323,8 @@ def people(conn):
     """Every person, by name."""
     def compute(conn):
         rows = conn.execute("SELECT * FROM people ORDER BY name COLLATE NOCASE, id").fetchall()
-        linked, labels = _linked(conn, rows), _labels(conn)
-        return [_person(r, linked[r["id"]], labels[r["id"]]) for r in rows]
+        linked, labels, off = _linked(conn, rows), _labels(conn), _no_sync_people(conn)
+        return [_person(r, linked[r["id"]], labels[r["id"]], r["id"] in off) for r in rows]
     return db._memo(conn, ("people",), compute)
 
 
@@ -349,7 +352,13 @@ def exists(conn, pid):
 
 def person(conn, pid):
     row = conn.execute("SELECT * FROM people WHERE id = ?", (pid,)).fetchone()
-    return _person(row, _linked(conn, [row])[pid], _labels(conn, [pid])[pid]) if row else None
+    return _person(row, _linked(conn, [row])[pid], _labels(conn, [pid])[pid], pid in _no_sync_people(conn)) \
+        if row else None
+
+
+def _no_sync_people(conn):
+    """{person id} of the people set to Don't sync (nosync.py)."""
+    return {r[0] for r in conn.execute("SELECT person_id FROM no_sync_people")}
 
 
 # ---------------------------------------------------------------------------

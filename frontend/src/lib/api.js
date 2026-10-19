@@ -147,6 +147,13 @@ export function markSeen(at, whom = {}) { return post("/api/new/seen", at == nul
 // whom: { person: id } or { account: { platform, id } } (one linked to nobody).
 // → { ok, muted: { people: [ids], accounts: [{ platform, id }] } }
 export function muteNew(whom, muted) { return post("/api/new/mute", { ...whom, muted }); }
+// Don't sync (docs/API.md "Don't sync"). whom: { person: id } or
+// { account: { platform, id } }. Turned on for one whose sources would stop
+// syncing, it answers { ok: false, confirm: true, sources: n } until sent
+// again with confirm. → { ok, no_sync: { people: [ids], accounts: [{ platform, id }] } }
+export function setNoSync(whom, noSync, confirm = false) {
+  return post("/api/no-sync", { ...whom, no_sync: noSync, ...(confirm ? { confirm: true } : {}) });
+}
 // Syncs that brought new posts or failed (docs/API.md "Notifications"):
 // { unread, latest, entries: newest first }.
 export function getNotifications() { return get("/api/notifications"); }

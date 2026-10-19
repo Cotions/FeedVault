@@ -3895,6 +3895,17 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .creator-mute { margin-right: 6px; flex-shrink: 0; }
 .creator-mute.is-muted { color: var(--glow); }
 
+/* Don't sync (#189): the switch, and the "not synced" chip of a card, an
+   account row or a source kept but never run. */
+.creator-nosync { margin-right: 6px; flex-shrink: 0; }
+.creator-nosync.is-on { color: var(--glow); }
+.portrait-actions > .creator-nosync, .person-account > .creator-nosync { margin-right: 0; }
+.nosync-chip { flex: none; gap: 4px; max-width: 100%; color: var(--muted); border-style: dashed; }
+.nosync-chip .icon { flex: none; }
+.creator-nosync-line { display: flex; min-width: 0; max-width: 100%; }
+.source-row.is-nosync .source-id > .creator-name, .source-row.is-nosync .source-summary { color: var(--text-dim); }
+.creator-sub.nosync-note { margin: 0 0 10px; white-space: normal; overflow: visible; }
+
 /* ── Phone pass (#85) ───────────────────────────────────── */
 /* A phone, or any touch screen (a phone on its side is wider than 640px). */
 @media (max-width: 640px), (pointer: coarse) {

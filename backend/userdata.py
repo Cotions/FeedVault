@@ -3,7 +3,7 @@
 The index is derived from the media folders and rebuilds from a rescan. A few
 tables are not: review decisions, tags, collections, people (and their labels), sources, links, the
 handles the user accepted for an account, the "new posts" marks, the posts
-the Save button added, who is muted. Each one is
+the Save button added, who is muted, who is set to Don't sync. Each one is
 registered here once, and gets the same treatment:
 
 - written to ``<data_dir>/userdata/<name>.json`` shortly after it changes
@@ -171,6 +171,12 @@ register("muted_people", "muted_people", ("person", "at"), "person",
          insert=("INSERT OR IGNORE INTO muted_people(person_id, at) "
                  "SELECT id, COALESCE(:at, 0) FROM people WHERE name = :person",))
 register("muted_accounts", "muted_accounts", ("platform", "author_id", "at"), ("platform", "author_id"))
+# Don't sync (nosync.py): people by name (after people), accounts by platform and id.
+register("no_sync_people", "no_sync_people", ("person", "at"), "person",
+         select="SELECT p.name, n.at FROM no_sync_people n JOIN people p ON p.id = n.person_id ORDER BY p.name",
+         insert=("INSERT OR IGNORE INTO no_sync_people(person_id, at) "
+                 "SELECT id, COALESCE(:at, 0) FROM people WHERE name = :person",))
+register("no_sync_accounts", "no_sync_accounts", ("platform", "author_id", "at"), ("platform", "author_id"))
 # Posts the Save button added (save.py): they never seed a sync's stamp.
 register("saved_posts", "saved_posts", ("post_id", "saved_at"), "post_id")
 

@@ -160,6 +160,7 @@ import info_cookies
 import jobs
 import news
 import notify
+import nosync
 import people
 import scanner
 import slim
@@ -1741,6 +1742,10 @@ class Refused(Exception):
 SCRIPT_REFUSED = "this source runs a script, which only FeedVault's own dashboard can start"
 
 
+class NotSynced(Exception):
+    """The source's account or person is set to Don't sync (nosync.py)."""
+
+
 def _job(src, scheduled=False, scripts_ok=True):
     """(kind, params) of a source's sync: its script's (scripts.py) when it
     has one, else its tool's. Raises Refused for a script when not
@@ -1765,9 +1770,12 @@ def sync(sid, scheduled=False, scripts_ok=True):
     with _submitting, scripts.read_once():     # its script read once, for its params and its build
         if sid in active():
             raise Busy("its sync is already queued or running")
-        src = sources.row(db.connect(), sid)
+        conn = db.connect()
+        src = sources.row(conn, sid)
         if src is None:
             raise jobs.BadRequest("no such source")
+        if sources.not_synced(conn, src):
+            raise NotSynced(sources.not_synced_error(conn, src))
         return jobs.submit(*_job(src, scheduled, scripts_ok))
 
 
@@ -1776,17 +1784,23 @@ def sync_all(only=None, scripts_ok=True):
     target, or for those of ``only`` (source ids: a person's). They run one
     after another, the pause between each. Returns (jobs, skipped, errors:
     [{source, error}] for those refused; a source with a script, when not
-    ``scripts_ok``). The jobs queued become the batch (see batch), or join
+    ``scripts_ok``; not_synced: how many were left out as set to Don't
+    sync, nosync.py). The jobs queued become the batch (see batch), or join
     it while it still runs."""
     global _batch
     import scripts                             # it imports this module
-    queued, skipped, errors = [], 0, []
+    queued, skipped, errors, not_synced = [], 0, [], 0
     # The scripts folder read once for every source that has a script.
     with _submitting, scripts.read_once():
         busy = active()
-        for src in db.connect().execute("SELECT * FROM sources ORDER BY target, id").fetchall():
+        conn = db.connect()
+        accounts, flags = db.accounts(conn), nosync.flags(conn)
+        for src in conn.execute("SELECT * FROM sources ORDER BY target, id").fetchall():
             sid = src["id"]
             if only is not None and sid not in only:
+                continue
+            if sources.not_synced(conn, src, accounts, flags):
+                not_synced += 1
                 continue
             if sid in busy:
                 skipped += 1
@@ -1808,7 +1822,7 @@ def sync_all(only=None, scripts_ok=True):
                     done = jobs.get(j["id"])
                     if done and done["state"] in jobs.STATES[2:]:
                         _batch["ended"][j["id"]] = _ending(done)
-    return queued, skipped, errors
+    return queued, skipped, errors, not_synced
 
 
 # The last "Sync all", in memory only: a restart, which also ends every job
