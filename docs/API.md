@@ -2704,9 +2704,13 @@ confirm.
 
 ## Save from the browser (userscript)
 
-The userscript adds a **Save** button to a post and a **Sync profile**
-button to a profile page, on Instagram, X (x.com, twitter.com) and TikTok
-(www.tiktok.com). What they can ask for is as narrow as it can be: a
+The userscript adds a **Save** button to a post (its page, and each grid
+tile linking to it) and a **Sync profile** button to a profile page, on
+Instagram, X (x.com, twitter.com) and TikTok (www.tiktok.com). A tile's
+Save sends the same body as the post page's, built from the tile link's
+`href` (read again at the click, held to the same whole-path pattern as a
+post page, on the site's own host), and stops the click from opening the
+post. What they can ask for is as narrow as it can be: a
 checked id, or a post's link parsed down to its id, never a path, a flag or
 a command.
 
