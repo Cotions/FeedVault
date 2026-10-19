@@ -104,7 +104,19 @@ def test_a_source_sets_its_own(env, client):
     assert s["metadata"]["mode"] == "slim" and "--no-metadata-json" not in build(s)
 
 
-def test_builtins_follow_the_setting(env):
+def test_builtin_yt_dlp_scripts_write_the_files_without_ffmpeg(env):
+    """As its syncs: none embeds with ffmpeg, so with none found the
+    built-ins stay full; the others still write no files."""
+    setting(instaloader="none", gallery_dl="none", yt_dlp="none")
+    got = scripts.builtins()
+    for name, t in got.items():
+        if t["argv"][0] == "yt-dlp":
+            assert t == scripts.BUILTINS[name] and "--embed-metadata" not in t["argv"], name
+        else:
+            assert "No metadata files" in t["description"], name
+
+
+def test_builtins_follow_the_setting(env, ffmpeg):
     assert scripts.builtins() == scripts.BUILTINS
     setting(instaloader="none", gallery_dl="none", yt_dlp="none")
     got = scripts.builtins()
@@ -119,6 +131,7 @@ def test_builtins_follow_the_setting(env):
             assert after(argv, "-f") == sync.GALLERY_DL_BARE
         else:
             assert "--embed-metadata" in argv and after(argv, "-o") == "{root}/" + sync.yt_dlp_name("none")
+            assert after(argv, "--ffmpeg-location") == ffmpeg
     # What a script's template shows changes with it; the stored BUILTINS do not.
     assert "--write-metadata" in scripts.BUILTINS["gallery-dl-user"]["argv"]
 
@@ -276,17 +289,21 @@ def test_gallery_dl_names_need_the_ids_and_date_it_writes(tmp_path):
     folder = tmp_path / "Someone"
     posts = ["twitter 1800000000000000001 01 20240601-120000.jpg",
              "bluesky 3kxyzabcde22a 01 20240601-120000.jpg",
-             "reddit 1abc2de 01 20240601-120000.png"]
+             "reddit 1abc2de 01 20240601-120000.png",
+             "fanbox 8123456 01.jpg"]                                  # fanbox posts can have no date
     others = ["flickr trip 1.jpg", "twitter cat 2.png", "threads day 3.mp4",
               "twitter 12345 01 20240601-120000.jpg",                  # too short for a snowflake
               "twitter 1800000000000000002 01.jpg",                    # no date: FeedVault writes one
               "twitter 1800000000000000003 1 20240601-120000.jpg",     # the number has two digits
               "bluesky 3kxyzabcde22 01 20240601-120000.jpg",           # a TID has 13 characters
               "tiktok 73000000001 00 20240601-120000.mp4",
-              "redgifs happysillygoose 01 20240601-120000.mp4"]        # no id shape: not read
+              "redgifs happysillygoose 01 20240601-120000.mp4",        # no id shape: not read
+              "fanbox holiday 01.jpg"]
     touch(folder, *posts, *others)
     r = gallery_dl.parse_filenames(str(tmp_path), str(folder), os.listdir(folder))
-    assert sorted(p.post_id for p in r.posts) == ["1800000000000000001", "1abc2de", "3kxyzabcde22a"]
+    assert sorted(p.post_id for p in r.posts) == ["1800000000000000001", "1abc2de", "3kxyzabcde22a", "8123456"]
+    undated = next(p for p in r.posts if p.post_id == "8123456")
+    assert undated.posted_at == int(os.path.getmtime(folder / "fanbox 8123456 01.jpg"))   # the file's time
     assert r.claimed == set(posts)
     for n in others:
         assert gallery_dl._BARE_RE.fullmatch(n) is None, n

@@ -388,9 +388,10 @@ export function resolveSource(url, opts, tool) { return get(`/api/sources/resolv
 export function createSource(body) { return post("/api/sources", body); }
 // options: { full_history?, session?, content?, media?, since?, first_posts?, script?, metadata?, schedule? }
 // (one changed is set on the source; one sent as it is stays as it was), reset?: [option keys] or true
-// (those follow its platform's download defaults again) → { ok, source }
-export function updateSource(id, options, reset) {
-  return post(`/api/sources/${seg(id)}`, reset ? { options, reset } : { options });
+// (those follow its platform's download defaults again). ``pin``: every option sent is set as sent
+// (the Options dialog sends only the fields the user changed) → { ok, source }
+export function updateSource(id, options, reset, pin = false) {
+  return post(`/api/sources/${seg(id)}`, { options, ...(reset ? { reset } : {}), ...(pin ? { pin } : {}) });
 }
 // One platform's download defaults ({ option: value }; {} for none) → { ok, config } or { ok: false, error }
 export function saveSourceDefaults(tool, platform, defaults) {

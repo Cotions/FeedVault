@@ -428,12 +428,23 @@ _BARE_IDS = {
     "gelbooru": r"\d{1,9}",
 }
 BARE_CATEGORIES = set(_BARE_IDS)
+# Those whose posts can have no date: gallery-dl's fanbox extractor sets it
+# to None when publishedDatetime does not parse, and GALLERY_DL_BARE's
+# "{date:? //...}" then writes nothing. Every other one's extractor sets it
+# from a field the site always sends (twitter's created_at, bluesky's
+# createdAt, tiktok's createTime, instagram's taken_at, reddit's
+# created_utc, pixiv's create_date, tumblr's timestamp, flickr's
+# dateupload, imgur's created_at, patreon's published_at, danbooru's and
+# gelbooru's created_at): there a name without it is not one of FeedVault's.
+_BARE_UNDATED = {"fanbox"}
+_BARE_DATE = r"\d{8}-\d{6}"
 # Exactly sync.GALLERY_DL_BARE's names: the number two digits at least, and
-# the date, which every post of these categories has ("twitter None 01.jpg":
-# the post had none of the id keys).
-_BARE_RE = re.compile(r"(?=(?:" + "|".join(f"{c} {i}" for c, i in _BARE_IDS.items()) + r") )"
-                      r"(?P<category>[a-z]+) (?P<id>[A-Za-z0-9]+) (?P<num>\d{2,4})"
-                      r" (?P<date>\d{8}-\d{6})\.(?P<ext>[A-Za-z0-9]+)")
+# the date ("twitter None 01.jpg": the post had none of the id keys).
+_BARE_RE = re.compile(
+    r"(?=(?:" + "|".join(f"{c} {i}" for c, i in _BARE_IDS.items() if c not in _BARE_UNDATED)
+    + rf") \d{{2,4}} {_BARE_DATE}\.|(?:" + "|".join(f"{c} {_BARE_IDS[c]}" for c in sorted(_BARE_UNDATED))
+    + rf") \d{{2,4}}(?: {_BARE_DATE})?\.)"
+    rf"(?P<category>[a-z]+) (?P<id>[A-Za-z0-9]+) (?P<num>\d{{2,4}})(?: (?P<date>{_BARE_DATE}))?\.(?P<ext>[A-Za-z0-9]+)")
 _SIDE_EXT = {"mp3", "m4a", "aac", "ogg", "opus", "wav", "vtt", "srt"}
 FILENAMES = TOOL + " (filenames)"
 # The post's link, from what its names say.

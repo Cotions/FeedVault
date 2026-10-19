@@ -130,7 +130,8 @@ INSTALOADER_BARE_NAME = "{profile}-{date_utc:%Y-%m-%d}-{shortcode}"    # sync.DA
 
 
 def _bare(t):
-    """Built-in ``t`` writing no metadata files (sync.py's flags for "none")."""
+    """Built-in ``t`` writing no metadata files (sync.py's flags for "none",
+    with the ffmpeg yt-dlp embeds with)."""
     argv, tool = list(t["argv"]), t["argv"][0]
     if tool == "instaloader":
         argv[1:1] = [*sync.INSTALOADER_BARE, "--filename-pattern", INSTALOADER_BARE_NAME]
@@ -139,7 +140,7 @@ def _bare(t):
         argv[i:i + 1] = sync.gallery_dl_metadata_flags("none")
     else:
         i = argv.index("--write-info-json")
-        argv[i:i + 2] = sync.yt_dlp_metadata_flags("none")
+        argv[i:i + 2] = [*sync.yt_dlp_metadata_flags("none"), *sync.ffmpeg_flags("none")]
         argv[argv.index(YT_DLP_NAME)] = "{root}/" + sync.yt_dlp_name("none")
     description = t["description"].replace(", with metadata", "").replace(", with its info JSON and thumbnail", "")
     return {**t, "description": description + " No metadata files, as Settings → Sync says.", "argv": argv}
@@ -149,6 +150,9 @@ def builtins(cfg=None):
     """BUILTINS as they run now: each tool's metadata setting applied."""
     cfg = cfg or config.load()
     modes = {tool: sync.metadata_of(tool, {}, cfg) for tool in sources.TOOLS}
+    # yt-dlp embeds with ffmpeg: with none found, its built-ins write the
+    # files (full), as its syncs do (sync.yt_dlp_mode).
+    modes["yt-dlp"] = sync.yt_dlp_mode(modes["yt-dlp"])
     return {name: _bare(t) if modes[t["argv"][0]] == "none" else t for name, t in BUILTINS.items()}
 
 

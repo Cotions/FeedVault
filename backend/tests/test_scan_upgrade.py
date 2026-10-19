@@ -154,6 +154,26 @@ def test_probe_runs_without_the_lock(env, monkeypatch):
         "From the file\n\nabout #cats"
 
 
+def test_a_stop_before_the_probe_is_probed_on_the_next_scan(env, monkeypatch):
+    """Indexed, then FeedVault stopped before the probe wrote: the post is
+    kept marked (no size), and the next scan reads it again and probes it."""
+    held = []
+    probing(monkeypatch, held)
+    folder = env["media"] / "youtube" / "somechannel"
+    fake_video(str(folder / BARE))
+    enrich = scanner._enrich
+    monkeypatch.setattr(scanner, "_enrich", lambda conn, posts, now: None)   # the stop
+    assert scanner.scan(env["roots"])["added"] == 1
+    conn = db.connect()
+    text, size = conn.execute("SELECT text, meta_size FROM posts WHERE id = ?", (ID,)).fetchone()
+    assert held == [] and size is None and "From the file" not in (text or "")
+    monkeypatch.setattr(scanner, "_enrich", enrich)
+    assert scanner.scan(env["roots"])["updated"] == 1 and held == [False]
+    text, size = conn.execute("SELECT text, meta_size FROM posts WHERE id = ?", (ID,)).fetchone()
+    assert text == "From the file\n\nabout #cats" and size == os.path.getsize(folder / BARE)
+    assert scanner.scan(env["roots"])["updated"] == 0 and held == [False]
+
+
 def test_restore_probes_apart(env, monkeypatch):
     """index_dirs_locked, its caller holding the lock (a restore): the
     probe runs in a thread of its own, and writes once the lock is let go."""

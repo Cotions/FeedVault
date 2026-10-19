@@ -444,10 +444,15 @@ def _index_post(conn, post, now, report, seen_meta, unmatched, copies, first_see
                                            (post.id,))}
         if have == {m.path for m in post.media}:
             return                             # nothing changed
-    outcome = db.upsert_post(conn, post, mtime, size, now, first_seen)
+    # One whose media files are still to be read (_enrich) is stored with
+    # no size: until that is written, every scan finds it changed and reads
+    # it again, so a stop in between (a crash, a quit) does not leave it
+    # unread for good.
+    pending = post.enrich is not None
+    outcome = db.upsert_post(conn, post, mtime, None if pending else size, now, first_seen)
     report[outcome] += 1
-    if post.enrich is not None:
-        later.append(post)                     # read once db.write_lock is let go (_enrich)
+    if pending:
+        later.append((post, size))             # read once db.write_lock is let go (_enrich)
 
 
 def _enrich(conn, posts, now):
@@ -455,27 +460,28 @@ def _enrich(conn, posts, now):
     posts just indexed, written over them. Not under db.write_lock: a probe
     can take seconds a file, and a delete or a restore must not wait for
     it. A post changed meanwhile (trashed, or replaced by the same post
-    read from its metadata file) is left as it is."""
+    read from its metadata file) is left as it is. ``posts``: (post, the
+    size of its file as indexed), stored with none until this is done."""
     done = []
-    for post in posts:
+    for post, size in posts:
         try:
             post.enrich(post)
         except Exception as e:                 # the post as its name gives it
             print(f"[scan] {post.meta_path}: could not read its embedded metadata: {e}")
-            continue
-        done.append(post)
+        # Written even when it could not be read: the name's post is the
+        # post then, and the next scan does not probe it again.
+        done.append((post, size))
     if not done:
         return
     with db.write_lock:
-        for post in done:
+        for post, size in done:
             row = conn.execute("SELECT meta_path, meta_mtime, meta_size, tool, missing FROM posts WHERE id = ?",
                                (post.id,)).fetchone()
             if row is None or (row["meta_path"], row["tool"], row["missing"]) != (post.meta_path, post.tool, 0) \
-                    or row["meta_mtime"] is None:
+                    or row["meta_mtime"] is None or row["meta_size"] is not None:
                 continue
-            # The metadata file's mtime and size as indexed: the next scan
-            # finds nothing changed.
-            db.upsert_post(conn, post, row["meta_mtime"], row["meta_size"], now)
+            # The file's size as indexed: the next scan finds nothing changed.
+            db.upsert_post(conn, post, row["meta_mtime"], size, now)
         conn.commit()
 
 

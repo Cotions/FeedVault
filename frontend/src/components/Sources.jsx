@@ -532,7 +532,8 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const firstSync = !s.last_sync_at || s.options.first_posts != null;
+  // Until a sync has worked (health.ok_at, sources.synced_ok): a failed first one leaves last N open.
+  const firstSync = !s.health?.ok_at || s.options.first_posts != null;
   const problem = formError(form, s.choices);
   const focus = useRef(null);
   // Esc, Cancel or a click outside ask before changed choices go, as
@@ -550,7 +551,7 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
     setBusy(true);
     setError(null);
     try {
-      const r = changes ? await updateSource(s.id, changes.options, changes.reset) : { ok: true, source: s };
+      const r = changes ? await updateSource(s.id, changes.options, changes.reset, true) : { ok: true, source: s };
       if (!r?.ok) { setError(r?.error || "Could not save."); return; }
       toast(`${sourceName(s)}: options saved.`);
       onSaved?.(r.source);

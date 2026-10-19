@@ -139,6 +139,22 @@ def test_a_change_is_set_even_to_the_default_and_reset_inherits(env, client):
     assert r["source"]["overrides"] == [] and r["source"]["options"]["media"] == "images"
 
 
+def test_pin_sets_what_is_sent_even_equal_to_a_default_that_moved(env, client):
+    """The form opened with media "all" (the default then), the default
+    became "images", the user picked "images": with pin it is theirs."""
+    s = add(client, X)
+    url = f"/api/sources/{s['id']}"
+    defaults(client, "gallery-dl", "twitter", {"media": "images"})
+    r = post(client, url, {"options": {"media": "images"}, "pin": True})
+    assert r["source"]["overrides"] == ["media"]
+    defaults(client, "gallery-dl", "twitter", {"media": "videos"})
+    assert get(client, url)["options"]["media"] == "images"
+    # Without pin, the same is no change.
+    other = add(client, "https://x.com/other")
+    assert post(client, f"/api/sources/{other['id']}", {"options": {"media": "videos"}})["source"]["overrides"] == []
+    assert client.post(url, json={"options": {}, "pin": "yes"}, headers=H).status_code == 400
+
+
 def test_a_save_writes_only_the_options_that_changed(env, client):
     """What was written meanwhile (another tab, a sync's end) and not sent stays."""
     s = add(client, X, options={"since": "2024-01-01"})
@@ -242,6 +258,23 @@ def test_first_posts_default_is_for_a_first_sync_only(env, client):
         with conn:
             conn.execute("UPDATE sources SET last_result = ? WHERE id = ?", (json.dumps(result), s["id"]))
         assert "--post-range" not in build(s), result
+
+
+def test_last_n_can_be_set_until_a_sync_has_worked(env, client):
+    """The same rule as the default's (sources.synced_ok): a failed first
+    sync leaves last N open; one that worked closes it."""
+    s = add(client, X)
+    url = f"/api/sources/{s['id']}"
+    conn = db.connect()
+    with conn:
+        conn.execute("UPDATE sources SET last_sync_at = 1, last_result = ? WHERE id = ?",
+                     (json.dumps({"state": "failed", "ok_at": None}), s["id"]))
+    assert post(client, url, {"options": {"first_posts": 20}})["source"]["options"]["first_posts"] == 20
+    post(client, url, {"options": {"first_posts": None}})
+    with conn:
+        conn.execute("UPDATE sources SET last_result = ? WHERE id = ?", (json.dumps({"state": "done"}), s["id"]))
+    r = post(client, url, {"options": {"first_posts": 20}}, 400)
+    assert "synced already" in r["error"]
 
 
 @pytest.mark.parametrize("legacy, overrides", [

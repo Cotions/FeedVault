@@ -1665,6 +1665,8 @@ def update_source(sid):
     # "reset": the options it stops setting itself (true: all of them), so
     # they follow its platform's download defaults again; before "options".
     reset = body.get("reset")
+    if body.get("pin") not in (None, True, False):
+        return jsonify({"ok": False, "error": "pin must be true or false"}), 400
     if reset is True:
         reset = list(sources.OPTION_KEYS)
     if reset is not None and (not isinstance(reset, list) or any(k not in sources.OPTION_KEYS for k in reset)):
@@ -1688,7 +1690,7 @@ def update_source(sid):
                                            target=s["target"])
     # Last N stays open while a first sync with it has not worked yet.
     if not error and sent.get("first_posts") not in (None, s["options"]["first_posts"]) \
-            and s["last_sync_at"] is not None and s["options"]["first_posts"] is None:
+            and sources.synced_ok(sources.row(conn, sid)) and s["options"]["first_posts"] is None:
         error = "only the last posts is for a source's first sync, and this one has synced already"
     error = error or sources.login_refused(options, s["platform"], sync.session_of(s["tool"], options))
     if error:
@@ -1696,7 +1698,11 @@ def update_source(sid):
     # Only what changes is written: an option sent as it is now (the form
     # sends what it shows) keeps being set or inherited, as it was; one
     # changed is set, even to what it inherits now; one reset is inherited.
-    changed = {k: options[k] for k in sources.OPTION_KEYS if options[k] != base[k]}
+    # With "pin" (the dashboard's Options, which sends only the fields the
+    # user changed), every option sent is set as sent: a pick equal to a
+    # default that moved after the form opened is the user's all the same.
+    pinned = sent if body.get("pin") is True else {}
+    changed = {k: options[k] for k in sources.OPTION_KEYS if options[k] != base[k] or k in pinned}
     sources.write(conn, sid, changed, [k for k in reset or () if k not in changed])
     if options["schedule"] != s["options"]["schedule"]:
         scheduler.forget(sid)

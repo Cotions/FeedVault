@@ -547,10 +547,13 @@ def test_first_posts_only_before_the_first_sync(env, client):
     # A first sync that failed: last N is still to do, and can still change.
     sources.record(db.connect(), s["id"], 1, TS, {"state": "failed"})
     assert post(client, url, {"options": {"first_posts": 40}})["source"]["options"]["first_posts"] == 40
-    # Other changes keep it; it can be cleared, and once gone it cannot come back.
+    # Other changes keep it; it can be cleared, and set again until a sync has worked.
     assert post(client, url, {"options": {"media": "videos"}})["source"]["options"]["first_posts"] == 40
     assert post(client, url, {"options": {"first_posts": None}})["source"]["options"]["first_posts"] is None
-    assert "synced already" in post(client, url, {"options": {"first_posts": 40}}, 400)["error"]
+    assert post(client, url, {"options": {"first_posts": 40}})["source"]["options"]["first_posts"] == 40
+    sources.record(db.connect(), s["id"], 2, TS + 1, {"state": "done"})
+    post(client, url, {"options": {"first_posts": None}})
+    assert "synced already" in post(client, url, {"options": {"first_posts": 50}}, 400)["error"]
 
 
 def test_resolve_gives_choices(env, client):
