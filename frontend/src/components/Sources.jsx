@@ -532,8 +532,8 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  // Until a sync has worked (health.ok_at, sources.synced_ok): a failed first one leaves last N open.
-  const firstSync = !s.health?.ok_at || s.options.first_posts != null;
+  // Until a sync has worked (s.synced, sources.synced_ok): a failed first one leaves last N open.
+  const firstSync = !s.synced || s.options.first_posts != null;
   const problem = formError(form, s.choices);
   const focus = useRef(null);
   // Esc, Cancel or a click outside ask before changed choices go, as

@@ -247,17 +247,43 @@ def test_first_posts_default_is_for_a_first_sync_only(env, client):
     assert after(build(s), "--post-range") == "1-30"
     conn = db.connect()
     # A first sync that failed, or was cancelled, leaves it a first sync.
-    for result in ({"state": "failed", "ok_at": None}, {"state": "cancelled"}, None):
+    for result in ({"state": "failed", "ok_at": None}, {"state": "cancelled"}):
         with conn:
             conn.execute("UPDATE sources SET last_sync_at = 1, last_result = ? WHERE id = ?",
-                         (json.dumps(result) if result else None, s["id"]))
+                         (json.dumps(result), s["id"]))
         assert after(build(s), "--post-range") == "1-30", result
-        assert get(client, f"/api/sources/{s['id']}")["options"]["first_posts"] == 30
+        source = get(client, f"/api/sources/{s['id']}")
+        assert (source["options"]["first_posts"], source["synced"]) == (30, False)
     # One that worked (now, or before a failed one) ends it.
     for result in ({"state": "done"}, {"state": "failed", "ok_at": 1}):
         with conn:
             conn.execute("UPDATE sources SET last_result = ? WHERE id = ?", (json.dumps(result), s["id"]))
         assert "--post-range" not in build(s), result
+        assert get(client, f"/api/sources/{s['id']}")["synced"] is True
+
+
+@pytest.mark.parametrize("legacy", [None, {"added": 3}, {"error": "rate_limited"}, "not json"])
+def test_a_source_synced_before_results_had_a_state_is_synced(env, client, legacy):
+    """A row from before: last_sync_at set, no result state stored. It is
+    an established source, so neither the default last N nor a new one
+    applies to it."""
+    defaults(client, "gallery-dl", "twitter", {"first_posts": 30})
+    s = add(client, X)
+    conn = db.connect()
+    stored = legacy if legacy is None or isinstance(legacy, str) else json.dumps(legacy)
+    with conn:
+        conn.execute("UPDATE sources SET last_sync_at = 1, last_result = ? WHERE id = ?", (stored, s["id"]))
+    assert sources.synced_ok(sources.row(conn, s["id"])) is True
+    assert "--post-range" not in build(s)
+    url = f"/api/sources/{s['id']}"
+    source = get(client, url)
+    assert (source["synced"], source["options"]["first_posts"]) == (True, None)
+    assert "synced already" in post(client, url, {"options": {"first_posts": 20}}, 400)["error"]
+    # Never synced: still a first sync.
+    with conn:
+        conn.execute("UPDATE sources SET last_sync_at = NULL, last_result = NULL WHERE id = ?", (s["id"],))
+    assert sources.synced_ok(sources.row(conn, s["id"])) is False
+    assert after(build(s), "--post-range") == "1-30"
 
 
 def test_last_n_can_be_set_until_a_sync_has_worked(env, client):

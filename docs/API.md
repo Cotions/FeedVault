@@ -1702,7 +1702,7 @@ no person yet.
   "choices": { "content": ["posts", "reels", "stories", "highlights", "tagged"], "content_default": ["posts"],
                "login": ["stories", "highlights", "tagged"], "media": true, "since": true, "first_posts": false,
                "metadata": ["full", "slim", "none"] },
-  "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41,
+  "created_at": 1727500000, "last_sync_at": 1727503600, "last_job_id": 41, "synced": true,
   "last_result": { "state": "failed", "error": "rate_limited",
                    "message": "Instagram is limiting requests: wait a while before syncing again",
                    "line": "…429 - Too Many Requests…", "added": 0, "job": 41, "outdated": false,
@@ -1755,9 +1755,9 @@ no person yet.
     first sync gets only that many of the newest posts instead of the full
     history. Only where `choices.first_posts` (gallery-dl and yt-dlp:
     instaloader cannot stop after a number of a profile's posts), not with
-    `full_history` (a 400: one or the other), and once a source has synced
-    (`last_sync_at` set) without it, or after it worked, it cannot be set
-    (while a first sync with it has only failed, it can still change). Set
+    `full_history` (a 400: one or the other), and once a sync of the
+    source has worked (`synced`) it cannot be set (while syncs have only
+    failed or been cancelled, it can still be set or change). Set
     back to `null` once a sync succeeds, like `full_history`, and `since`
     set to the day of the oldest post that sync added or listed (see
     [What a source downloads](#what-a-source-downloads)).
@@ -1788,6 +1788,9 @@ no person yet.
   `media`, `since` and `first_posts` can be set, and the `metadata` modes
   of its tool.
 - `last_sync_at`: when the last sync ended (any outcome), or `null`.
+- `synced`: whether a sync of it has worked (`health.ok_at` set), or it
+  synced before outcomes were stored (`last_sync_at` set, `last_result`
+  with no `state`): then `first_posts` and its default no longer apply.
 - `last_result`: how it ended, or `null` before the first sync:
   - `state`: the job's (`done`, `failed`, `cancelled`, `interrupted`)
   - `error`: `null` when it worked, else what the output says went wrong:

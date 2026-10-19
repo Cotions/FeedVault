@@ -290,7 +290,7 @@ def test_gallery_dl_names_need_the_ids_and_date_it_writes(tmp_path):
     posts = ["twitter 1800000000000000001 01 20240601-120000.jpg",
              "bluesky 3kxyzabcde22a 01 20240601-120000.jpg",
              "reddit 1abc2de 01 20240601-120000.png",
-             "fanbox 8123456 01.jpg"]                                  # fanbox posts can have no date
+             "fanbox 8123456 01 20240601-120000.jpg"]
     others = ["flickr trip 1.jpg", "twitter cat 2.png", "threads day 3.mp4",
               "twitter 12345 01 20240601-120000.jpg",                  # too short for a snowflake
               "twitter 1800000000000000002 01.jpg",                    # no date: FeedVault writes one
@@ -298,12 +298,12 @@ def test_gallery_dl_names_need_the_ids_and_date_it_writes(tmp_path):
               "bluesky 3kxyzabcde22 01 20240601-120000.jpg",           # a TID has 13 characters
               "tiktok 73000000001 00 20240601-120000.mp4",
               "redgifs happysillygoose 01 20240601-120000.mp4",        # no id shape: not read
-              "fanbox holiday 01.jpg"]
+              "fanbox holiday 01.jpg",
+              "fanbox 2024 01.jpg",                                    # someone's own file: no date
+              "fanbox 8123456 01.jpg"]                                 # an undated post: not read either
     touch(folder, *posts, *others)
     r = gallery_dl.parse_filenames(str(tmp_path), str(folder), os.listdir(folder))
     assert sorted(p.post_id for p in r.posts) == ["1800000000000000001", "1abc2de", "3kxyzabcde22a", "8123456"]
-    undated = next(p for p in r.posts if p.post_id == "8123456")
-    assert undated.posted_at == int(os.path.getmtime(folder / "fanbox 8123456 01.jpg"))   # the file's time
     assert r.claimed == set(posts)
     for n in others:
         assert gallery_dl._BARE_RE.fullmatch(n) is None, n

@@ -570,10 +570,15 @@ def _stored(src):
 
 def synced_ok(src):
     """Whether a sync of the source has worked (ended done) once: a failed
-    or cancelled first sync leaves it a first sync, for "last N"."""
+    or cancelled first sync leaves it a first sync, for "last N". A row
+    synced with no result state stored (from before results were kept, or
+    one edited by hand) counts as synced: an established source."""
     if src["last_sync_at"] is None:
         return False
-    return health.public(last_result(src), src["last_sync_at"], 0)["ok_at"] is not None
+    result = last_result(src)
+    if not isinstance((result or {}).get("state"), str):
+        return True
+    return health.public(result, src["last_sync_at"], 0)["ok_at"] is not None
 
 
 def _resolve(src, stored, cfg):
@@ -729,6 +734,7 @@ def _public(conn, row, accounts, active, cfg=None):
         "choices": choices(row["tool"], row["platform"], row["target"]),
         "created_at": row["created_at"], "last_sync_at": row["last_sync_at"],
         "last_job_id": row["last_job_id"],
+        "synced": synced_ok(row),
         "last_result": result,
         "health": health.public(result, row["last_sync_at"], failures(result), row["target"]),
         "job": job,
