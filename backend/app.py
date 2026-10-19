@@ -104,9 +104,13 @@ FOREIGN_ALLOWED = frozenset({
     ("create_source", "POST"),         # POST /api/sources (never with a script, nor a login)
     ("get_source", "GET"),             # GET /api/sources/<id>
     ("sync_source", "POST"),           # POST /api/sources/<id>/sync (never a script, nor a login)
+    ("link_people", "GET"),            # GET /api/links/people (ids and names only)
+    ("import_links", "POST"),          # POST /api/links/import (a link-in-bio page's links, insert-only)
+    ("create_link", "POST"),           # POST /api/links (the "Add this page" menu command)
 })
 FOREIGN_REFUSED = "this can only be called from FeedVault's own dashboard"
 FOREIGN_LOGIN = "this source syncs with a login, which only FeedVault's own dashboard can start"
+FOREIGN_LINK = "from another site, a link is saved with a url and a title only, to no one"
 
 # The profile a page was loaded in (its id). A tab left open across a profile
 # switch must not write into the other library with ids from the old one:
@@ -1414,6 +1418,65 @@ def bio_import(pid):
     return jsonify({"ok": True, "url": page.url, "accounts": accounts, "links": kept})
 
 
+_BAD_SENT = (f"send {{ page_url: a link-in-bio page's link, links: [{{ url, title }}] (at most {biofetch.MAX_LINKS}; "
+             f"url an http or https address of at most {links.MAX_URL} characters, title text of at most "
+             f"{biofetch.LABEL_READ}), person: a person's id or null }}")
+
+
+def _sent_links(body):
+    """[(url, title)] of the import's ``links``, each as sent, or None when
+    one is not { url: an http(s) address as text, title: text or none }."""
+    sent = body.get("links")
+    if not isinstance(sent, list) or len(sent) > biofetch.MAX_LINKS:
+        return None
+    out = []
+    for x in sent:
+        if not isinstance(x, dict) or "url" not in x or not set(x) <= {"url", "title"}:
+            return None
+        url, title = x["url"], x.get("title")
+        if not isinstance(url, str) or len(url) > links.MAX_URL \
+                or not url.lower().startswith(("http://", "https://")):
+            return None
+        if title is not None and (not isinstance(title, str) or len(title) > biofetch.LABEL_READ):
+            return None
+        out.append((url, title or ""))
+    return out
+
+
+@app.post("/api/links/import")
+def import_links():
+    """A link-in-bio page's links as the browser shows them (the
+    userscript, on a page of biofetch.SITES): its address and those links
+    saved to a person's Links, or to no one's, as the link-in-bio import
+    does (links.keep: only the new ones; nothing saved before is changed or
+    removed). Nothing is fetched: what is kept is what was sent, through
+    biofetch's filters. Under the same switch as the import (bio_import).
+    The userscript's, so another site reaches it (FOREIGN_ALLOWED)."""
+    body = request.get_json(silent=True)
+    sent = _sent_links(body) if isinstance(body, dict) else None
+    if sent is None or not {"page_url", "links"} <= set(body) <= {"page_url", "links", "person"} \
+            or not isinstance(body["page_url"], str):
+        return jsonify({"ok": False, "error": _BAD_SENT}), 400
+    pid, error = _link_person(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    if not biofetch.enabled(config.load()):
+        return jsonify({"ok": False, "error": BIO_OFF}), 403
+    try:
+        found, dropped = biofetch.sent_links(body["page_url"], sent)
+    except biofetch.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    kept = links.keep(db.connect(), pid, found, _link_now(), biofetch.MAX_SAVED)
+    if kept is None:                           # deleted in between
+        return jsonify({"ok": False, "error": "person must be the id of a person, or null"}), 400
+    if kept["saved"]:
+        userdata.changed("links")
+    kept["dropped"] = dropped
+    print(f"[links] import from the browser of {found[0][0]}: {kept['saved']} links saved, "
+          f"{kept['already'] + kept['elsewhere']} saved already, {dropped} dropped, {kept['over']} over the limit")
+    return jsonify({"ok": True, "url": found[0][0], "person": pid, "links": kept})
+
+
 # ---------------------------------------------------------------------------
 # Links (links.py: any web address, tied to a person or to no one; never fetched)
 # ---------------------------------------------------------------------------
@@ -1471,6 +1534,9 @@ def list_links():
 @app.post("/api/links")
 def create_link():
     body = _body()
+    # From another site (the userscript's "Add this page"): a URL and a title, saved to no one.
+    if _foreign_origin() and not set(body) <= {"url", "title"}:
+        return jsonify({"ok": False, "error": FOREIGN_LINK}), 403
     url = links.clean_url(body.get("url"))
     if url is None:
         return jsonify({"ok": False, "error": _BAD_URL}), 400
@@ -1579,6 +1645,16 @@ def recent_link_people():
     """The people most recently given a link (links.recent_people), for the
     quick-add's picker. ``limit`` is kept between 1 and links.MAX_RECENT."""
     return jsonify({"people": links.recent_people(db.connect(), _int_arg("limit", 10, 1, links.MAX_RECENT))})
+
+
+@app.get("/api/links/people")
+def link_people():
+    """Whom the userscript's link import can save to: every person's id and
+    name (links.names), nothing else of them, and the ids of the ten most
+    recently given a link, latest first. The userscript's, so another site
+    reaches it (FOREIGN_ALLOWED): that is why it is not /api/people."""
+    conn = db.connect()
+    return jsonify({"people": links.names(conn), "recent": [p["id"] for p in links.recent_people(conn, 10)]})
 
 
 @app.post("/api/people/<int:pid>/links/order")

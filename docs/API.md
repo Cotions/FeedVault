@@ -81,6 +81,13 @@ browser from reading or changing the library; they are not a login.
     dashboard: it runs a script or logs in)
   - `POST /api/sources/<id>/sync` (403 when the source runs a script, or
     its sync would use a login: cookies or a saved session)
+  - `GET /api/links/people` (ids and names only, see [Save links from the
+    browser](#save-links-from-the-browser))
+  - `POST /api/links/import` (a link-in-bio page's links, insert-only,
+    under the `bio_import` switch)
+  - `POST /api/links` (403 with anything but `url` and `title`: from
+    another site a link is saved to no one, the "Add this page" menu
+    command)
 
   Every other `/api/*` request from another site, whatever its method
   (`HEAD` and `OPTIONS` included), a path no route has, and any route added
@@ -1591,6 +1598,47 @@ import); `backend/biofetch.py`.
   URL fetched and what came of it; the page itself is never logged or
   stored.
 
+### Save links from the browser
+
+The same import from the [userscript](#save-from-the-browser-userscript),
+with the links as the browser rendered them (so a page drawn by JavaScript
+works too) and **nothing fetched**, by the browser's extension or by
+FeedVault: on a person's page of one of the sites above, the userscript's
+**Save links to FeedVault** panel sends the page's address and its
+outbound `<a href>` links with their text, to a person's Links or to no
+one's (**Unsorted**). Under the same switch (`bio_import`, Settings →
+Downloads → Link-in-bio import): it is the same feature, from another
+place. Two of the few routes another site may call (see [Security
+rules](#security-rules)).
+
+| Method | Path | Returns |
+|---|---|---|
+| POST | `/api/links/import` | body `{ "page_url": "https://linktr.ee/somebody", "links": [{ "url": "https://x.com/somebody", "title": "X" }, …], "person": 3 }` → `{ "ok": true, "url": "https://linktr.ee/somebody", "person": 3, "links": { "saved": 7, "already": 2, "elsewhere": 0, "dropped": 1, "over": 0 } }` |
+| GET | `/api/links/people` | `{ "people": [{ "id": 3, "name": "Some Body" }, …], "recent": [3, …] }`: every person's id and name, by name, and the ids of the ten most recently given a link, latest first (the userscript's picker) |
+
+- `page_url`: what the bio-import fetch accepts as the pasted link (https,
+  port 443, the host one of the sites above exactly, a page and not the
+  site's home), else a 400 with why (`not an allowed site: …`, `only https
+  links`…). It is saved first, untitled.
+- `links`: at most 1000, each `{ "url", "title" }` (`title` may be left
+  out or `null`): `url` text of at most 2048 characters starting
+  `http://` or `https://`, `title` text of at most 2000. Any other key,
+  type, scheme or size, or a missing `page_url` or `links`, is a 400 and
+  nothing is saved.
+- `person`: a person's id, or `null` / left out for no one (their
+  `position` is `null`, as for any link of no one). An unknown id is a 400.
+- What is kept is what the fetched import would keep from the same links:
+  each once (its first label that is not empty), through the same filters
+  (the bio site's own pages, a page's parts and trackers left out
+  silently; a port, an IP address or a private name `dropped`), titles
+  cleaned the same way, and **insert-only** the same way: `already` and
+  `elsewhere` links are left exactly as they are, nothing is removed, at
+  most 200 are saved (`over`). With no person, `already` counts the links
+  of no one, `elsewhere` a person's.
+- 403 when the switch is off (`link-in-bio import is off: turn it on in
+  Settings → Downloads`). No account or source is suggested or added: the
+  links are bookmarks. The server log has the page's URL and the counts.
+
 ## Links
 
 Web addresses worth keeping that are not an account FeedVault downloads: a
@@ -1640,7 +1688,7 @@ A **link**:
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/links?person=&kind=&site=&q=` | `{ "links": [link, …], "sites": [{ "site": "patreon.com", "count": 4 }, …] }`, see below |
-| POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` (all but `url` may be omitted; `person` `null` for no one) → `{ "ok": true, "link": {…} }` |
+| POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` (all but `url` may be omitted; `person` `null` for no one; from another site, the userscript's "Add this page", `url` and `title` only, else a 403) → `{ "ok": true, "link": {…} }` |
 | POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person` (`null` unties it; none is a 400) → `{ "ok": true, "link": {…} }` |
 | DELETE | `/api/links/<id>` | → `{ "ok": true }` |
 | POST | `/api/links/assign` | body `{ "ids": [12, 9], "person": 3 }` (1 to 5000 ids; `person` `null` unties them; optional `if_person`) → `{ "ok": true, "moved": 2, "skipped": [], "links": [link, …] }`, see below |
@@ -2713,6 +2761,20 @@ post page, on the site's own host), and stops the click from opening the
 post. What they can ask for is as narrow as it can be: a
 checked id, or a post's link parsed down to its id, never a path, a flag or
 a command.
+
+On a person's page of a link-in-bio site (`linktr.ee`, `beacons.ai`,
+`lnk.bio`, `solo.to`, `campsite.bio`, `linkin.bio`, `allmylinks.com`: the
+bio import's sites, each with its own `@match`), a **Save links to
+FeedVault** panel asks for a person (`GET /api/links/people`; recent ones
+first, a search box, or "No person (Unsorted)") and sends the page's
+outbound links as rendered, read from its `<a href>`s at the click
+(`http`/`https`, no login part, none on the site's own hosts, each once, at
+most 200), to `POST /api/links/import`; it says what came of it ("4 saved,
+2 already there"). See [Save links from the browser](#save-links-from-the-browser).
+On every page the script runs on (those sites and Instagram, X and
+TikTok, nowhere else), the userscript manager's menu has **Add this page
+to FeedVault Links**: the page's address and title, to no one, by
+`POST /api/links`.
 
 **Who talks to FeedVault.** Only the userscript, through
 `GM_xmlhttpRequest` (`@connect localhost`, `@connect 127.0.0.1`). The page

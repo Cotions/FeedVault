@@ -319,7 +319,8 @@ browser userscript** in Settings › About, or open
 with the port of the instance it comes from (in its `API_BASE` and its update
 URLs): installed from the demo on 3389, or with `FEEDVAULT_PORT` set, it
 talks to that instance. It runs on Instagram,
-X (x.com, twitter.com) and TikTok (www.tiktok.com). Saved posts get a green
+X (x.com, twitter.com) and TikTok (www.tiktok.com), and on the link-in-bio
+sites below. Saved posts get a green
 "saved" badge in grids, and a post page shows an "In FeedVault" link.
 A post FeedVault does not have gets a **Save to FeedVault** button instead (on
 the post page and in the dialog a grid opens on Instagram): it downloads that
@@ -361,6 +362,22 @@ a script, or one whose sync logs in (browser cookies, an instaloader
 session), is only synced from the dashboard: the button says so and links
 there. A source the button adds downloads without a login, whatever your
 download defaults or tool settings say.
+
+On a person's link-in-bio page (linktr.ee, beacons.ai, lnk.bio, solo.to,
+campsite.bio, linkin.bio, allmylinks.com), a **Save links to FeedVault**
+panel saves the page and the links it shows into a person's **Links**, or
+into Unsorted: pick the person (recent ones first, or search), confirm, and
+it says what came of it ("4 saved, 2 already there"). It reads the links as
+your browser shows them, so pages drawn by JavaScript work, and nothing is
+fetched. As the link-in-bio import in a person's page, it only adds: a link
+saved already keeps its title and person, and nothing is removed. It is
+under the same switch (**Settings → Downloads → Link-in-bio import**).
+Links are bookmarks: nothing is downloaded from them.
+
+On every page the script runs on, the userscript manager's menu has **Add
+this page to FeedVault Links**: the page's address and title go to Unsorted.
+The script runs only on the sites above, so the command is not on other
+sites.
 
 ## Jobs and tools
 

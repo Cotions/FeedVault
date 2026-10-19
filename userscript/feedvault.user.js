@@ -1,17 +1,25 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.4.0
-// @description  Marks Instagram, X and TikTok posts you already have in FeedVault, and saves the ones you don't
+// @version      0.5.0
+// @description  Marks Instagram, X and TikTok posts you already have in FeedVault, saves the ones you don't, and keeps link-in-bio pages' links in its Links
 // @author       Cotions
 // @match        https://www.instagram.com/*
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @match        https://www.tiktok.com/*
+// @match        https://linktr.ee/*
+// @match        https://beacons.ai/*
+// @match        https://lnk.bio/*
+// @match        https://solo.to/*
+// @match        https://campsite.bio/*
+// @match        https://linkin.bio/*
+// @match        https://allmylinks.com/*
 // @connect      localhost
 // @connect      127.0.0.1
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
+// @grant        GM_registerMenuCommand
 // @run-at       document-idle
 // @updateURL    http://localhost:3380/userscript/feedvault.user.js
 // @downloadURL  http://localhost:3380/userscript/feedvault.user.js
@@ -101,6 +109,26 @@ const SITES = {
 
 const SITE = Object.values(SITES).find((s) => s.hosts.includes(location.hostname)) || null;
 
+// Link-in-bio sites: a person's page is one path on the host. The same hosts
+// as backend/biofetch.py SITES and the @match lines above (a test checks the
+// three agree). ``also``: the site's other names, its own pages too.
+const BIO_SITES = {
+  "linktr.ee": { also: ["linktree.com"] },
+  "beacons.ai": {},
+  "lnk.bio": {},
+  "solo.to": {},
+  "campsite.bio": {},
+  "linkin.bio": { also: ["later.com"] },
+  "allmylinks.com": {},
+};
+// First path parts that are the sites' own pages, not a person's.
+const BIO_NOT_PAGES = new Set(["login", "logout", "signin", "signup", "register", "join", "admin", "dashboard",
+  "settings", "account", "auth", "help", "support", "blog", "about", "pricing", "privacy", "terms", "legal",
+  "cookies", "s", "features", "templates", "discover", "explore", "marketplace", "careers", "press", "app", "api",
+  "contact", "search"]);
+const BIO_MAX_LINKS = 200;                     // biofetch.MAX_SAVED: what one import saves at most
+const BIO_HOST = !SITE && Object.prototype.hasOwnProperty.call(BIO_SITES, location.hostname) ? location.hostname : null;
+
 // The post id a path (or a link's href) is about: "<platform>:<id>", else
 // null. Each site's tileRe captures the id alone.
 function postOf(href, re = SITE.tileRe) {
@@ -150,7 +178,7 @@ function postPath(id) {
   return `/p/${platform}/${code}`;
 }
 
-if (SITE) GM_addStyle(`
+if (SITE || BIO_HOST) GM_addStyle(`
   .${BADGE_CLASS} {
     position: absolute; top: 6px; left: 6px; z-index: 5;
     display: inline-flex; align-items: center; gap: 4px;
@@ -186,6 +214,20 @@ if (SITE) GM_addStyle(`
   }
   .fv-note a { color: #93c5fd; }
   .fv-row { display: flex; gap: 6px; }
+  /* The link-in-bio panel's person picker. */
+  .fv-field {
+    all: unset; box-sizing: border-box; width: 260px; padding: 4px 9px; border-radius: 8px;
+    color: #e8ecf6; background: rgba(10, 12, 17, 0.92); box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.35);
+    font: inherit; font-weight: 400;
+  }
+  select.fv-field { cursor: pointer; }
+  .fv-field:focus { box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.8); }
+  .fv-field option, .fv-field optgroup { color: #e8ecf6; background: #0a0c11; }
+  /* What the menu command did: top right, clear of the corner panel. */
+  .fv-toast {
+    position: fixed; right: 18px; top: 18px; z-index: 2147483000; max-width: 320px;
+    font: 600 12px/16px ui-monospace, "JetBrains Mono", monospace;
+  }
   /* A tile's Save: bottom right, clear of the "saved" badge's corner, of
      Instagram's carousel and reel icons (top right) and of TikTok's view
      count and X's ALT and duration labels (bottom left). Shown while the
@@ -395,9 +437,10 @@ function render(p, sig, build) {
   p.replaceChildren(...build());
 }
 
+// ``settings``: true for a link to Settings → Downloaders, or the link's own text.
 function note(text, settings) {
   const n = el("div", { class: "fv-note" }, text);
-  if (settings) n.append(el("br"), link(`${API_BASE}/settings`, "Open Settings → Downloaders"));
+  if (settings) n.append(el("br"), link(`${API_BASE}/settings`, settings === true ? "Open Settings → Downloaders" : settings));
   return n;
 }
 
@@ -699,6 +742,202 @@ function followSync(name, jobId) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Save links to FeedVault: on a person's link-in-bio page, its address and
+// the links it shows, as the browser rendered them (nothing is fetched, here
+// or by FeedVault), saved to a person's Links or to no one's (Unsorted) by
+// POST /api/links/import. Only new links are added: FeedVault never changes
+// or removes one saved before. Links are bookmarks: nothing is downloaded.
+// ---------------------------------------------------------------------------
+
+// page -> { state: "idle" | "loading" | "pick" | "sending" | "done" | "failed" | "offline",
+//           people, recent, person, count, result, message, settings }
+const bios = new Map();
+
+// The person's page open, as sent (no query, no fragment), else null.
+function bioPage() {
+  if (!BIO_HOST) return null;
+  const m = location.pathname.match(/^\/@?([A-Za-z0-9._-]{1,64})\/?$/);
+  if (!m || BIO_NOT_PAGES.has(m[1].toLowerCase()) || !m[1].replace(/\./g, "")) return null;
+  return `https://${BIO_HOST}${location.pathname}`;
+}
+
+// A host that is the bio site's own (its nav, legal and login pages).
+function bioOwn(host) {
+  return [BIO_HOST, ...(BIO_SITES[BIO_HOST].also || [])].some((s) => host === s || host.endsWith(`.${s}`));
+}
+
+// The text a link shows, else its aria-label or title: plain, bounded.
+function linkLabel(a) {
+  const text = (a.innerText ?? a.textContent ?? "").replace(/\s+/g, " ").trim();
+  return (text || a.getAttribute("aria-label") || a.getAttribute("title") || "").replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+// The page's outbound links, read from the rendered anchors now: http(s)
+// only, no login part, none of the site's own, each once (its first label
+// that is not empty), at most BIO_MAX_LINKS. FeedVault filters them again.
+function bioLinks() {
+  const out = new Map();
+  for (const a of document.querySelectorAll("a")) {
+    if (a.closest(".fv-panel, .fv-toast")) continue;
+    let u;
+    try { u = new URL(a.getAttribute("href") || "", location.href); } catch { continue; }
+    if ((u.protocol !== "https:" && u.protocol !== "http:") || u.username || u.password || bioOwn(u.hostname)) continue;
+    if (u.href.length > 2048) continue;
+    if (!out.has(u.href) && out.size >= BIO_MAX_LINKS) break;
+    if (!out.get(u.href)) out.set(u.href, linkLabel(a));
+  }
+  return [...out].map(([url, title]) => ({ url, title }));
+}
+
+function setBio(page, value) {
+  bios.set(page, { ...bios.get(page), ...value });
+  paint();
+}
+
+// The picker's choices: no one, the recent people, then everyone whose name
+// has ``query`` in it. The person chosen stays in it whatever the query, so
+// what it shows is what is sent.
+function fillPeople(select, s, query) {
+  const q = query.trim().toLowerCase();
+  const byId = new Map(s.people.map((p) => [String(p.id), p]));
+  const keep = (p) => String(p.id) === s.person || !q || p.name.toLowerCase().includes(q);
+  const option = (p) => {
+    const o = el("option", { value: String(p.id) }, p.name);
+    if (String(p.id) === s.person) o.setAttribute("selected", "");
+    return o;
+  };
+  const none = el("option", { value: "none" }, "No person (Unsorted)");
+  if (s.person === "none") none.setAttribute("selected", "");
+  const recent = s.recent.map((id) => byId.get(String(id))).filter((p) => p && keep(p));
+  const rest = s.people.filter((p) => keep(p) && !s.recent.includes(p.id)).slice(0, 300);
+  const out = [none];
+  if (recent.length) {
+    const g = el("optgroup", { label: "Recent" });
+    g.append(...recent.map(option));
+    out.push(g);
+  }
+  if (rest.length) {
+    const g = el("optgroup", { label: recent.length ? "Everyone" : "People" });
+    g.append(...rest.map(option));
+    out.push(g);
+  }
+  select.replaceChildren(...out);
+  select.value = s.person;
+}
+
+function bioPicker(page, s) {
+  const find = el("input", { class: "fv-field", type: "search", placeholder: "Find a person", "aria-label": "Find a person" });
+  const select = el("select", { class: "fv-field", "aria-label": "Save to" });
+  fillPeople(select, s, "");
+  // Only the user's own choice counts: a page script can set the select's
+  // value or send it a change, which changes nothing here.
+  select.addEventListener("change", (e) => {
+    if (!e.isTrusted) { select.value = bios.get(page).person; return; }
+    bios.get(page).person = select.value;
+  });
+  find.addEventListener("input", () => fillPeople(select, bios.get(page), find.value || ""));
+  const row = el("div", { class: "fv-row" });
+  row.append(button("confirm", "Save links", () => sendBio(page)),
+             button("idle", "Cancel", () => setBio(page, { state: "idle" })));
+  return [find, select, row,
+          note(`This page and the ${s.count} link${s.count === 1 ? "" : "s"} it shows, to the person's Links; links saved already stay as they are.`)];
+}
+
+function bioDone(s) {
+  const r = s.result;
+  const parts = [`${r.saved} saved`, `${r.already + r.elsewhere} already there`];
+  if (r.over) parts.push(`${r.over} over the limit`);
+  if (r.dropped) parts.push(`${r.dropped} refused`);
+  const n = note(parts.join(", "));
+  const who = s.people?.find((p) => String(p.id) === String(r.person));
+  n.append(el("br"), who ? link(`${API_BASE}/people/${encodeURIComponent(who.id)}`, `${who.name} in FeedVault`)
+                         : link(`${API_BASE}/links`, "Links in FeedVault"));
+  return n;
+}
+
+function paintBio() {
+  const page = bioPage();
+  if (!page) { dropPanel("bio:"); return; }
+  if (!bios.has(page)) bios.set(page, { state: "idle" });
+  const s = bios.get(page);
+  const p = panel(`bio:${page}`);
+  render(p, `${s.state}|${s.message || ""}|${JSON.stringify(s.result || null)}`, () => {
+    if (s.state === "loading" || s.state === "sending") return [button("busy", "…", null)];
+    if (s.state === "pick") return bioPicker(page, s);
+    if (s.state === "offline") return [button("offline", "FeedVault is not running — retry", () => openBio(page))];
+    if (s.state === "failed") {
+      return [button("failed", "Save links to FeedVault — retry", () => openBio(page)),
+              note(s.message || "Failed", s.settings ? "Open Settings → Downloads" : false)];
+    }
+    const out = [button(s.state === "done" ? "done" : "idle", "Save links to FeedVault", () => openBio(page))];
+    if (s.state === "done") out.push(bioDone(s));
+    return out;
+  });
+}
+
+// The people to choose from (ids and names), then the picker.
+async function openBio(page) {
+  setBio(page, { state: "loading", message: null });
+  const r = await api("GET", "/api/links/people");
+  if (r === null) { setBio(page, { state: "offline" }); return; }
+  if (r.status !== 200 || !Array.isArray(r.body?.people) || !Array.isArray(r.body?.recent)) {
+    setBio(page, { state: "failed", message: r.body?.error || `FeedVault answered ${r.status}` });
+    return;
+  }
+  const people = r.body.people.filter((p) => typeof p?.id === "number" && typeof p?.name === "string");
+  const was = bios.get(page).person;
+  const person = people.some((p) => String(p.id) === was) ? was : "none";
+  setBio(page, { state: "pick", people, recent: r.body.recent, person, count: bioLinks().length });
+}
+
+// The links are read again now, from the page as it is.
+async function sendBio(page) {
+  const s = bios.get(page);
+  if (s?.state !== "pick" || bioPage() !== page) return;
+  const person = s.person === "none" ? null : Number(s.person);
+  const body = { page_url: page, links: bioLinks(), person };
+  setBio(page, { state: "sending" });
+  const r = await api("POST", "/api/links/import", body);
+  if (r === null) { setBio(page, { state: "offline" }); return; }
+  const b = r.body || {};
+  if (!b.ok || !b.links) {
+    setBio(page, { state: "failed", message: b.error || `FeedVault answered ${r.status}`, settings: r.status === 403 });
+    return;
+  }
+  setBio(page, { state: "done", result: { ...b.links, person } });
+}
+
+// ---------------------------------------------------------------------------
+// Add this page to FeedVault Links (the userscript manager's menu, on every
+// page the script runs on): its address and title, to no one (Unsorted).
+// Only the user can pick a menu command: no page script reaches it.
+// ---------------------------------------------------------------------------
+
+function toast(text, to = null) {
+  document.querySelector(".fv-toast")?.remove();
+  const t = el("div", { class: "fv-toast" });
+  const n = note(text);
+  if (to) n.append(el("br"), to);
+  t.append(n);
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
+}
+
+async function addPage() {
+  const title = (document.title || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  toast("Saving to FeedVault Links…");
+  const r = await api("POST", "/api/links", { url: location.href, title });
+  if (r === null) { toast("FeedVault is not running"); return; }
+  const b = r.body || {};
+  const to = link(`${API_BASE}/links`, "Links in FeedVault");
+  if (r.status === 409) {
+    const who = b.link?.person?.name;
+    toast(who ? `Already in FeedVault Links, with ${who}` : "Already in FeedVault Links", to);
+  } else if (!b.ok) toast(b.error || `FeedVault answered ${r.status}`);
+  else toast("Added to FeedVault Links (Unsorted)", to);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -706,7 +945,7 @@ function sleep(ms) {
 // A page that does not look as expected leaves nothing behind: no error in
 // the page's console, the next change paints again.
 function paint() {
-  for (const part of [paintTiles, paintPage, paintProfile]) {
+  for (const part of SITE ? [paintTiles, paintPage, paintProfile] : [paintBio]) {
     try {
       part();
     } catch {
@@ -716,7 +955,8 @@ function paint() {
   if (pending.size) schedule();
 }
 
-if (SITE) {
+if (SITE || BIO_HOST) {
+  GM_registerMenuCommand("Add this page to FeedVault Links", addPage);
   let raf = null;
   new MutationObserver(() => {
     if (raf) return;
