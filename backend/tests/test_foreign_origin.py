@@ -43,6 +43,8 @@ EXPECTED = {
     ("POST", "/api/saved"), ("POST", "/api/save"), ("GET", "/api/jobs/<int:job_id>"),
     ("GET", "/api/sources/resolve"), ("POST", "/api/sources"), ("GET", "/api/sources/<int:sid>"),
     ("POST", "/api/sources/<int:sid>/sync"),
+    # The link-in-bio pages' Save links, and the "Add this page" menu command.
+    ("GET", "/api/links/people"), ("POST", "/api/links/import"), ("POST", "/api/links"),
 }
 
 
@@ -75,7 +77,7 @@ def spies(client, monkeypatch):
     return ran
 
 
-def test_the_allowlist_is_the_issues_seven_routes():
+def test_the_allowlist_is_the_userscripts_ten_routes():
     rules = {r.endpoint: r.rule for r in app_module.app.url_map.iter_rules()}
     assert {(m, rules[e]) for e, m in app_module.FOREIGN_ALLOWED} == EXPECTED
 
@@ -200,5 +202,5 @@ def _userscript_calls():
 
 def test_the_allowlist_is_what_the_userscript_calls():
     got = _userscript_calls()
-    assert len(got) == 7
+    assert len(got) == 10
     assert got == set(app_module.FOREIGN_ALLOWED)

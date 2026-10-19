@@ -190,6 +190,13 @@ def find(conn, url):
     return row[0] if row else None
 
 
+def names(conn):
+    """[{"id", "name"}] of every person, by name: all a picker outside the
+    dashboard (the userscript's) is given of them."""
+    return [{"id": i, "name": n} for i, n in
+            conn.execute("SELECT id, name FROM people ORDER BY name COLLATE NOCASE, id")]
+
+
 def recent_people(conn, limit):
     """[{"id", "name", "at"}]: the people most recently given a link, the
     latest first. ``at`` is when the last of their links was given to them
@@ -238,6 +245,8 @@ def keep(conn, pid, found, now, limit):
     never moved, retitled or removed (the link-in-bio import, biofetch.py,
     run again on a page that changed). Another spelling of a link they
     have (spelling) is theirs already too. At most ``limit`` are saved.
+    ``pid`` None saves them to no one (the Links page's Unsorted), with no
+    place, as create does: "already" is then a link of no one's.
 
     {"saved", "already" (this person's), "elsewhere" (another person's, or
     no one's), "over" (new, but past the limit)}, or None when the person
@@ -245,11 +254,11 @@ def keep(conn, pid, found, now, limit):
     out = {"saved": 0, "already": 0, "elsewhere": 0, "over": 0}
     conn.execute("BEGIN IMMEDIATE")
     try:
-        if conn.execute("SELECT 1 FROM people WHERE id = ?", (pid,)).fetchone() is None:
+        if pid is not None and conn.execute("SELECT 1 FROM people WHERE id = ?", (pid,)).fetchone() is None:
             conn.execute("ROLLBACK")
             return None
-        place = _next_position(conn, pid)
-        have = {spelling(u) for (u,) in conn.execute("SELECT url FROM links WHERE person_id = ?", (pid,))}
+        place = None if pid is None else _next_position(conn, pid)
+        have = {spelling(u) for (u,) in conn.execute("SELECT url FROM links WHERE person_id IS ?", (pid,))}
         for url, title in found:
             row = conn.execute("SELECT person_id FROM links WHERE url = ?", (url,)).fetchone()
             if row is not None or spelling(url) in have:
@@ -258,7 +267,9 @@ def keep(conn, pid, found, now, limit):
                 out["over"] += 1
             else:
                 conn.execute("INSERT INTO links(url, title, notes, person_id, position, created_at, tied_at) "
-                             "VALUES (?, ?, '', ?, ?, ?, ?)", (url, title, pid, place + out["saved"], now, now))
+                             "VALUES (?, ?, '', ?, ?, ?, ?)",
+                             (url, title, pid, None if pid is None else place + out["saved"], now,
+                              None if pid is None else now))
                 out["saved"] += 1
                 have.add(spelling(url))
         conn.execute("COMMIT")

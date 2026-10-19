@@ -903,3 +903,31 @@ def shown_links(page, page_url, table):
         if not out.get(url) and url != first:  # the first label a link is given
             out[url] = clean_label(label, url)
     return list(out.items()), len(refused)
+
+
+# ---------------------------------------------------------------------------
+# What the browser shows: the userscript's import, nothing fetched
+# ---------------------------------------------------------------------------
+
+def sent_links(page_url, sent):
+    """([(url, title)], dropped): what an import from the browser (the
+    userscript, on a page of SITES) keeps, as shown_links does for a page
+    fetched: the page's own address first, untitled, then each link once,
+    its first label kept, through _visitor_url and clean_label. ``sent``
+    is [(link, label)], checked as text by the caller (an http or https
+    address, bounded). The bio site's own pages and a page's parts are left
+    out without a word; ``dropped`` counts the links refused. Raises
+    Refused for the page's address (check_url: https, on SITES, a page)."""
+    host, _, first = check_url(page_url)
+    first = links.clean_url(first)
+    own = (host, *_ALSO_OWN.get(host, ()))
+    out, refused = {first: ""}, set()
+    for link, label in sent:
+        url, why = _visitor_url(link, own)
+        if url is None:
+            if why == "refused":
+                refused.add(link)
+            continue
+        if not out.get(url) and url != first:
+            out[url] = clean_label(label, url)
+    return list(out.items()), len(refused)

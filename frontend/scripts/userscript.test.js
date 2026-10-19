@@ -80,23 +80,27 @@ function hrefs(fixture) {
   return links(fixture).map((l) => l.href);
 }
 
-// A fixture's links: href, and whether an image is inside.
+// A fixture's links: href, whether an image is inside, and the text shown.
 function links(fixture) {
   const html = readFileSync(new URL(`fixtures/${fixture}`, ROOT), "utf8");
-  return [...html.matchAll(/<a [^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gs)].map((m) => ({ href: m[1], img: m[2].includes("<img") }));
+  return [...html.matchAll(/<a [^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gs)]
+    .map((m) => ({ href: m[1], img: m[2].includes("<img"), text: m[2].replace(/<[^>]*>/g, "") }));
 }
 
 // The script on a page at ``href`` (with the links of ``fixture`` in it):
-// returns its context, its document and the calls it made.
+// returns its context, its document, the calls it made and its menu commands.
 function load(href, fixture = null) {
   const url = new URL(href);
   const calls = [];
+  const menu = [];
   const document = new Node("#document");
   document.body = document.appendChild(new Node("body"));
   document.createElement = (tag) => new Node(tag);
+  document.title = fixture ? (readFileSync(new URL(`fixtures/${fixture}`, ROOT), "utf8").match(/<title>(.*?)<\/title>/)?.[1] ?? "") : "";
   for (const l of fixture ? links(fixture) : []) {
     const a = document.body.appendChild(new Node("div")).appendChild(new Node("a"));
     a.setAttribute("href", l.href);
+    a.text = l.text;
     if (l.img) a.appendChild(new Node("img"));
   }
   const ctx = vm.createContext({
@@ -105,6 +109,7 @@ function load(href, fixture = null) {
     document,
     GM_addStyle: () => {},
     GM_xmlhttpRequest: (req) => calls.push(req),
+    GM_registerMenuCommand: (name, fn) => menu.push({ name, fn }),
     MutationObserver: class { observe() {} },
     requestAnimationFrame: () => 0,
     setInterval: () => 0,
@@ -112,7 +117,7 @@ function load(href, fixture = null) {
     getComputedStyle: (n) => ({ position: n.style.position || "static" }),
   });
   vm.runInContext(SOURCE, ctx);
-  return { run: (code) => vm.runInContext(code, ctx), calls, document };
+  return { run: (code) => vm.runInContext(code, ctx), calls, document, menu };
 }
 
 test("only its sites", () => {
@@ -120,7 +125,9 @@ test("only its sites", () => {
                       "https://vm.tiktok.com/ZMabcdef/", "https://mobile.x.com/someone/status/1800000000000000001"]) {
     const page = load(href);
     assert.equal(page.run("SITE"), null, href);
+    assert.equal(page.run("BIO_HOST"), null, href);
     assert.equal(page.calls.length, 0);
+    assert.equal(page.menu.length, 0);
   }
 });
 
@@ -387,4 +394,166 @@ test("the post page's Save and its tile show the same save", async () => {
   await answer(call(t.page, "POST", "/api/save"), 200, { ok: true, have: false, job: { id: 5, state: "running" } });
   assert.equal(panel(), "Saving…");
   assert.equal(t.look("/someone/status/1800000000000000001/photo/1"), "busy");
+});
+
+// ---------------------------------------------------------------------------
+// Link-in-bio pages: Save links to FeedVault
+// ---------------------------------------------------------------------------
+
+test("the link-in-bio hosts are biofetch's, and each has its @match", () => {
+  const py = readFileSync(new URL("../backend/biofetch.py", ROOT), "utf8");
+  const sites = [...py.match(/^SITES = \{([\s\S]*?)^\}/m)[1].matchAll(/^\s+"([^"]+)":/gm)].map((m) => m[1]).sort();
+  const page = load("https://linktr.ee/somebody");
+  assert.deepEqual(JSON.parse(page.run("JSON.stringify(Object.keys(BIO_SITES).sort())")), sites);
+  const matches = [...SOURCE.matchAll(/^\/\/ @match\s+https:\/\/([^/]+)\/\*$/gm)].map((m) => m[1]);
+  const social = JSON.parse(page.run("JSON.stringify(Object.values(SITES).flatMap((s) => s.hosts))"));
+  assert.deepEqual(matches.filter((h) => !social.includes(h)).sort(), sites);
+  assert.doesNotMatch(SOURCE, /@match\s+\*:\/\/\*\/\*|@match\s+https?:\/\/\*\//);   // never every site
+});
+
+test("a person's page on a link-in-bio site, not the site's own pages", () => {
+  for (const [href, page] of [["https://linktr.ee/somebody", "https://linktr.ee/somebody"],
+                              ["https://linktr.ee/somebody/?utm_source=ig", "https://linktr.ee/somebody/"],
+                              ["https://beacons.ai/some.body", "https://beacons.ai/some.body"],
+                              ["https://allmylinks.com/somebody", "https://allmylinks.com/somebody"],
+                              ["https://linktr.ee/", null], ["https://linktr.ee/login", null], ["https://linktr.ee/s/about", null],
+                              ["https://linktr.ee/somebody/extra", null], ["https://linktr.ee/...", null]]) {
+    const p = load(href);
+    assert.equal(p.run("SITE"), null, href);
+    assert.equal(p.run("bioPage()"), page, href);
+    assert.equal(p.calls.length, 0, href);                          // nothing is asked until a click
+    const panel = p.document.querySelector(".fv-panel");
+    assert.equal(panel ? panel.textContent : null, page ? "Save links to FeedVault" : null, href);
+  }
+  assert.equal(load("https://www.instagram.com/somebody/").run("bioPage()"), null);
+});
+
+test("the page's outbound links, as rendered, none of the site's own", () => {
+  const page = load("https://linktr.ee/somebody", "linktree-page.html");
+  assert.deepEqual(JSON.parse(page.run("JSON.stringify(bioLinks())")), [
+    { url: "https://www.instagram.com/somebody/", title: "Instagram" },
+    { url: "https://x.com/somebody", title: "My X" },
+    { url: "https://shop.example/somebody?ref=linktree", title: "Shop my picks" },
+    { url: "https://www.youtube.com/@somebody", title: "YouTube" },     // the icon's link has no text: the next one's
+    { url: "http://old-site.example/", title: "My old site" },
+  ]);
+  // At most BIO_MAX_LINKS.
+  const many = load("https://linktr.ee/somebody");
+  many.run(`for (let i = 0; i < 250; i++) { const a = document.body.appendChild(document.createElement("a"));
+            a.setAttribute("href", "https://shop.example/" + i); }`);
+  assert.equal(many.run("bioLinks().length"), 200);
+});
+
+const PEOPLE = { people: [{ id: 3, name: "Some Body" }, { id: 4, name: "Other One" }], recent: [4] };
+const options = (select) => select.all().filter((n) => n.tagName === "OPTION").map((o) => o.textContent);
+
+// The link-in-bio page with its fixture, the picker open.
+async function picker() {
+  const page = load("https://linktr.ee/somebody", "linktree-page.html");
+  const panel = () => page.document.querySelector(".fv-panel");
+  const btn = (text) => panel().querySelectorAll("button").find((b) => b.textContent === text);
+  btn("Save links to FeedVault").dispatch("click", true);
+  await answer(call(page, "GET", "/api/links/people"), 200, PEOPLE);
+  const select = panel().querySelector("select");
+  const imports = () => page.calls.filter((c) => c.url.endsWith("/api/links/import"));
+  return { page, panel, btn, select, imports };
+}
+
+test("Save links: a person picked, the page's links sent, what was saved said", async () => {
+  const t = await picker();
+  assert.equal(t.page.calls[0].headers["X-FeedVault"], "1");
+  assert.match(t.panel().textContent, /the 5 links it shows/);
+  // No one by default; the recent person first, then everyone else.
+  assert.equal(t.select.value, "none");
+  assert.deepEqual(options(t.select), ["No person (Unsorted)", "Other One", "Some Body"]);
+  // The search narrows the list; the person chosen stays in it.
+  const find = t.panel().querySelector("input");
+  t.select.value = "3";
+  t.select.dispatch("change", true);
+  find.value = "zzz";
+  find.dispatch("input", true);
+  assert.deepEqual(options(t.select), ["No person (Unsorted)", "Some Body"]);
+  find.value = "OTH";
+  find.dispatch("input", true);
+  assert.deepEqual(options(t.select), ["No person (Unsorted)", "Other One", "Some Body"]);
+  assert.equal(t.select.value, "3");
+
+  t.btn("Save links").dispatch("click", true);
+  assert.equal(t.imports().length, 1);
+  assert.deepEqual(JSON.parse(t.imports()[0].data), {
+    page_url: "https://linktr.ee/somebody", person: 3, links: [
+      { url: "https://www.instagram.com/somebody/", title: "Instagram" },
+      { url: "https://x.com/somebody", title: "My X" },
+      { url: "https://shop.example/somebody?ref=linktree", title: "Shop my picks" },
+      { url: "https://www.youtube.com/@somebody", title: "YouTube" },
+      { url: "http://old-site.example/", title: "My old site" }] });
+  assert.equal(t.panel().textContent, "…");
+  t.btn("…").dispatch("click", true);                                  // under way: nothing more
+  assert.equal(t.imports().length, 1);
+  await answer(t.imports()[0], 200, { ok: true, url: "https://linktr.ee/somebody", person: 3,
+                                      links: { saved: 4, already: 1, elsewhere: 1, over: 0, dropped: 0 } });
+  assert.match(t.panel().textContent, /4 saved, 2 already there/);
+  assert.equal(t.panel().querySelector("a").getAttribute("href"), "http://localhost:3380/people/3");
+});
+
+test("Save links to no one", async () => {
+  const t = await picker();
+  t.btn("Save links").dispatch("click", true);
+  assert.equal(JSON.parse(t.imports()[0].data).person, null);
+  await answer(t.imports()[0], 200, { ok: true, person: null, links: { saved: 6, already: 0, elsewhere: 0, over: 2, dropped: 1 } });
+  assert.match(t.panel().textContent, /6 saved, 0 already there, 2 over the limit, 1 refused/);
+  assert.equal(t.panel().querySelector("a").getAttribute("href"), "http://localhost:3380/links");
+});
+
+test("a page script's clicks and changes on the panel do nothing", async () => {
+  const page = load("https://linktr.ee/somebody", "linktree-page.html");
+  page.document.querySelector(".fv-panel").querySelector("button").dispatch("click", false);
+  assert.equal(page.calls.length, 0);
+  const t = await picker();
+  t.select.value = "4";
+  t.select.dispatch("change", false);                                  // not the user's: the choice stays
+  assert.equal(t.select.value, "none");
+  assert.equal(t.page.run("bios.get('https://linktr.ee/somebody').person"), "none");
+  t.btn("Save links").dispatch("click", false);
+  t.btn("Cancel").dispatch("click", false);
+  assert.equal(t.imports().length, 0);
+  assert.ok(t.btn("Save links"));
+});
+
+test("Save links when the import is off, or FeedVault does not answer", async () => {
+  const t = await picker();
+  t.btn("Save links").dispatch("click", true);
+  await answer(t.imports()[0], 403, { ok: false, error: "link-in-bio import is off: turn it on in Settings → Downloads" });
+  assert.match(t.panel().textContent, /import is off/);
+  assert.equal(t.panel().querySelector("a").textContent, "Open Settings → Downloads");
+  const off = load("https://linktr.ee/somebody");
+  off.document.querySelector(".fv-panel").querySelector("button").dispatch("click", true);
+  off.calls[0].onerror();
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(off.document.querySelector(".fv-panel").textContent, "FeedVault is not running — retry");
+});
+
+// ---------------------------------------------------------------------------
+// The menu command: Add this page to FeedVault Links
+// ---------------------------------------------------------------------------
+
+test("the menu command adds the page's address and title, to no one", async () => {
+  for (const [href, fixture] of [["https://x.com/someone/status/1800000000000000001", "x-post.html"],
+                                 ["https://linktr.ee/somebody", "linktree-page.html"]]) {
+    const page = load(href, fixture);
+    assert.deepEqual(page.menu.map((m) => m.name), ["Add this page to FeedVault Links"]);
+    const before = page.calls.length;
+    page.menu[0].fn();
+    const sent = page.calls.slice(before);
+    assert.deepEqual(sent.map((c) => [c.method, c.url]), [["POST", "http://localhost:3380/api/links"]]);
+    assert.deepEqual(JSON.parse(sent[0].data), { url: href, title: page.document.title });
+    assert.ok(page.document.title);
+    assert.equal(sent[0].headers["X-FeedVault"], "1");
+    await answer(sent[0], 409, { ok: false, error: "that link is saved already", link: { person: { id: 3, name: "Some Body" } } });
+    assert.match(page.document.querySelector(".fv-toast").textContent, /Already in FeedVault Links, with Some Body/);
+  }
+  const page = load("https://www.tiktok.com/@someone");
+  page.menu[0].fn();
+  await answer(page.calls.at(-1), 200, { ok: true, link: { id: 9 } });
+  assert.match(page.document.querySelector(".fv-toast").textContent, /Added to FeedVault Links \(Unsorted\)/);
 });
