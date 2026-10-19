@@ -1235,7 +1235,7 @@ An **account** (`/api/authors` rows, a person's `accounts`):
   "url": "https://www.instagram.com/somebody/", "person": { "id": 3, "name": "Some Body" },
   "handles": [{ "handle": "somebody", "first": 1700000000, "last": 1727481600 },
               { "handle": "some.body.old", "first": 1600000000, "last": 1690000000 }],
-  "names": [{ "name": "Some Body", "first": 1600000000, "last": 1727481600 }] }
+  "names": [{ "name": "Some Body", "first": 1600000000, "last": 1727481600 }], "no_sync": false }
 ```
 
 - `handle` and `name` are those of the newest post (handles change), or the
@@ -1252,6 +1252,9 @@ An **account** (`/api/authors` rows, a person's `accounts`):
 - `url`: the profile's address for `instagram`, `twitter`, `tiktok` and
   `youtube`, `null` otherwise.
 - `person`: the person the account is linked to, or `null`.
+- `no_sync`: [Don't sync](#dont-sync) is on for the account itself. Its
+  person's own switch is the person's `no_sync`; either one stops its
+  sources.
 - `handles` and `names`: **handle history**, every handle and display name
   the account's posts (aliases included) carry, with the `posted_at` of the
   first and last post under it, the most recent first. Handles also come
@@ -1274,7 +1277,7 @@ A **person**:
   "gender": "Female", "country": "FR", "labels": ["cosplay", "Travel"],
   "avatar": "3f9a1c0b7d2e4f6a8b1c",
   "accounts": [account, …], "platforms": ["instagram", "twitter"],
-  "count": 900, "bytes": 2347483648, "newest": 1727481600 }
+  "count": 900, "bytes": 2347483648, "newest": 1727481600, "no_sync": false }
 ```
 
 - `name`: 1 to 64 characters, no `"` or control characters, unique without
@@ -1294,18 +1297,20 @@ A **person**:
   (before the first scan of a rebuilt index, or every post trashed) is listed
   with `count` 0 and `handle` `null`.
 - `count`, `bytes`, `newest`: over every account.
+- `no_sync`: [Don't sync](#dont-sync) is on for the person: none of their
+  sources syncs.
 
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/people` | `[person, …]`, by name |
 | POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted; at most 500 accounts and 20 profiles; `profiles` with no media root set is a 400) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
-| POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }] }`: a sync of each of the person's sources, as Sync all does for every source; 404 for an unknown id |
+| POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }], "not_synced": 0 }`: a sync of each of the person's sources, as Sync all does for every source (`not_synced`: those left out, set to [Don't sync](#dont-sync)); 404 for an unknown id |
 | GET | `/api/people/attributes` | `{ "labels": [{ "name", "count" }], "genders": [{ "name", "count" }], "presets": ["Female", "Male", "Transgender"], "countries": ["AD", …] }`: the labels and genders people have, most used first (what the person page suggests and the Creators filters offer), and every country code a person can have |
 | GET | `/api/people/<id>` | person, with its `links` (see [Links](#links)), or 404 |
 | POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"] }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date) → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, tied to no one |
 | POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted; at most 500 each) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
-| POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }] }` → `{ "ok": true, "person": {…} }`, see below |
+| POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }], "confirm": true }` → `{ "ok": true, "person": {…} }`, see below; 409 `{ "ok": false, "confirm": true, "sources": 2, "error" }` when one of them is set to [Don't sync](#dont-sync) and sources that sync now would stop, until sent with `"confirm": true` |
 
 - An account belongs to one person at most: adding it to a person (create,
   add, merge) takes it from any other. An account that is not in the index
@@ -1739,7 +1744,7 @@ no person yet.
   "session": { "mode": "login", "user": "me", "session_file": true },
   "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "stopped": null,
                 "failures": 1 },
-  "script_warning": null }
+  "script_warning": null, "no_sync": false }
 ```
 
 - `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
@@ -1753,6 +1758,10 @@ no person yet.
 - `account`: the indexed account the source belongs to (an alias is
   replaced by the id it stands for), or `null`. `person`: the account's
   person, else the person the source was added to, else `null`.
+- `no_sync`: its account (before its first sync, its folder's account,
+  else the one with its link's handle), the person it shows under, or the
+  person it was added to is set to [Don't sync](#dont-sync): the source is
+  kept but never synced.
 - `options`: what its syncs use, option by option: the source's own value
   when it sets one (`overrides` names those), else its platform's
   [download default](#download-defaults), else the default below.
@@ -1924,16 +1933,18 @@ no person yet.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
-| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "choices": {…}, "defaults": {…}, "metadata": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `choices`: as a source's; `defaults`: the options a new source starts from, its platform's [download defaults](#download-defaults); `metadata`: as a source's; `session`: the one a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` (an option left out, or sent as its platform's default, is not stored: it follows the default); 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or an `options.session` other than `{ "mode": "none" }` (a [browser profile](#browser-profiles) included), set from another site (see [Security rules](#security-rules)) |
+| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "no_sync": false, "choices": {…}, "defaults": {…}, "metadata": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `no_sync`: that source, or the account the profile's folder or handle belongs to, is set to [Don't sync](#dont-sync), so it can be neither added nor synced; `choices`: as a source's; `defaults`: the options a new source starts from, its platform's [download defaults](#download-defaults); `metadata`: as a source's; `session`: the one a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` (an option left out, or sent as its platform's default, is not stored: it follows the default); 409 `{ "ok": false, "error", "no_sync": true }` when its account (given, or found from its folder or handle) or its person is set to [Don't sync](#dont-sync), from the dashboard and another site alike; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or an `options.session` other than `{ "mode": "none" }` (a [browser profile](#browser-profiles) included), set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
 | POST | `/api/sources/<id>` | body `{ "options": {…}, "reset": true \| ["media", …] }` (an option sent with another value than it has now becomes its own, even one equal to its default; one sent as it is now, or not sent, stays as it was, set or inherited; `reset`: those options, or all with `true`, follow the defaults again, before `options` applies) → `{ "ok": true, "source": {…} }`; 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent or reset; 403 from another site (see [Security rules](#security-rules)) |
 | POST | `/api/source-defaults/apply` | body `{ "tool": "gallery-dl", "platform": "twitter", "option": "media" }` → `{ "ok": true, "applied": 3, "skipped": 1 }`: every source of that tool and platform that sets that option itself stops doing so and follows the [download default](#download-defaults); those syncing now are skipped (but for `schedule`). 400 for another option than the defaults'; 403 from another site |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
 | POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site |
 | DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site |
-| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }` (already `failed`, with the reason, for a script that cannot run, see [Scripts](#scripts) "On a source"); 409 when its sync is already queued or running; 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script or would sync with a login and the request comes from another site; 404 for an unknown id |
-| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }] }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, and those that cannot be synced (folder no longer inside a media root) listed in `errors`; 403 from another site |
+| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }` (already `failed`, with the reason, for a script that cannot run, see [Scripts](#scripts) "On a source"); 409 when its sync is already queued or running; 409 `{ "ok": false, "error", "no_sync": true }` when it is set to [Don't sync](#dont-sync); 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script or would sync with a login and the request comes from another site; 404 for an unknown id |
+| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }], "not_synced": 2 }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, those set to [Don't sync](#dont-sync) left out (counted in `not_synced`), and those that cannot be synced (folder no longer inside a media root) listed in `errors`; 403 from another site |
+| GET | `/api/no-sync` | `{ "people": [3], "accounts": [{ "platform": "instagram", "id": "123456" }] }`: who [Don't sync](#dont-sync) is on for, as set; 403 from another site |
+| POST | `/api/no-sync` | body `{ "person": 3, "no_sync": true }` or `{ "account": { "platform", "id" }, "no_sync": false }`, and `"confirm": true` once asked → `{ "ok": true, "no_sync": { "people": [3], "accounts": [] } }`. Turning it on for one whose sources would stop syncing is 409 `{ "ok": false, "confirm": true, "sources": 2, "error" }` until sent again with `"confirm": true`; 409 while one of those sources' sync is queued or running; 400 for an unknown person, an account not indexed, or a malformed body; 403 from another site. See [Don't sync](#dont-sync) |
 
 Every `/api/sources/<id>…` call answers 404 `{ "ok": false, "error": "no
 such source" }` for an unknown id.
@@ -2516,6 +2527,58 @@ had it accepted. One that ended `not_found` says nothing of the session
 (the site says it to a throttled or logged-out client too): only a line
 above marks it accepted.
 
+### Don't sync
+
+Some accounts are never to be downloaded from. **Don't sync** is a switch
+on a person (it covers each of their accounts) or on an account (whoever it
+is linked to, its folder-name aliases included); off by default. While it
+is on (on the account itself, or on its person):
+
+- no source can be added for it: `POST /api/sources` answers 409 with
+  `"no_sync": true`, from the dashboard and from another site (the
+  userscript) alike, for an account given or found from the source's
+  folder or handle, and for a source added to such a person;
+- it gets no source suggestion (`GET /api/sources` `suggestions`);
+- a source it already has is **kept**, never deleted, and marked
+  `"no_sync": true`, but never runs: `POST /api/sources/<id>/sync` answers
+  409 with `"no_sync": true`, Sync all and a person's Sync leave it out
+  (`not_synced` counts them), the scheduler never queues it, and no sync
+  job for it can be started any other way (`POST /api/jobs` with a sync
+  kind answers 400);
+- its posts stay in the library, in the Feed, Review, Storage and every
+  page, exactly as before.
+
+Turned on for one whose sources would stop syncing, `POST /api/no-sync`
+asks first (409, `confirm`, how many) and acts once sent again with
+`"confirm": true`; it is refused while one of those sources' sync is queued
+or running. Turned off, its sources sync again as they did, schedules
+included. Another site can neither read nor set it (it is not in the
+userscript's routes, see [Security rules](#security-rules)).
+
+A source counts as its account's, and as the person it shows under; one
+added to a person set to Don't sync stays not synced even when its account
+is linked to someone else. One not tied to an account yet (its first sync
+not done) counts as its folder's account, else, its folder still empty, as
+the account with its link's handle.
+
+A person who leaves keeps nothing syncing that did not: when a person set
+to Don't sync is deleted, or an account leaves them (unlinked, added to
+someone else, or taken by a new person or a merge), that account gets the
+switch of its own. Merging people keeps it on when any of them had it;
+when that would stop sources that sync now, `POST /api/people/merge`
+asks first (409 `{ "ok": false, "confirm": true, "sources": n, "error" }`)
+and merges once sent again with `"confirm": true`.
+
+Deliberate one-off actions that are not a source's sync stay allowed:
+saving one post (`POST /api/save`) and running a script by hand with an
+explicit link or target (`POST /api/scripts/<id>/run`). A script attached
+to a source runs as that source's sync, and is refused as it is.
+
+User data: `no_sync_people` (exported by person name, as `muted_people`;
+deleting the person drops it) and `no_sync_accounts` (by platform and
+account id, stored as the id it stands for), written to
+`userdata/no_sync_people.json` and `userdata/no_sync_accounts.json`.
+
 ### Schedules
 
 A source whose `options.schedule` is `"hourly"`, `"daily"` or `"weekly"`
@@ -2557,6 +2620,9 @@ running is never queued again).
   are indexed under it); it is tried again a minute later. A sync refused
   (its folder no longer inside a media root) is noted the same way and
   tried again one interval later.
+- A source set to [Don't sync](#dont-sync) is never queued: it keeps its
+  `schedule`, which applies again once the switch is off;
+  `schedule.next_at` is `null` meanwhile.
 - `GET /api/config` has `"schedules_paused": false`; `POST /api/config`
   with `{ "schedules_paused": true }` (a boolean, else an error) pauses
   every schedule (Settings → Sync), the syncs already queued go on.
@@ -3036,7 +3102,7 @@ A **job**:
 |---|---|---|
 | GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "unsorted_links": 3, "notifications": { "unread": 1, "latest": 42, "desktop": false } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `unsorted_links` the number of links tied to no one, see [Links](#links); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
-| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object, a `kind` that is not text, and a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync) |
+| POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object, a `kind` that is not text, and a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync), and a sync kind for a source set to [Don't sync](#dont-sync) |
 | GET | `/api/jobs/<id>` | job, or 404 |
 | GET | `/api/jobs/<id>/log?after=<n>` | output lines numbered above `n` (default 0), see below; 404 if unknown |
 | POST | `/api/jobs/<id>/cancel` | → `{ "ok": true, "job": {…} }`; 404 if unknown, 409 if it has already ended, or if its process has exited and it is indexing what it downloaded |

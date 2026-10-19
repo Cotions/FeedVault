@@ -1632,10 +1632,9 @@ def sync_params(sid, src):
 
 
 def _source(params):
-    """The source row a script sync is for, still the one it was queued for."""
-    src = sources.row(db.connect(), sync._source_id(params))
-    if src is None:
-        raise jobs.BadRequest("no such source")
+    """The source row a script sync is for, still the one it was queued for
+    (and not set to Don't sync: sync.synced_source)."""
+    src = sync.synced_source(params)
     if src["target"] != params["target"]:
         raise jobs.BadRequest("the source changed since its sync was queued")
     return src

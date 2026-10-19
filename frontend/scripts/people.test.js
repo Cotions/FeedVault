@@ -3,8 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  attributeChoices, attributesMatch, cleanGender, countryFlag, countryName, countryOptions, filtersOn, NO_FILTERS,
-  personText, sameLabels, withLabel,
+  attributeChoices, attributeFiltersOn, attributesMatch, cleanGender, countryFlag, countryName, countryOptions, filtersOn,
+  mergeSet, mergeStopping, NO_FILTERS, notSynced, personText, sameLabels, syncFilter, syncMatch, withLabel,
 } from "../src/lib/people.js";
 
 const person = (over = {}) => ({ name: "Someone", gender: "", country: "", labels: [], accounts: [], ...over });
@@ -53,6 +53,35 @@ test("the filters: any, not set, or a value (labels and genders without regard t
   assert.equal(filtersOn({ ...NO_FILTERS, label: "" }), true);
 });
 
+test("the sync filter: set to Don't sync, the person, the account, or each account of a person", () => {
+  const off = person({ no_sync: true });
+  const eachOff = person({ accounts: [{ no_sync: true }, { no_sync: true }] });
+  const someOff = person({ accounts: [{ no_sync: true }, { no_sync: false }] });
+  const synced = person({ no_sync: false });
+  const account = { platform: "instagram", id: "1", no_sync: true };
+  assert.equal(filtersOn({ ...NO_FILTERS, sync: "off" }), true);
+  assert.equal(attributeFiltersOn({ ...NO_FILTERS, sync: "off" }), false);
+  for (const p of [off, eachOff]) {
+    assert.equal(notSynced(p), true);
+    assert.equal(attributesMatch(p, { ...NO_FILTERS, sync: "off" }), true);
+    assert.equal(attributesMatch(p, { ...NO_FILTERS, sync: "on" }), false);
+  }
+  for (const p of [someOff, synced, person()]) {
+    assert.equal(notSynced(p), false);
+    assert.equal(attributesMatch(p, { ...NO_FILTERS, sync: "on" }), true);
+    assert.equal(attributesMatch(p, { ...NO_FILTERS, sync: "off" }), false);
+  }
+  // An account linked to nobody: its own switch.
+  assert.equal(syncMatch(account, "off"), true);
+  assert.equal(syncMatch({ ...account, no_sync: false }, "off"), false);
+  assert.equal(syncMatch(account, null), true);
+  // From the address: only on or off.
+  assert.equal(syncFilter("off"), "off");
+  assert.equal(syncFilter("on"), "on");
+  assert.equal(syncFilter("<script>"), null);
+  assert.equal(syncFilter(null), null);
+});
+
 test("what the filters offer: counted, most used first, and how many have none", () => {
   const c = attributeChoices([
     person({ gender: "Female", country: "FR", labels: ["Travel"] }),
@@ -79,4 +108,18 @@ test("the country picker: an exact code first, then names that start with the te
   assert.equal(all.length, 5);
   assert.deepEqual(all.map(c => c.name), [...all.map(c => c.name)].sort((a, b) => a.localeCompare(b)));
   assert.equal(countryOptions(codes, "zzzz").length, 0);
+});
+
+test("a merge's Don't sync warning holds for the set it was given for only", () => {
+  const a = { platform: "instagram", id: "1" }, b = { platform: "x", id: "2" };
+  const set = mergeSet([{ id: 3 }, { id: 7 }], [a]);
+  assert.equal(set, mergeSet([{ id: 7 }, { id: 3 }], [a]));
+  const merge = { name: "N", stopping: 2, stoppingFor: set };
+  assert.equal(mergeStopping(merge, set), 2);
+  // A person or an account added or dropped since: asked again.
+  assert.equal(mergeStopping(merge, mergeSet([{ id: 3 }], [a])), 0);
+  assert.equal(mergeStopping(merge, mergeSet([{ id: 3 }, { id: 7 }], [a, b])), 0);
+  assert.equal(mergeStopping(merge, mergeSet([{ id: 3 }, { id: 9 }], [a])), 0);
+  assert.equal(mergeStopping({ name: "N" }, set), 0);
+  assert.equal(mergeStopping(null, set), 0);
 });

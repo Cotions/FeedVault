@@ -16,7 +16,8 @@ import CreatorPicker from "../components/CreatorPicker";
 import Suggestions from "../components/Suggestions";
 import BioImport from "../components/BioImport";
 import MuteButton from "../components/MuteButton";
-import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
+import NoSyncButton from "../components/NoSyncButton";
+import { AddSource, NotSyncedChip, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
 import PersonAbout from "../components/PersonAbout";
@@ -26,7 +27,9 @@ import { LinkForm, LinkRow } from "../components/Links";
 import { copyUrls } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
 
-function AccountRow({ account: a, busy, onUnlink }) {
+/* personOff: the person's name when they are set to Don't sync, so this account is not
+   synced whatever its own switch says. */
+function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync }) {
   const url = safeUrl(a.url);
   const former = (a.handles || []).filter(h => h.handle !== a.handle);
   const names = (a.names || []).map(n => n.name).filter(n => n !== a.name);
@@ -40,6 +43,7 @@ function AccountRow({ account: a, busy, onUnlink }) {
           {handle}
           {named && <span className="creator-sub"> · {a.name}</span>}
         </span>
+        {a.no_sync && <span className="creator-nosync-line"><NotSyncedChip title={`${handle} is set to Don't sync`} /></span>}
         <span className="creator-sub">
           {platformLabel(a.platform)} · id {a.id}
           {names.length > 0 && ` · also named ${names.join(", ")}`}
@@ -69,6 +73,7 @@ function AccountRow({ account: a, busy, onUnlink }) {
       <Link to={authorFeedPath(a.platform, a)} className="icon-btn" title="This account's posts" aria-label={`Posts by @${a.handle || a.id}`}>
         <Icon name="feed" size={15} />
       </Link>
+      <NoSyncButton compact on={!!a.no_sync} inherited={personOff} whom={{ account: accountRef(a) }} name={handle} onDone={onNoSync} />
       <button type="button" className="btn-ghost" disabled={busy} onClick={() => onUnlink(a)}>Unlink</button>
     </li>
   );
@@ -281,6 +286,7 @@ export default function PersonPage() {
       const n = r.jobs.length;
       const parts = [n ? `${n} sync${n === 1 ? "" : "s"} queued` : "Nothing queued"];
       if (r.skipped) parts.push(`${r.skipped} already queued or running`);
+      if (r.not_synced) parts.push(`${r.not_synced} set to Don't sync`);
       if (r.errors.length) parts.push(`${r.errors.length} refused: ${r.errors[0].error}`);
       toast(`${parts.join("; ")}.`, r.errors.length && !n ? "err" : undefined);
       sources.reload();
@@ -344,6 +350,9 @@ export default function PersonPage() {
   const notesValue = notes ?? p.notes;
   const fresh = (newApi.data?.by_person || []).find(r => r.id === p.id);
   const muted = !!newApi.data?.muted?.people?.includes(p.id);
+  // Set to Don't sync, they or one account: those sources are kept, never run.
+  const live = mine.filter(s => !s.no_sync);
+  const onNoSync = () => { reload(); sources.reload(); suggestApi.reload(); };
 
   return (
     <>
@@ -440,6 +449,8 @@ export default function PersonPage() {
                   key={accountKey(a)}
                   account={a}
                   busy={busy}
+                  personOff={p.no_sync ? p.name : null}
+                  onNoSync={onNoSync}
                   onUnlink={a => change({ remove: [accountRef(a)] }, `@${a.handle || a.id} unlinked.`)}
                 />
               ))}
@@ -482,13 +493,22 @@ export default function PersonPage() {
         <section className="person-section">
           <div className="person-section-head">
             <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
-            {mine.length > 0 && (
+            {/* The person's switch: beside what it stops (the head's line has no room for it). */}
+            <NoSyncButton on={!!p.no_sync} whom={{ person: p.id }} name={p.name} onDone={onNoSync} />
+            {live.length > 0 && (
               <button type="button" className="btn-primary" disabled={busy} onClick={syncAll}
                       title="Sync each source of this person, one after another">
-                <Icon name="refresh" size={14} /> Sync {mine.length > 1 ? `all ${mine.length}` : ""}
+                <Icon name="refresh" size={14} /> Sync {live.length > 1 ? `all ${live.length}` : ""}
               </button>
             )}
           </div>
+          {p.no_sync && (
+            <p className="creator-sub nosync-note">
+              Don&apos;t sync is on: FeedVault downloads nothing of theirs, no source can be added, and{" "}
+              {mine.length ? "their sources stay listed but never run" : "none is suggested"}. What is downloaded stays.
+              Turn it off with Not synced, beside Sources.
+            </p>
+          )}
           {mine.length === 0 ? (
             <div className="empty">
               {sources.data ? "Nothing to sync yet. Add a profile below to download their new posts from here." : "Loading…"}
@@ -501,7 +521,7 @@ export default function PersonPage() {
               ))}
             </ul>
           )}
-          <AddSource person={p.id} onAdded={sources.reload} onDirty={setNewSource} />
+          {!p.no_sync && <AddSource person={p.id} onAdded={sources.reload} onDirty={setNewSource} />}
         </section>
 
         <PersonLinks person={p} onChanged={reload} onDirty={setLinkEdits} onAddDirty={setNewLink} />

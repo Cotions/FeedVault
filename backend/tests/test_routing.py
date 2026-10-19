@@ -115,7 +115,7 @@ def test_folder_names():
 def test_resolve_endpoint(env, client):
     r = get(client, "/api/sources/resolve?url=https://www.tiktok.com/@someone")
     assert r == {"ok": True, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone",
-                 "folder": str(env["media"] / "tiktok" / "someone"), "source": None,
+                 "folder": str(env["media"] / "tiktok" / "someone"), "source": None, "no_sync": False,
                  "choices": sources.choices("yt-dlp", "tiktok", "https://tiktok.com/@someone"),
                  "defaults": {k: sources.BUILTIN[k] for k in sources.OPTION_KEYS},
                  "metadata": {"mode": "full", "inherited": "full", "setting": "full", "ffmpeg": False},

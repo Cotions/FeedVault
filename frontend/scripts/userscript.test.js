@@ -118,6 +118,34 @@ test("a profile page asks FeedVault about the profile, nothing else", () => {
   assert.equal(page.calls[0].headers["X-FeedVault"], "1");
 });
 
+// Answers a recorded call as FeedVault would, then lets the script go on.
+async function answer(call, status, body) {
+  call.onload({ status, responseText: JSON.stringify(body) });
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
+
+test("a profile set to Don't sync in FeedVault: nothing to click, no further call", async () => {
+  const page = load("https://x.com/someone");
+  await answer(page.calls[0], 200, { ok: true, tool: "gallery-dl", folder: "/m/someone", source: null, no_sync: true });
+  assert.equal(page.run("profiles.get('someone').state"), "nosync");
+  assert.equal(page.calls.length, 1);
+  // Its click does nothing: the state stays, no add is sent.
+  page.run("clickProfile('someone')");
+  assert.equal(page.calls.length, 1);
+});
+
+test("an add or a sync FeedVault refuses for Don't sync shows that, not a failure", async () => {
+  const page = load("https://x.com/someone");
+  await answer(page.calls[0], 200, { ok: true, tool: "gallery-dl", folder: "/m/someone", source: null, no_sync: false });
+  page.run("addAndSync('someone')");
+  await answer(page.calls[1], 409, { ok: false, error: "set to Don't sync", no_sync: true });
+  assert.equal(page.run("profiles.get('someone').state"), "nosync");
+  page.run("syncSource('someone', 4)");
+  await answer(page.calls[2], 409, { ok: false, error: "set to Don't sync", no_sync: true });
+  assert.equal(page.run("profiles.get('someone').state"), "nosync");
+  assert.equal(page.calls.length, 3);
+});
+
 test("never a script route", () => {
   assert.doesNotMatch(SOURCE, /\/api\/scripts|script-sync|\/api\/jobs"/);
 });

@@ -576,13 +576,34 @@ def _migrate_26(conn):
         conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps({"v": 2, **kept}), sid))
 
 
+def _migrate_27(conn):
+    """Don't sync (nosync.py): a person or an account whose sources never
+    sync (no Sync, no Sync all, no schedule) and get no source suggestion;
+    their posts stay as they are. User data, mirrored by userdata.py as the
+    mutes are: no_sync_people by person (exported by name), no_sync_accounts
+    by platform and account id. CREATE IF NOT EXISTS: a file that has them
+    already is left as it is."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS no_sync_people (
+            person_id INTEGER PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+            at        INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS no_sync_accounts (
+            platform  TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            at        INTEGER NOT NULL,
+            PRIMARY KEY (platform, author_id)
+        ) WITHOUT ROWID""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
               _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
-              _migrate_26]
+              _migrate_26, _migrate_27]
 
 BACKUPS_KEPT = 3
 
@@ -1106,19 +1127,29 @@ NEW = ("p.first_seen > COALESCE((SELECT MIN(at) FROM (SELECT at FROM seen_at WHE
        "WHERE s.platform = p.platform AND s.author_id = p.author_id), "
        "(SELECT at FROM seen_at WHERE id = 1), 9223372036854775807)")
 
+
+def _flagged(people_table, accounts_table):
+    """(platform, author id) of every account flagged in ``accounts_table``
+    or through its person in ``people_table``, folder-name aliases both ways."""
+    return f"""
+    SELECT platform, author_id FROM {accounts_table}
+    UNION SELECT a.platform, a.alias_id FROM account_aliases a JOIN {accounts_table} m
+      ON m.platform = a.platform AND m.author_id = a.author_id
+    UNION SELECT a.platform, a.author_id FROM account_aliases a JOIN {accounts_table} m
+      ON m.platform = a.platform AND m.author_id = a.alias_id
+    UNION SELECT pa.platform, pa.author_id FROM person_accounts pa JOIN {people_table} m ON m.person_id = pa.person_id
+    UNION SELECT a.platform, a.alias_id FROM account_aliases a JOIN person_accounts pa
+      ON pa.platform = a.platform AND pa.author_id = a.author_id JOIN {people_table} m ON m.person_id = pa.person_id
+    UNION SELECT a.platform, a.author_id FROM account_aliases a JOIN person_accounts pa
+      ON pa.platform = a.platform AND pa.author_id = a.alias_id JOIN {people_table} m ON m.person_id = pa.person_id"""
+
+
 # (platform, author id) of every muted account (news.py): those muted on
 # their own and those of a muted person, folder-name aliases both ways.
-MUTED = """
-    SELECT platform, author_id FROM muted_accounts
-    UNION SELECT a.platform, a.alias_id FROM account_aliases a JOIN muted_accounts m
-      ON m.platform = a.platform AND m.author_id = a.author_id
-    UNION SELECT a.platform, a.author_id FROM account_aliases a JOIN muted_accounts m
-      ON m.platform = a.platform AND m.author_id = a.alias_id
-    UNION SELECT pa.platform, pa.author_id FROM person_accounts pa JOIN muted_people m ON m.person_id = pa.person_id
-    UNION SELECT a.platform, a.alias_id FROM account_aliases a JOIN person_accounts pa
-      ON pa.platform = a.platform AND pa.author_id = a.author_id JOIN muted_people m ON m.person_id = pa.person_id
-    UNION SELECT a.platform, a.author_id FROM account_aliases a JOIN person_accounts pa
-      ON pa.platform = a.platform AND pa.author_id = a.alias_id JOIN muted_people m ON m.person_id = pa.person_id"""
+MUTED = _flagged("muted_people", "muted_accounts")
+# (platform, author id) of every account set to Don't sync (nosync.py), the
+# same way: on its own, or through its person.
+NO_SYNC = _flagged("no_sync_people", "no_sync_accounts")
 
 # New and not muted: the sidebar's count, the Feed's "New since last visit".
 # A muted one's new posts show on its own (a person's, an account's filter).
@@ -1416,7 +1447,14 @@ def _accounts(conn, sizes=True):
     for a, handle, at in renamed.values():
         if at >= (a["handles"].get(a["handle"], [None, None])[1] or 0):
             a["handle"] = handle
+    # Don't sync set on the account itself (nosync.py), stored by the id it
+    # stood for then: an alias of it since reads as the account.
+    for platform, aid in conn.execute("SELECT platform, author_id FROM no_sync_accounts"):
+        a = out.get((platform, alias.get((platform, aid), aid))) or out.get((platform, aid))
+        if a is not None:
+            a["no_sync"] = True
     for a in out.values():
+        a.setdefault("no_sync", False)
         a["handle"] = a["handle"] or next(iter(a["handles"]), None)
         a["url"] = profile_url(a["platform"], a["handle"])
         a["handles"] = _spans(a["handles"], "handle")

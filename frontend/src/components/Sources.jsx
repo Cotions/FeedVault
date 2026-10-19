@@ -168,14 +168,27 @@ export function InheritBadge({ source: s }) {
   );
 }
 
+/* "Not synced": its account or person is set to Don't sync (docs/API.md
+   "Don't sync"), so the source is kept but never runs. */
+export function NotSyncedChip({ title = "Set to Don't sync: kept, never synced. Turn it off on its card or page" }) {
+  return (
+    <span className="chip nosync-chip" title={title}>
+      <Icon name="syncOff" size={11} />Not synced
+    </span>
+  );
+}
+
 /* One source: its profile, what it downloads, tool, folder, schedule, last
-   sync, Options, Sync and Remove. ``onSaved``: after its options changed. */
+   sync, Options, Sync and Remove. ``onSaved``: after its options changed.
+   One set to Don't sync is marked so and keeps Remove only: no Options, no
+   Sync, no schedule line (its schedule waits for the switch to go off). */
 export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = false }) {
   const [editing, setEditing] = useState(false);
   const url = safeUrl(s.url);
   const summary = optionsSummary(s);
+  const off = !!s.no_sync;
   return (
-    <li className={`source-row${flash ? " is-flash" : ""}`} data-source-id={s.id}>
+    <li className={`source-row${flash ? " is-flash" : ""}${off ? " is-nosync" : ""}`} data-source-id={s.id}>
       <PlatformIcon platform={s.platform} />
       <span className="source-id">
         <span className="creator-name" title={sourceName(s)}>
@@ -183,16 +196,17 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
           {s.person && !s.account && <span className="creator-sub"> · first sync not done yet</span>}
         </span>
         <span className="source-summary-line">
+          {off && <NotSyncedChip />}
           {summary && <span className="source-summary" title={`What it downloads: ${summary}`}>{summary}</span>}
           <InheritBadge source={s} />
         </span>
-        <ScriptWarning source={s} />
-        <ScheduleLine source={s} />
-        <SourceHealth source={s} job={job} onSaved={onSaved} />
+        {!off && <ScriptWarning source={s} />}
+        {!off && <ScheduleLine source={s} />}
+        {!off && <SourceHealth source={s} job={job} onSaved={onSaved} />}
         <code className="source-folder" title={s.folder}>{s.folder}</code>
       </span>
       <ToolBadge tool={s.tool} />
-      <SourceStatus source={s} job={job} />
+      {!off && <SourceStatus source={s} job={job} />}
       {url && (
         <a href={url} className="icon-btn" target="_blank" rel="noreferrer noopener"
            title={`Profile on ${platformLabel(s.platform)} (opens the site)`}
@@ -201,16 +215,18 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
         </a>
       )}
       {job && <Link to="/jobs" className="btn-ghost">Log</Link>}
-      <button type="button" className="btn-ghost" disabled={!!job} onClick={() => setEditing(true)}
-              title={job ? "Its sync is queued or running" : "What this source downloads"}>
-        Options
-      </button>
-      <SyncButton source={s} job={job} onSync={onSync} />
+      {!off && (
+        <button type="button" className="btn-ghost" disabled={!!job} onClick={() => setEditing(true)}
+                title={job ? "Its sync is queued or running" : "What this source downloads"}>
+          Options
+        </button>
+      )}
+      {!off && <SyncButton source={s} job={job} onSync={onSync} />}
       <button type="button" className="btn-ghost" disabled={!!job} onClick={() => onRemove(s)}
               title={job ? "Cancel its sync first" : "Forget this source; files and posts stay"}>
         Remove
       </button>
-      {editing && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
+      {editing && !off && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
     </li>
   );
 }
@@ -678,7 +694,9 @@ export function AddSource({ person = null, onAdded, onDirty }) {
   const kind = resolved?.ok ? `${resolved.tool}:${resolved.platform}:${resolved.choices.content.join(",")}` : null;
   // A new source starts from its platform's download defaults; what stays
   // equal to them is not stored, so it follows them later.
-  const form = kind && (forms[kind] || formOf(resolved.defaults, resolved.choices));
+  // Its account is set to Don't sync: no Add, nothing to choose.
+  const off = !!resolved?.ok && !!resolved.no_sync;
+  const form = kind && !off && (forms[kind] || formOf(resolved.defaults, resolved.choices));
   const problem = form && formError(form, resolved.choices);
   const login = form ? needsLogin(form, resolved.choices, resolved.session) : [];
 
@@ -721,7 +739,7 @@ export function AddSource({ person = null, onAdded, onDirty }) {
         onChange={e => { setTarget(e.target.value); setError(null); }}
       />
       <button type="submit" className="btn-secondary"
-              disabled={busy || !form || resolved.source != null || !!problem || login.length > 0}>
+              disabled={busy || !form || off || resolved.source != null || !!problem || login.length > 0}>
         <Icon name="plus" size={13} />Add source
       </button>
       {resolved?.ok && (
@@ -732,6 +750,12 @@ export function AddSource({ person = null, onAdded, onDirty }) {
           <span className="dim">into</span>
           <code className="source-folder" title={resolved.folder}>{resolved.folder}</code>
           {resolved.source != null && <span className="is-err">already a source</span>}
+          {off && <NotSyncedChip title="Its account is set to Don't sync: FeedVault does not download from it" />}
+        </div>
+      )}
+      {off && (
+        <div className="msg source-msg" role="status">
+          This account is set to Don&apos;t sync: no source can be added for it. Turn Don&apos;t sync off on its card or page first.
         </div>
       )}
       {form && resolved.source == null && (

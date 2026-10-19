@@ -48,6 +48,10 @@ without its own, the tool's session in Settings: sources.resume_tool) or a
 rename is accepted (last_result.resumed). Rate limited is not stopped: the back-off
 above applies.
 
+Never queued: a source whose account or person is set to Don't sync
+(nosync.py). It keeps its schedule, which applies again once the switch is
+off; status shows no next time meanwhile.
+
 A sync refused (jobs.BadRequest: its folder is no longer inside a media
 root…) is noted too and held for one interval. Notes and holds live in
 memory: a restart tries again at once. A note no longer shows once the
@@ -63,6 +67,7 @@ import db
 import health
 import jobs
 import library
+import nosync
 import scanner
 import sources
 import sync
@@ -115,7 +120,7 @@ def status(s, cfg=None):
     why = health.paused(s["last_result"])
     stopped = f"paused: {why}" if why and every in INTERVALS else None
     next_at = None
-    if every in INTERVALS and not stopped:
+    if every in INTERVALS and not stopped and not s.get("no_sync"):
         next_at = max(due_at(every, s["last_sync_at"], s["last_result"]), held)
     synced = s["last_sync_at"] if isinstance(s["last_sync_at"], int) else None
     shown = note is not None and every in INTERVALS and (synced is None or synced < note[1])
@@ -183,6 +188,7 @@ def tick(now=None):
         return []
     conn = db.connect()
     rows = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
+    accounts, flags, owners = db.accounts(conn), nosync.flags(conn), {"roots": cfg["media_roots"]}
     busy = sync.active()
     platform = {r["id"]: r["platform"] for r in rows}
     taken = {platform.get(sid) for sid in busy}
@@ -191,7 +197,8 @@ def tick(now=None):
     due = []
     for r in rows:
         every = sources.stored_options(r, cfg)["schedule"]
-        if every not in INTERVALS or r["id"] in busy or health.paused(sources.last_result(r)):
+        if every not in INTERVALS or r["id"] in busy or health.paused(sources.last_result(r)) \
+                or sources.not_synced(conn, r, accounts, flags, owners):
             continue
         at = max(due_at(every, r["last_sync_at"], sources.last_result(r)), held.get(r["id"], 0))
         if at <= now:
@@ -209,7 +216,7 @@ def tick(now=None):
             break                              # FeedVault is stopping: its jobs too
         try:
             job = sync.sync(sid, scheduled=True)
-        except sync.Busy:
+        except (sync.Busy, sync.NotSynced):     # set to Don't sync since the list was read
             continue
         except jobs.BadRequest as e:
             _note(sid, f"skipped: {e}", now)

@@ -37,6 +37,15 @@ export function matchedFormer(a, query) {
 export const accountKey = a => `${a.platform}:${a.id}`;
 export const accountRef = a => ({ platform: a.platform, id: a.id });
 
+// What a merge is of (its people and accounts), in any order: the key its
+// Don't sync warning is kept under.
+export const mergeSet = (people, accounts) =>
+  [...people.map(p => `person:${p.id}`), ...accounts.map(accountKey)].sort().join(" ");
+
+// How many sources the merge's Don't sync warning said would stop, while it
+// is still about the same set (else 0: it is asked again).
+export const mergeStopping = (merge, set) => (merge?.stoppingFor === set && merge.stopping) || 0;
+
 // A default name for a new person: the most used display name, else a handle.
 export function suggestName(accounts) {
   const names = {};
@@ -121,10 +130,26 @@ export function countryName(code) {
 
 /* The Creators filters: each null for any, "" for "not set", else the
    value wanted (a label: one of theirs). */
-export const NO_FILTERS = { gender: null, country: null, label: null };
-export const filtersOn = f => f.gender != null || f.country != null || f.label != null;
+/* sync: null (any), "on" (synced) or "off" (set to Don't sync, see
+   notSynced). The others: a person's attributes, which an account linked to
+   nobody has none of. */
+export const NO_FILTERS = { gender: null, country: null, label: null, sync: null };
+export const attributeFiltersOn = f => f.gender != null || f.country != null || f.label != null;
+export const filtersOn = f => attributeFiltersOn(f) || f.sync != null;
+export const SYNC_FILTERS = ["on", "off"];
+export const syncFilter = v => (SYNC_FILTERS.includes(v) ? v : null);
+
+/* Set to Don't sync (docs/API.md "Don't sync"): a person or an account
+   itself, or a person each of whose accounts is. */
+export function notSynced(row) {
+  return !!row.no_sync || (row.accounts?.length > 0 && row.accounts.every(a => a.no_sync));
+}
+
+// A person, or an account linked to nobody, against the sync filter.
+export const syncMatch = (row, sync) => sync == null || (sync === "off") === notSynced(row);
 
 export function attributesMatch(p, f) {
+  if (!syncMatch(p, f.sync)) return false;
   if (f.gender != null && fold(p.gender) !== fold(f.gender)) return false;
   if (f.country != null && (p.country || "") !== f.country) return false;
   if (f.label === "") return !(p.labels || []).length;

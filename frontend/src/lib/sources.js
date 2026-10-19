@@ -96,7 +96,8 @@ export function useSyncAll() {
       if (!r?.ok) { toast(r?.error || "Could not start the syncs.", "err"); return; }
       for (const e of r.errors || []) toast(`Source ${e.source}: ${e.error}`, "err");
       if (!r.jobs.length) {
-        toast(r.skipped ? "Every source is already syncing." : "No source to sync.");
+        toast(r.skipped ? "Every source is already syncing."
+          : r.not_synced ? "No source to sync: the others are set to Don't sync." : "No source to sync.");
         return;
       }
       started(r.jobs[0]);
