@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.3.1
+// @version      0.4.0
 // @description  Marks Instagram, X and TikTok posts you already have in FeedVault, and saves the ones you don't
 // @author       Cotions
 // @match        https://www.instagram.com/*
@@ -26,6 +26,7 @@ const API_BASE = "http://localhost:3380";
 // attach a custom header cross-origin; this privileged script can.
 const FV_HEADERS = { "X-FeedVault": "1", "Content-Type": "application/json" };
 const BADGE_CLASS = "fv-badge";
+const TILE_SAVE_CLASS = "fv-tile-save";
 const MARKED_ATTR = "data-fv";
 // "Not saved" answers go stale when a download lands, so ask again after this.
 const MISS_TTL_MS = 30_000;
@@ -34,10 +35,10 @@ const SETTINGS_ERRORS = new Set(["missing", "login_required"]);   // fixed in Se
 
 // ---------------------------------------------------------------------------
 // The sites. Everything that knows a site's pages is here, one entry each:
-// which links are posts (tiles), which page is a post (the Save button) or a
-// profile (Sync profile), and what is sent for them. When a site changes its
-// layout or its paths, a selector or pattern stops matching and that part
-// does nothing: no button, no badge, no error.
+// which links are posts (tiles), which page or tile link is a post (a Save
+// button) or a profile (Sync profile), and what is sent for them. When a
+// site changes its layout or its paths, a selector or pattern stops
+// matching and that part does nothing: no button, no badge, no error.
 // ---------------------------------------------------------------------------
 
 // An X or TikTok post id: digits, as POST /api/save accepts them.
@@ -51,8 +52,8 @@ const SITES = {
     tiles: 'a[href*="/p/"], a[href*="/reel/"]',
     tileRe: /^\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/,
     // A post page or dialog the Save button shows on (the grid's dialog
-    // sets the same path): the whole path, and a shortcode as POST /api/save
-    // accepts it.
+    // sets the same path), and a tile's link its Save is for: the whole
+    // path, and a shortcode as POST /api/save accepts it.
     postRe: /^\/(?:[A-Za-z0-9._]{1,30}\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,40})\/?$/,
     saveBody: (m) => ({ platform: "instagram", shortcode: m[1] }),
     // A profile page (or one of its tabs) the Sync profile button shows on.
@@ -111,11 +112,37 @@ function postOf(href, re = SITE.tileRe) {
   }
 }
 
-// The post the open page is, with what POST /api/save is sent for it, or null.
-function savePost() {
-  const m = location.pathname.match(SITE.postRe);
+// The post a path is, with what POST /api/save is sent for it, or null.
+function postAt(path) {
+  const m = path.match(SITE.postRe);
   if (!m) return null;
   return { id: `${SITE.platform}:${SITE.postId ? SITE.postId(m) : m[1]}`, body: SITE.saveBody(m) };
+}
+
+// The post the open page is.
+function savePost() {
+  return postAt(location.pathname);
+}
+
+// The post a tile's link is, read from its href now and held to the same
+// pattern as a post page (postRe, the whole path), else null: no Save on it.
+// What that leaves, per site: Instagram's /p/<code>/ and /<name>/reel/<code>/
+// links carry the shortcode, all a save needs. X's photo and video links
+// (/<name>/status/<id>/photo/1) carry the name; one without it does not
+// match, and FeedVault reads only the id anyway (/i/status/<id> is sent as
+// is, it accepts that link). TikTok's grid and search links carry @<name>,
+// which FeedVault needs to build the video's link: one without it, or a
+// photo post (yt-dlp downloads videos), gets no Save. A link to another
+// host (an absolute href) gets none either.
+function tilePost(href) {
+  try {
+    const u = new URL(href, location.origin);
+    if (u.protocol !== "https:" || !SITE.hosts.includes(u.hostname)) return null;
+    const post = postAt(u.pathname);
+    return post && post.id === postOf(href) ? post : null;
+  } catch {
+    return null;
+  }
 }
 
 function postPath(id) {
@@ -159,6 +186,25 @@ if (SITE) GM_addStyle(`
   }
   .fv-note a { color: #93c5fd; }
   .fv-row { display: flex; gap: 6px; }
+  /* A tile's Save: bottom right, clear of the "saved" badge's corner, of
+     Instagram's carousel and reel icons (top right) and of TikTok's view
+     count and X's ALT and duration labels (bottom left). Shown while the
+     tile is hovered or focused; always once a save is under way or failed. */
+  .fv-tile-save {
+    all: unset; box-sizing: border-box;
+    position: absolute; right: 6px; bottom: 6px; z-index: 6;
+    padding: 2px 8px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+    font: 700 11px/16px ui-monospace, "JetBrains Mono", monospace;
+    color: #e8ecf6; background: rgba(10, 12, 17, 0.86);
+    box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.45);
+    opacity: 0; pointer-events: none; transition: opacity 0.12s;
+  }
+  :hover > .fv-tile-save, :focus-within > .fv-tile-save, .fv-tile-save:not([data-state="idle"]) {
+    opacity: 1; pointer-events: auto;
+  }
+  .fv-tile-save:hover, .fv-tile-save:focus-visible { box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.9); }
+  .fv-tile-save[data-state="busy"] { cursor: default; }
+  .fv-tile-save[data-state="failed"], .fv-tile-save[data-state="offline"] { box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.85); }
 `);
 
 // id -> { saved: bool, at: ms }
@@ -226,7 +272,13 @@ function badge(text) {
   return el;
 }
 
-// Every anchor that points at a post, as the site's entry picks them.
+// The tile holds what is laid over it.
+function hold(a) {
+  if (getComputedStyle(a).position === "static") a.style.position = "relative";
+}
+
+// Every anchor that points at a post, as the site's entry picks them: a
+// saved one gets the badge, one known not saved its own Save.
 function paintTiles() {
   for (const a of document.querySelectorAll(SITE.tiles)) {
     if (a.closest(".fv-panel")) continue;      // our own links to FeedVault
@@ -235,20 +287,80 @@ function paintTiles() {
     const state = known(id);
     if (state === null) { pending.add(id); continue; }
     const has = a.querySelector(`:scope > .${BADGE_CLASS}`);
-    // Only tiles with an image get a badge; plain text links (timestamps,
-    // "view all comments") stay untouched.
-    if (state && !has && a.querySelector("img")) {
-      if (getComputedStyle(a).position === "static") a.style.position = "relative";
-      a.appendChild(badge("saved"));
-      a.setAttribute(MARKED_ATTR, "1");
-    } else if (!state && has) {
-      has.remove();
+    const ctl = a.querySelector(`:scope > .${TILE_SAVE_CLASS}`);
+    // Only tiles with an image get a badge or a Save; plain text links
+    // (timestamps, "view all comments") stay untouched.
+    const img = a.querySelector("img");
+    if (state) {
+      ctl?.remove();
+      if (!has && img) {
+        hold(a);
+        a.appendChild(badge("saved"));
+        a.setAttribute(MARKED_ATTR, "1");
+      }
+      continue;
     }
+    has?.remove();
+    const post = img ? tilePost(a.getAttribute("href")) : null;
+    if (!post) { ctl?.remove(); continue; }
+    paintTileSave(ctl || addTileSave(a), post.id);
   }
 }
 
+// A tile's Save. The tile is a link (and the sites route on their own
+// click and press handlers): no click on it opens the post, a real one or
+// not, and only a real one saves.
+function addTileSave(a) {
+  hold(a);
+  const b = el("button", { class: TILE_SAVE_CLASS, type: "button" });
+  b.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.isTrusted) return;
+    // The sites reuse a tile for another post as they scroll: what is sent
+    // is read from its href now, and only for the post the button showed.
+    const post = tilePost(a.getAttribute("href"));
+    if (post && post.id === b.dataset.id) startSave(post.id, post);
+  });
+  for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup"]) {
+    b.addEventListener(type, (e) => e.stopPropagation());
+  }
+  a.appendChild(b);
+  return b;
+}
+
+// The same states as the corner panel's button, in a word; why it failed
+// in its tooltip.
+function tileLook(s) {
+  switch (s?.state) {
+    case "sending": return ["busy", "Sending…", "Saving to FeedVault"];
+    case "queued": return ["busy", "Queued", jobTitle(s)];
+    case "running": return ["busy", "Saving…", jobTitle(s)];
+    case "failed": {
+      const where = SETTINGS_ERRORS.has(s.error) ? " (FeedVault: Settings → Downloaders)" : "";
+      return ["failed", "Failed — retry", `${s.message || "Save failed"}${where}`];
+    }
+    case "offline": return ["offline", "Offline — retry", "FeedVault is not running"];
+    default: return ["idle", "Save", "Save to FeedVault"];
+  }
+}
+
+function paintTileSave(b, id) {
+  const [look, text, title] = tileLook(saves.get(id));
+  const sig = `${id}|${text}|${title}`;
+  if (b.dataset.sig === sig) return;
+  b.dataset.sig = sig;
+  b.dataset.id = id;
+  b.dataset.state = look;
+  b.textContent = text;
+  b.setAttribute("title", title);
+  if (look === "busy") b.setAttribute("aria-disabled", "true");
+  else b.removeAttribute("aria-disabled");
+}
+
 // ---------------------------------------------------------------------------
-// Save button: a post page, or the dialog a grid opens (it sets the same path)
+// Save button: a post page, or the dialog a grid opens (it sets the same path).
+// A tile's Save (above) shares its state: the same post shows the same.
 // ---------------------------------------------------------------------------
 
 const ENDED = new Set(["done", "failed", "cancelled", "interrupted"]);
@@ -337,11 +449,8 @@ function paintPage() {
   const st = s?.state || "idle";
   render(p, `${st}|${s?.job?.id || ""}|${s?.message || ""}`, () => {
     if (st === "sending") return [button("busy", "Sending…", null)];
-    if (st === "queued") {
-      const wait = s.job.waits_until ? `, waits until ${new Date(s.job.waits_until * 1000).toLocaleTimeString()}` : "";
-      return [button("busy", "Queued", null, `Job #${s.job.id}${wait}`)];
-    }
-    if (st === "running") return [button("busy", "Saving…", null, `Job #${s.job.id}`)];
+    if (st === "queued") return [button("busy", "Queued", null, jobTitle(s))];
+    if (st === "running") return [button("busy", "Saving…", null, jobTitle(s))];
     if (st === "failed") {
       return [button("failed", "Failed — retry", () => startSave(id), s.message || ""),
               note(s.message || "Save failed", SETTINGS_ERRORS.has(s.error))];
@@ -351,16 +460,31 @@ function paintPage() {
   });
 }
 
+function jobTitle(s) {
+  const wait = s.state === "queued" && s.job.waits_until
+    ? `, waits until ${new Date(s.job.waits_until * 1000).toLocaleTimeString()}` : "";
+  return `Job #${s.job.id}${wait}`;
+}
+
 function setSave(id, value) {
   saves.set(id, value);
   paint();
 }
 
-// Saves the post the page shows, when it is still the one clicked for: what
-// is sent is built from the path again, never kept from an earlier page.
-async function startSave(id) {
-  const post = savePost();
-  if (!post || post.id !== id) return;
+const UNDER_WAY = new Set(["sending", "queued", "running"]);
+
+// Is the post on screen: the page, or one of its tiles?
+function shown(id) {
+  return savePost()?.id === id || !!document.querySelector(`.${TILE_SAVE_CLASS}[data-id="${id}"]`);
+}
+
+// Saves a post, when it is still the one clicked for: the page's (what is
+// sent is built from the path again, never kept from an earlier page), or
+// a tile's, as tilePost read it from the tile's href at the click. One
+// whose save is under way is not sent again: one job per post, as many
+// posts at once as are clicked (FeedVault queues them).
+async function startSave(id, post = savePost()) {
+  if (!post || post.id !== id || UNDER_WAY.has(saves.get(id)?.state)) return;
   setSave(id, { state: "sending" });
   const r = await api("POST", "/api/save", post.body);
   if (r === null) { setSave(id, { state: "offline" }); return; }
@@ -375,7 +499,7 @@ async function startSave(id) {
   if (!b.job || typeof b.job.id !== "number") { setSave(id, { state: "failed", message: "unexpected answer" }); return; }
   applyJob(id, b.job);
   if (ENDED.has(b.job.state)) return;
-  watchJob(b.job.id, () => saves.get(id)?.job?.id === b.job.id, () => savePost()?.id === id,
+  watchJob(b.job.id, () => saves.get(id)?.job?.id === b.job.id, () => shown(id),
     (job) => (job ? applyJob(id, job) : setSave(id, { state: "failed", message: GONE })));
 }
 

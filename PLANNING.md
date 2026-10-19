@@ -96,7 +96,9 @@ the backend in batches for the post IDs visible on the page.
 
 Posts not saved yet get a "Save to FeedVault" button that hands the post to a
 save job. The button shows queued / saving / failed, then turns into a link
-once the rescan picks the post up. Profile pages get a "Sync profile" button.
+once the rescan picks the post up. Grid tiles not saved yet get their own
+small Save (on hover or focus), sharing the same states, so a post is saved
+without opening it. Profile pages get a "Sync profile" button.
 
 ## Dashboard
 
