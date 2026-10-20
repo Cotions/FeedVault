@@ -156,7 +156,7 @@ function load(href, fixture = null, store = new Map()) {
     requestAnimationFrame: () => 0,
     setInterval: () => 0,
     setTimeout: (fn) => timers.push(fn),     // nothing fires by itself: the test calls tick() or flush()
-    getComputedStyle: (n) => ({ position: n.style.position || "static" }),
+    getComputedStyle: (n) => ({ position: n.style.position || "static", display: n.style.display || "block" }),
   });
   vm.runInContext(SOURCE, ctx);
   return {
@@ -302,7 +302,7 @@ test("a profile page asks FeedVault about the profile, nothing else", () => {
 test("never a script route, nor the old panel and its combined Add & sync", () => {
   assert.doesNotMatch(SOURCE, /\/api\/scripts|script-sync|\/api\/jobs"/);
   assert.doesNotMatch(SOURCE, /fv-panel|fv-grip|Add & sync|addAndSync/);
-  assert.match(SOURCE, /^\/\/ @version\s+0\.7\.0$/m);
+  assert.match(SOURCE, /^\/\/ @version\s+0\.7\.1$/m);
 });
 
 // ---------------------------------------------------------------------------
@@ -723,8 +723,8 @@ async function tiles(href, fixture, saved) {
   page.run("flush()");
   await answer(call(page, "POST", "/api/saved"), 200, { saved });
   const tile = (h) => page.document.querySelectorAll("a").find((a) => a.getAttribute("href") === h);
-  const save = (h) => tile(h).querySelector(":scope > .fv-tile-save");
-  const look = (h) => (tile(h).querySelector(":scope > .fv-badge") ? "saved" : save(h)?.dataset.state || null);
+  const save = (h) => tile(h).querySelector(".fv-tile-save");
+  const look = (h) => (tile(h).querySelector(".fv-badge") ? "saved" : save(h)?.dataset.state || null);
   const sent = () => page.calls.filter((c) => c.url.endsWith("/api/save")).map((c) => JSON.parse(c.data));
   return { page, tile, look, save, sent };
 }
@@ -940,7 +940,7 @@ test("a failed or unanswered tile save says so, and retries on a click", async (
 test("a tile reused for another post: its Save sends nothing until painted again", async () => {
   const t = await tiles("https://x.com/someone/media", "x-profile.html", []);
   const a = t.tile("/someone/status/1800000000000000001/photo/1");
-  const b = a.querySelector(":scope > .fv-tile-save");
+  const b = a.querySelector(".fv-tile-save");
   a.setAttribute("href", "/someone/status/1800000000000000004/photo/1");
   b.dispatch("click", true);
   assert.deepEqual(t.sent(), []);
@@ -978,6 +978,125 @@ test("the bubble's own links are not tiles", async () => {
   t.page.run("paint()");
   assert.equal(itemOf(t.page, "View in FeedVault").querySelector(":scope > .fv-badge"), null);
   assert.equal(t.page.run("pending.size"), 0);
+});
+
+// Instagram's profile grid as it is laid out: a row of tiles, each an
+// inline link round a positioned media box (the image in it) and the
+// hover overlay; ``video``: the tile that plays one.
+async function igGrid(codes, { saved = [], video = null } = {}) {
+  const page = load("https://www.instagram.com/carol.cooks/");
+  const row = page.document.body.appendChild(new Node("div"));
+  const grid = codes.map((code) => {
+    const a = row.appendChild(new Node("div")).appendChild(new Node("a"));
+    a.setAttribute("href", `/carol.cooks/p/${code}/`);
+    a.style.display = "inline";
+    const media = a.appendChild(new Node("div"));
+    media.style.position = "relative";
+    const img = media.appendChild(new Node("div")).appendChild(new Node("img"));
+    a.appendChild(new Node("div"));
+    const player = code === video ? media.appendChild(new Node("video")) : null;
+    return { a, media, img, player, save: () => a.querySelector(".fv-tile-save") };
+  });
+  page.run("paint(); flush()");
+  await answer(call(page, "POST", "/api/saved"), 200, { saved: saved.map((c) => `instagram:${c}`) });
+  const sent = () => page.calls.filter((c) => c.url.endsWith("/api/save")).map((c) => JSON.parse(c.data));
+  return { page, grid, sent };
+}
+
+test("Instagram's grid: each tile's Save and badge sit on its own image, and save its own post", async () => {
+  const { grid: [left, right], sent } = await igGrid(["CLEFT00001", "CRIGHT0001"]);
+  // In the tile's media box, not the inline link (whose box has no width:
+  // what sat at its right sat on the tile to the left); the link untouched.
+  for (const t of [left, right]) {
+    assert.equal(t.save().parentNode, t.media);
+    assert.equal(t.save().closest("a"), t.a);
+    assert.equal(t.a.style.position, undefined);
+    assert.equal(t.media.style.position, "relative");
+  }
+  const e = right.save().dispatch("click", true);
+  assert.ok(e.defaultPrevented && e.stopped);
+  assert.deepEqual(sent(), [{ platform: "instagram", shortcode: "CRIGHT0001" }]);
+  left.save().dispatch("click", true);
+  assert.deepEqual(sent().map((b) => b.shortcode), ["CRIGHT0001", "CLEFT00001"]);
+
+  // Shown for the tile under the pointer, or the keyboard's focus: not for
+  // one that only holds focus (Instagram gives it back to the tile whose
+  // dialog closed).
+  assert.match(SOURCE, /a:hover \.fv-tile-save, a:focus-visible \.fv-tile-save, \.fv-tile-save:focus-visible,/);
+  assert.doesNotMatch(SOURCE, /:focus-within|:hover > \.fv-tile-save/);
+
+  const saved = await igGrid(["CLEFT00001", "CRIGHT0001"], { saved: ["CRIGHT0001"] });
+  assert.equal(saved.grid[1].a.querySelector(".fv-badge").parentNode, saved.grid[1].media);
+  assert.equal(saved.grid[0].a.querySelector(".fv-badge"), null);
+});
+
+test("a tile's Save is sent for the tile it is in at the click", async () => {
+  const { page, grid: [left, right], sent } = await igGrid(["CLEFT00001", "CRIGHT0001"]);
+  // The site moved the left tile's box into the right one: its Save sends
+  // nothing (it showed another post) until painted again, then the right.
+  const b = left.save();
+  right.media.appendChild(b);
+  right.save().remove();
+  b.dispatch("click", true);
+  assert.deepEqual(sent(), []);
+  page.run("paint()");
+  b.dispatch("click", true);
+  assert.deepEqual(sent(), [{ platform: "instagram", shortcode: "CRIGHT0001" }]);
+});
+
+test("a reel tile's hover preview keeps its Save and badge; the video's clicks and keys go through", async () => {
+  const { page, grid: [still, reel], sent } = await igGrid(["CSTILL0001", "CREEL00001"], { video: "CREEL00001" });
+  assert.ok(still.save());
+  assert.equal(reel.save().parentNode, reel.media);
+  assert.equal(reel.a.style.position, undefined);
+  const e0 = reel.save().dispatch("click", true);
+  assert.ok(e0.defaultPrevented && e0.stopped);
+  assert.deepEqual(sent(), [{ platform: "instagram", shortcode: "CREEL00001" }]);
+  // Our nodes listen to nothing but the Save's own events: none on the
+  // video, the tile or its boxes.
+  for (const n of [reel.a, reel.media, reel.player]) assert.deepEqual(Object.keys(n.listeners), []);
+  assert.match(SOURCE, /\.\$\{BADGE_CLASS\} \{[^}]*pointer-events: none;/);
+  let played = 0;
+  reel.a.addEventListener("click", () => { played += 1; });
+  open(page);
+  for (const [type, props] of [["pointerdown", {}], ["mousedown", {}], ["pointerup", {}], ["click", {}],
+                               ["keydown", { key: " " }], ["keydown", { key: "k" }], ["keydown", { key: "Escape" }]]) {
+    const e = reel.player.dispatch(type, true, props);
+    assert.ok(!e.defaultPrevented && !e.stopped, type);
+  }
+  assert.equal(played, 1);
+  assert.ok(!opened(page));                          // a click outside still closes the menu
+  // A preview showing up on hover keeps the very same Save: nothing flickers.
+  const b = still.save();
+  const preview = still.media.appendChild(new Node("video"));
+  page.run("paint()");
+  assert.equal(still.save(), b);
+  preview.remove();
+  page.run("paint()");
+  assert.equal(still.save(), b);
+  // A click on a tile's image opens the post as it would.
+  const e = still.img.dispatch("click", true);
+  assert.ok(!e.defaultPrevented && !e.stopped);
+});
+
+test("a saved reel's badge stays through its hover preview", async () => {
+  const { page, grid: [reel] } = await igGrid(["CREEL00001"], { saved: ["CREEL00001"] });
+  const badge = reel.a.querySelector(".fv-badge");
+  assert.ok(badge);
+  reel.media.appendChild(new Node("video"));
+  page.run("paint()");
+  assert.equal(reel.a.querySelector(".fv-badge"), badge);
+});
+
+test("a link round a real player, with its controls, gets nothing over them", async () => {
+  const { page, grid: [post] } = await igGrid(["CPLAYER001"]);
+  assert.ok(post.save());
+  const v = post.media.appendChild(new Node("video"));
+  v.setAttribute("controls", "");
+  page.run("paint()");
+  assert.equal(post.save(), null);
+  const e = v.dispatch("click", true);
+  assert.ok(!e.defaultPrevented && !e.stopped);
 });
 
 // ---------------------------------------------------------------------------

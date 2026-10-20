@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.7.0
+// @version      0.7.1
 // @description  Marks Instagram, X and TikTok posts you already have in FeedVault, saves the ones you don't, and keeps link-in-bio pages' links in its Links
 // @author       Cotions
 // @match        https://www.instagram.com/*
@@ -304,7 +304,12 @@ if (SITE || BIO_HOST) GM_addStyle(`
     box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.4);
     opacity: 0; pointer-events: none; transition: opacity 0.12s;
   }
-  :hover > .fv-tile-save, :focus-within > .fv-tile-save, .fv-tile-save:not([data-state="idle"]) {
+  /* Its own tile's: the link it sits in (a:hover, whatever of the tile is
+     under the pointer), never a neighbour's, nor a tile the site gave focus
+     back to (Instagram does, closing a post's dialog): only the keyboard's
+     focus shows it. */
+  a:hover .fv-tile-save, a:focus-visible .fv-tile-save, .fv-tile-save:focus-visible,
+  .fv-tile-save:not([data-state="idle"]) {
     opacity: 1; pointer-events: auto;
   }
   .fv-tile-save[data-fv-site="x"] { top: 6px; bottom: auto; }
@@ -386,13 +391,27 @@ function badge(text) {
   return el;
 }
 
-// The tile holds what is laid over it.
-function hold(a) {
-  if (getComputedStyle(a).position === "static") a.style.position = "relative";
+// The box in a tile that holds what is laid over it: the nearest one round
+// its image that is laid out as a box (not inline: Instagram's grid links
+// are, and a box laid out from an inline link that wraps blocks has no
+// width, so what sits at its right sat on the tile to the left) and
+// already positioned; else the nearest box, made to hold it. The link
+// itself only when it is that box.
+function frameOf(a, img) {
+  let box = null;
+  for (let n = img.parentNode; n; n = n === a ? null : n.parentNode) {
+    const s = getComputedStyle(n);
+    if (s.display === "inline" || s.display === "contents") continue;
+    if (s.position !== "static") return n;
+    box ||= n;
+  }
+  if (box) box.style.position = "relative";
+  return box;
 }
 
 // Every anchor that points at a post, as the site's entry picks them: a
-// saved one gets the badge, one known not saved its own Save.
+// saved one gets the badge, one known not saved its own Save, both in the
+// tile's own frame.
 function paintTiles() {
   for (const a of document.querySelectorAll(SITE.tiles)) {
     if (a.closest(".fv-bubble, .fv-toast")) continue;   // our own links to FeedVault
@@ -400,46 +419,56 @@ function paintTiles() {
     if (!id) continue;
     const state = known(id);
     if (state === null) { pending.add(id); continue; }
-    const has = a.querySelector(`:scope > .${BADGE_CLASS}`);
-    const ctl = a.querySelector(`:scope > .${TILE_SAVE_CLASS}`);
+    const has = a.querySelector(`.${BADGE_CLASS}`);
+    const ctl = a.querySelector(`.${TILE_SAVE_CLASS}`);
     // Only tiles with an image get a badge or a Save; plain text links
     // (timestamps, "view all comments") stay untouched.
+    // A tile's hover preview (a reel's muted <video>) keeps both: the badge
+    // takes no pointer, the Save is a small button in its corner with only
+    // its own listeners. A link round a real player, one with controls,
+    // gets neither: its corners are the player's own buttons (mute, full
+    // screen), and nothing of ours goes over them.
     const img = a.querySelector("img");
+    const player = [...a.querySelectorAll("video")].some((v) => v.hasAttribute("controls"));
+    if (!img || player) { has?.remove(); ctl?.remove(); continue; }
     if (state) {
       ctl?.remove();
-      if (!has && img) {
-        hold(a);
-        a.appendChild(badge("saved"));
+      const frame = has ? null : frameOf(a, img);
+      if (frame) {
+        frame.appendChild(badge("saved"));
         a.setAttribute(MARKED_ATTR, "1");
       }
       continue;
     }
     has?.remove();
-    const post = img ? tilePost(a.getAttribute("href")) : null;
+    const post = tilePost(a.getAttribute("href"));
     if (!post) { ctl?.remove(); continue; }
-    paintTileSave(ctl || addTileSave(a), post.id);
+    const frame = ctl ? null : frameOf(a, img);
+    if (ctl || frame) paintTileSave(ctl || addTileSave(frame), post.id);
   }
 }
 
-// A tile's Save. The tile is a link (and the sites route on their own
-// click and press handlers): no click on it opens the post, a real one or
-// not, and only a real one saves.
-function addTileSave(a) {
-  hold(a);
+// A tile's Save, in its frame. The tile is a link (and the sites route on
+// their own click and press handlers): no click on it opens the post, a
+// real one or not, and only a real one saves. Nothing else is stopped:
+// the listeners are the button's own.
+function addTileSave(frame) {
   const b = el("button", { class: TILE_SAVE_CLASS, type: "button", "data-fv-site": SITE_KEY });
   b.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
     if (!e.isTrusted) return;
-    // The sites reuse a tile for another post as they scroll: what is sent
-    // is read from its href now, and only for the post the button showed.
-    const post = tilePost(a.getAttribute("href"));
+    // What is sent is the tile this button is in, read at the click: its
+    // link's href now (the sites reuse a tile for another post as they
+    // scroll), and only for the post the button showed.
+    const a = b.closest(SITE.tiles);
+    const post = a ? tilePost(a.getAttribute("href")) : null;
     if (post && post.id === b.dataset.id) startSave(post.id, post);
   });
   for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup"]) {
     b.addEventListener(type, (e) => e.stopPropagation());
   }
-  a.appendChild(b);
+  frame.appendChild(b);
   return b;
 }
 
