@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getAuthors, getConfig, getPeopleAttributes, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
   createLink, updateLink, deleteLink, orderPersonLinks } from "../lib/api";
@@ -15,9 +15,11 @@ import DiscardDialog from "../components/DiscardDialog";
 import CreatorPicker from "../components/CreatorPicker";
 import Suggestions from "../components/Suggestions";
 import BioImport from "../components/BioImport";
-import MuteButton from "../components/MuteButton";
-import NoSyncButton from "../components/NoSyncButton";
-import { AddSource, NotSyncedChip, RemoveSourceDialog, SourceRow } from "../components/Sources";
+import ActionMenu from "../components/ActionMenu";
+import StateChips from "../components/StateChips";
+import { useNoSync } from "../components/NoSync";
+import { useMute } from "../lib/useMute";
+import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
 import { useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
 import PersonAbout from "../components/PersonAbout";
@@ -27,14 +29,17 @@ import { LinkForm, LinkRow } from "../components/Links";
 import { copyUrls } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
 
-/* personOff: the person's name when they are set to Don't sync, so this account is not
-   synced whatever its own switch says. */
+/* One account of theirs: its profile on the site, its posts, Don't sync
+   and Unlink in its ⋯ menu. personOff: the person's name when they are set
+   to Don't sync, so this account is not synced whatever its own switch
+   says (turned off on the person, not here). */
 function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync }) {
   const url = safeUrl(a.url);
   const former = (a.handles || []).filter(h => h.handle !== a.handle);
   const names = (a.names || []).map(n => n.name).filter(n => n !== a.name);
   const handle = `@${a.handle || a.id}`;
   const named = a.name && a.name !== a.handle;
+  const noSync = useNoSync({ on: !!a.no_sync, inherited: personOff, whom: { account: accountRef(a) }, name: handle, onDone: onNoSync });
   return (
     <li className="person-account">
       <PlatformIcon platform={a.platform} />
@@ -43,7 +48,7 @@ function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync }) 
           {handle}
           {named && <span className="creator-sub"> · {a.name}</span>}
         </span>
-        {a.no_sync && <span className="creator-nosync-line"><NotSyncedChip title={`${handle} is set to Don't sync`} /></span>}
+        <StateChips name={handle} noSync={!!a.no_sync} />
         <span className="creator-sub">
           {platformLabel(a.platform)} · id {a.id}
           {names.length > 0 && ` · also named ${names.join(", ")}`}
@@ -64,17 +69,15 @@ function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync }) 
         {a.count ? `${fmtInt(a.count)} posts · ${fmtBytes(a.bytes)}` : "No posts indexed"}
         {a.newest && <> · <span title={fmtFullDate(a.newest)}>newest {fmtAgo(a.newest)}</span></>}
       </span>
-      {url && (
-        <a href={url} className="icon-btn" target="_blank" rel="noreferrer noopener"
-           title={`Profile on ${platformLabel(a.platform)} (opens the site)`} aria-label={`@${a.handle || a.id} on ${platformLabel(a.platform)}`}>
-          <Icon name="external" size={15} />
-        </a>
-      )}
-      <Link to={authorFeedPath(a.platform, a)} className="icon-btn" title="This account's posts" aria-label={`Posts by @${a.handle || a.id}`}>
-        <Icon name="feed" size={15} />
-      </Link>
-      <NoSyncButton compact on={!!a.no_sync} inherited={personOff} whom={{ account: accountRef(a) }} name={handle} onDone={onNoSync} />
-      <button type="button" className="btn-ghost" disabled={busy} onClick={() => onUnlink(a)}>Unlink</button>
+      <ActionMenu label={`More for ${handle}`} items={[
+        url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(a.platform)} (opens the site)` },
+        { label: "Show feed", icon: "feed", to: authorFeedPath(a.platform, a), title: "This account's posts" },
+        noSync.item,
+        "separator",
+        { label: "Unlink", icon: "close", danger: true, disabled: busy, onSelect: () => onUnlink(a),
+          title: `${handle} goes back to the accounts linked to nobody; no post or file is touched` },
+      ]} />
+      {noSync.dialog}
     </li>
   );
 }
@@ -214,6 +217,17 @@ export default function PersonPage() {
   const [newLink,   setNewLink]   = useState(false);  // the new link's form has something typed
   const [newSource, setNewSource] = useState(false);  // the new source's field has something typed
   const sources = useSources();
+  // The head's ⋯ menu: Rename, Mute, Don't sync and Delete person. The
+  // rename form gives focus back to its button when it closes.
+  const moreRef = useRef(null);
+  const muted = !!p && !!newApi.data?.muted?.people?.includes(p.id);
+  const mute = useMute({ muted, whom: { person: p?.id }, name: p?.name, onDone: () => { newApi.reload(); started(); } });
+  const onNoSync = () => { reload(); sources.reload(); suggestApi.reload(); };
+  const noSync = useNoSync({ on: !!p?.no_sync, whom: { person: p?.id }, name: p?.name, onDone: onNoSync });
+  function endRename() {
+    setEditName(null);
+    moreRef.current?.focus({ preventScroll: true });
+  }
 
   // What was typed and not saved, asked about before the app leaves the page.
   const notesDirty  = !!p && notes != null && notes !== p.notes;
@@ -349,17 +363,15 @@ export default function PersonPage() {
   const scoped = (path, more) => `${path}?${new URLSearchParams({ person: p.id, ...more })}`;
   const notesValue = notes ?? p.notes;
   const fresh = (newApi.data?.by_person || []).find(r => r.id === p.id);
-  const muted = !!newApi.data?.muted?.people?.includes(p.id);
   // Set to Don't sync, they or one account: those sources are kept, never run.
   const live = mine.filter(s => !s.no_sync);
-  const onNoSync = () => { reload(); sources.reload(); suggestApi.reload(); };
 
   return (
     <>
       <PageHeader
         title={p.name}
         heading={editName != null && (
-          <form className="person-rename" onSubmit={e => { e.preventDefault(); save({ name: editName }, () => setEditName(null)); }}>
+          <form className="person-rename" onSubmit={e => { e.preventDefault(); save({ name: editName }, endRename); }}>
             <input
               autoFocus
               type="text"
@@ -368,22 +380,24 @@ export default function PersonPage() {
               maxLength={64}
               value={editName}
               onChange={e => setEditName(e.target.value)}
-              onKeyDown={e => { if (e.key === "Escape") setEditName(null); }}
+              onKeyDown={e => { if (e.key === "Escape") endRename(); }}
             />
             <button type="submit" className="btn-primary" disabled={busy || !editName.trim()}>Save</button>
-            <button type="button" className="btn-ghost" onClick={() => setEditName(null)}>Cancel</button>
+            <button type="button" className="btn-ghost" onClick={endRename}>Cancel</button>
           </form>
         )}
         sub={`${fmtInt(p.count)} posts · ${fmtBytes(p.bytes)}${p.newest ? ` · newest ${fmtAgo(p.newest)}` : ""}`}
         back={back}
-        actions={<>
-          {editName == null && (
-            <button type="button" className="btn-ghost" onClick={() => setEditName(p.name)}>Rename</button>
-          )}
-          <button type="button" className="btn-ghost person-delete" onClick={() => { setDlgError(null); setConfirm(true); }}>
-            <Icon name="trash" size={14} /> Delete person
-          </button>
-        </>}
+        actions={(
+          <ActionMenu label={`More for ${p.name}`} buttonRef={moreRef} items={[
+            editName == null && { label: "Rename", icon: "pencil", onSelect: () => setEditName(p.name) },
+            newApi.data && mute,
+            noSync.item,
+            "separator",
+            { label: "Delete person", icon: "trash", danger: true, onSelect: () => { setDlgError(null); setConfirm(true); },
+              title: `Their ${plural(p.accounts.length, "account")} ${p.accounts.length === 1 ? "goes" : "go"} back to unlinked; no post or file is touched` },
+          ]} />
+        )}
       />
       <div className="card person-page">
         {/* Their portrait (2:3, as Stash shows a performer) beside who they
@@ -426,9 +440,9 @@ export default function PersonPage() {
                     </button>
                   </>
                 )}
-                {newApi.data && (
-                  <MuteButton muted={muted} whom={{ person: p.id }} name={p.name} onDone={() => { newApi.reload(); started(); }} />
-                )}
+                {/* What the ⋯ menu's switches are set to, where Mute was. */}
+                <StateChips name={p.name} muted={muted} noSync={!!p.no_sync}
+                            noSyncTitle={`${p.name} is set to Don't sync: nothing of theirs is downloaded. Sync again from the ⋯ menu at the top`} />
               </div>
             </div>
 
@@ -500,8 +514,6 @@ export default function PersonPage() {
         <section className="person-section">
           <div className="person-section-head">
             <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
-            {/* The person's switch: beside what it stops (the head's line has no room for it). */}
-            <NoSyncButton on={!!p.no_sync} whom={{ person: p.id }} name={p.name} onDone={onNoSync} />
             {live.length > 0 && (
               <button type="button" className="btn-primary" disabled={busy} onClick={syncAll}
                       title="Sync each source of this person, one after another">
@@ -513,7 +525,7 @@ export default function PersonPage() {
             <p className="creator-sub nosync-note">
               Don&apos;t sync is on: FeedVault downloads nothing of theirs, no source can be added, and{" "}
               {mine.length ? "their sources stay listed but never run" : "none is suggested"}. What is downloaded stays.
-              Turn it off with Not synced, beside Sources.
+              Turn it off with Sync again, in the ⋯ menu at the top of the page.
             </p>
           )}
           {mine.length === 0 ? (
@@ -543,6 +555,9 @@ export default function PersonPage() {
             placeholder="Anything worth remembering about them."
             value={notesValue}
             onChange={e => setNotes(e.target.value)}
+            // The whole box in sight, ring included, when Tab lands on it at
+            // the bottom of the window: the browser only brings its caret in.
+            onFocus={e => e.target.scrollIntoView({ block: "nearest" })}
           />
           {notesDirty && (
             <div className="person-notes-actions">
@@ -564,6 +579,7 @@ export default function PersonPage() {
         {picture && <AvatarDialog person={p} onChanged={reload} onClose={() => setPicture(false)} />}
 
         <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
+        {noSync.dialog}
 
         <ConfirmDialog
           open={confirm}
@@ -575,7 +591,7 @@ export default function PersonPage() {
           onConfirm={remove}
           onCancel={() => setConfirm(false)}
         >
-          Their {p.accounts.length} account{p.accounts.length === 1 ? "" : "s"} go back to unlinked.
+          Their {plural(p.accounts.length, "account")} {p.accounts.length === 1 ? "goes" : "go"} back to unlinked.
           No post or file is touched.
         </ConfirmDialog>
       </div>

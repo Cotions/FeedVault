@@ -2,7 +2,7 @@
 // follows them (its row's mark, its Options' "default" / "set here" and
 // Reset). Two X sources are added to the throwaway instance and removed
 // after, with the defaults; nothing is synced.
-import { test, expect, idle, checkLayout, formatFindings } from "./fixtures.js";
+import { test, expect, idle, checkLayout, formatFindings, menuItem } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -67,7 +67,7 @@ test("download defaults: set once for X, followed by the sources that do not set
     await expect(ownRow.locator(".source-inherit")).toHaveText("custom");
 
     // Its Options: "set here" with the default and Reset; Reset all to default.
-    await ownRow.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, ownRow, /^More for /, "Options")).click();
     const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
     await expect(dialog).toBeVisible();
     const mediaSet = dialog.locator("fieldset", { has: page.locator("legend", { hasText: "Media" }) });

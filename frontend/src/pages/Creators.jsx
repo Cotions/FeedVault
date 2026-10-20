@@ -18,10 +18,12 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
 import SelectionBar from "../components/SelectionBar";
 import Suggestions from "../components/Suggestions";
-import MuteButton from "../components/MuteButton";
-import NoSyncButton from "../components/NoSyncButton";
+import ActionMenu from "../components/ActionMenu";
+import StateChips from "../components/StateChips";
+import { useNoSync } from "../components/NoSync";
+import { useMute } from "../lib/useMute";
 import {
-  AddSource, NotSyncedChip, RemoveSourceDialog, ScheduleLine, ScriptWarning, SourceOptionsDialog, SourceRow, SourceStatus,
+  AddSource, RemoveSourceDialog, ScheduleLine, ScriptWarning, SourceOptionsDialog, SourceRow, SourceStatus,
   SyncAllBar, SyncButton,
 } from "../components/Sources";
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
@@ -98,16 +100,11 @@ function NewBadge({ count }) {
   return <span className="side-badge new-badge" title="New since you last marked them seen">{fmtInt(count)} new</span>;
 }
 
-// "Mark seen" of one card: its new posts stop being new, the others' stay.
-function SeenButton({ fresh, name, onSeen }) {
-  if (!fresh?.count) return null;
-  return (
-    <button type="button" className="icon-btn creator-seen" onClick={onSeen}
-            title={`Mark ${name}'s ${plural(fresh.count, "new post")} seen`}
-            aria-label={`Mark ${name}'s new posts seen`}>
-      <Icon name="check" size={15} />
-    </button>
-  );
+// "Mark seen" of one card, in its ⋯ menu: its new posts stop being new,
+// the others' stay.
+function seenItem(fresh, name, onSeen) {
+  return fresh?.count > 0 && { label: "Mark seen", icon: "check", onSelect: onSeen,
+    title: `Mark ${name}'s ${plural(fresh.count, "new post")} seen` };
 }
 
 // A source of the card needs a look: its account is not found, it needs a
@@ -154,6 +151,8 @@ function CardLabels({ labels }) {
 function PersonCard({ person: p, index, settled, portrait, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted,
   onNoSync, flash }) {
   const where = countryName(p.country);
+  const mute = useMute({ muted: !!muted, whom: { person: p.id }, name: p.name, onDone: onMuted });
+  const noSync = useNoSync({ on: !!p.no_sync, whom: { person: p.id }, name: p.name, onDone: onNoSync });
   const badges = <><NewBadge count={fresh?.count} /><WarnBadge sync={sync} /></>;
   const body = (
     <>
@@ -178,12 +177,9 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
           ))}
         </span>
         <CardLabels labels={p.labels} />
-        {notSynced(p) && (
-          <span className="creator-nosync-line">
-            <NotSyncedChip title={p.no_sync ? `${p.name} is set to Don't sync: nothing is downloaded from them`
-              : "Each of their accounts is set to Don't sync"} />
-          </span>
-        )}
+        <StateChips name={p.name} muted={!!muted} noSync={notSynced(p)}
+                    noSyncTitle={p.no_sync ? `${p.name} is set to Don't sync: nothing is downloaded from them. Sync again from their ⋯ menu`
+                      : "Each of their accounts is set to Don't sync"} />
         <CardSyncStatus sync={sync} />
       </span>
       {!portrait && (
@@ -204,12 +200,17 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
       <span className="creator-sub">{fmtBytes(p.bytes)}</span>
     </span>
   );
+  // Sync in sight (when they have a source), the rest in the ⋯ menu; none
+  // in select mode, where a portrait is one button.
   const actions = !selectMode && (
     <>
-      <SeenButton fresh={fresh} name={p.name} onSeen={onSeen} />
-      {muted != null && <MuteButton compact muted={muted} whom={{ person: p.id }} name={p.name} onDone={onMuted} />}
-      <NoSyncButton compact on={!!p.no_sync} whom={{ person: p.id }} name={p.name} onDone={onNoSync} />
       <CardSyncButton sync={sync} onSync={onSync} />
+      <ActionMenu label={`More for ${p.name}`} items={[
+        seenItem(fresh, p.name, onSeen),
+        "separator",
+        muted != null && mute,
+        noSync.item,
+      ]} />
     </>
   );
   return (
@@ -229,77 +230,47 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
           {stats}
         </>
       )}
-      {portrait ? actions && <span className="portrait-actions">{actions}</span> : actions}
+      {actions && <span className={portrait ? "portrait-actions" : "card-actions"}>{actions}</span>}
       <CardScriptWarnings sync={sync} />
+      {noSync.dialog}
     </div>
   );
 }
 
-// An account card's sources have no row of their own: one Options icon
-// here, which opens the source's options, or with several sources a menu
-// to pick one, so the card's name keeps its room.
-function CardOptionsButton({ sync, onEdit }) {
-  const [open, setOpen] = useState(false);
-  const wrap = useRef(null);
-  // A click elsewhere or Escape closes the menu (a clicked button is not
-  // focused in every browser, so blur alone would not).
-  useEffect(() => {
-    if (!open) return undefined;
-    const away = e => { if (!wrap.current?.contains(e.target)) setOpen(false); };
-    const key = e => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", away);
-    document.addEventListener("keydown", key);
-    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", key); };
-  }, [open]);
-  if (!sync) return null;
+// An account card's Options, in its ⋯ menu: its source's, or one item per
+// source when it has several. Off while that source's sync is queued or
+// running (its end would undo what changes now).
+function optionsItems(sync, onEdit) {
+  if (!sync) return [];
   const label = s => `${sourceName(s)} (${s.tool})`;
-  const title = s => {
-    if (!sync.idle.includes(s)) return `${label(s)}: its sync is queued or running`;
+  return sync.sources.map(s => {
+    const idle = sync.idle.includes(s);
     const summary = optionsSummary(s);
-    return `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}`;
-  };
-  const one = sync.sources.length === 1 ? sync.sources[0] : null;
-  return (
-    <span className="creator-opts-wrap" ref={wrap}
-          onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
-      <button type="button" className="icon-btn creator-opts"
-              // Its sync's end would undo what changes now.
-              disabled={one ? !sync.idle.includes(one) : !sync.idle.length}
-              onClick={() => (one ? onEdit(one) : setOpen(o => !o))}
-              title={one ? title(one) : `Options of its ${sync.sources.length} sources`}
-              aria-label={one ? `Options of ${label(one)}` : "Options of its sources"}
-              aria-haspopup={one ? undefined : "menu"} aria-expanded={one ? undefined : open}>
-        <Icon name="settings" size={15} />
-      </button>
-      {open && (
-        <span className="creator-opts-menu" role="menu">
-          {sync.sources.map(s => (
-            <button key={s.id} type="button" role="menuitem" className="btn-ghost" disabled={!sync.idle.includes(s)}
-                    title={title(s)} onClick={() => { setOpen(false); onEdit(s); }}>
-              {label(s)}
-            </button>
-          ))}
-        </span>
-      )}
-    </span>
-  );
+    return {
+      label: sync.sources.length === 1 ? "Options" : `Options of ${label(s)}`,
+      icon: "settings",
+      disabled: !idle,
+      title: idle ? `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}` : `${label(s)}: its sync is queued or running`,
+      onSelect: () => onEdit(s),
+    };
+  });
 }
 
 function AccountCard({ account: a, index, settled, query, selectMode, selected, onToggle, sync, onSync, onEdit, onMake, fresh, onSeen, muted, onMuted,
   onNoSync, flash }) {
   const former = matchedFormer(a, query);
   const sub = `${a.name && a.name !== a.handle ? `${a.name} · ` : ""}${platformLabel(a.platform)}${former ? ` · was @${former}` : ""}`;
+  const name = `@${a.handle || a.id}`;
+  const known = a.id != null;                   // one without an id has no Review, Make creator, Mute or Don't sync
+  const mute = useMute({ muted: !!muted, whom: { account: accountRef(a) }, name, onDone: onMuted });
+  const noSync = useNoSync({ on: !!a.no_sync, whom: { account: accountRef(a) }, name, onDone: onNoSync });
   const body = (
     <>
       <span className="avatar-letter" aria-hidden="true">{(a.handle || a.name || "?").charAt(0).toUpperCase()}</span>
       <span className="creator-id">
-        <span className="creator-name">@{a.handle || a.id}</span>
+        <span className="creator-name">{name}</span>
         <span className="creator-sub" title={sub}>{sub}</span>
-        {a.no_sync && (
-          <span className="creator-nosync-line">
-            <NotSyncedChip title={`@${a.handle || a.id} is set to Don't sync: nothing is downloaded from it`} />
-          </span>
-        )}
+        <StateChips name={name} muted={known && !!muted} noSync={!!a.no_sync} />
         <CardSyncStatus sync={sync} />
       </span>
       <span className="person-stats">
@@ -309,7 +280,7 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
       </span>
     </>
   );
-  const selectable = selectMode && a.id != null;
+  const selectable = selectMode && known;
   return (
     <div
       className={`creator-card${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
@@ -321,37 +292,28 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
           {body}
         </button>
       ) : (
-        <Link to={authorFeedPath(a.platform, a)} className="creator-main" title={`Show posts by @${a.handle}`}>{body}</Link>
+        <Link to={authorFeedPath(a.platform, a)} className="creator-main" title={`Show posts by ${name}`}>{body}</Link>
       )}
-      {a.id != null && !selectMode && (
-        // Review, Options under it when the account has a source, and Make
-        // creator beside them: a person of its own, in one click.
-        <span className="creator-tools">
-          <Link
-            to={`/review?${new URLSearchParams({ platform: a.platform, author: a.id })}`}
-            className="icon-btn creator-review"
-            title={`Review @${a.handle}'s unreviewed posts`}
-            aria-label={`Review @${a.handle}`}
-          >
-            <Icon name="review" size={15} />
-          </Link>
-          <CardOptionsButton sync={sync} onEdit={onEdit} />
-          <button type="button" className="icon-btn creator-make" onClick={onMake}
-                  title={`Make @${a.handle || a.id} a creator: a person of its own`}
-                  aria-label={`Make @${a.handle || a.id} a creator`}>
-            <Icon name="userPlus" size={15} />
-          </button>
+      {!selectMode && (
+        // One quick action in sight, Sync (when it has a source); Review,
+        // Options, Make creator (a person of its own, in one click) and the
+        // switches in its ⋯ menu, so the card stays one row.
+        <span className="card-actions">
+          <CardSyncButton sync={sync} onSync={onSync} />
+          <ActionMenu label={`More for ${name}`} items={[
+            known && { label: "Review", icon: "review", to: `/review?${new URLSearchParams({ platform: a.platform, author: a.id })}`,
+                       title: `Review ${name}'s unreviewed posts` },
+            ...optionsItems(sync, onEdit),
+            known && { label: "Make creator", icon: "userPlus", onSelect: onMake, title: `Make ${name} a creator: a person of its own` },
+            seenItem(fresh, name, onSeen),
+            "separator",
+            known && muted != null && mute,
+            known && noSync.item,
+          ]} />
         </span>
       )}
-      {!selectMode && <SeenButton fresh={fresh} name={`@${a.handle || a.id}`} onSeen={onSeen} />}
-      {!selectMode && a.id != null && muted != null && (
-        <MuteButton compact muted={muted} whom={{ account: accountRef(a) }} name={`@${a.handle || a.id}`} onDone={onMuted} />
-      )}
-      {!selectMode && a.id != null && (
-        <NoSyncButton compact on={!!a.no_sync} whom={{ account: accountRef(a) }} name={`@${a.handle || a.id}`} onDone={onNoSync} />
-      )}
-      {!selectMode && <CardSyncButton sync={sync} onSync={onSync} />}
       <CardScriptWarnings sync={sync} />
+      {noSync.dialog}
     </div>
   );
 }
@@ -1038,7 +1000,7 @@ export default function Creators() {
         >
           <p>
             {mergePeopleList.length > 1 && `${mergePeopleList.length} people become one; their notes are kept. `}
-            {mergeAccounts.length > 0 && `${mergeAccounts.length} account${mergeAccounts.length === 1 ? "" : "s"} get linked. `}
+            {mergeAccounts.length > 0 && `${plural(mergeAccounts.length, "account")} ${mergeAccounts.length === 1 ? "gets" : "get"} linked. `}
             Posts and files are not touched.
           </p>
           {stopping > 0 && (

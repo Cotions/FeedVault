@@ -322,6 +322,43 @@ input[type="text"].header-search:focus {
 .profile-option-n { flex-shrink: 0; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .profile-menu-manage { margin-top: 3px; border-top: 1px solid var(--border-soft); border-radius: 0 0 7px 7px; }
 .profile-menu-err { padding: 6px 10px; font-size: 12px; line-height: 1.45; color: #ffb3b5; }
+/* A card's, a row's or a page's ⋯ menu of more actions
+   (components/ActionMenu.jsx), with the profile menu's look. A popover in
+   the top layer, placed by the component (left, top) under its button, so
+   a card's overflow or a scrolling box never cuts it off. */
+.action-menu-wrap { display: inline-flex; flex-shrink: 0; }
+.action-menu-btn.is-open { color: var(--text); border-color: rgba(var(--glow-rgb), 0.45); background: var(--surface-2); }
+/* In a page's head, as tall as the toolbar's buttons beside it. */
+.page-head .action-menu-btn { width: 34px; height: 34px; }
+.action-menu {
+  position: fixed; inset: auto; margin: 0; z-index: 120;
+  width: max-content; min-width: 180px; max-width: min(320px, calc(100vw - 16px));
+  display: flex; flex-direction: column; gap: 1px; padding: 4px; border-radius: 10px;
+  color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  overflow: visible;
+}
+.action-menu-item {
+  display: flex; align-items: center; gap: 9px;
+  min-height: 32px; padding: 6px 10px;
+  font-family: var(--body); font-size: 12.5px; font-weight: 600; line-height: 1.3; text-align: left; text-decoration: none;
+  color: var(--text-dim); background: none; border: 0; border-radius: 7px; cursor: pointer;
+}
+.action-menu-item > span { min-width: 0; overflow-wrap: anywhere; }
+.action-menu-item > .icon { color: var(--muted); }
+.action-menu-item:hover, .action-menu-item:focus-visible { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.action-menu-item:hover > .icon, .action-menu-item:focus-visible > .icon { color: var(--accent-hover); }
+.action-menu-item.is-danger, .action-menu-item.is-danger > .icon { color: #ffb3b5; }
+.action-menu-item.is-danger:hover, .action-menu-item.is-danger:focus-visible { color: #ffb3b5; background: rgba(229, 72, 77, 0.12); }
+/* Off (aria-disabled): still focusable, its title says why; a click does nothing. */
+.action-menu-item[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.action-menu-item[aria-disabled="true"]:hover { color: var(--text-dim); background: none; }
+.action-menu-gap { flex-shrink: 0; width: 14px; }
+.action-menu-sep { height: 1px; margin: 3px 6px; background: var(--border-soft); }
+@media (pointer: coarse) {
+  .action-menu-item { min-height: 44px; }
+  .page-head .action-menu-btn { width: 44px; height: 44px; }
+}
 .header-count {
   font-family: var(--mono);
   font-size: 13px;
@@ -1838,9 +1875,9 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
 /* ── Creators ───────────────────────────────────────────── */
 .creator-grid {
   display: grid;
-  /* 340px: a card carries up to four icon buttons beside the name, count
-     and badges; at 240px the name shrank to "@…" and the badges ran over
-     the count. min(): never wider than the column on a phone. */
+  /* 340px: a card carries Sync and its ⋯ menu beside the name, count and
+     badges; at 240px the name shrank to "@…" and the badges ran over the
+     count. min(): never wider than the column on a phone. */
   grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
   gap: 10px;
 }
@@ -2403,31 +2440,13 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 @media (max-width: 640px), (pointer: coarse) { .select-hint { display: none; } }
 .select-bar .btn-danger, .select-bar .btn-keep { padding: 9px 14px; }
 
-/* ── Creators review link ───────────────────────────────── */
+/* ── Creators card actions ──────────────────────────────── */
 .creator-card { padding: 0; gap: 0; }
 .creator-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 11px 10px 11px 14px; }
-.creator-review { margin-right: 10px; flex-shrink: 0; }
-.creator-seen { margin-right: 6px; flex-shrink: 0; }
-/* Review with a source's Options and Make creator under it, so
-   the name keeps its room. */
-.creator-tools { display: flex; flex-direction: column; gap: 2px; margin-right: 10px; flex-shrink: 0; }
-.creator-tools .creator-review { margin-right: 0; }
-.creator-tools .icon-btn { width: 26px; height: 26px; }
-/* A phone: the buttons go on a row of their own under the name. */
-@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
-  .creator-card { flex-wrap: wrap; justify-content: flex-end; }
-  .creator-card:has(> :not(.creator-main)) { padding-bottom: 8px; }
-  .creator-card .creator-main { flex-basis: 100%; }
-  .creator-card .creator-tools { flex-direction: row; }
-}
-.creator-opts-wrap { position: relative; display: inline-flex; }
-.creator-opts-menu {
-  position: absolute; top: 100%; right: 0; z-index: 20; margin-top: 4px; min-width: 200px;
-  display: flex; flex-direction: column; padding: 4px; border-radius: 10px;
-  background: var(--surface-2); border: 1px solid var(--border);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
-}
-.creator-opts-menu .btn-ghost { justify-content: flex-start; text-align: left; white-space: nowrap; font-size: 12px; }
+/* An account's or a person's buttons, on the card's one row: Sync when it
+   has a source, then its ⋯ menu (Review, Options, Make creator, Mark seen,
+   Mute, Don't sync), so the name keeps its room. */
+.card-actions { display: flex; align-items: center; gap: 4px; margin-right: 10px; flex-shrink: 0; }
 
 /* ── Trash card ─────────────────────────────────────────── */
 .trash-total { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; font-size: 13px; }
@@ -3394,10 +3413,12 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .dialog-field input[type="text"].page-filter { flex: none; align-self: stretch; }
 
 .person-rename { display: flex; align-items: center; gap: 6px; }
+/* The portrait dialog's Remove picture (the head's Delete person is in its ⋯ menu now). */
 .person-delete { flex-shrink: 0; white-space: nowrap; }
 .person-delete:hover:not(:disabled) { color: #ffb3b5; }
-/* The person across the app on the left, their new posts and Mute on the
-   right of the same line (below it when the line is full). */
+/* The person across the app on the left, their new posts and what they are
+   set to (Muted, Not synced) on the right of the same line (below it when
+   the line is full). */
 .person-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 4px 0 20px; }
 /* The card's head: their portrait on the left, the person across the app
    and About beside it; the portrait above them on a phone. */
@@ -3868,7 +3889,6 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-rename > .source-rename-actions { display: inline-flex; gap: 10px; flex-shrink: 0; white-space: nowrap; }
 .warn-badge { margin-left: 0; align-self: flex-end; white-space: nowrap; color: #ffd59a; background: rgba(255, 196, 102, 0.12); border-color: rgba(255, 196, 102, 0.4); }
 .warn-badge .icon { color: #ffd59a; }
-.creator-card .source-sync { margin-right: 10px; }
 .source-suggestion .suggestion-why { gap: 3px; }
 @media (max-width: 760px) {
   .source-row { flex-wrap: wrap; }
@@ -3942,19 +3962,12 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
     width: auto; top: calc(var(--header-h) + 8px);
   }
 }
-.creator-mute { margin-right: 6px; flex-shrink: 0; }
-.creator-mute.is-muted { color: var(--glow); }
-
-/* Don't sync (#189): the switch, and the "not synced" chip of a card, an
-   account row or a source kept but never run. */
-.creator-nosync { margin-right: 6px; flex-shrink: 0; }
-.creator-nosync.is-on { color: var(--glow); }
-/* On through the person's switch: turned off there, the title says so. */
-.creator-nosync[aria-disabled="true"], .nosync-toggle[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
-.portrait-actions > .creator-nosync, .person-account > .creator-nosync { margin-right: 0; }
-.nosync-chip { flex: none; gap: 4px; max-width: 100%; color: var(--muted); border-style: dashed; }
-.nosync-chip .icon { flex: none; }
-.creator-nosync-line { display: flex; min-width: 0; max-width: 100%; }
+/* Mute and Don't sync (#189), items of a ⋯ menu: what they are set to, as
+   dim dashed chips on a card, an account row or a person's page ("Muted",
+   "Not synced"), and on a source kept but never run. Nothing while off. */
+.nosync-chip, .state-chip { flex: none; gap: 4px; max-width: 100%; color: var(--muted); border-style: dashed; }
+.nosync-chip .icon, .state-chip .icon { flex: none; }
+.state-line { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
 .source-row.is-nosync .source-id > .creator-name, .source-row.is-nosync .source-summary { color: var(--text-dim); }
 .creator-sub.nosync-note { margin: 0 0 10px; white-space: normal; overflow: visible; }
 
@@ -3973,7 +3986,7 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
      duplicate, Tag, Collection…) and the icon buttons on rows and tiles. */
   .btn-ghost { min-height: 32px; }
   .del-btn { min-width: 32px; min-height: 32px; }
-  .creator-tools .icon-btn, .big-file-trash, .icon-btn-sm { width: 34px; height: 34px; }
+  .action-menu-btn, .card-actions .icon-btn, .big-file-trash, .icon-btn-sm { width: 34px; height: 34px; }
   .source-sync { min-height: 32px; }
   .source-rename .btn-link { padding: 8px 4px; }
   .review-open { padding: 8px 0; }

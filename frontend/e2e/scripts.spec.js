@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test, expect, idle } from "./fixtures.js";
+import { test, expect, idle, menuItem } from "./fixtures.js";
 import { findPython, protectedDirs } from "./harness.js";
 
 const H = { "X-FeedVault": "1" };
@@ -98,7 +98,7 @@ test("the script picker groups scripts by what they run and hides other tools' (
     const row = page.locator(`.source-row[data-source-id="${id}"]`);
     await expect(row).toBeVisible();
     await expect(row.locator(".source-script-warn")).toHaveCount(0);   // greet can run
-    await row.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, row, /^More for /, "Options")).click();
     const pick = page.getByRole("combobox", { name: "Command a sync runs" });
     await expect(pick).toHaveValue("greet");
     const groups = await pick.locator("optgroup").evaluateAll(gs => gs.map(g => ({
@@ -284,7 +284,7 @@ test("a source's Options: a script disables the tool's choices, and changes are 
   await withScriptSource(request, async ({ id }) => {
     await page.goto("/creators");
     const row = page.locator(`.source-row[data-source-id="${id}"]`);
-    await row.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, row, /^More for /, "Options")).click();
     const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
     const pick = dialog.getByRole("combobox", { name: "Command a sync runs" });
     await expect(pick).toHaveValue("greet");
@@ -331,7 +331,7 @@ test("a source's Options: a script disables the tool's choices, and changes are 
     const { sources } = await (await request.get("/api/sources", { headers: H })).json();
     expect(sources.find(s => s.id === id).options.script).toBe("greet");
     // Unchanged: Esc closes at once.
-    await row.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, row, /^More for /, "Options")).click();
     await expect(pick).toHaveValue("greet");
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
@@ -351,7 +351,7 @@ test("a source's Options: a link inside it asks before dropping changed choices 
     const before = await optionsNow();
     await page.goto("/creators");
     const row = page.locator(`.source-row[data-source-id="${id}"]`);
-    await row.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, row, /^More for /, "Options")).click();
     const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
     const link = dialog.getByRole("link", { name: "Scripts", exact: true });
     const schedule = fieldset(dialog, "Schedule").getByRole("radio");
@@ -386,7 +386,7 @@ test("a source's Options: a link inside it asks before dropping changed choices 
     await page.goto("/creators");
     const typed = page.getByRole("textbox", { name: "Profile link, or an Instagram name" });
     await typed.fill(`https://x.com/e2e_options_${id}`);
-    await row.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, row, /^More for /, "Options")).click();
     await expect(schedule.first()).toBeChecked();
     await link.click();
     await expect(discard).toContainText("The new source is not added yet.");
@@ -398,7 +398,7 @@ test("a source's Options: a link inside it asks before dropping changed choices 
     await typed.fill("");
 
     // Unchanged, nothing else typed: the link goes at once.
-    await row.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, row, /^More for /, "Options")).click();
     await link.click();
     await expect(page).toHaveURL(/\/scripts#script-greet$/);
     await expect(discard).toHaveCount(0);

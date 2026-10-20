@@ -4,7 +4,7 @@
 // marked Not synced, and the Creators page filtered to Not synced, in both
 // views. A source is added to the throwaway instance and removed after,
 // and every switch is turned off again; nothing is synced.
-import { test, expect, idle, checkLayout, dismissToasts, formatFindings, stressData, settle } from "./fixtures.js";
+import { test, expect, idle, checkLayout, dismissToasts, formatFindings, stressData, settle, menuItem, openMenu } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
 const S = stressData();
@@ -40,11 +40,14 @@ test("Don't sync: asked first, the source kept and marked, the filter, no overla
     headers: H, data: { target: "https://x.com/e2e_nosync_kept", person: S.person } })).json()).source;
   expect(src?.no_sync).toBe(false);
   try {
-    // The person page: the switch asks first, with how many sources stop.
+    // The person page: the switch (in the head's ⋯ menu) asks first, with
+    // how many sources stop.
     await page.goto(`/people/${S.person}`);
     await expect(page.locator(`.source-row[data-source-id="${src.id}"]`)).toBeVisible();
+    await expect(page.locator(".person-new .nosync-chip"), "no marker while it syncs").toHaveCount(0);
     await idle(page);
-    await page.locator(".nosync-toggle").click();
+    const head = `More for ${person.name}`;
+    await (await menuItem(page, page, head, "Don't sync")).click();
     const ask = page.getByRole("alertdialog", { name: `Stop syncing ${person.name}?` });
     await expect(ask).toBeVisible();
     await expect(ask).toContainText("1 source");
@@ -53,21 +56,32 @@ test("Don't sync: asked first, the source kept and marked, the filter, no overla
     await checkSizes(page, testInfo, "Don't sync, asked", ".modal-overlay");
     await ask.getByRole("button", { name: "Don't sync" }).click();
     await expect(ask).toHaveCount(0);
+    // The dialog gives focus back to the ⋯ button it came from.
+    await expect(page.getByRole("button", { name: head, exact: true })).toBeFocused();
 
     // Kept, marked, no Sync, no Options, no Add source.
     const row = page.locator(`.source-row[data-source-id="${src.id}"]`);
     await expect(row.locator(".nosync-chip")).toBeVisible();
     await expect(row.getByRole("button", { name: /^Sync / })).toHaveCount(0);
-    await expect(row.getByRole("button", { name: "Options" })).toHaveCount(0);
-    await expect(row.getByRole("button", { name: "Remove" })).toBeVisible();
+    const rowMenu = await openMenu(page, row, /^More for /);
+    await expect(rowMenu.getByRole("menuitem", { name: "Options" })).toHaveCount(0);
+    await expect(rowMenu.getByRole("menuitem", { name: "Remove" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(rowMenu).toHaveCount(0);
     await expect(page.getByRole("textbox", { name: "Profile link, or an Instagram name" })).toHaveCount(0);
-    await expect(page.locator(".nosync-toggle")).toHaveAttribute("aria-pressed", "true");
-    // An account of theirs: shown not synced, turned off on the person only, its title says who.
-    const own = page.locator(".person-account .creator-nosync").first();
+    // The page says so beside the Feed … Trash line, and its ⋯ menu turns it off.
+    await expect(page.locator(".person-new .nosync-chip")).toBeVisible();
+    await expect(await menuItem(page, page, head, "Sync again")).toBeVisible();
+    await page.keyboard.press("Escape");
+    // An account of theirs: turned off on the person only, its item's title says who.
+    const account = page.locator(".person-account").first();
+    const own = await menuItem(page, account, /^More for @/, "Sync again");
     await expect(own).toHaveAttribute("aria-disabled", "true");
     expect(await own.getAttribute("title")).toContain(`${person.name} is set to Don't sync`);
     await own.click({ force: true });           // aria-disabled: Playwright would wait for it to be enabled
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(page.getByRole("menu"), "a click on an item that is off keeps the menu open").toBeVisible();
+    await page.keyboard.press("Escape");
     expect((await (await request.get("/api/no-sync", { headers: H })).json()).accounts).toEqual([]);
     await idle(page);
     await checkSizes(page, testInfo, "person set to Don't sync");
@@ -96,8 +110,8 @@ test("Don't sync: asked first, the source kept and marked, the filter, no overla
     await checkSizes(page, testInfo, "Creators, Not synced, compact");
     await page.getByRole("button", { name: "Portraits" }).click();
 
-    // Turned off from its card: syncs again.
-    await card.getByRole("button", { name: `Sync ${person.name} again` }).click();
+    // Turned off from its card's ⋯ menu: syncs again.
+    await (await menuItem(page, card, `More for ${person.name}`, "Sync again")).click();
     await expect.poll(async () => (await (await request.get(`/api/sources/${src.id}`, { headers: H })).json()).no_sync)
       .toBe(false);
   } finally {

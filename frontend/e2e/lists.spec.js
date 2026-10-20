@@ -254,14 +254,14 @@ test.describe("Creators, 1,500 more accounts", () => {
     await expect(lit).toBeInViewport();
     expect(await cards.count()).toBeLessThan(MAX_ROWS);
 
-    // Its Review link focused, then scrolled away from (the address drops
+    // Its ⋯ button focused, then scrolled away from (the address drops
     // ?source=, and a new address starts at the top): focus stays on it.
-    const review = lit.getByRole("link", { name: "Review @many.acc.1499" });
-    await review.focus();
+    const more = lit.getByRole("button", { name: "More for @many.acc.1499", exact: true });
+    await more.focus();
     await expect(page).toHaveURL(/\/creators$/, { timeout: 6_000 });
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-    await expect(review).not.toBeInViewport();
-    await expect(page.getByRole("link", { name: "Review @many.acc.1499" })).toBeFocused();
+    await expect(more).not.toBeInViewport();
+    await expect(page.getByRole("button", { name: "More for @many.acc.1499", exact: true })).toBeFocused();
     expect(await cards.count()).toBeLessThan(MAX_ROWS);
     await idle(page);
   });

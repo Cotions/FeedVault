@@ -11,7 +11,8 @@
 //    stays put under reduced motion), and whatever opens on hover stays in the
 //    window, clear of the bars. The popovers that open on a click
 //    (creator picker, tag suggestions, notifications, the selection bar's
-//    dialogs) too, at rest and with their field low in the window.
+//    dialogs, the ⋯ menus) too, at rest and with their field low in the
+//    window.
 //  - Scrolled: the Feed (and in select mode), a creator page, Storage and
 //    Jobs, halfway and at the bottom: nothing a click can reach sits under
 //    a bar, and what is in the open takes its clicks. Jumps (a #card link,
@@ -54,8 +55,9 @@ async function open(page, name) {
 const VIEWS = [
   ...PAGES.map(p => ({ name: p.name, open: page => open(page, p.name) })),
   { name: "Post", open: page => openUrl(page, postUrl(), ".post-page-head") },
-  // Accounts, the link-in-bio import, Sources, Links: with Mute loaded.
-  { name: "Person", open: page => openUrl(page, personUrl(), ".person-new button") },
+  // Accounts, the link-in-bio import, Sources, Links: the head's ⋯ menu
+  // shows with the page, and quiet() waits for what loads after (Mute's state).
+  { name: "Person", open: page => openUrl(page, personUrl(), ".page-head .action-menu-btn") },
 ];
 
 test.beforeEach(async ({ page }) => { await addProbes(page); });
@@ -266,6 +268,28 @@ const POPOVERS = [
       await page.getByRole("button", { name: /^Collection…/ }).click();
     },
     pop: ".modal-overlay .modal",
+  },
+  {
+    name: "Person › the head's ⋯ menu",
+    open: async page => {
+      await openUrl(page, personUrl(), ".page-head .action-menu-btn");
+      await page.locator(".page-head .action-menu-btn").click();
+    },
+    pop: ".action-menu",
+  },
+  {
+    // An account card's ⋯ button near the bottom of the window: its menu
+    // turns upward, over the cards above it.
+    name: "Creators › an account's ⋯ menu, low in the window",
+    open: async page => {
+      await open(page, "Creators");
+      const more = page.locator(".creator-card:not(.person-card) .action-menu-btn").nth(3);
+      await more.scrollIntoViewIfNeeded();
+      await more.evaluate(el => window.scrollBy(0, el.getBoundingClientRect().bottom - innerHeight + 12));
+      await settle(page);
+      await more.click();
+    },
+    pop: ".action-menu",
   },
 ];
 
