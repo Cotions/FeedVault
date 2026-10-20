@@ -420,11 +420,30 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
 // The sidebar fits short desktop windows: at 1280x800 and 1366x768 every
 // entry shows without scrolling it, the last (Quit) whole and clear of the
 // sidebar's bottom edge by its focus ring, and each entry stays a 24px target.
+// Its links come in three named groups (Browse, Library, System), in the
+// order they always had, Rescan and Quit after them.
 const SIDEBAR_SIZES = [SIZES[1], { label: "1366x768", width: 1366, height: 768 }];
+const SIDEBAR_GROUPS = {
+  Browse: ["Feed", "Review", "Creators", "Tags", "Links", "Collections"],
+  Library: ["Stats", "Storage", "Trash", "Unmatched", "Duplicates"],
+  System: ["Jobs", "Notifications", "Scripts", "Settings"],
+};
 
 test("the sidebar fits without scrolling", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "layout-zoom", "measured at the two short desktop sizes only");
   await openPage(page, PAGES[0]);
+  const nav = page.locator("#main-nav");
+  const groups = nav.getByRole("group");
+  await expect(groups).toHaveCount(3);
+  for (const [i, [name, entries]] of Object.entries(SIDEBAR_GROUPS).entries()) {
+    const group = groups.nth(i);
+    await expect(group).toHaveAccessibleName(name);
+    await expect(group.locator(".side-group-label")).toHaveText(name);
+    await expect(group.locator(".side-link")).toHaveText(entries.map(e => new RegExp(`^${e}`)));
+  }
+  // The foot: Rescan and Quit, outside the groups.
+  await expect(nav.locator(":scope > .side-scan")).toHaveText(/^(Rescan|Scanning…)$/);
+  await expect(nav.locator(":scope > .side-link-quit")).toHaveText("Quit");
   const problems = [];
   for (const s of SIDEBAR_SIZES) {
     await page.setViewportSize({ width: s.width, height: s.height });
