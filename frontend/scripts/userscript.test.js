@@ -11,9 +11,14 @@ import vm from "node:vm";
 const ROOT = new URL("../../userscript/", import.meta.url);
 const SOURCE = readFileSync(new URL("feedvault.user.js", ROOT), "utf8");
 
+// The window, and every element's box (the panel is the only one asked).
+const VW = 1280, VH = 800, BOX_W = 200, BOX_H = 60;
+const px = (v) => (v && v !== "auto" ? parseFloat(v) : null);
+
 // Just enough of a DOM for the script: elements with attributes, children,
 // listeners, and the few selectors it uses (tag, .class, [attr="v"],
-// [attr*="v"], lists, ":scope > ").
+// [attr*="v"], lists, ":scope > "), and a box laid out from style's
+// left/top, else right/bottom.
 class Node {
   constructor(tag) {
     this.tagName = tag.toUpperCase();
@@ -45,9 +50,15 @@ class Node {
     this.parentNode = null;
   }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  getBoundingClientRect() {
+    const left = px(this.style.left) ?? VW - (px(this.style.right) ?? 0) - BOX_W;
+    const top = px(this.style.top) ?? VH - (px(this.style.bottom) ?? 0) - BOX_H;
+    return { left, top, right: left + BOX_W, bottom: top + BOX_H, width: BOX_W, height: BOX_H };
+  }
+  setPointerCapture(id) { this.captured = id; }
   // A click as the browser sends it (isTrusted) or as a page script would.
-  dispatch(type, isTrusted) {
-    const e = { type, isTrusted, defaultPrevented: false, stopped: false,
+  dispatch(type, isTrusted, props = {}) {
+    const e = { type, isTrusted, ...props, defaultPrevented: false, stopped: false,
                 preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } };
     for (let n = this; n && !e.stopped; n = n.parentNode) (n.listeners[type] || []).forEach((fn) => fn(e));
     return e;
@@ -88,8 +99,9 @@ function links(fixture) {
 }
 
 // The script on a page at ``href`` (with the links of ``fixture`` in it):
-// returns its context, its document, the calls it made and its menu commands.
-function load(href, fixture = null) {
+// returns its context, its document, the calls it made, its menu commands
+// and its GM_setValue storage (``store``, given to start from one).
+function load(href, fixture = null, store = new Map()) {
   const url = new URL(href);
   const calls = [];
   const menu = [];
@@ -110,6 +122,10 @@ function load(href, fixture = null) {
     GM_addStyle: () => {},
     GM_xmlhttpRequest: (req) => calls.push(req),
     GM_registerMenuCommand: (name, fn) => menu.push({ name, fn }),
+    GM_getValue: (k, d) => (store.has(k) ? store.get(k) : d),
+    GM_setValue: (k, v) => store.set(k, v),
+    innerWidth: VW, innerHeight: VH,
+    addEventListener: () => {},
     MutationObserver: class { observe() {} },
     requestAnimationFrame: () => 0,
     setInterval: () => 0,
@@ -117,7 +133,7 @@ function load(href, fixture = null) {
     getComputedStyle: (n) => ({ position: n.style.position || "static" }),
   });
   vm.runInContext(SOURCE, ctx);
-  return { run: (code) => vm.runInContext(code, ctx), calls, document, menu };
+  return { run: (code) => vm.runInContext(code, ctx), calls, document, menu, store };
 }
 
 test("only its sites", () => {
@@ -394,6 +410,88 @@ test("the post page's Save and its tile show the same save", async () => {
   await answer(call(t.page, "POST", "/api/save"), 200, { ok: true, have: false, job: { id: 5, state: "running" } });
   assert.equal(panel(), "Saving…");
   assert.equal(t.look("/someone/status/1800000000000000001/photo/1"), "busy");
+});
+
+test("X: a tile's Save sits top right, clear of X's own button; elsewhere bottom right", async () => {
+  const x = await tiles("https://x.com/someone/media", "x-profile.html", []);
+  assert.equal(x.save("/someone/status/1800000000000000001/photo/1").getAttribute("data-fv-site"), "x");
+  const ig = await tiles("https://www.instagram.com/carol.cooks/", "instagram-profile.html", []);
+  assert.equal(ig.save("/p/CSAVEME0003/").getAttribute("data-fv-site"), "instagram");
+  const tt = await tiles("https://www.tiktok.com/@someone", "tiktok-profile.html", []);
+  assert.equal(tt.save("https://www.tiktok.com/@someone/video/7300000000000000001").getAttribute("data-fv-site"), "tiktok");
+  assert.match(SOURCE, /\.fv-tile-save\[data-fv-site="x"\] \{ top: 6px; bottom: auto; \}/);
+  assert.doesNotMatch(SOURCE, /data-fv-site="(?!x")/);
+});
+
+// ---------------------------------------------------------------------------
+// The panel's grip: drag it, it stays there on this site
+// ---------------------------------------------------------------------------
+
+const spot = (p) => [p.style.right, p.style.bottom];
+// The spot kept for x.com (copied out of the script's context).
+const kept = (page) => { const v = page.store.get("panel:x.com"); return v && { ...v }; };
+
+// The panel on a post page FeedVault does not have (or a link-in-bio
+// page), and its grip.
+async function gripped(href = "https://x.com/someone/status/1800000000000000001", store) {
+  const page = load(href, null, store);
+  if (page.run("SITE")) {
+    page.run("flush()");
+    await answer(call(page, "POST", "/api/saved"), 200, { saved: [] });
+  }
+  const panel = () => page.document.querySelector(".fv-panel");
+  return { page, panel, grip: () => panel().querySelector(":scope > .fv-grip") };
+}
+
+function drag(g, isTrusted, [x0, y0], [x1, y1]) {
+  g.dispatch("pointerdown", isTrusted, { button: 0, pointerId: 1, clientX: x0, clientY: y0 });
+  g.dispatch("pointermove", isTrusted, { pointerId: 1, clientX: x1, clientY: y1 });
+  g.dispatch("pointerup", isTrusted, { pointerId: 1, clientX: x1, clientY: y1 });
+}
+
+test("the panel starts in the site's spot: on X, left of X's own corner buttons", async () => {
+  assert.deepEqual(spot((await gripped()).panel()), ["90px", "18px"]);
+  assert.deepEqual(spot((await gripped("https://www.tiktok.com/@someone/video/7300000000000000001")).panel()), ["18px", "18px"]);
+  assert.deepEqual(spot((await gripped("https://linktr.ee/somebody")).panel()), ["18px", "18px"]);
+  // The grip is the panel's, outside what is rendered in it.
+  const t = await gripped();
+  assert.equal(t.panel().children.length, 2);
+  assert.equal(t.panel().children[1].className, "fv-body");
+  assert.equal(t.panel().textContent, "Save to FeedVault");
+});
+
+test("a dragged panel keeps its spot on that site, for every panel after it; a double-click puts it back", async () => {
+  const t = await gripped();
+  // The panel's box: left 990, top 722 (90 from the right, 18 from the bottom).
+  drag(t.grip(), true, [1000, 730], [500, 330]);
+  assert.equal(t.grip().captured, 1);
+  assert.deepEqual(kept(t.page), { right: 590, bottom: 418 });
+  assert.deepEqual(spot(t.panel()), ["590px", "418px"]);
+  // Another post: a new panel, in the same spot; another site has its own.
+  const next = await gripped("https://x.com/other/status/1800000000000000002", t.page.store);
+  assert.deepEqual(spot(next.panel()), ["590px", "418px"]);
+  assert.deepEqual(spot((await gripped("https://twitter.com/other/status/1800000000000000002", t.page.store)).panel()), ["90px", "18px"]);
+  // Kept inside the window, however far it is dragged.
+  drag(next.grip(), true, [600, 400], [-500, 5000]);
+  assert.deepEqual(kept(next.page), { right: VW - BOX_W, bottom: 0 });
+  next.grip().dispatch("dblclick", true);
+  assert.equal(next.page.store.get("panel:x.com"), null);
+  assert.deepEqual(spot(next.panel()), ["90px", "18px"]);
+  // A click on the grip, without a move, saves nothing.
+  drag(next.grip(), true, [1000, 730], [1000, 730]);
+  assert.equal(next.page.store.get("panel:x.com"), null);
+});
+
+test("a page script's pointer events and double-clicks on the grip do nothing", async () => {
+  const t = await gripped();
+  drag(t.grip(), false, [1000, 730], [500, 330]);
+  assert.equal(t.page.store.has("panel:x.com"), false);
+  assert.deepEqual(spot(t.panel()), ["90px", "18px"]);
+  assert.equal(t.panel().style.left || "", "");
+  // Dragged by the user, then a page script's double-click: the spot stays.
+  drag(t.grip(), true, [1000, 730], [500, 330]);
+  t.grip().dispatch("dblclick", false);
+  assert.deepEqual(kept(t.page), { right: 590, bottom: 418 });
 });
 
 // ---------------------------------------------------------------------------
