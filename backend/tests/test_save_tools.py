@@ -427,7 +427,7 @@ def test_owner_folder_order(env, client, fake):
 
 
 # ---------------------------------------------------------------------------
-# Sync profile, from the userscript's origin
+# Add profile and Sync now, from the userscript's origin
 # ---------------------------------------------------------------------------
 
 # What the userscript's requests carry on x.com and tiktok.com.

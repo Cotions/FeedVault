@@ -1462,8 +1462,8 @@ export default function Settings() {
                 <div className="card">
                   <div className="card-title">Browser userscript</div>
                   <p className="page-lede">
-                    Adds Save and Sync profile buttons on Instagram, X and TikTok, and marks the posts
-                    you already have. It needs <a href="https://www.tampermonkey.net/" className="text-link" target="_blank" rel="noopener noreferrer">Tampermonkey</a> or <a href="https://violentmonkey.github.io/" className="text-link" target="_blank" rel="noopener noreferrer">Violentmonkey</a> in your browser.
+                    Adds a small movable FeedVault bubble on Instagram, X and TikTok (Save post, Add
+                    profile, Sync now), a Save on grid tiles, and marks the posts you already have. It needs <a href="https://www.tampermonkey.net/" className="text-link" target="_blank" rel="noopener noreferrer">Tampermonkey</a> or <a href="https://violentmonkey.github.io/" className="text-link" target="_blank" rel="noopener noreferrer">Violentmonkey</a> in your browser.
                     Installed from here, it talks to this instance, and replaces a FeedVault userscript
                     installed from another port.
                   </p>

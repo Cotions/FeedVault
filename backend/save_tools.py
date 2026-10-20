@@ -63,7 +63,7 @@ PLATFORMS = {
                "short": {"vm.tiktok.com", "vt.tiktok.com"}},
 }
 LINK_MAX = 500
-# A profile's link, as the userscript's Sync profile adds it: the folder a
+# A profile's link, as the userscript's Add profile adds it: the folder a
 # save falls back to is the one that source would get (sources.default_folder).
 PROFILE_LINKS = {"twitter": "https://x.com/{handle}", "tiktok": "https://www.tiktok.com/@{handle}"}
 # A post id: digits only, ASCII, no leading zero (both sites' ids are 64-bit numbers).
