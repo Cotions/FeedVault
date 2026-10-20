@@ -1519,7 +1519,8 @@ import); `backend/biofetch.py`.
     `environment`, `statsig`, `sponsor`… anywhere in the key, at any depth
     above the link) or under an `ALL_CAPS` settings key;
   - the bio site's own pages: the host of the page fetched and its
-    subdomains (`linktr.ee/s/about`, `ugc.production.linktr.ee`), and
+    subdomains (`linktr.ee/s/about`, `ugc.production.linktr.ee`,
+    `media.link.me`, `about.link.me`), and
     `linktree.com` / `later.com` for Linktree / Linkin.bio. Another
     person's page on the same site is left out with them; a page on
     another bio site is kept;
@@ -1563,9 +1564,9 @@ import); `backend/biofetch.py`.
 - **The fetch.** One page, the URL given, and its redirects:
   - **Sites**: `https` on port 443, no login part, the host exactly one of
     `linktr.ee`, `beacons.ai`, `lnk.bio`, `solo.to`, `campsite.bio`,
-    `linkin.bio`, `allmylinks.com` (a leading `www.` and a trailing dot are
-    dropped, and an IDN is compared in its ASCII form, so a look-alike name
-    matches nothing). Sites where a profile is a subdomain or the user's
+    `linkin.bio`, `allmylinks.com`, `link.me` (a leading `www.` and a
+    trailing dot are dropped, and an IDN is compared in its ASCII form, so
+    a look-alike name matches nothing). Sites where a profile is a subdomain or the user's
     own domain are left out: a host check cannot tell them from any site.
     A link with spaces, control characters or `\` is refused, and the
     pasted one must name a page, not the site's home.
@@ -2763,7 +2764,7 @@ checked id, or a post's link parsed down to its id, never a path, a flag or
 a command.
 
 On a person's page of a link-in-bio site (`linktr.ee`, `beacons.ai`,
-`lnk.bio`, `solo.to`, `campsite.bio`, `linkin.bio`, `allmylinks.com`: the
+`lnk.bio`, `solo.to`, `campsite.bio`, `linkin.bio`, `allmylinks.com`, `link.me`: the
 bio import's sites, each with its own `@match`), a **Save links to
 FeedVault** panel asks for a person (`GET /api/links/people`; recent ones
 first, a search box, or "No person (Unsorted)") and sends the page's

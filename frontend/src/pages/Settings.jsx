@@ -565,7 +565,7 @@ function BioImportCard({ on, onSaved }) {
       <div className="card-title">Link-in-bio import</div>
       <p className="page-lede">
         On a person&rsquo;s page, paste their linktr.ee (or Beacons, Lnk.Bio, solo.to, Campsite, Linkin.bio,
-        AllMyLinks) link and FeedVault fetches that one page, once per click, to list the accounts it links to.
+        AllMyLinks, Linkme) link and FeedVault fetches that one page, once per click, to list the accounts it links to.
         Importing also saves the page&rsquo;s address and every link it shows (a shop, a Patreon, a site, the
         profiles) to that person&rsquo;s Links, so they stay when the page changes or goes; import again later
         to pick up what is new. Nothing saved before is replaced or removed. Nothing else is fetched, never a

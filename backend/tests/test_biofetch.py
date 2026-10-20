@@ -179,6 +179,24 @@ def test_allowed_forms_of_an_allowed_host(url):
     assert net.lookups == ["linktr.ee"] and net.tls == [(PUBLIC, "linktr.ee")]
 
 
+@pytest.mark.parametrize("url", ["https://link.me/alice", "link.me/alice", "https://www.link.me/alice"])
+def test_linkme_pages_are_allowed(url):
+    net = Net(dns={"link.me": [PUBLIC]}, pages={("link.me", "/alice"): html_answer()})
+    assert net.get(url).url == "https://link.me/alice"
+    assert net.lookups == ["link.me"] and net.tls == [(PUBLIC, "link.me")]
+
+
+@pytest.mark.parametrize("url, error", [
+    ("https://link.me/", "not the site's home page"),
+    ("https://media.link.me/alice", "not an allowed site: media.link.me"),
+    ("https://about.link.me/alice", "not an allowed site: about.link.me"),
+])
+def test_linkme_home_and_subdomains_are_refused(url, error):
+    net = Net()
+    assert error in refused(net, url)
+    assert net.lookups == net.connects == []
+
+
 def test_every_allowed_site_has_a_reason_and_is_a_plain_host():
     for host, why in biofetch.SITES.items():
         assert why and biofetch._host(host) == host and not host.startswith("www.")
@@ -1085,6 +1103,70 @@ def test_an_anchor_page_keeps_its_buttons_only():
     found, dropped = biofetch.shown_links(LNK_BIO_PAGE, "https://lnk.bio/alice", ROUTES)
     assert found == LNK_BIO_KEPT
     assert dropped == 3                        # mailto:, tel:, javascript:
+
+
+# A Linkme page as the site serves it (TanStack Start, drawn on the
+# server): the links are anchors, between its media CDN's images, its
+# footer's pages on about.link.me, its build's files and its serialized
+# state, a script never read.
+LINKME_PAGE = """<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/>
+<link rel="preload" as="image" href="https://media.link.me/_resize/image/width=100,quality=90,format=webp/images/user-profile/1/alice.jpeg"/>
+<link rel="preload" as="image" href="https://media.link.me/_resize/image/width=64,quality=90,format=webp/images/style/icons/v5.0/Twitch-1.png"/>
+<link rel="preload" as="image" href="/images/noshoutmedia.png"/><link rel="stylesheet" href="/build/index-AbCd.css"/>
+<link rel="icon" href="/favicon.ico"/><link rel="canonical" href="https://link.me/alice"/>
+<script id="linkme-google-analytics-bootstrap">window.dataLayer = []</script>
+<script type="application/ld+json">{"@context":"https://schema.org/","@type":"ProfilePage",
+ "mainEntity":{"@id":"alice","@type":"Person","name":"@alice","identifier":"alice",
+ "image":"https://media.link.me/_resize/image/quality=90,format=webp/images/user-profile/1/alice.webp",
+ "url":"https://link.me/alice"},"significantLink":"https://link.me/alice","isPartOf":"https://link.me/",
+ "thumbnailUrl":"https://media.link.me/_resize/image/quality=90,format=webp/images/user-profile/1/alice.webp"}</script>
+</head><body><main><div id="profileContainer" class="dark">
+<a style="background-color:#000000ff" href="https://twitch.tv/alice_live" class="singlealbum socialmedialink" target="_blank">
+<div class="imgbox"><img src="https://media.link.me/_resize/image/width=1092/images/external-links/1/1.jpeg" alt="LinkMe" title="LinkMe"/></div>
+<div class="iconbox"><img src="https://media.link.me/_resize/image/width=64/images/style/icons/v5.0/Twitch-1.png" alt="Twitch"/></div>
+<div class="albumtextbox"><div class="first"><p><span style="color:#ffffffff">twitch</span></p></div></div></a>
+<a style="background-color:#000000ff" href="https://www.instagram.com/alice.example?igsh=AbCd%3D%3D&amp;utm_source=qr" class="singlealbum socialmedialink" target="_blank">
+<div class="iconbox"><img src="https://media.link.me/_resize/image/width=64/images/style/icons/v5.0/Instagram-1.png" alt="Instagram"/></div>
+<div class="albumtextbox"><div class="first"><p><span>instagram</span></p></div></div></a>
+</div><footer><a href="https://about.link.me/privacypolicy" class="underline">Privacy Policy</a>
+<a href="https://about.link.me/termsandconditions" class="underline">Terms</a></footer></main>
+<script class="$tsr">$R[0]={manifest:{css:["/build/index-AbCd.css"]},links:[{url:"https://twitch.tv/alice_live"},
+{url:"https://evil.example/from-the-script"}]}</script>
+<script type="module" async="" src="/build/entry-AbCd.js"></script></body></html>"""
+LINKME_KEPT = [
+    ("https://link.me/alice", ""), ("https://twitch.tv/alice_live", "twitch"),
+    ("https://www.instagram.com/alice.example?igsh=AbCd%3D%3D&utm_source=qr", "instagram"),
+]
+
+
+def test_a_linkme_page_keeps_its_links_only():
+    found, dropped = biofetch.shown_links(LINKME_PAGE, "https://link.me/alice", ROUTES)
+    assert found == LINKME_KEPT and dropped == 0
+    assert not any("link.me/" in url for url, _ in found[1:])        # no media., about. or the page again
+    table = {**ROUTES, "twitch.tv": "yt-dlp"}
+    assert {(p[0], p[1]) for p in filter(None, (biofetch.profile(x, table) for x in biofetch.page_links(LINKME_PAGE)))} \
+        == {("twitch", "alice_live"), ("instagram", "alice.example")}
+
+
+def test_a_linkme_import_end_to_end(bio, client, monkeypatch):
+    from test_people import post
+    post(client, "/api/config", {"routes": {**ROUTES, "twitch.tv": "yt-dlp"}})
+    net = Net(dns={"link.me": [PUBLIC]}, pages={("link.me", "/alice"): html_answer(LINKME_PAGE.encode())})
+    monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
+    r = bio_import(client, bio["id"], url="https://link.me/alice")
+    assert {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]} == {
+        ("twitch", "alice_live"): "new", ("instagram", "alice.example"): "linked"}
+    assert r["links"] == {"saved": 3, "already": 0, "elsewhere": 0, "over": 0, "dropped": 0}
+    assert saved(client, bio["id"]) == LINKME_KEPT
+    assert net.connects == [PUBLIC] and net.lookups == ["link.me"]
+
+
+@pytest.mark.parametrize("link", [
+    "https://media.link.me/_resize/image/width=64/images/a.png", "https://about.link.me/privacypolicy",
+    "https://link.me/bob", "https://www.link.me/alice",
+])
+def test_linkme_own_pages_are_not_links_to_keep(link):
+    assert biofetch._visitor_url(link, ("link.me",)) == (None, "plumbing")
 
 
 @pytest.mark.parametrize("link", [

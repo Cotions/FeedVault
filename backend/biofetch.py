@@ -60,6 +60,7 @@ SITES = {
     "campsite.bio": "Campsite: campsite.bio/<name>",
     "linkin.bio": "Later's Linkin.bio, for Instagram: linkin.bio/<name>",
     "allmylinks.com": "AllMyLinks: allmylinks.com/<name>",
+    "link.me": "Linkme: link.me/<name>",
 }
 PORT = 443
 URL_MAX = 2000
