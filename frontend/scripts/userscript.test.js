@@ -1044,13 +1044,18 @@ test("a tile's Save is sent for the tile it is in at the click", async () => {
   assert.deepEqual(sent(), [{ platform: "instagram", shortcode: "CRIGHT0001" }]);
 });
 
-test("the site's player is left alone: no Save or badge on a video, its clicks and keys go through", async () => {
-  const { page, grid: [still, reel] } = await igGrid(["CSTILL0001", "CREEL00001"], { video: "CREEL00001" });
+test("a reel tile's hover preview keeps its Save and badge; the video's clicks and keys go through", async () => {
+  const { page, grid: [still, reel], sent } = await igGrid(["CSTILL0001", "CREEL00001"], { video: "CREEL00001" });
   assert.ok(still.save());
-  assert.equal(reel.save(), null);
-  assert.equal(reel.a.querySelector(".fv-badge"), null);
+  assert.equal(reel.save().parentNode, reel.media);
   assert.equal(reel.a.style.position, undefined);
-  assert.equal(reel.media.children.at(-1), reel.player);
+  const e0 = reel.save().dispatch("click", true);
+  assert.ok(e0.defaultPrevented && e0.stopped);
+  assert.deepEqual(sent(), [{ platform: "instagram", shortcode: "CREEL00001" }]);
+  // Our nodes listen to nothing but the Save's own events: none on the
+  // video, the tile or its boxes.
+  for (const n of [reel.a, reel.media, reel.player]) assert.deepEqual(Object.keys(n.listeners), []);
+  assert.match(SOURCE, /\.\$\{BADGE_CLASS\} \{[^}]*pointer-events: none;/);
   let played = 0;
   reel.a.addEventListener("click", () => { played += 1; });
   open(page);
@@ -1061,12 +1066,36 @@ test("the site's player is left alone: no Save or badge on a video, its clicks a
   }
   assert.equal(played, 1);
   assert.ok(!opened(page));                          // a click outside still closes the menu
-  // A video showing up in a tile (a reel's preview on hover) takes ours off it.
-  still.media.appendChild(new Node("video"));
+  // A preview showing up on hover keeps the very same Save: nothing flickers.
+  const b = still.save();
+  const preview = still.media.appendChild(new Node("video"));
   page.run("paint()");
-  assert.equal(still.save(), null);
-  // And a click on a tile's image opens the post as it would.
+  assert.equal(still.save(), b);
+  preview.remove();
+  page.run("paint()");
+  assert.equal(still.save(), b);
+  // A click on a tile's image opens the post as it would.
   const e = still.img.dispatch("click", true);
+  assert.ok(!e.defaultPrevented && !e.stopped);
+});
+
+test("a saved reel's badge stays through its hover preview", async () => {
+  const { page, grid: [reel] } = await igGrid(["CREEL00001"], { saved: ["CREEL00001"] });
+  const badge = reel.a.querySelector(".fv-badge");
+  assert.ok(badge);
+  reel.media.appendChild(new Node("video"));
+  page.run("paint()");
+  assert.equal(reel.a.querySelector(".fv-badge"), badge);
+});
+
+test("a link round a real player, with its controls, gets nothing over them", async () => {
+  const { page, grid: [post] } = await igGrid(["CPLAYER001"]);
+  assert.ok(post.save());
+  const v = post.media.appendChild(new Node("video"));
+  v.setAttribute("controls", "");
+  page.run("paint()");
+  assert.equal(post.save(), null);
+  const e = v.dispatch("click", true);
   assert.ok(!e.defaultPrevented && !e.stopped);
 });
 

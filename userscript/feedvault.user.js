@@ -423,10 +423,14 @@ function paintTiles() {
     const ctl = a.querySelector(`.${TILE_SAVE_CLASS}`);
     // Only tiles with an image get a badge or a Save; plain text links
     // (timestamps, "view all comments") stay untouched.
-    // Nothing is laid over a tile with a video in it: the site's player
-    // stays the site's (a reel's preview, a post's video).
+    // A tile's hover preview (a reel's muted <video>) keeps both: the badge
+    // takes no pointer, the Save is a small button in its corner with only
+    // its own listeners. A link round a real player, one with controls,
+    // gets neither: its corners are the player's own buttons (mute, full
+    // screen), and nothing of ours goes over them.
     const img = a.querySelector("img");
-    if (!img || a.querySelector("video")) { has?.remove(); ctl?.remove(); continue; }
+    const player = [...a.querySelectorAll("video")].some((v) => v.hasAttribute("controls"));
+    if (!img || player) { has?.remove(); ctl?.remove(); continue; }
     if (state) {
       ctl?.remove();
       const frame = has ? null : frameOf(a, img);
