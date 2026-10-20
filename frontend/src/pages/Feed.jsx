@@ -314,7 +314,7 @@ export default function Feed() {
     ? authors.find(a => (a.id === author || a.aliases?.includes(author)) && (!platform || a.platform === platform)) : null;
   const selectedPerson = person ? (peopleApi.data || []).find(p => String(p.id) === person) : null;
 
-  // On a phone the filters fold behind a toggle; Sort and Select stay beside it.
+  // On a phone the filters fold behind a toggle; Sort stays beside it.
   const [filtersOpen, setFiltersOpen] = useFiltersOpen();
   // Sort's choices in short there, so they fit beside the toggle.
   const phone = usePhone();
@@ -356,12 +356,27 @@ export default function Feed() {
             </span>
           )}
         </>}
-        actions={newCount > 0 && (
-          <button type="button" className="btn-secondary" onClick={runMarkSeen} disabled={marking}
-                  title="These new posts stop being new; any indexed since stay new">
-            <Icon name="check" size={14} />{marking ? "Marking…" : "Mark all seen"}
-          </button>
-        )}
+        actions={<>
+          {newCount > 0 && (
+            <button type="button" className="btn-secondary" onClick={runMarkSeen} disabled={marking}
+                    title="These new posts stop being new; any indexed since stay new">
+              <Icon name="check" size={14} />{marking ? "Marking…" : "Mark all seen"}
+            </button>
+          )}
+          {/* In the head, as on Creators: the filter bar keeps its row. */}
+          {posts.length > 0 && (
+            <button
+              type="button"
+              className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
+              onClick={() => (sel.active ? sel.exit() : sel.enter())}
+              aria-pressed={sel.active}
+              title={sel.active ? "Leave select mode (Esc)" : "Select posts to tag, keep or delete"}
+            >
+              <Icon name={sel.active ? "close" : "check"} size={14} />
+              {sel.active ? "Done" : "Select"}
+            </button>
+          )}
+        </>}
       />
       <div className="card feed">
         <div className={`feed-filters feed-fold${filtersOpen ? " is-open" : ""}`} role="group" aria-label="Filters">
@@ -374,7 +389,9 @@ export default function Feed() {
               onClick={() => setParam({ new: newOnly ? "" : "1" })}
               title="Only posts indexed since you last marked everything seen"
             >
-              <Icon name="refresh" size={13} />New since last visit{newCount > 0 ? ` (${fmtInt(newCount)})` : ""}
+              {/* "since last visit" stays in the name, and in sight from 1366px wide. */}
+              <Icon name="refresh" size={13} />
+              <span>New<span className="feed-new-more"> since last visit</span>{newCount > 0 ? ` (${fmtInt(newCount)})` : ""}</span>
             </button>
             <label className="filter">
               <span>Platform</span>
@@ -440,7 +457,8 @@ export default function Feed() {
             {(collections.length > 0 || collection) && (
               <label className="filter filter-collection">
                 <span>Collection</span>
-                <select className="sort-select" value={collection} onChange={e => setParam({ collection: e.target.value })}>
+                <select className="sort-select" value={collection} onChange={e => setParam({ collection: e.target.value })}
+                        title={selectedCollection?.name}>
                   <option value="">Any</option>
                   {collection && !selectedCollection && <option value={collection} disabled>collection {collection}</option>}
                   {collections.map(c => <option key={c.id} value={String(c.id)}>{c.name} ({c.count})</option>)}
@@ -496,18 +514,6 @@ export default function Feed() {
                 <Icon name="refresh" size={14} />Re-review
               </Link>
             </>
-          )}
-          {posts.length > 0 && (
-            <button
-              type="button"
-              className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
-              onClick={() => (sel.active ? sel.exit() : sel.enter())}
-              aria-pressed={sel.active}
-              title={sel.active ? "Leave select mode (Esc)" : "Select posts to tag, keep or delete"}
-            >
-              <Icon name={sel.active ? "close" : "check"} size={14} />
-              <span className="select-toggle-label">{sel.active ? "Done" : "Select"}</span>
-            </button>
           )}
         </div>
 

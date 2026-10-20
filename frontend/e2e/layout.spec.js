@@ -114,7 +114,7 @@ const DIALOGS = [
     name: "Feed › Tag selected posts",
     open: async page => {
       await openUrl(page, `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`, pg => pg.locator("article.post-card").first());
-      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator(".page-head .select-toggle").click();
       await page.locator("article.post-card").first().click();
       await page.getByRole("button", { name: /^Tag…/ }).click();
     },
@@ -463,6 +463,52 @@ test("the sidebar fits without scrolling", async ({ page }, testInfo) => {
     // 3px: room for the focus ring (box-shadow var(--ring)) below the last entry.
     if (m.lastBottom > m.navBottom - 3) problems.push(`${at}: "${m.lastText}" ends at ${m.lastBottom}, the sidebar at ${m.navBottom}`);
     if (m.small.length) problems.push(`${at}: entries under 24px: ${m.small.join(", ")}`);
+  }
+  expect(problems, problems.join("\n")).toEqual([]);
+});
+
+// The Feed's filter bar (Feed.jsx): Select is in the page's head, as on
+// Creators, not in the bar. With the filters a vault without collections
+// shows (New since last visit, Platform, Kind, Creator, Tags, Review,
+// Sort: /api/collections answered empty, so no Collection filter) the bar
+// is one row at 1440x900, Sort at its right end. With the stress vault's
+// collection too, or at 1280x800, it takes two rows at most, Sort still
+// ending on the right.
+async function feedBar(page) {
+  return page.evaluate(() => {
+    const bar = document.querySelector(".feed-filters");
+    const b = bar.getBoundingClientRect();
+    const items = [...bar.querySelectorAll(":scope > *, .feed-scope > *")]
+      .filter(e => !e.matches(".feed-scope, .page-head-spacer") && e.getBoundingClientRect().width > 0);
+    const sort = bar.querySelector(".filter-sort").getBoundingClientRect();
+    return {
+      rows: new Set(items.map(e => Math.round(e.getBoundingClientRect().bottom))).size,
+      sortRight: sort.right, barRight: b.right,
+      select: [...bar.querySelectorAll("button")].some(x => /^(Select|Done)$/.test(x.textContent.trim())),
+    };
+  });
+}
+
+test("the Feed's filter bar is one row at 1440, Select in the head", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "layout-zoom", "measured at 1280x800 and 1440x900");
+  const problems = [];
+  const noCollections = url => url.pathname === "/api/collections";
+  for (const collections of [false, true]) {
+    if (!collections) await page.route(noCollections, route => route.fulfill({ json: [] }));
+    else await page.unroute(noCollections);
+    await openPage(page, PAGES[0]);
+    await expect(page.locator(".filter-collection")).toHaveCount(collections ? 1 : 0);
+    await expect(page.locator(".page-head-actions").getByRole("button", { name: "Select", exact: true })).toBeVisible();
+    for (const s of [SIZES[2], SIZES[1]]) {
+      await page.setViewportSize({ width: s.width, height: s.height });
+      await settle(page);
+      const m = await feedBar(page);
+      const at = `Feed${collections ? " with a collection" : ""} at ${s.label}`;
+      if (m.select) problems.push(`${at}: Select is in the filter bar`);
+      const most = !collections && s === SIZES[2] ? 1 : 2;
+      if (m.rows > most) problems.push(`${at}: the filter bar takes ${m.rows} rows (${most} at most)`);
+      if (Math.abs(m.sortRight - m.barRight) > 1) problems.push(`${at}: Sort ends at x=${m.sortRight}, the bar at x=${m.barRight}`);
+    }
   }
   expect(problems, problems.join("\n")).toEqual([]);
 });

@@ -70,7 +70,7 @@ test("Review: Keep is on screen without a scroll; keep, trash and undo by tap", 
 test("Feed: a toast after Keep leaves the selection bar's buttons free", async ({ page }) => {
   await fakeDecisions(page);
   await openPage(page, PAGES[0]);
-  await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().tap();
+  await page.locator(".page-head .select-toggle").tap();
   await page.locator("article.post-card").first().tap();
   await page.locator(".select-bar").getByRole("button", { name: "Keep", exact: true }).tap();
   await expect(page.locator(".toast")).toBeVisible();
