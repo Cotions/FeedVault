@@ -616,11 +616,16 @@ function ReviewSession({ scope, scopeControls, againTo }) {
             <button type="button" className="btn-danger" onClick={e => act(e, trashPost)} disabled={!cur || busy}>
               <Icon name="trash" size={15} />Trash post<Kbd>D</Kbd>
             </button>
-            {media.length > 1 && (
-              <button type="button" className="btn-danger-soft" onClick={e => act(e, trashItem)} disabled={!m || busy}>
-                <Icon name="trash" size={14} />Trash <span className="review-wide">this </span>item<Kbd>X</Kbd>
-              </button>
-            )}
+            {/* Always there, so Keep and Trash post never move between posts. */}
+            <button
+              type="button"
+              className={`btn-danger-soft${media.length > 1 ? "" : " is-single"}`}
+              onClick={e => act(e, trashItem)}
+              disabled={media.length < 2 || !m || busy}
+              title={cur && media.length < 2 ? "This post has a single item" : undefined}
+            >
+              <Icon name="trash" size={14} />Trash <span className="review-wide">this </span>item<Kbd>X</Kbd>
+            </button>
             <div className="review-actions-row">
               <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "prev" }))} title="Previous post (↑ or J)" aria-label="Previous post">
                 <Icon name="arrowUp" size={14} /><Kbd>↑</Kbd>
