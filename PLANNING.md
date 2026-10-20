@@ -94,11 +94,13 @@ are in the README ("Downloading with …"), not in code.
 already in the index with a green "saved" badge, like ChannelVault's. It asks
 the backend in batches for the post IDs visible on the page.
 
-Posts not saved yet get a "Save to FeedVault" button that hands the post to a
-save job. The button shows queued / saving / failed, then turns into a link
-once the rescan picks the post up. Grid tiles not saved yet get their own
-small Save (on hover or focus), sharing the same states, so a post is saved
-without opening it. Profile pages get a "Sync profile" button.
+Its actions sit in one small bubble that can be dragged anywhere, its menu
+holding what the page offers. Posts not saved yet get "Save post", which hands
+the post to a save job: it shows queued / saving / failed, then turns into
+"View in FeedVault" once the rescan picks the post up. Grid tiles not saved
+yet get their own small round Save (on hover or focus), sharing the same
+states, so a post is saved without opening it. Profile pages get "Add profile"
+(the source only, nothing downloaded) and "Sync now".
 
 ## Dashboard
 

@@ -321,26 +321,43 @@ URLs): installed from the demo on 3389, or with `FEEDVAULT_PORT` set, it
 talks to that instance. It runs on Instagram,
 X (x.com, twitter.com) and TikTok (www.tiktok.com), and on the link-in-bio
 sites below. Saved posts get a green
-"saved" badge in grids, and a post page shows an "In FeedVault" link.
-A post FeedVault does not have gets a **Save to FeedVault** button instead (on
-the post page and in the dialog a grid opens on Instagram): it downloads that
-one post, and turns into the link once it is indexed. It shows Queued,
-Saving… and, when it fails, why; with FeedVault stopped it says "FeedVault is
-not running". Several saves in a row queue up (at most 20 at once,
-`save_queue_max` in the config). The corner panel these buttons sit in can be
-dragged by its **⠿ FV** grip; it remembers its spot per site (on X it starts
-left of X's own corner buttons), and a double-click on the grip puts it back.
+"saved" badge in grids.
+
+Everything else is in one small round **FV** bubble, on every page the script
+runs on (bottom right; on X left of X's own corner buttons). It stays faded
+until the pointer is on it. Drag it anywhere: it remembers its spot per site,
+and a double-click (or **Reset bubble position** in its menu) puts it back.
+A click opens its menu, toward the side of the screen with room; another
+click, Escape or a click elsewhere closes it. What you start there shows its
+progress in the menu, and a dot on the closed bubble says how the page
+stands: green when its post (or profile) is in FeedVault, blue and turning
+while a save or sync runs, red when one failed or FeedVault is not running
+(its tooltip says which; the menu says why). The menu holds:
+
+- On a post (its page, or the dialog a grid opens on Instagram): **Save
+  post** downloads that one post, showing Sending…, Queued, Saving… and, when
+  it fails, why (with a link to Settings → Downloaders for a missing tool);
+  once FeedVault has it, **View in FeedVault**. Several saves in a row queue
+  up (at most 20 at once, `save_queue_max` in the config).
+- On a profile: **Add profile** adds the profile's source (it asks first,
+  naming the tool and folder) and downloads nothing; **Sync now** syncs that
+  source, with its progress ("Sync queued", "Syncing…", "Synced: …"); **View
+  in FeedVault** opens the person, the account's posts, or the new source in
+  Creators. Each says why when it cannot be used ("Already in FeedVault", "Add
+  the profile first", "Not in FeedVault yet").
+- On a person's link-in-bio page: **Save links** (below).
+- Everywhere: **Add this page to Links**, **Open FeedVault** and **Reset
+  bubble position**.
 
 Grid tiles (a profile's grid, timelines, search results, the "more posts"
-under a post) get the same, without opening the post: a tile FeedVault does
-not have shows a small **Save** in its bottom-right corner (top-right on X,
-where X has its own button bottom right) while the pointer
-is on it (or it has the keyboard focus), and keeps showing Sending…, Queued,
-Saving… or "Failed — retry" (why, in its tooltip) until the tile turns
-"saved". Each tile saves its own post, several at once, and a post page and
-its tile show the same save. Only tiles whose link names everything a save
-needs get one: on TikTok, a link without the `@name`, and photo posts, do
-not.
+under a post) can be saved without opening the post: a tile FeedVault does
+not have shows a small round **↓** in its bottom-right corner (top-right on
+X, where X has its own button bottom right) while the pointer is on it (or it
+has the keyboard focus). It turns while the save runs and gets a red ring
+when it fails (why, in its tooltip), until the tile turns "saved". Each tile
+saves its own post, several at once, and a post's tile and the bubble's Save
+post show the same save. Only tiles whose link names everything a save needs
+get one: on TikTok, a link without the `@name`, and photo posts, do not.
 
 - Instagram: instaloader, into its owner's folder: the one of its source,
   else the one holding its posts, else `<first media root>/instagram/<name>`
@@ -358,17 +375,15 @@ not.
   refused, open it and save from the post's page. The tool's settings apply
   (browser cookies, ignoring your config).
 
-A profile page gets a **Sync profile** button: it syncs the profile's
-source, or first adds one (it asks, in the button itself, naming the tool and
-folder), and links to the person or account in FeedVault. A source that runs
-a script, or one whose sync logs in (browser cookies, an instaloader
-session), is only synced from the dashboard: the button says so and links
-there. A source the button adds downloads without a login, whatever your
-download defaults or tool settings say.
+A profile's source that runs a script, or one whose sync logs in (browser
+cookies, an instaloader session), is only synced from the dashboard: Sync now
+says so and links there. One set to Don't sync in FeedVault offers neither Add
+profile nor Sync now. A source Add profile adds downloads without a login,
+whatever your download defaults or tool settings say.
 
 On a person's link-in-bio page (linktr.ee, beacons.ai, lnk.bio, solo.to,
-campsite.bio, linkin.bio, allmylinks.com, link.me), a **Save links to
-FeedVault** panel saves the page and the links it shows into a person's **Links**, or
+campsite.bio, linkin.bio, allmylinks.com, link.me), the bubble's **Save
+links** saves the page and the links it shows into a person's **Links**, or
 into Unsorted: pick the person (recent ones first, or search), confirm, and
 it says what came of it ("4 saved, 2 already there"). It reads the links as
 your browser shows them, so pages drawn by JavaScript work, and nothing is
@@ -377,10 +392,10 @@ saved already keeps its title and person, and nothing is removed. It is
 under the same switch (**Settings → Downloads → Link-in-bio import**).
 Links are bookmarks: nothing is downloaded from them.
 
-On every page the script runs on, the userscript manager's menu has **Add
-this page to FeedVault Links**: the page's address and title go to Unsorted.
-The script runs only on the sites above, so the command is not on other
-sites.
+**Add this page to Links** (in the bubble, and as **Add this page to
+FeedVault Links** in the userscript manager's menu) sends the page's address
+and title to Unsorted. The script runs only on the sites above, so neither is
+on other sites.
 
 ## Jobs and tools
 

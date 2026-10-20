@@ -1604,8 +1604,8 @@ import); `backend/biofetch.py`.
 The same import from the [userscript](#save-from-the-browser-userscript),
 with the links as the browser rendered them (so a page drawn by JavaScript
 works too) and **nothing fetched**, by the browser's extension or by
-FeedVault: on a person's page of one of the sites above, the userscript's
-**Save links to FeedVault** panel sends the page's address and its
+FeedVault: on a person's page of one of the sites above, the userscript
+bubble's **Save links** sends the page's address and its
 outbound `<a href>` links with their text, to a person's Links or to no
 one's (**Unsorted**). Under the same switch (`bio_import`, Settings →
 Downloads → Link-in-bio import): it is the same feature, from another
@@ -2753,9 +2753,11 @@ confirm.
 
 ## Save from the browser (userscript)
 
-The userscript adds a **Save** button to a post (its page, and each grid
-tile linking to it) and a **Sync profile** button to a profile page, on
-Instagram, X (x.com, twitter.com) and TikTok (www.tiktok.com). A tile's
+The userscript puts one small movable bubble on every page it runs on, its
+menu holding what the page offers: **Save post** on a post's page (and a
+Save on each grid tile linking to a post), **Add profile** and **Sync now**
+on a profile page, on Instagram, X (x.com, twitter.com) and TikTok
+(www.tiktok.com). A tile's
 Save sends the same body as the post page's, built from the tile link's
 `href` (read again at the click, held to the same whole-path pattern as a
 post page, on the site's own host), and stops the click from opening the
@@ -2765,17 +2767,17 @@ a command.
 
 On a person's page of a link-in-bio site (`linktr.ee`, `beacons.ai`,
 `lnk.bio`, `solo.to`, `campsite.bio`, `linkin.bio`, `allmylinks.com`, `link.me`: the
-bio import's sites, each with its own `@match`), a **Save links to
-FeedVault** panel asks for a person (`GET /api/links/people`; recent ones
+bio import's sites, each with its own `@match`), the bubble's **Save
+links** asks for a person (`GET /api/links/people`; recent ones
 first, a search box, or "No person (Unsorted)") and sends the page's
 outbound links as rendered, read from its `<a href>`s at the click
 (`http`/`https`, no login part, none on the site's own hosts, each once, at
 most 200), to `POST /api/links/import`; it says what came of it ("4 saved,
 2 already there"). See [Save links from the browser](#save-links-from-the-browser).
 On every page the script runs on (those sites and Instagram, X and
-TikTok, nowhere else), the userscript manager's menu has **Add this page
-to FeedVault Links**: the page's address and title, to no one, by
-`POST /api/links`.
+TikTok, nowhere else), the bubble's **Add this page to Links** and the
+userscript manager's menu item **Add this page to FeedVault Links** send the
+page's address and title, to no one, by `POST /api/links`.
 
 **Who talks to FeedVault.** Only the userscript, through
 `GM_xmlhttpRequest` (`@connect localhost`, `@connect 127.0.0.1`). The page
@@ -2831,17 +2833,19 @@ this machine is a 403 as for any URL. The host stays `localhost`, and
   `yt-dlp-post`: they are only started here, with the checks above.
 - `POST /api/saved` and `have` answer for `twitter:<id>` and `tiktok:<id>`
   as for `instagram:<shortcode>` (`path` `/p/twitter/<id>`).
-- The **Sync profile** button uses the source endpoints as they are:
+- **Add profile** and **Sync now** use the source endpoints as they are:
   `GET /api/sources/resolve` (`?tool=instaloader&url=<name>` on Instagram,
   `?url=https://x.com/<name>` or `?url=https://www.tiktok.com/@<name>`
   elsewhere: the tool, the target, the folder, and the source already
-  there, if any), `GET /api/sources/<id>` for that source, `POST
-  /api/sources` with `{ "tool": "instaloader", "target": "<name>" }` or `{
-  "target": "<the profile's link>" }` (the routing table picks the tool) after the
-  user confirms, then `POST /api/sources/<id>/sync`. Its state is read from
-  `GET /api/jobs/<id>`. A source with a script (`options.script`) is
-  refused there with a 403 (see [Scripts](#scripts)): the button says it
-  is synced from the dashboard and links to its person, else Creators.
+  there, if any) and `GET /api/sources/<id>` for that source. **Add
+  profile** sends `POST /api/sources` with `{ "tool": "instaloader",
+  "target": "<name>" }` or `{ "target": "<the profile's link>" }` (the
+  routing table picks the tool) after the user confirms, and nothing else:
+  it downloads nothing. **Sync now**, its own click, sends `POST
+  /api/sources/<id>/sync`; its state is read from `GET /api/jobs/<id>`. A
+  source with a script (`options.script`) is refused there with a 403 (see
+  [Scripts](#scripts)): Sync now says it is synced from the dashboard and
+  links to its person, else Creators.
 
 **Post links (X and TikTok).** Parsed strictly, nothing fetched:
 
