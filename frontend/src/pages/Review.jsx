@@ -19,7 +19,7 @@ import { useSwipe } from "../lib/swipe";
 import { useFiltersOpen } from "../lib/useFiltersOpen";
 import FiltersToggle from "../components/FiltersToggle";
 import PageHeader from "../components/PageHeader";
-import { PAGE, initial, nextUndecided, reducer } from "../lib/reviewQueue";
+import { PAGE, initial, listPlace, nextUndecided, reducer } from "../lib/reviewQueue";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
 
@@ -31,7 +31,14 @@ import { PAGE, initial, nextUndecided, reducer } from "../lib/reviewQueue";
    offset = number of undecided posts we hold. Ids already held are filtered
    out as a guard against a rescan shifting things. Tagging can take a post
    out of a tag scope (or the untagged one) on the server too, so those are
-   not counted either. */
+   not counted either.
+
+   Re-review (`again=1`): the same queue over every post in the scope, kept
+   ones too, to go through a creator again. A keep leaves a post on that
+   list and only a trash takes it off, so the offset counts every post held
+   but the trashed ones (lib/reviewQueue.js's listPlace has both rules). A
+   post kept before the session says so ("Kept"); K on it moves on and
+   leaves it as it is, and so does undoing that K. */
 
 const TOP_UP_BELOW = 10;
 const PRELOAD_AHEAD = 2;
@@ -73,7 +80,7 @@ function Kbd({ children }) {
   return <kbd className="kbd">{children}</kbd>;
 }
 
-function ReviewSession({ scope, scopeControls }) {
+function ReviewSession({ scope, scopeControls, againTo }) {
   const toast = useToast();
   const { started } = useJobs();
   const [state, dispatch] = useReducer(reducer, initial);
@@ -126,21 +133,27 @@ function ReviewSession({ scope, scopeControls }) {
     return n;
   }, [queue, status, pos]);
   const undecidedHeld = useMemo(() => queue.filter(p => !status[p.id]).length, [queue, status]);
-  const outOfScope = useMemo(
-    () => queue.filter(p => !status[p.id] && tagsOf[p.id] && !tagsMatch(tagsOf[p.id], scope.tag, scope.untagged)).length,
-    [queue, status, tagsOf, scope]);
+  const place = useMemo(() => listPlace(queue, status, {
+    again: scope.again,
+    outOfScope: p => !!tagsOf[p.id] && !tagsMatch(tagsOf[p.id], scope.tag, scope.untagged),
+  }), [queue, status, tagsOf, scope]);
+  // A re-review's total counts the posts kept this session: taken off it
+  // as the answer comes, a K pressed while it was on its way included.
+  const decidedRef = useRef(0);
+  useEffect(() => { decidedRef.current = place.decided; });
 
   // Top up the queue when it runs low.
   useEffect(() => {
     if (exhausted || fetchingRef.current || undecidedAhead >= TOP_UP_BELOW) return;
     fetchingRef.current = true;
-    getPosts({ ...scope, review: "unreviewed", sort: "posted", offset: undecidedHeld - outOfScope, limit: PAGE })
+    const { again, ...filters } = scope;
+    getPosts({ ...filters, ...(again ? {} : { review: "unreviewed" }), sort: "posted", offset: place.offset, limit: PAGE })
       .then(
-        r => dispatch({ type: "loaded", posts: r.posts || [], total: r.total ?? 0 }),
+        r => dispatch({ type: "loaded", posts: r.posts || [], total: Math.max(0, (r.total ?? 0) - decidedRef.current) }),
         e => dispatch({ type: "error", error: e }),
       )
       .finally(() => { fetchingRef.current = false; });
-  }, [exhausted, undecidedAhead, undecidedHeld, outOfScope, scope]);
+  }, [exhausted, undecidedAhead, place.offset, scope]);
 
   // Full posts (media lists) for the current one and the next few.
   const fetchFull = useCallback(p => {
@@ -192,10 +205,15 @@ function ReviewSession({ scope, scopeControls }) {
     finally { busyRef.current = false; setBusy(false); }
   }, [toast]);
 
+  // A post kept before this session (a re-review's) is not sent again: it
+  // stays kept as it was, and its undo has nothing to clear.
   const keep = () => cur && run(async () => {
-    const r = await setDecision([cur.id], "keep");
-    if (!r?.ok) { toast(r?.error || "Could not mark as kept.", "err"); return; }
-    setUndo(u => [...u, { type: "keep", post: cur, index: pos }]);
+    const already = cur.decision === "keep";
+    if (!already) {
+      const r = await setDecision([cur.id], "keep");
+      if (!r?.ok) { toast(r?.error || "Could not mark as kept.", "err"); return; }
+    }
+    setUndo(u => [...u, { type: "keep", post: cur, index: pos, already }]);
     setSession(s => ({ ...s, kept: s.kept + 1 }));
     dispatch({ type: "decide", id: cur.id, decision: "keep" });
   });
@@ -234,8 +252,10 @@ function ReviewSession({ scope, scopeControls }) {
   const undoLast = () => undo.length && run(async () => {
     const e = undo[undo.length - 1];
     if (e.type === "keep") {
-      const r = await setDecision([e.post.id], null);
-      if (!r?.ok) { toast(r?.error || "Undo failed.", "err"); return; }
+      if (!e.already) {
+        const r = await setDecision([e.post.id], null);
+        if (!r?.ok) { toast(r?.error || "Undo failed.", "err"); return; }
+      }
       setSession(s => ({ ...s, kept: s.kept - 1 }));
       dispatch({ type: "undecide", id: e.post.id, index: e.index });
     } else {
@@ -443,7 +463,7 @@ function ReviewSession({ scope, scopeControls }) {
     stage = (
       <div className="review-empty">
         <Icon name="check" size={34} className="review-done-mark" />
-        <h3>{scope.new ? "Nothing new left to review" : "Nothing left to review in this scope"}</h3>
+        <h3>{scope.again ? "Re-review done" : scope.new ? "Nothing new left to review" : "Nothing left to review in this scope"}</h3>
         <p className="mono">
           this session: {session.kept} kept · {session.trashed} trashed{session.items ? ` · ${session.items} items` : ""}
         </p>
@@ -451,6 +471,11 @@ function ReviewSession({ scope, scopeControls }) {
           <button type="button" className="btn-secondary" onClick={() => dispatch({ type: "goto", index: nextUndecided(queue, status, -1) })}>
             Back to the {skipped} skipped post{skipped === 1 ? "" : "s"}
           </button>
+        )}
+        {!scope.again && (
+          <Link className="btn-secondary" to={againTo} title="The same scope again, with the posts you kept">
+            <Icon name="refresh" size={14} />Re-review all posts, kept too
+          </Link>
         )}
         {undo.length > 0 && <p className="dim">Press <Kbd>Z</Kbd> to undo the last decision.</p>}
       </div>
@@ -497,7 +522,7 @@ function ReviewSession({ scope, scopeControls }) {
 
   return (
     <div className="review-page">
-      <PageHeader title="Review" />
+      <PageHeader title={scope.again ? "Re-review" : "Review"} />
       <div className="review" ref={rootRef}>
         <div className="review-stage" ref={stageRef} {...swipe}>
           {stage}
@@ -523,7 +548,7 @@ function ReviewSession({ scope, scopeControls }) {
 
           <div className="review-progress">
             <span className="review-left mono">{left == null ? "…" : left.toLocaleString()}</span>
-            <span className="dim">left to review</span>
+            <span className="dim">{scope.again ? "left in this pass" : "left to review"}</span>
             <span className="review-session mono">
               <span className="ok-text">{session.kept} kept</span> · <span className="warn-text">{session.trashed} trashed</span>
               {session.items > 0 && <> · {session.items} item{session.items === 1 ? "" : "s"}</>}
@@ -535,6 +560,9 @@ function ReviewSession({ scope, scopeControls }) {
               <div className="review-byline">
                 <PlatformIcon platform={cur.platform} />
                 <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
+                {cur.decision === "keep" && status[cur.id] !== "trash" && (
+                  <span className="chip review-kept" title="Marked as kept before this session"><span className="kept-dot" aria-hidden="true" />Kept</span>
+                )}
                 {media.length > 1 && <span className="chip">{safeItem + 1}/{media.length}</span>}
                 <span className="chip">{cur.kind}</span>
               </div>
@@ -658,15 +686,16 @@ export default function Review() {
   const tag      = params.get("tag") || "";
   const untagged = !tag && params.get("untagged") === "1";
   const newOnly  = params.get("new") === "1";
+  const again    = params.get("again") === "1";
   const collection = /^\d+$/.test(params.get("collection") || "") ? params.get("collection") : "";
-  const scope    = useMemo(() => ({ platform, author, person, kind, order, tag: tag ? [tag] : [], untagged, new: newOnly, collection }),
-    [platform, author, person, kind, order, tag, untagged, newOnly, collection]);
+  const scope    = useMemo(() => ({ platform, author, person, kind, order, tag: tag ? [tag] : [], untagged, new: newOnly, collection, again }),
+    [platform, author, person, kind, order, tag, untagged, newOnly, collection, again]);
   const scopeKey = JSON.stringify(scope);
 
   const [filtersOpen, setFiltersOpen] = useFiltersOpen();
   // A creator account sets its platform too: one filter, not two (a person
   // and a platform are two).
-  const active = [author || person, !author && platform, kind, tag || untagged, collection, newOnly, order === "asc"].filter(Boolean).length;
+  const active = [author || person, !author && platform, kind, tag || untagged, collection, newOnly, again, order === "asc"].filter(Boolean).length;
 
   const { data: authorsData } = useApi(getAuthors, 0);
   const { data: peopleData } = useApi(getPeople, 0);
@@ -685,6 +714,9 @@ export default function Review() {
     for (const [k, v] of Object.entries(changes)) { if (v) next.set(k, v); else next.delete(k); }
     setParams(next, { replace: true });
   }
+  // This scope again, kept posts too: where the done screen goes on to.
+  const againParams = new URLSearchParams(params);
+  againParams.set("again", "1");
 
   const controls = (
     <div className={`review-filters${filtersOpen ? " is-open" : ""}`}>
@@ -739,6 +771,10 @@ export default function Review() {
           <option value="">New and old</option>
           <option value="1">New since last visit</option>
         </select>
+        <select className="sort-select" aria-label="Posts to review" value={again ? "1" : ""} onChange={e => setParam({ again: e.target.value })}>
+          <option value="">Unreviewed only</option>
+          <option value="1">Kept posts too</option>
+        </select>
         <select className="sort-select" aria-label="Order" value={order} onChange={e => setParam({ order: e.target.value === "asc" ? "asc" : "" })}>
           <option value="desc">Newest first</option>
           <option value="asc">Oldest first</option>
@@ -748,5 +784,5 @@ export default function Review() {
   );
 
   // A new scope is a new session: fresh queue, counts and undo stack.
-  return <ReviewSession key={scopeKey} scope={scope} scopeControls={controls} />;
+  return <ReviewSession key={scopeKey} scope={scope} scopeControls={controls} againTo={`/review?${againParams}`} />;
 }

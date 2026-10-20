@@ -58,6 +58,18 @@ const VIEWS = [
   ...PAGES.map(p => ({ name: p.name, open: page => openPage(page, p) })),
   { name: "Review, stress post", open: page => openUrl(page, `/review?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`,
     pg => pg.locator(".review-open")) },
+  // A re-review of the 60-character creator, its posts all shown as kept
+  // before (the answers only: nothing is decided), for the "Kept" chip.
+  { name: "Re-review, kept stress post", open: async page => {
+    await page.route(url => url.pathname === "/api/posts", async route => {
+      const response = await route.fetch();
+      const json = await response.json();
+      for (const p of json.posts || []) p.decision = "keep";
+      await route.fulfill({ response, json });
+    });
+    await openUrl(page, `/review?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}&again=1`,
+      pg => pg.locator(".review-kept"));
+  } },
   { name: "Post", open: page => openUrl(page, `/p/${S.post.platform}/${S.post.post_id}`, pg => pg.locator(".post-page-head")) },
   { name: "Creator", open: page => openUrl(page, `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`,
     pg => pg.locator("article.post-card").first()) },

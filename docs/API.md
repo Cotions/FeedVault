@@ -766,7 +766,10 @@ Every post summary carries `"decision": "keep"` or `"decision": null`.
 `"kept"` and `"unreviewed"` counts.
 
 Undo in the review screen: after a trash, call `/api/trash/restore` with that
-post id; after a keep, call `/api/review` with `decision: null`.
+post id; after a keep, call `/api/review` with `decision: null`. A re-review
+(`/review?again=1`) lists the scope's posts with no `review` filter, kept ones
+too; a keep on a post that was already kept sends nothing, so its undo has
+nothing to clear either.
 
 `/api/posts` query parameters, all optional:
 

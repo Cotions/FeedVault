@@ -13,6 +13,25 @@ export function prevUndecided(queue, status, from) {
   return -1;
 }
 
+// Where the next page starts in the server's list, and how many of the posts
+// held on it this session has decided already. A normal session reads the
+// `review=unreviewed` list, which a decision leaves: the posts held on it are
+// the undecided ones, none decided. A re-review (`again`) reads every post in
+// the scope, which a keep stays on and only a trash leaves: the posts kept
+// this session are held on it, decided, not left in this pass. In both, a
+// post tagged out of a tag scope (or the untagged one) has left it too:
+// `outOfScope`, a test on a held post.
+export function listPlace(queue, status, { again = false, outOfScope = () => false } = {}) {
+  let offset = 0, decided = 0;
+  for (const p of queue) {
+    const st = status[p.id];
+    if (st === "trash" || (st && !again) || outOfScope(p)) continue;
+    offset++;
+    if (st) decided++;
+  }
+  return { offset, decided };
+}
+
 export const initial = { queue: [], status: {}, pos: 0, left: null, exhausted: false, error: null };
 
 export function reducer(s, a) {

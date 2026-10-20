@@ -346,7 +346,7 @@ export default function PersonPage() {
   const mine = (sources.data?.sources || []).filter(s => s.person?.id === p.id);
   // Suggestions that would add accounts to this person.
   const suggested = (suggestApi.data?.suggestions || []).filter(s => s.person?.id === p.id);
-  const scoped = path => `${path}?${new URLSearchParams({ person: p.id })}`;
+  const scoped = (path, more) => `${path}?${new URLSearchParams({ person: p.id, ...more })}`;
   const notesValue = notes ?? p.notes;
   const fresh = (newApi.data?.by_person || []).find(r => r.id === p.id);
   const muted = !!newApi.data?.muted?.people?.includes(p.id);
@@ -400,7 +400,14 @@ export default function PersonPage() {
             <div className="person-bar">
               <nav className="person-links" aria-label={`${p.name} across the app`}>
                 <Link to={scoped("/")} className="btn-secondary review-link"><Icon name="feed" size={14} /> Feed</Link>
-                <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
+                {/* Re-review is an icon joined to Review: in words it pushes Mute off this line at 1280. */}
+                <span className="link-pair">
+                  <Link to={scoped("/review")} className="btn-secondary review-link"><Icon name="review" size={14} /> Review</Link>
+                  <Link to={scoped("/review", { again: "1" })} className="btn-secondary review-link" aria-label="Re-review"
+                        title="Re-review: all their posts again, the kept ones too, which stay kept unless you trash them">
+                    <Icon name="refresh" size={14} />
+                  </Link>
+                </span>
                 <Link to={scoped("/storage")} className="btn-secondary review-link"><Icon name="disk" size={14} /> Storage</Link>
                 <Link to={scoped("/stats")} className="btn-secondary review-link"><Icon name="chart" size={14} /> Stats</Link>
                 <Link to={scoped("/trash")} className="btn-secondary review-link"><Icon name="trash" size={14} /> Trash</Link>
