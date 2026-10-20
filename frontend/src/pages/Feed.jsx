@@ -333,6 +333,8 @@ export default function Feed() {
   const firstLoad = result.key === null && !result.error;
   const error = current ? result.error : null;
   const showEmpty = current && !error && result.total === 0;
+  // Review's scope for the creator or person shown (and New with it).
+  const reviewScope = { ...(person ? { person } : { ...(platform ? { platform } : {}), author }), ...(newOnly ? { new: "1" } : {}) };
 
   return (
     <>
@@ -478,13 +480,22 @@ export default function Feed() {
             </Link>
           )}
           {(author || person) && (
-            <Link
-              className="btn-secondary review-link"
-              to={`/review?${new URLSearchParams({ ...(person ? { person } : { ...(platform ? { platform } : {}), author }), ...(newOnly ? { new: "1" } : {}) })}`}
-              title={`Keep or trash this ${person ? "person" : "creator"}'s unreviewed posts, one by one`}
-            >
-              <Icon name="review" size={14} />Review this {person ? "person" : "creator"}
-            </Link>
+            <>
+              <Link
+                className="btn-secondary review-link"
+                to={`/review?${new URLSearchParams(reviewScope)}`}
+                title={`Keep or trash this ${person ? "person" : "creator"}'s unreviewed posts, one by one`}
+              >
+                <Icon name="review" size={14} />Review this {person ? "person" : "creator"}
+              </Link>
+              <Link
+                className="btn-secondary review-link"
+                to={`/review?${new URLSearchParams({ ...reviewScope, again: "1" })}`}
+                title={`Go through all of this ${person ? "person" : "creator"}'s posts again, the kept ones too: they stay kept unless you trash them`}
+              >
+                <Icon name="refresh" size={14} />Re-review
+              </Link>
+            </>
           )}
           {posts.length > 0 && (
             <button
