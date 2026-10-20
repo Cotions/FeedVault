@@ -513,55 +513,67 @@ export default function App() {
               <Icon name="close" size={15} />
             </button>
           </div>
-          <div className="side-row">
-            <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
-            {jobList?.new > 0 && (
-              <Link to="/?new=1" className="side-badge side-new" title="Posts indexed since you last marked everything seen">
-                {fmtInt(jobList.new)} new
-              </Link>
-            )}
-          </div>
-          <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
-          <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
-          <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
-          <div className="side-row side-row-split">
-            <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
-            <span className="side-row-end">
-              {unsorted > 0 && (
-                <Link to={UNSORTED_PATH} className="side-badge side-unsorted"
-                      title={`${plural(unsorted, "link")} tied to no one yet: sort them`}
-                      aria-label={`Unsorted links: ${fmtInt(unsorted)}`}>
-                  {unsorted > 99 ? "99+" : unsorted}
+          {/* Three groups, each named by a small label (a role="group" for
+              screen readers): what to look at, what the library holds, and
+              the app itself. Rescan and Quit stay apart at the foot. */}
+          <div className="side-group" role="group" aria-labelledby="side-group-browse">
+            <span className="side-group-label" id="side-group-browse">Browse</span>
+            <div className="side-row">
+              <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
+              {jobList?.new > 0 && (
+                <Link to="/?new=1" className="side-badge side-new" title="Posts indexed since you last marked everything seen">
+                  {fmtInt(jobList.new)} new
                 </Link>
               )}
-              <button type="button" className="side-badge side-add" onClick={() => openQuickAdd()}
-                      title="Add a link (Alt+L)" aria-label="Add a link" aria-keyshortcuts="Alt+L">
-                <Icon name="plus" size={11} />Link
-              </button>
-            </span>
-          </div>
-          <NavLink to="/collections" className="side-link"><Icon name="bookmark" />Collections</NavLink>
-          <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
-          <NavLink to="/storage" className="side-link"><Icon name="disk" />Storage</NavLink>
-          <NavLink to="/trash" className="side-link"><Icon name="trash" />Trash</NavLink>
-          <NavLink to="/unmatched" className="side-link"><Icon name="unmatched" />Unmatched</NavLink>
-          <NavLink to="/duplicates" className="side-link"><Icon name="copy" />Duplicates</NavLink>
-          <NavLink
-            to="/jobs"
-            className="side-link"
-            title={jobsActive ? `${jobsRunning} running, ${jobsActive - jobsRunning} queued` : "Downloads and other jobs"}
-          >
-            <Icon name="terminal" />Jobs
-            {jobsActive > 0 && (
-              <span className="side-badge" aria-label={`${jobsActive} job${jobsActive === 1 ? "" : "s"} active`}>
-                <JobsIcon running={jobsRunning} size={11} />{jobsActive}
+            </div>
+            <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
+            <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
+            <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
+            <div className="side-row side-row-split">
+              <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
+              <span className="side-row-end">
+                {unsorted > 0 && (
+                  <Link to={UNSORTED_PATH} className="side-badge side-unsorted"
+                        title={`${plural(unsorted, "link")} tied to no one yet: sort them`}
+                        aria-label={`Unsorted links: ${fmtInt(unsorted)}`}>
+                    {unsorted > 99 ? "99+" : unsorted}
+                  </Link>
+                )}
+                <button type="button" className="side-badge side-add" onClick={() => openQuickAdd()}
+                        title="Add a link (Alt+L)" aria-label="Add a link" aria-keyshortcuts="Alt+L">
+                  <Icon name="plus" size={11} />Link
+                </button>
               </span>
-            )}
-          </NavLink>
-          <Notifications unread={jobList?.notifications?.unread ?? 0} latest={jobList?.notifications?.latest ?? null}
-                         onRead={jobStarted} />
-          <NavLink to="/scripts" className="side-link" title="Your own download commands and shell scripts"><Icon name="pencil" />Scripts</NavLink>
-          <NavLink to="/settings" className="side-link"><Icon name="settings" />Settings</NavLink>
+            </div>
+            <NavLink to="/collections" className="side-link"><Icon name="bookmark" />Collections</NavLink>
+          </div>
+          <div className="side-group" role="group" aria-labelledby="side-group-library">
+            <span className="side-group-label" id="side-group-library">Library</span>
+            <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
+            <NavLink to="/storage" className="side-link"><Icon name="disk" />Storage</NavLink>
+            <NavLink to="/trash" className="side-link"><Icon name="trash" />Trash</NavLink>
+            <NavLink to="/unmatched" className="side-link"><Icon name="unmatched" />Unmatched</NavLink>
+            <NavLink to="/duplicates" className="side-link"><Icon name="copy" />Duplicates</NavLink>
+          </div>
+          <div className="side-group" role="group" aria-labelledby="side-group-system">
+            <span className="side-group-label" id="side-group-system">System</span>
+            <NavLink
+              to="/jobs"
+              className="side-link"
+              title={jobsActive ? `${jobsRunning} running, ${jobsActive - jobsRunning} queued` : "Downloads and other jobs"}
+            >
+              <Icon name="terminal" />Jobs
+              {jobsActive > 0 && (
+                <span className="side-badge" aria-label={`${jobsActive} job${jobsActive === 1 ? "" : "s"} active`}>
+                  <JobsIcon running={jobsRunning} size={11} />{jobsActive}
+                </span>
+              )}
+            </NavLink>
+            <Notifications unread={jobList?.notifications?.unread ?? 0} latest={jobList?.notifications?.latest ?? null}
+                           onRead={jobStarted} />
+            <NavLink to="/scripts" className="side-link" title="Your own download commands and shell scripts"><Icon name="pencil" />Scripts</NavLink>
+            <NavLink to="/settings" className="side-link"><Icon name="settings" />Settings</NavLink>
+          </div>
           <div className="side-sep" />
           <button
             type="button"

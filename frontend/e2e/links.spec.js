@@ -1,7 +1,7 @@
 // Desktop, 1440x900: saved links, on the Links page and on a person's
 // page. Addresses are invented (.example); FeedVault never opens them, and
 // neither does the test: it checks the anchors, it does not follow them.
-import { test, expect, openPage, idle, stressData, fakeBioImport } from "./fixtures.js";
+import { test, expect, openPage, idle, stressData, fakeBioImport, openBioImport, openAddLink } from "./fixtures.js";
 import { STRESS_LINKS } from "./stress.js";
 
 const H = { "X-FeedVault": "1" };
@@ -54,7 +54,8 @@ test("a person's Links: add, reorder, edit and delete", async ({ page }) => {
     await page.goto(`/people/${pid}`);
     const section = page.locator(".person-links-section");
     await expect(section.locator(".empty")).toBeVisible();
-    const form = section.locator(".person-link-add .link-form");
+    // Folded until wanted; it stays open from one add to the next.
+    const form = await openAddLink(page);
     for (const [path, title] of [["one", "First"], ["two", "Second"]]) {
       await form.getByLabel("Address").fill(`https://e2e-${stamp}.example/${path}`);
       await form.getByLabel("Title").fill(title);
@@ -110,14 +111,14 @@ test("a link-in-bio import shows the links it saved in the person's Links", asyn
     await page.goto(`/people/${pid}`);
     const section = page.locator(".person-links-section");
     await expect(section.locator(".empty")).toBeVisible();
-    const box = page.locator(".bio-import");
+    const box = await openBioImport(page);
     await box.getByRole("textbox", { name: "Link-in-bio page" }).fill(`linktr.ee/e2e${stamp}`);
     await box.getByRole("button", { name: "Import" }).click();
     await expect(box.locator(".bio-import-kept")).toHaveText("3 links saved to their Links");
 
     const titles = section.locator(".link-row .link-row-title");
     await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "My Patreon", "<img src=x onerror=alert(1)>"]);
-    await expect(section.locator(".link-group-title")).toHaveText(["Socials", "Other", "Add a link"]);
+    await expect(section.locator(".link-group-title:visible")).toHaveText(["Socials", "Other"]);   // Add a link folded
     expect(await section.locator("img").count(), "a label is text, never markup").toBe(0);
     for (const [i, link] of found.entries()) await expectSafeAnchor(section.locator(".link-row").nth(i), link.url);
 
@@ -159,9 +160,9 @@ test("editing a link shows its whole notes", async ({ page }) => {
 });
 
 // A person's page, by Tab: out of Add an account (a picker whose open list
-// of every account scrolls) on to the link-in-bio import's link to Settings
-// (the import is off in this instance), not to <body>: the open list was a
-// Tab stop (Chromium's focusable scrollers) that went as the field lost focus.
+// of every account scrolls) on to the folded link-in-bio import's button,
+// not to <body>: the open list was a Tab stop (Chromium's focusable
+// scrollers) that went as the field lost focus.
 test("Tab goes on from a person's Add an account picker", async ({ page }) => {
   await page.goto(`/people/${stressData().person}`);
   await expect(page.locator(".person-new button")).toBeVisible();
@@ -171,7 +172,66 @@ test("Tab goes on from a person's Add an account picker", async ({ page }) => {
   await expect(page.locator(".person-add .picker-list")).toBeVisible();
   expect(await page.locator(".person-add .picker-list").evaluate(ul => ul.scrollHeight > ul.clientHeight), "the open list scrolls").toBe(true);
   await page.keyboard.press("Tab");
-  await expect(page.locator(".bio-import").getByRole("link", { name: "Turn it on in Settings" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Import from link-in-bio…" })).toBeFocused();
+  await idle(page);
+});
+
+// A person's page opens with its link-in-bio import and its Add a link form
+// folded, each behind a button. A click opens it in place, focus in its
+// first field (the import's link to Settings while the import is off, as
+// in this instance; its notice only shows then). Escape folds an empty
+// one, focus back on its button. A typed link asks before Cancel or Escape
+// drops it: Keep editing keeps it, Discard empties and folds the form.
+test("a person's page folds its link-in-bio import and Add a link", async ({ page }) => {
+  await page.goto(`/people/${stressData().person}`);
+  await expect(page.locator(".person-new button")).toBeVisible();
+  await idle(page);
+  const importButton = page.getByRole("button", { name: "Import from link-in-bio…" });
+  const addButton = page.locator(".person-link-add").getByRole("button", { name: "Add link…" });
+  await expect(importButton).toBeVisible();
+  await expect(addButton).toBeVisible();
+  await expect(page.locator(".bio-import")).toHaveCount(0);
+  await expect(page.getByText("Off: FeedVault fetches no page unless you allow it.")).toHaveCount(0);
+  await expect(page.locator(".person-link-add .link-form")).toHaveCount(0);
+  await expect(page.locator(".person-link-add .link-group-title")).toBeHidden();
+
+  // The import: opened, its notice and its link to Settings, focused; Escape folds it.
+  const box = await openBioImport(page);
+  await expect(box.getByText("Off: FeedVault fetches no page unless you allow it.")).toBeVisible();
+  await expect(box.getByRole("link", { name: "Turn it on in Settings" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(box).toHaveCount(0);
+  await expect(importButton).toBeFocused();
+  await openBioImport(page);
+  await page.locator(".bio-import").getByRole("button", { name: "Cancel" }).click();
+  await expect(page.locator(".bio-import")).toHaveCount(0);
+  await expect(importButton).toBeFocused();
+
+  // Add a link: focus in Address; empty, Escape folds it.
+  const form = await openAddLink(page);
+  const address = form.getByLabel("Address");
+  await expect(address).toBeFocused();
+  await expect(page.locator(".person-link-add .link-group-title")).toHaveText("Add a link");
+  await page.keyboard.press("Escape");
+  await expect(form).toHaveCount(0);
+  await expect(addButton).toBeFocused();
+
+  // Typed: Escape asks; Keep editing keeps it, Cancel asks again, Discard folds it empty.
+  await openAddLink(page);
+  await address.fill("https://e2e-fold.example/not-saved");
+  await page.keyboard.press("Escape");
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("The new link is not saved.");
+  await dialog.getByRole("button", { name: "Keep editing" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(address).toHaveValue("https://e2e-fold.example/not-saved");
+  await form.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toContainText("The new link is not saved.");
+  await dialog.getByRole("button", { name: "Discard" }).click();
+  await expect(form).toHaveCount(0);
+  await expect(addButton).toBeFocused();
+  await openAddLink(page);
+  await expect(address).toHaveValue("");
   await idle(page);
 });
 

@@ -162,7 +162,7 @@ function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
       ))}
       <div className="person-link-add">
         <h4 className="link-group-title">Add a link</h4>
-        <LinkForm busy={busy} idPrefix="person-link-add" onDirty={onAddDirty}
+        <LinkForm busy={busy} idPrefix="person-link-add" onDirty={onAddDirty} folded
                   onSubmit={async body => {
                     const problem = await call(() => createLink({ ...body, person: p.id }), "Could not add the link.");
                     if (!problem) toast("Link added.");

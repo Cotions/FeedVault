@@ -105,9 +105,9 @@ test("tap targets are 44px: header, Feed, select mode", async ({ page }) => {
   atLeast44(await sizes(page, "input.header-search"), { width: false });
   // The header's height did not change: the page under it starts where it did.
   expect((await page.locator("header").boundingBox()).height).toBeCloseTo(53, 0);
-  atLeast44(await sizes(page, ".page-head button, .feed-filters .select-toggle"), { width: false });
+  atLeast44(await sizes(page, ".page-head button"), { width: false });       // Select among them
 
-  await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().tap();
+  await page.locator(".page-head .select-toggle").tap();
   atLeast44(await sizes(page, ".select-bar button"), { width: false });
   // The check looks as it did (24px); a tap in the 44px square around it
   // lands on it (each side's middle, and the corner the card's rounded

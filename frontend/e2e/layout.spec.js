@@ -9,7 +9,8 @@
 // 24x24 px. The demo has the stress cases of make_demo.py --stress and
 // stress.js: a 60-character creator, 15 tags, long names and paths.
 import fs from "node:fs";
-import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle, fakeBioImport } from "./fixtures.js";
+import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle, fakeBioImport,
+  openBioImport, openAddLink } from "./fixtures.js";
 import { STRESS_PERSON } from "./stress.js";
 
 const SIZES = [
@@ -114,7 +115,7 @@ const DIALOGS = [
     name: "Feed › Tag selected posts",
     open: async page => {
       await openUrl(page, `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`, pg => pg.locator("article.post-card").first());
-      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator(".page-head .select-toggle").click();
       await page.locator("article.post-card").first().click();
       await page.getByRole("button", { name: /^Tag…/ }).click();
     },
@@ -154,6 +155,7 @@ const DIALOGS = [
     open: async page => {
       await fakeBioImport(page);
       await openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title"));
+      await openBioImport(page);
       await page.getByRole("textbox", { name: "Link-in-bio page" }).fill("https://linktr.ee/somebody");
       await page.locator(".bio-import").getByRole("button", { name: "Import" }).click();
       await expect(page.locator(".bio-import-row").first()).toBeVisible();
@@ -335,10 +337,11 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
 //  - Mute is on the line of Feed … Trash, at the right edge of the sections.
 //  - Every section after the first is set apart by a rule, below the one
 //    before it; the empty Sources says so in a line, not a 48px gap.
-//  - The link-in-bio import is a box inside Accounts, as wide as the Add a
-//    link box, and both have the same sub-heading style.
-//  - Add a link's title field and its button end at the same x (a person's
-//    page); on the Links page the button ends where the Person field does.
+//  - The link-in-bio import, opened, is a box inside Accounts, as wide as
+//    the opened Add a link box, and both have the same sub-heading style.
+//  - Add a link's title field and its buttons (Add link, Cancel) end at the
+//    same x (a person's page); on the Links page the button ends where the
+//    Person field does.
 //  - A long person name on the Links page ends in an ellipsis inside its chip.
 const LINE_SIZES = [SIZES[1], SIZES[2], SIZES[3]];
 
@@ -347,6 +350,8 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
   const problems = [];
   const near = (a, b, px = 1) => Math.abs(a - b) <= px;
   await openUrl(page, `/people/${S.person}`, pg => pg.locator(".person-new button"));
+  await openBioImport(page);
+  await openAddLink(page);
   await stillPage(page);
   for (const s of LINE_SIZES) {
     await page.setViewportSize({ width: s.width, height: s.height });
@@ -362,7 +367,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
       const style = e => getComputedStyle(e);
       const bio = document.querySelector(".bio-import"), add = document.querySelector(".person-link-add");
       const sourcesEmpty = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Sources"))?.querySelector(".empty");
-      const title = box(add.querySelector(".link-form-title input")), button = box(add.querySelector(".link-form-actions .btn-primary"));
+      const title = box(add.querySelector(".link-form-title input")), button = box(add.querySelector(".link-form-actions > :last-child"));
       return {
         nav: nav.top + nav.height / 2, mute: mute.top + mute.height / 2, muteRight: mute.right, sectionRight: box(accounts).right,
         rules: sections.slice(1).map((x, i) => ({ border: parseFloat(style(x).borderTopWidth), top: box(x).top, above: box(sections[i]).bottom })),
@@ -387,7 +392,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
     if (new Set(m.heads).size !== 1) problems.push(`${at}: the sub-headings differ: ${[...new Set(m.heads)].join(" | ")}`);
     if (m.empty == null) problems.push(`${at}: the stress person's Sources has no empty state`);
     else if (m.empty > 60) problems.push(`${at}: the empty Sources is ${m.empty}px tall`);
-    if (!near(m.titleRight, m.buttonRight)) problems.push(`${at}: Add a link's title ends at x=${m.titleRight}, its button at x=${m.buttonRight}`);
+    if (!near(m.titleRight, m.buttonRight)) problems.push(`${at}: Add a link's title ends at x=${m.titleRight}, its last button (Cancel) at x=${m.buttonRight}`);
   }
 
   await openPage(page, { name: "Links", path: "/links" });
@@ -420,11 +425,30 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
 // The sidebar fits short desktop windows: at 1280x800 and 1366x768 every
 // entry shows without scrolling it, the last (Quit) whole and clear of the
 // sidebar's bottom edge by its focus ring, and each entry stays a 24px target.
+// Its links come in three named groups (Browse, Library, System), in the
+// order they always had, Rescan and Quit after them.
 const SIDEBAR_SIZES = [SIZES[1], { label: "1366x768", width: 1366, height: 768 }];
+const SIDEBAR_GROUPS = {
+  Browse: ["Feed", "Review", "Creators", "Tags", "Links", "Collections"],
+  Library: ["Stats", "Storage", "Trash", "Unmatched", "Duplicates"],
+  System: ["Jobs", "Notifications", "Scripts", "Settings"],
+};
 
 test("the sidebar fits without scrolling", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "layout-zoom", "measured at the two short desktop sizes only");
   await openPage(page, PAGES[0]);
+  const nav = page.locator("#main-nav");
+  const groups = nav.getByRole("group");
+  await expect(groups).toHaveCount(3);
+  for (const [i, [name, entries]] of Object.entries(SIDEBAR_GROUPS).entries()) {
+    const group = groups.nth(i);
+    await expect(group).toHaveAccessibleName(name);
+    await expect(group.locator(".side-group-label")).toHaveText(name);
+    await expect(group.locator(".side-link")).toHaveText(entries.map(e => new RegExp(`^${e}`)));
+  }
+  // The foot: Rescan and Quit, outside the groups.
+  await expect(nav.locator(":scope > .side-scan")).toHaveText(/^(Rescan|Scanning…)$/);
+  await expect(nav.locator(":scope > .side-link-quit")).toHaveText("Quit");
   const problems = [];
   for (const s of SIDEBAR_SIZES) {
     await page.setViewportSize({ width: s.width, height: s.height });
@@ -444,6 +468,52 @@ test("the sidebar fits without scrolling", async ({ page }, testInfo) => {
     // 3px: room for the focus ring (box-shadow var(--ring)) below the last entry.
     if (m.lastBottom > m.navBottom - 3) problems.push(`${at}: "${m.lastText}" ends at ${m.lastBottom}, the sidebar at ${m.navBottom}`);
     if (m.small.length) problems.push(`${at}: entries under 24px: ${m.small.join(", ")}`);
+  }
+  expect(problems, problems.join("\n")).toEqual([]);
+});
+
+// The Feed's filter bar (Feed.jsx): Select is in the page's head, as on
+// Creators, not in the bar. With the filters a vault without collections
+// shows (New since last visit, Platform, Kind, Creator, Tags, Review,
+// Sort: /api/collections answered empty, so no Collection filter) the bar
+// is one row at 1440x900, Sort at its right end. With the stress vault's
+// collection too, or at 1280x800, it takes two rows at most, Sort still
+// ending on the right.
+async function feedBar(page) {
+  return page.evaluate(() => {
+    const bar = document.querySelector(".feed-filters");
+    const b = bar.getBoundingClientRect();
+    const items = [...bar.querySelectorAll(":scope > *, .feed-scope > *")]
+      .filter(e => !e.matches(".feed-scope, .page-head-spacer") && e.getBoundingClientRect().width > 0);
+    const sort = bar.querySelector(".filter-sort").getBoundingClientRect();
+    return {
+      rows: new Set(items.map(e => Math.round(e.getBoundingClientRect().bottom))).size,
+      sortRight: sort.right, barRight: b.right,
+      select: [...bar.querySelectorAll("button")].some(x => /^(Select|Done)$/.test(x.textContent.trim())),
+    };
+  });
+}
+
+test("the Feed's filter bar is one row at 1440, Select in the head", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "layout-zoom", "measured at 1280x800 and 1440x900");
+  const problems = [];
+  const noCollections = url => url.pathname === "/api/collections";
+  for (const collections of [false, true]) {
+    if (!collections) await page.route(noCollections, route => route.fulfill({ json: [] }));
+    else await page.unroute(noCollections);
+    await openPage(page, PAGES[0]);
+    await expect(page.locator(".filter-collection")).toHaveCount(collections ? 1 : 0);
+    await expect(page.locator(".page-head-actions").getByRole("button", { name: "Select", exact: true })).toBeVisible();
+    for (const s of [SIZES[2], SIZES[1]]) {
+      await page.setViewportSize({ width: s.width, height: s.height });
+      await settle(page);
+      const m = await feedBar(page);
+      const at = `Feed${collections ? " with a collection" : ""} at ${s.label}`;
+      if (m.select) problems.push(`${at}: Select is in the filter bar`);
+      const most = !collections && s === SIZES[2] ? 1 : 2;
+      if (m.rows > most) problems.push(`${at}: the filter bar takes ${m.rows} rows (${most} at most)`);
+      if (Math.abs(m.sortRight - m.barRight) > 1) problems.push(`${at}: Sort ends at x=${m.sortRight}, the bar at x=${m.barRight}`);
+    }
   }
   expect(problems, problems.join("\n")).toEqual([]);
 });

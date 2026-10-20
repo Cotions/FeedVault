@@ -8,6 +8,7 @@ import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, linkLabel, withScheme } from
 import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 import Icon from "./Icon";
 import CreatorPicker from "./CreatorPicker";
+import DiscardDialog from "./DiscardDialog";
 import PersonPicker from "./PersonPicker";
 
 /* A link's fields: URL, title, notes, and its person when ``people`` is
@@ -15,15 +16,27 @@ import PersonPicker from "./PersonPicker";
    onSubmit({ url, title, notes, person? }) resolves to an error message, or
    null when it went through (a new link's form then empties; the caller
    closes an edit). onDirty(bool) hears whether the fields differ from the
-   link's (false again when the form goes). */
+   link's (false again when the form goes).
+
+   ``folded`` (a new link's form, a person's page): the form starts as a
+   "+ Add link…" button and opens in its place, focus in Address. It stays
+   open after an add, empty for the next one; Cancel or Escape closes it,
+   asking first when something is typed (the question the page asks before
+   leaving it). */
 export function LinkForm({
   link = null, people = null, onSubmit, onCancel, onDirty, busy = false, submitLabel = "Add link", idPrefix = "link",
+  folded = false,
 }) {
   const [url,    setUrl]    = useState(link?.url || "");
   const [title,  setTitle]  = useState(link?.title || "");
   const [notes,  setNotes]  = useState(link?.notes || "");
   const [person, setPerson] = useState(link?.person?.id ?? null);
   const [error,  setError]  = useState(null);
+  const [open,   setOpen]   = useState(!folded);
+  const [asking, setAsking] = useState(false);        // Cancel with something typed: discard it?
+  const urlRef = useRef(null);
+  const openRef = useRef(null);
+  const focusTo = useRef(null);                       // after the next render: "url" or "open"
   const dirty = url !== (link?.url || "") || title !== (link?.title || "") || notes !== (link?.notes || "")
     || (!!people && person !== (link?.person?.id ?? null));
 
@@ -31,6 +44,25 @@ export function LinkForm({
     onDirty?.(dirty);
     return () => onDirty?.(false);
   }, [dirty, onDirty]);
+
+  useEffect(() => {
+    const to = focusTo.current;
+    focusTo.current = null;
+    if (to === "url") urlRef.current?.focus();
+    else if (to === "open") openRef.current?.focus();
+  });
+
+  function fold() {
+    setUrl(""); setTitle(""); setNotes(""); setPerson(null); setError(null);
+    focusTo.current = "open";
+    setOpen(false);
+  }
+  const canCancel = folded || !!onCancel;
+  function cancel() {
+    if (!folded) onCancel();
+    else if (dirty) setAsking(true);
+    else fold();
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -43,15 +75,26 @@ export function LinkForm({
     const problem = await onSubmit(body);
     if (problem) { setError(problem); return; }
     if (!link) { setUrl(""); setTitle(""); setNotes(""); setPerson(null); }
+    if (folded) focusTo.current = "url";              // the next one
+  }
+
+  if (!open) {
+    return (
+      <button ref={openRef} type="button" className="btn-secondary link-form-open"
+              onClick={() => { focusTo.current = "url"; setOpen(true); }}>
+        <Icon name="plus" size={14} />{submitLabel}…
+      </button>
+    );
   }
 
   return (
+    <>
     <form className={`link-form${link ? " is-edit" : ""}`} onSubmit={submit}
-          onKeyDown={e => { if (e.key === "Escape" && onCancel && !e.nativeEvent.isComposing) { e.stopPropagation(); onCancel(); } }}>
+          onKeyDown={e => { if (e.key === "Escape" && canCancel && !e.nativeEvent.isComposing) { e.stopPropagation(); cancel(); } }}>
       <label className="filter link-form-url">
         <span>Address</span>
         <input type="text" inputMode="url" autoComplete="off" spellCheck={false} placeholder="https://…"
-               id={`${idPrefix}-url`} maxLength={MAX_URL} value={url} autoFocus={!!link}
+               id={`${idPrefix}-url`} maxLength={MAX_URL} value={url} autoFocus={!!link} ref={urlRef}
                onChange={e => { setUrl(e.target.value); setError(null); }} />
       </label>
       <label className="filter link-form-title">
@@ -82,10 +125,17 @@ export function LinkForm({
         <button type="submit" className="btn-primary" disabled={busy || !url.trim()}>
           {!link && <Icon name="plus" size={14} />}{submitLabel}
         </button>
-        {onCancel && <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>}
+        {canCancel && <button type="button" className="btn-ghost" onClick={cancel}>Cancel</button>}
       </div>
       {error && <div className="msg err link-form-msg" role="alert">{error}</div>}
     </form>
+    {/* Outside the form: its Escape does not reach the form's. */}
+    {folded && (
+      <DiscardDialog open={asking} onDiscard={() => { setAsking(false); fold(); }} onKeep={() => setAsking(false)}>
+        <p>The new link is not saved.</p>
+      </DiscardDialog>
+    )}
+    </>
   );
 }
 

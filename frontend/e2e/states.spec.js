@@ -249,7 +249,7 @@ const POPOVERS = [
     name: "Selection bar › Tag… and its suggestions",
     open: async page => {
       await openUrl(page, creatorUrl(), "article.post-card");
-      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator(".page-head .select-toggle").click();
       await page.locator("article.post-card").first().click();
       await page.getByRole("button", { name: /^Tag…/ }).click();
       await page.locator(".modal-overlay input").first().fill("a");
@@ -261,7 +261,7 @@ const POPOVERS = [
     name: "Selection bar › Collection…",
     open: async page => {
       await openUrl(page, creatorUrl(), "article.post-card");
-      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator(".page-head .select-toggle").click();
       await page.locator("article.post-card").first().click();
       await page.getByRole("button", { name: /^Collection…/ }).click();
     },
@@ -295,7 +295,7 @@ const SCROLLED = [
     name: "Feed, selecting",
     open: async page => {
       await open(page, "Feed");
-      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator(".page-head .select-toggle").click();
       await page.locator("article.post-card").first().click();
       await expect(page.locator(".select-bar")).toBeVisible();
     },
@@ -394,7 +394,7 @@ test.describe("closing a selection bar dialog leaves the Feed where it was", () 
     test(name, async ({ page }) => {
       await atSize(page, SIZES[1]);
       await open(page, "Feed");
-      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator(".page-head .select-toggle").click();
       await page.locator("article.post-card").first().click();
       const button = page.locator(".select-bar").getByRole("button", { name, exact: true });
       await expect(button).toBeEnabled();
@@ -445,7 +445,7 @@ test.describe("focus stays off <body>", () => {
     try {
       await atSize(page, SIZES[1]);
       await open(page, "Feed");
-      await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+      await page.locator(".page-head .select-toggle").click();
       for (const n of [0, 1, 2]) await page.locator("article.post-card").nth(n).click();
       const button = page.locator(".select-bar").getByRole("button", { name: "Collection…", exact: true });
       const dialog = page.locator(".modal-overlay .modal");
@@ -654,7 +654,7 @@ test.describe("focus stays off <body>", () => {
   test("Space toggles a focused Feed card in select mode", async ({ page }) => {
     await atSize(page, SIZES[1]);
     await open(page, "Feed");
-    await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+    await page.locator(".page-head .select-toggle").click();
     const card = page.locator("article.post-card").nth(1);
     const check = card.locator(".select-check");
     await expect(check).toHaveAttribute("aria-checked", "false");
@@ -686,7 +686,7 @@ test.describe("toasts stay clear of the bottom buttons", () => {
   test("Feed: the selection bar after Keep", async ({ page }) => {
     await fakeDecisions(page);
     await open(page, "Feed");
-    await page.locator(".feed-filters .select-toggle", { hasText: /Select|Done/ }).last().click();
+    await page.locator(".page-head .select-toggle").click();
     await expect(page.locator(".select-bar")).toBeVisible();
     const keep = page.locator(".select-bar").getByRole("button", { name: "Keep", exact: true });
     for (const s of TOAST_SIZES) {

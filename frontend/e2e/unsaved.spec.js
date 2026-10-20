@@ -3,7 +3,7 @@
 // from another (#120), and typed edits are never dropped without asking
 // (#125). People, collections and links are made for each test and removed
 // after it.
-import { test, expect, idle } from "./fixtures.js";
+import { test, expect, idle, openAddLink } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -349,7 +349,8 @@ test("a person's page asks before dropping a half-filled new link or source (#13
     await expect(dialog).toHaveCount(0);
     await back();
 
-    // A new link typed: asked; Keep editing keeps it, Discard drops it.
+    // A new link typed (its form folded until opened): asked; Keep editing keeps it, Discard drops it.
+    await openAddLink(page);
     await url.fill(`https://e2e-${stamp}.example/person`);
     await nav(page, "/links");
     await expect(dialog).toContainText(`Not saved for E2E adds ${stamp}: the new link.`);
@@ -361,6 +362,8 @@ test("a person's page asks before dropping a half-filled new link or source (#13
     await expect(page).toHaveURL(/\/links$/);
     await arrived(page, "Links");
     await back();
+    await expect(url).toHaveCount(0);                 // folded again, and empty once opened
+    await openAddLink(page);
     await expect(url).toHaveValue("");
 
     // A new source typed: the same.
@@ -378,6 +381,7 @@ test("a person's page asks before dropping a half-filled new link or source (#13
     await expect(source).toHaveValue("");
 
     // Both added: nothing left to ask about.
+    await openAddLink(page);
     await url.fill(`https://e2e-${stamp}.example/person-added`);
     await page.locator(".person-link-add").getByRole("button", { name: "Add link" }).click();
     await expect(url).toHaveValue("");
