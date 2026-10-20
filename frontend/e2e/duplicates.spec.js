@@ -230,10 +230,37 @@ test("Duplicates: trash just the matching pictures of a similar group, or a whol
   await dialog.getByRole("button", { name: "Cancel" }).click();
   expect(sent).toBeNull();
 
-  // none ticked: nothing to send
-  for (const n of [1, 2, 3]) await cards.nth(n).getByRole("checkbox").uncheck();
+  // every post whole: allowed, with a warning, and it asks first. Ticking the
+  // kept one leaves no kept post for the pictures to match, so they read as
+  // kept until ticked again, whole this time.
+  await cards.nth(0).getByRole("checkbox").check();
+  for (const n of [1, 3]) await cards.nth(n).getByRole("checkbox").check();
+  for (const n of [0, 1, 2, 3]) await expect(cards.nth(n)).toHaveClass(/is-post/);
+  await expect(plan).toHaveClass(/is-lossy/);
+  await expect(plan).toHaveText("Every member is marked for the trash: the whole group goes · 4 posts · 28.6 MB");
+  await expect(button).toBeEnabled();
+  await expect(button).toHaveAttribute("title", /^Move 4 posts to the trash/);
+  await button.click();
+  await expect(dialog).toContainText("No member is kept: the whole group goes.");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  expect(sent).toBeNull();
+
+  // Untick all: none ticked, nothing to send
+  const tickAll = group.getByRole("button", { name: "Tick all", exact: true });
+  const untickAll = group.getByRole("button", { name: "Untick all", exact: true });
+  await expect(tickAll).toHaveCount(0);
+  await untickAll.click();
+  for (const n of [0, 1, 2, 3]) await expect(cards.nth(n).getByRole("checkbox")).not.toBeChecked();
+  await expect(untickAll).toHaveCount(0);
   await expect(button).toBeDisabled();
   await expect(button).toHaveAttribute("title", "Tick the members to trash first");
+  await expect(plan).toHaveText("Nothing marked for the trash: tick a member to trash it.");
+  // Tick all: every post whole, then back to none
+  await tickAll.click();
+  for (const n of [0, 1, 2, 3]) await expect(cards.nth(n)).toHaveClass(/is-post/);
+  await expect(plan).toHaveText("Every member is marked for the trash: the whole group goes · 4 posts · 28.6 MB");
+  await untickAll.click();
+  await expect(button).toBeDisabled();
 
   // two pictures: they go after the similar group's confirmation
   for (const n of [1, 3]) await cards.nth(n).getByRole("checkbox").check();

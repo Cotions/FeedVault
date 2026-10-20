@@ -698,9 +698,7 @@ def test_resolve_trash_picked_members_only(env, client):
     assert client.get("/api/posts/instagram/S7", headers=H).get_json()["tags"] == []
     [g] = listing(client, "content")["groups"]
     assert [m["id"] for m in g["members"]] == ["instagram:P1", "instagram:S7"]
-    # one at least must stay, and only members of the group go
-    r = resolve(client, {"group": g["id"], "trash": ["instagram:P1", "instagram:S7"]})
-    assert r["ok"] is False and r["skipped"][0]["error"] == "keep at least one member" and r["files"] == 0
+    # only members of the group go, and one at least
     r = resolve(client, {"group": g["id"], "trash": ["instagram:R9"]})
     assert r["skipped"][0]["error"] == "a member to trash is not in this group"
     r = resolve(client, {"group": g["id"], "trash": []})
@@ -708,6 +706,38 @@ def test_resolve_trash_picked_members_only(env, client):
     r = resolve(client, {"group": g["id"], "trash": ["instagram:P1"]})
     assert r["ok"] and r["resolved"] == [g["id"]] and r["posts"] == ["instagram:P1"]
     assert listing(client, "content")["total"] == 0
+
+
+def test_resolve_trash_every_member(env, client):
+    """All of a group is junk: every member goes, the group is resolved and
+    gone, with no heir to carry tags to, and each post can be restored with its own."""
+    three_reposts(env)
+    client.post("/api/tags/apply", json={"posts": ["instagram:R9"], "add": ["red"]}, headers=H)
+    g = listing(client, "content")["groups"][0]
+    # every item of each post is the post whole: all three go
+    r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:P1", "items": [1]},
+                                                     "instagram:R9", "instagram:S7"]})
+    assert r["ok"] and r["resolved"] == [g["id"]] and r["skipped"] == []
+    assert sorted(r["posts"]) == ["instagram:P1", "instagram:R9", "instagram:S7"]
+    assert not any(p.suffix == ".jpg" for d in ("alice", "bob", "carol") for p in (env["media"] / d).iterdir())
+    assert listing(client, "content")["total"] == 0
+    for pid in ("instagram:P1", "instagram:R9", "instagram:S7"):
+        assert client.get(f"/api/posts/{pid.replace(':', '/')}", headers=H).status_code == 404
+    keys = [e["key"] for e in client.get("/api/trash/items", headers=H).get_json()["entries"]]
+    assert client.post("/api/trash/restore", json={"keys": keys}, headers=H).get_json()["errors"] == []
+    assert client.get("/api/posts/instagram/R9", headers=H).get_json()["tags"] == ["red"]
+    assert client.get("/api/posts/instagram/P1", headers=H).get_json()["tags"] == []
+
+
+def test_resolve_trash_every_copy(env, client):
+    """A post and its extra copy, both trashed: no copy is promoted to the post."""
+    a, copy_base = hashed_copies(env, kind="image")
+    g = listing(client)["groups"][0]
+    r = resolve(client, {"group": g["id"], "trash": [m["id"] for m in g["members"]]})
+    assert r["ok"] and r["resolved"] == [g["id"]] and r["posts"] == ["instagram:P1"] and len(r["copies"]) == 1
+    assert not os.path.exists(a + ".jpg") and not os.path.exists(copy_base + ".jpg")
+    assert listing(client)["total"] == 0
+    assert client.get("/api/posts/instagram/P1", headers=H).status_code == 404
 
 
 def test_resolve_trash_keeps_what_another_group_keeps(env, client):
@@ -761,10 +791,6 @@ def test_resolve_items_rules(env, client):
     g = listing(client, "content")["groups"][0]
     r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:P1", "items": [5]}]})
     assert r["skipped"][0]["error"] == "an item to trash is not in its post"
-    r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:P1", "items": [1]},
-                                                     {"member": "instagram:R9", "items": [1]},
-                                                     "instagram:S7"]})
-    assert r["skipped"][0]["error"] == "keep at least one member"
     t = time.time() + 10
     os.utime(next(p for p in (env["media"] / "bob").iterdir() if p.suffix == ".jpg"), (t, t))
     r = resolve(client, {"group": g["id"], "trash": [{"member": "instagram:R9", "items": [1]}]})
