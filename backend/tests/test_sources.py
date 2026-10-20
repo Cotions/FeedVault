@@ -606,6 +606,66 @@ def test_source_added_to_a_person_without_an_account(env, client):
     assert get(client, f"/api/sources/{s['id']}")["person"] is None
 
 
+def test_link_a_loose_source_to_a_person(env, client):
+    archive(env)
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer"})["source"]
+    assert (s["account"], s["person"]) == (None, None)
+    p = post(client, "/api/people", {"name": "Newcomer"})["person"]
+    r = post(client, f"/api/sources/{s['id']}", {"person": p["id"]})
+    assert r["source"]["person"] == {"id": p["id"], "name": "Newcomer"}
+    assert r["source"]["options"] == s["options"] and r["source"]["overrides"] == s["overrides"]
+    assert sources.of_person(db.connect(), p["id"]) == [s["id"]]
+    assert get(client, f"/api/people/{p['id']}")["accounts"] == []      # it has no account yet
+    # Moved to someone else, then to nobody.
+    q = post(client, "/api/people", {"name": "Other"})["person"]
+    assert post(client, f"/api/sources/{s['id']}", {"person": q["id"]})["source"]["person"]["id"] == q["id"]
+    assert post(client, f"/api/sources/{s['id']}", {"person": None})["source"]["person"] is None
+    assert db.connect().execute("SELECT person_id FROM sources WHERE id = ?", (s["id"],)).fetchone()[0] is None
+
+
+def test_link_a_source_takes_its_account_along(env, client):
+    archive(env)
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "carol.cooks",
+                                      "folder": str(env["media"] / "carol.cooks")})["source"]
+    assert s["account"] is not None and s["person"] is None
+    p = post(client, "/api/people", {"name": "Carol"})["person"]
+    assert post(client, f"/api/sources/{s['id']}", {"person": p["id"]})["source"]["person"]["id"] == p["id"]
+    assert [a["id"] for a in get(client, f"/api/people/{p['id']}")["accounts"]] == [s["account"]["id"]]
+    # Moved: the account leaves the first person (it shows with its account's person).
+    q = post(client, "/api/people", {"name": "Someone else"})["person"]
+    assert post(client, f"/api/sources/{s['id']}", {"person": q["id"]})["source"]["person"]["id"] == q["id"]
+    assert get(client, f"/api/people/{p['id']}")["accounts"] == []
+    assert [a["id"] for a in get(client, f"/api/people/{q['id']}")["accounts"]] == [s["account"]["id"]]
+    # Unlinked: its account leaves the person too, or it would stay with them.
+    assert post(client, f"/api/sources/{s['id']}", {"person": None})["source"]["person"] is None
+    assert get(client, f"/api/people/{q['id']}")["accounts"] == []
+
+
+def test_unlink_from_a_person_set_to_dont_sync_keeps_the_switch(env, client):
+    archive(env)
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "carol.cooks",
+                                      "folder": str(env["media"] / "carol.cooks")})["source"]
+    p = post(client, "/api/people", {"name": "Carol", "accounts": [s["account"]]})["person"]
+    post(client, "/api/no-sync", {"person": p["id"], "no_sync": True, "confirm": True})
+    assert post(client, f"/api/sources/{s['id']}", {"person": None})["source"]["no_sync"] is True
+    assert get(client, "/api/no-sync")["accounts"] == [s["account"]]
+
+
+def test_link_a_source_with_options_and_refusals(env, client):
+    archive(env)
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer"})["source"]
+    p = post(client, "/api/people", {"name": "Newcomer"})["person"]
+    for bad in ["1", True, -1, 1.5, [p["id"]]]:
+        assert "person" in post(client, f"/api/sources/{s['id']}", {"person": bad}, 400)["error"]
+    assert post(client, f"/api/sources/{s['id']}", {"person": p["id"] + 99}, 400)["error"] == "no such person"
+    post(client, f"/api/sources/{s['id'] + 99}", {"person": p["id"]}, 404)
+    # Options refused: the person is not written either.
+    post(client, f"/api/sources/{s['id']}", {"person": p["id"], "options": {"media": "nope"}}, 400)
+    assert get(client, f"/api/sources/{s['id']}")["person"] is None
+    r = post(client, f"/api/sources/{s['id']}", {"person": p["id"], "options": {"media": "videos"}})["source"]
+    assert (r["person"]["id"], r["options"]["media"]) == (p["id"], "videos")
+
+
 def test_adopt_after_the_first_download(env, client, monkeypatch):
     archive(env)
     p = post(client, "/api/people", {"name": "Newcomer"})["person"]

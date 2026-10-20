@@ -1285,6 +1285,31 @@ def reset(conn, sid, keys=None):
         conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps({"v": OVERRIDES, **left}), sid))
 
 
+def set_person(conn, sid, pid, now):
+    """Add a source to a person (an existing id), or to none (None). A
+    source shows with its account's person first (_owner), so one tied to
+    an account takes it along: linked to ``pid`` (people._attach, as
+    _adopt does on a first sync), or, with None, unlinked from the person
+    it showed with (else it would stay with them). Returns
+    (person id, account) of the link removed, or None; the caller notes
+    userdata."""
+    src = row(conn, sid)
+    if src is None:
+        return None
+    accounts = db.accounts(conn)
+    key = _owner(conn, src, accounts)[0]
+    known = key is not None and key in accounts
+    with conn:
+        conn.execute("UPDATE sources SET person_id = ? WHERE id = ?", (pid, sid))
+        if pid is not None and known:
+            people._attach(conn, pid, [key], now)
+    if pid is None and known and accounts[key]["person"]:
+        owner = accounts[key]["person"]["id"]
+        people.link(conn, owner, [], [key], now)
+        return owner, key
+    return None
+
+
 def last_result(row):
     """A source row's last_result as stored: the object, or None (none yet,
     not JSON or not an object: sources.json can be edited by hand)."""

@@ -3713,6 +3713,11 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 .assign-modal .modal-title .icon { color: var(--accent-hover); }
 .assign-modal .link-assign-pick { padding: 0; }
 .assign-modal .person-pick-input, .assign-modal .person-pick-list, .assign-modal .link-assign-foot { max-width: none; }
+/* A source's "Link to creator…": or a new person, by name, under the list. */
+.source-person-new { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.source-person-new label { flex: none; }
+.source-person-new input[type="text"] { flex: 1 1 auto; min-width: 0; padding: 7px 11px; height: 34px; font-family: var(--body); }
+.source-person-new .btn-secondary { flex: none; }
 .link-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .link-row {
   display: flex; align-items: center; gap: 10px; padding: 9px 8px 9px 12px; min-width: 0;

@@ -402,6 +402,9 @@ export function createSource(body) { return post("/api/sources", body); }
 export function updateSource(id, options, reset, pin = false) {
   return post(`/api/sources/${seg(id)}`, { options, ...(reset ? { reset } : {}), ...(pin ? { pin } : {}) });
 }
+// The person a source is added to (an id), or null for none; one tied to an account takes it along
+// (docs/API.md "Sources") → { ok, source }
+export function setSourcePerson(id, person) { return post(`/api/sources/${seg(id)}`, { person }); }
 // One platform's download defaults ({ option: value }; {} for none) → { ok, config } or { ok: false, error }
 export function saveSourceDefaults(tool, platform, defaults) {
   return post("/api/config", { source_defaults: { [tool]: { [platform]: defaults } } });

@@ -799,8 +799,9 @@ export default function Creators() {
           {loose.length > 0 && (
             <ul className="source-list">
               {loose.map(src => (
+                // Linked to a person: it leaves this list for their card, which the cards' reload shows.
                 <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
-                           onSaved={sources.reload} flash={flashKey === `source:${src.id}`} />
+                           onSaved={sources.reload} onLinked={onNoSync} flash={flashKey === `source:${src.id}`} />
               ))}
             </ul>
           )}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getAuthors, getConfig, getPeopleAttributes, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
-  createLink, updateLink, deleteLink, orderPersonLinks } from "../lib/api";
+  createLink, updateLink, deleteLink, orderPersonLinks, setSourcePerson } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
@@ -20,7 +20,7 @@ import StateChips from "../components/StateChips";
 import { useNoSync } from "../components/NoSync";
 import { useMute } from "../lib/useMute";
 import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
-import { useSources } from "../lib/sources";
+import { sourceName, useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
 import PersonAbout from "../components/PersonAbout";
 import PersonAvatar from "../components/PersonAvatar";
@@ -274,6 +274,23 @@ export default function PersonPage() {
     }
   }
 
+  // A source linked to nobody, with no account yet (never synced): one
+  // with an account comes along with it, from the accounts above.
+  async function adoptSource(s) {
+    setBusy(true);
+    try {
+      const r = await setSourcePerson(s.id, p.id);
+      if (!r?.ok) { toast(r?.error || "Could not link the source.", "err"); return; }
+      toast(`${sourceName(s)} linked.`);
+      reload();
+      sources.reload();
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove() {
     setBusy(true);
     setDlgError(null);
@@ -358,6 +375,7 @@ export default function PersonPage() {
   }
 
   const mine = (sources.data?.sources || []).filter(s => s.person?.id === p.id);
+  const loose = (sources.data?.sources || []).filter(s => !s.person && !s.account);
   // Suggestions that would add accounts to this person.
   const suggested = (suggestApi.data?.suggestions || []).filter(s => s.person?.id === p.id);
   const scoped = (path, more) => `${path}?${new URLSearchParams({ person: p.id, ...more })}`;
@@ -480,17 +498,19 @@ export default function PersonPage() {
           <div className="person-add">
             <CreatorPicker
               accounts={authors || []}
+              sources={loose}
               exclude={linked}
               label="Add an account"
               allLabel="Add an account…"
               onChange={v => {
+                if (v?.source) { adoptSource(v.source); return; }
                 if (!v?.account) return;
                 const a = v.account;
                 const from = a.person && a.person.id !== p.id ? ` (moved from ${a.person.name})` : "";
                 change({ add: [accountRef(a)] }, `@${a.handle || a.id} linked${from}.`);
               }}
             />
-            <span className="creator-sub">An account belongs to one person: adding it here takes it from anyone else.</span>
+            <span className="creator-sub">An account belongs to one person: adding it here takes it from anyone else. A source linked to nobody that never synced is listed too.</span>
           </div>
           <Suggestions
             title="Also them?"
@@ -536,7 +556,7 @@ export default function PersonPage() {
             <ul className="source-list">
               {mine.map(s => (
                 <SourceRow key={s.id} source={s} job={sources.jobOf(s)} onSync={sources.sync} onRemove={setRemoving}
-                           onSaved={sources.reload} />
+                           onSaved={sources.reload} onLinked={() => { reload(); sources.reload(); }} />
               ))}
             </ul>
           )}
