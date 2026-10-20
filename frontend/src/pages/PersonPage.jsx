@@ -555,6 +555,9 @@ export default function PersonPage() {
             placeholder="Anything worth remembering about them."
             value={notesValue}
             onChange={e => setNotes(e.target.value)}
+            // The whole box in sight, ring included, when Tab lands on it at
+            // the bottom of the window: the browser only brings its caret in.
+            onFocus={e => e.target.scrollIntoView({ block: "nearest" })}
           />
           {notesDirty && (
             <div className="person-notes-actions">
