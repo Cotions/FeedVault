@@ -2488,6 +2488,8 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 .review-byline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* At the top of a scrolling box its 24px target grows down: above, it would be cut off. */
 .review-byline .post-byline-handle { flex: 1; min-width: 0; padding: 0 0 3px; margin: 0 0 -3px; }
+/* A re-review's post kept before this session: the Feed's kept dot, in a chip. */
+.review-kept { gap: 5px; color: var(--text); }
 .review-meta { font-size: 11.5px; color: var(--text-dim); }
 .review-album { font-size: 12px; }
 .review-caption { max-height: 30vh; overflow-y: auto; font-size: 13px; padding: 3px; margin: -3px; scroll-padding: 3px; }
