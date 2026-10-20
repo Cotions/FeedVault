@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.6.0
+// @version      0.6.1
 // @description  Marks Instagram, X and TikTok posts you already have in FeedVault, saves the ones you don't, and keeps link-in-bio pages' links in its Links
 // @author       Cotions
 // @match        https://www.instagram.com/*
@@ -15,6 +15,7 @@
 // @match        https://campsite.bio/*
 // @match        https://linkin.bio/*
 // @match        https://allmylinks.com/*
+// @match        https://link.me/*
 // @connect      localhost
 // @connect      127.0.0.1
 // @grant        GM_xmlhttpRequest
@@ -123,6 +124,7 @@ const BIO_SITES = {
   "campsite.bio": {},
   "linkin.bio": { also: ["later.com"] },
   "allmylinks.com": {},
+  "link.me": {},
 };
 // First path parts that are the sites' own pages, not a person's.
 const BIO_NOT_PAGES = new Set(["login", "logout", "signin", "signup", "register", "join", "admin", "dashboard",

@@ -514,6 +514,7 @@ test("a person's page on a link-in-bio site, not the site's own pages", () => {
                               ["https://linktr.ee/somebody/?utm_source=ig", "https://linktr.ee/somebody/"],
                               ["https://beacons.ai/some.body", "https://beacons.ai/some.body"],
                               ["https://allmylinks.com/somebody", "https://allmylinks.com/somebody"],
+                              ["https://link.me/somebody", "https://link.me/somebody"],
                               ["https://linktr.ee/", null], ["https://linktr.ee/login", null], ["https://linktr.ee/s/about", null],
                               ["https://linktr.ee/somebody/extra", null], ["https://linktr.ee/...", null]]) {
     const p = load(href);
@@ -540,6 +541,23 @@ test("the page's outbound links, as rendered, none of the site's own", () => {
   many.run(`for (let i = 0; i < 250; i++) { const a = document.body.appendChild(document.createElement("a"));
             a.setAttribute("href", "https://shop.example/" + i); }`);
   assert.equal(many.run("bioLinks().length"), 200);
+});
+
+test("a Linkme page's links, none of its media CDN or footer", () => {
+  const page = load("https://link.me/somebody");
+  page.run(`for (const [href, text] of [["https://media.link.me/_resize/image/width=64/images/a.png", ""],
+                                        ["https://twitch.tv/somebody", "twitch"],
+                                        ["https://www.instagram.com/somebody?igsh=AbCd&utm_source=qr", "instagram"],
+                                        ["https://about.link.me/privacypolicy", "Privacy Policy"],
+                                        ["https://about.link.me/termsandconditions", "Terms"],
+                                        ["https://link.me/somebody", "LinkMe"]]) {
+              const a = document.body.appendChild(document.createElement("a"));
+              a.setAttribute("href", href);
+              a.text = text; }`);
+  assert.deepEqual(JSON.parse(page.run("JSON.stringify(bioLinks())")), [
+    { url: "https://twitch.tv/somebody", title: "twitch" },
+    { url: "https://www.instagram.com/somebody?igsh=AbCd&utm_source=qr", title: "instagram" },
+  ]);
 });
 
 const PEOPLE = { people: [{ id: 3, name: "Some Body" }, { id: 4, name: "Other One" }], recent: [4] };

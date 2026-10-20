@@ -367,8 +367,8 @@ there. A source the button adds downloads without a login, whatever your
 download defaults or tool settings say.
 
 On a person's link-in-bio page (linktr.ee, beacons.ai, lnk.bio, solo.to,
-campsite.bio, linkin.bio, allmylinks.com), a **Save links to FeedVault**
-panel saves the page and the links it shows into a person's **Links**, or
+campsite.bio, linkin.bio, allmylinks.com, link.me), a **Save links to
+FeedVault** panel saves the page and the links it shows into a person's **Links**, or
 into Unsorted: pick the person (recent ones first, or search), confirm, and
 it says what came of it ("4 saved, 2 already there"). It reads the links as
 your browser shows them, so pages drawn by JavaScript work, and nothing is
