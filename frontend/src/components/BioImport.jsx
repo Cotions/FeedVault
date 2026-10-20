@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { bioImport, createSource, linkAccounts } from "../lib/api";
 import { platformLabel, plural, safeUrl } from "../lib/fmt";
@@ -21,13 +21,38 @@ const STATUS = {
    said here, and onImported lets the page show them. Everything in the
    answer comes from someone else's page: shown as text only, and the one
    link is the profile address FeedVault builds itself (profile_url). Off
-   until Settings turns it on. */
+   until Settings turns it on.
+
+   Folded behind a small button until wanted: opened, focus goes to its
+   field (to the Settings link while it is off). Cancel closes it and
+   forgets what it held; Escape closes it too, unless an address is typed
+   and not imported yet. It stays open after an import, its results in it. */
 export default function BioImport({ person, enabled, onAdded, onImported }) {
+  const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(null);       // "fetch", or the key of the one being added
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);   // { url, accounts, links: { saved, already, … } }
+  const [imported, setImported] = useState(null); // the address as sent, once its import went through
   const [added, setAdded] = useState({});       // key → true
+  const boxRef = useRef(null);
+  const toggleRef = useRef(null);
+  const focusTo = useRef(null);                 // after the next open or close: "box" or "toggle"
+  const typed = !!url.trim() && url.trim() !== imported;
+
+  useEffect(() => {
+    const to = focusTo.current;
+    focusTo.current = null;
+    if (to === "toggle") toggleRef.current?.focus();
+    else if (to === "box") boxRef.current?.querySelector('input:not(:disabled), a[href], button:not(:disabled)')?.focus();
+  }, [open]);
+
+  function show() { focusTo.current = "box"; setOpen(true); }
+  function close() {
+    setUrl(""); setError(null); setResult(null); setImported(null); setAdded({});
+    focusTo.current = "toggle";
+    setOpen(false);
+  }
 
   async function load(e) {
     e.preventDefault();
@@ -37,9 +62,11 @@ export default function BioImport({ person, enabled, onAdded, onImported }) {
     setResult(null);
     setAdded({});
     try {
-      const r = await bioImport(person.id, url.trim());
+      const sent = url.trim();
+      const r = await bioImport(person.id, sent);
       if (!r?.ok) { setError(r?.error || "Could not import that page."); return; }
       setResult(r);
+      setImported(sent);
       onImported?.(r);
     } catch (err) {
       setError(err.message);
@@ -65,8 +92,24 @@ export default function BioImport({ person, enabled, onAdded, onImported }) {
     }
   }
 
+  if (!open) {
+    return (
+      <div className="bio-import-fold">
+        <button ref={toggleRef} type="button" className="btn-secondary bio-import-open" onClick={show}
+                title="Fetch their linktr.ee (or the like) page: the accounts it lists, and its links for their Links">
+          <Icon name="download" size={14} />Import from link-in-bio…
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="bio-import">
+    <div className="bio-import" ref={boxRef}
+         onKeyDown={e => {
+           if (e.key !== "Escape" || e.nativeEvent.isComposing || typed || busy) return;
+           e.stopPropagation();
+           close();
+         }}>
       <h4 className="bio-import-title">Import accounts from a link-in-bio page</h4>
       {!enabled && (
         <p className="creator-sub bio-import-off">
@@ -89,6 +132,9 @@ export default function BioImport({ person, enabled, onAdded, onImported }) {
                 title={enabled ? "Fetches this one page now, lists the accounts it links to, and saves its links to their Links" : "Turn it on in Settings first"}>
           <Icon name="download" size={14} className={busy === "fetch" ? "spin" : ""} />
           {busy === "fetch" ? "Fetching…" : "Import"}
+        </button>
+        <button type="button" className="btn-ghost" onClick={close} disabled={!!busy}>
+          {result ? "Close" : "Cancel"}
         </button>
       </form>
       {error && <div className="msg err" role="alert">{error}</div>}

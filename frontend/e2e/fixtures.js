@@ -1061,6 +1061,21 @@ export const BIO_ACCOUNTS = [
     account: null, person: { id: 1, name: "Somebody Else With A Long Name" }, source: null },
 ];
 
+// A person's page folds its link-in-bio import and its Add a link form
+// behind a button each: these open one (the page loaded) and return its box.
+export async function openBioImport(page) {
+  await page.getByRole("button", { name: "Import from link-in-bio…" }).click();
+  const box = page.locator(".bio-import");
+  await expect(box).toBeVisible();
+  return box;
+}
+export async function openAddLink(page) {
+  await page.locator(".person-link-add").getByRole("button", { name: "Add link…" }).click();
+  const form = page.locator(".person-link-add .link-form");
+  await expect(form).toBeVisible();
+  return form;
+}
+
 // `found` ([{ url, title }]): what the faked page shows a visitor. The
 // backend would save those to the person's Links; here the usual call does
 // (POST /api/links, the ones not saved yet), so the page has real links to

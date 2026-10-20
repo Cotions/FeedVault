@@ -3444,6 +3444,13 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-add .creator-sub { white-space: normal; }
 /* A box of its own under the accounts, as "Add a link" is under the links. */
 .bio-import, .person-link-add { margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 10px; }
+/* Both folded until wanted: a button under the accounts, and one under the
+   links (the box and its sub-heading come with the open form). */
+.bio-import-fold { margin-top: 12px; }
+.person-link-add:has(> .link-form-open) { padding: 0; border: none; }
+.person-link-add:has(> .link-form-open) > .link-group-title { display: none; }
+:is(.bio-import-open, .link-form-open) { display: inline-flex; align-items: center; gap: 7px; }
+.bio-import-form > .btn-ghost, .link-form-actions > .btn-ghost { flex-shrink: 0; }
 .bio-import-off { white-space: normal; overflow: visible; margin: 0 0 8px; }
 .bio-import-form { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .bio-import-form .page-filter { flex: 1; min-width: 220px; max-width: 360px; }

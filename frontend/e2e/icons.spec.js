@@ -3,7 +3,7 @@
 // on a post card and in Review's byline. The logo is an image named after the platform, for
 // screen readers and the tooltip, and sits before the name, on its line.
 // A platform with no logo keeps its text chip.
-import { test, expect, openPage, stressData, idle, fakeBioImport, BIO_ACCOUNTS } from "./fixtures.js";
+import { test, expect, openPage, stressData, idle, fakeBioImport, openBioImport, BIO_ACCOUNTS } from "./fixtures.js";
 import { platformLabel } from "../src/lib/fmt.js";
 
 const logo = (scope, platform) => scope.getByRole("img", { name: platformLabel(platform), exact: true });
@@ -36,7 +36,7 @@ test("Person: each account row has its platform's logo, named", async ({ page })
   await expect(own.locator("svg.platform-icon > title")).toHaveText(platformLabel(stressData().post.platform));
   await expect(own.locator(".platform-chip")).toHaveCount(0);
 
-  const box = page.locator(".bio-import");
+  const box = await openBioImport(page);
   await box.getByRole("textbox", { name: "Link-in-bio page" }).fill("linktr.ee/somebody");
   await box.getByRole("button", { name: "Import" }).click();
   await expect(box.locator(".bio-import-row")).toHaveCount(accounts.length);

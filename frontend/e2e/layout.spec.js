@@ -9,7 +9,8 @@
 // 24x24 px. The demo has the stress cases of make_demo.py --stress and
 // stress.js: a 60-character creator, 15 tags, long names and paths.
 import fs from "node:fs";
-import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle, fakeBioImport } from "./fixtures.js";
+import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle, fakeBioImport,
+  openBioImport, openAddLink } from "./fixtures.js";
 import { STRESS_PERSON } from "./stress.js";
 
 const SIZES = [
@@ -154,6 +155,7 @@ const DIALOGS = [
     open: async page => {
       await fakeBioImport(page);
       await openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title"));
+      await openBioImport(page);
       await page.getByRole("textbox", { name: "Link-in-bio page" }).fill("https://linktr.ee/somebody");
       await page.locator(".bio-import").getByRole("button", { name: "Import" }).click();
       await expect(page.locator(".bio-import-row").first()).toBeVisible();
@@ -335,10 +337,11 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
 //  - Mute is on the line of Feed … Trash, at the right edge of the sections.
 //  - Every section after the first is set apart by a rule, below the one
 //    before it; the empty Sources says so in a line, not a 48px gap.
-//  - The link-in-bio import is a box inside Accounts, as wide as the Add a
-//    link box, and both have the same sub-heading style.
-//  - Add a link's title field and its button end at the same x (a person's
-//    page); on the Links page the button ends where the Person field does.
+//  - The link-in-bio import, opened, is a box inside Accounts, as wide as
+//    the opened Add a link box, and both have the same sub-heading style.
+//  - Add a link's title field and its buttons (Add link, Cancel) end at the
+//    same x (a person's page); on the Links page the button ends where the
+//    Person field does.
 //  - A long person name on the Links page ends in an ellipsis inside its chip.
 const LINE_SIZES = [SIZES[1], SIZES[2], SIZES[3]];
 
@@ -347,6 +350,8 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
   const problems = [];
   const near = (a, b, px = 1) => Math.abs(a - b) <= px;
   await openUrl(page, `/people/${S.person}`, pg => pg.locator(".person-new button"));
+  await openBioImport(page);
+  await openAddLink(page);
   await stillPage(page);
   for (const s of LINE_SIZES) {
     await page.setViewportSize({ width: s.width, height: s.height });
@@ -362,7 +367,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
       const style = e => getComputedStyle(e);
       const bio = document.querySelector(".bio-import"), add = document.querySelector(".person-link-add");
       const sourcesEmpty = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Sources"))?.querySelector(".empty");
-      const title = box(add.querySelector(".link-form-title input")), button = box(add.querySelector(".link-form-actions .btn-primary"));
+      const title = box(add.querySelector(".link-form-title input")), button = box(add.querySelector(".link-form-actions > :last-child"));
       return {
         nav: nav.top + nav.height / 2, mute: mute.top + mute.height / 2, muteRight: mute.right, sectionRight: box(accounts).right,
         rules: sections.slice(1).map((x, i) => ({ border: parseFloat(style(x).borderTopWidth), top: box(x).top, above: box(sections[i]).bottom })),
@@ -387,7 +392,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
     if (new Set(m.heads).size !== 1) problems.push(`${at}: the sub-headings differ: ${[...new Set(m.heads)].join(" | ")}`);
     if (m.empty == null) problems.push(`${at}: the stress person's Sources has no empty state`);
     else if (m.empty > 60) problems.push(`${at}: the empty Sources is ${m.empty}px tall`);
-    if (!near(m.titleRight, m.buttonRight)) problems.push(`${at}: Add a link's title ends at x=${m.titleRight}, its button at x=${m.buttonRight}`);
+    if (!near(m.titleRight, m.buttonRight)) problems.push(`${at}: Add a link's title ends at x=${m.titleRight}, its last button (Cancel) at x=${m.buttonRight}`);
   }
 
   await openPage(page, { name: "Links", path: "/links" });

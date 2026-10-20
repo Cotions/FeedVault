@@ -1,6 +1,7 @@
 // Desktop, 1440x900: every page loads clean, the Feed shows posts, Review
 // decides from the keyboard, and a person's link-in-bio import (faked).
-import { test, expect, PAGES, openPage, keepTrashUndo, reviewLeft, stressData, idle, fakeBioImport, BIO_ACCOUNTS } from "./fixtures.js";
+import { test, expect, PAGES, openPage, keepTrashUndo, reviewLeft, stressData, idle, fakeBioImport, BIO_ACCOUNTS,
+  openBioImport } from "./fixtures.js";
 
 test.describe("every page in the nav loads, no console error, no failed /api request", () => {
   for (const p of PAGES) {
@@ -259,13 +260,15 @@ async function openPerson(page) {
   await page.goto(`/people/${stressData().person}`);
   await expect(page.locator("h2.page-title")).toBeVisible();
   await idle(page);
-  return page.locator(".bio-import");
+  return openBioImport(page);
 }
 
 test("Person: link-in-bio import is off until Settings allows it", async ({ page }) => {
   let imports = 0;
   await page.route("**/api/people/*/bio-import", route => { imports += 1; return route.abort(); });
   const box = await openPerson(page);
+  // Opened (folded until then, the notice with it), focus on its first stop: the link to Settings.
+  await expect(box.getByRole("link", { name: "Turn it on in Settings" })).toBeFocused();
   await expect(box.getByRole("textbox", { name: "Link-in-bio page" })).toBeDisabled();
   await expect(box.getByRole("button", { name: "Import" })).toBeDisabled();
   const hint = box.getByRole("link", { name: "Turn it on in Settings" });
