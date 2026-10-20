@@ -1383,7 +1383,9 @@ def bio_import(pid):
     not have yet; nothing saved before is changed or removed, so importing
     again picks up what is new). No account or source is added: the
     dashboard adds each one the user picks through /api/people/<id>/accounts
-    or /api/sources. No link is fetched. Never from another site
+    or /api/sources. No link is fetched (a mydeck.bio-style redirect link
+    on the page's own host is only asked where it goes: biofetch's
+    REDIRECT_LINKS). Never from another site
     (_origin_guard)."""
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or set(body) != {"url"} or not isinstance(body["url"], str):
@@ -1403,7 +1405,7 @@ def bio_import(pid):
             shown = "a refused link"           # not logged as sent: it may hold anything
         print(f"[people] link-in-bio import of {shown}: {e}")
         return jsonify({"ok": False, "error": str(e)}), e.status
-    read, table = biofetch.read(page.text), sources.routes(cfg)
+    read, table = biofetch.read(page.text, page.url, page.resolved), sources.routes(cfg)
     accounts = biofetch.suggest(conn, pid, biofetch.page_links(read), table, cfg["media_roots"])
     found, dropped = biofetch.shown_links(read, page.url, table)
     kept = links.keep(conn, pid, found, _link_now(), biofetch.MAX_SAVED)

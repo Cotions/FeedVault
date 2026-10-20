@@ -138,6 +138,7 @@ def test_bad_bodies(on, body):
     ("https://linktr.ee.evil.example/somebody", "not an allowed site"),
     ("https://user@linktr.ee/somebody", "login part"),
     ("https://linktr.ee:8443/somebody", "443"),
+    ("https://carol.mydeck.bio/", "not an allowed site"),     # fetched by the import only: no userscript there
 ])
 def test_only_a_page_of_a_link_in_bio_site(on, page, error):
     assert error in send(on, {"page_url": page, "links": SENT}, 400)["error"]

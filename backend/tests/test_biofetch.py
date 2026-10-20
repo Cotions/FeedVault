@@ -92,7 +92,11 @@ class Net:
         self.clock = Clock()
         self.lookups, self.connects, self.tls = [], [], []
         self.delay, self.chunk, self.recv_error = 0.0, 1 << 20, None
-        self.socks = []
+        self.socks, self.sleeps = [], []
+
+    def sleep(self, t):
+        self.sleeps.append(t)
+        self.clock.t += t
 
     def resolve(self, host, port, timeout):
         assert port == 443 and timeout > 0
@@ -118,7 +122,8 @@ class Net:
         return sock
 
     def fetcher(self, **kw):
-        return biofetch.Fetcher(resolve=self.resolve, connect=self.connect, wrap=self.wrap, clock=self.clock, **kw)
+        return biofetch.Fetcher(resolve=self.resolve, connect=self.connect, wrap=self.wrap, clock=self.clock,
+                                sleep=self.sleep, **kw)
 
     def get(self, url, **kw):
         return self.fetcher(**kw).fetch(url)
@@ -198,8 +203,10 @@ def test_linkme_home_and_subdomains_are_refused(url, error):
 
 
 def test_every_allowed_site_has_a_reason_and_is_a_plain_host():
-    for host, why in biofetch.SITES.items():
+    for host, why in {**biofetch.SITES, **biofetch.SUBDOMAIN_SITES}.items():
         assert why and biofetch._host(host) == host and not host.startswith("www.")
+    assert not set(biofetch.SITES) & set(biofetch.SUBDOMAIN_SITES)
+    assert set(biofetch.REDIRECT_LINKS) <= {*biofetch.SITES, *biofetch.SUBDOMAIN_SITES}
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +435,7 @@ def test_too_large_chunked():
 def test_the_default_limits():
     f = biofetch.Fetcher()
     assert (f.timeout, f.max_bytes, f.max_redirects) == (10, 2 * 1024 * 1024, 3)
+    assert (f.max_lookups, f.import_time, biofetch.LOOKUP_GAP, biofetch.LOOKUP_TIMEOUT) == (30, 40, 0.4, 5)
 
 
 def test_chunked_and_charset():
@@ -1467,3 +1475,242 @@ def test_a_person_deleted_during_the_fetch_gets_no_links(bio, client, monkeypatc
     monkeypatch.setattr(biofetch, "FETCHER", Deleting())
     assert bio_import(client, bio["id"], status=404)["error"] == "no such person"
     assert get(client, "/api/links")["links"] == []
+
+
+# ---------------------------------------------------------------------------
+# Subdomain sites (mydeck.bio): <name>.mydeck.bio/, buttons as /go/<n>
+# redirects on the page's own host
+# ---------------------------------------------------------------------------
+
+DECK = "carol.mydeck.bio"
+
+# A MyDeck page as the site serves it (drawn on the server): each button is
+# /go/<n> on the page's host, which redirects to where it goes; the
+# address is nowhere in the page. Images on the site's R2 bucket, fonts
+# from Google, the site's own pages in the footer.
+MYDECK_PAGE = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Carol | MyDeck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<meta property="og:image" content="https://pub-0a1b2c3d4e5f.r2.dev/avatars/carol.webp"></head>
+<body><main class="card"><img class="avatar" src="https://pub-0a1b2c3d4e5f.r2.dev/avatars/carol.webp" alt="Carol">
+<h1>Carol</h1><a class="banner" href="https://pub-0a1b2c3d4e5f.r2.dev/banners/carol">banner</a>
+<div class="links" id="visible-links"><a href="/go/1" class="link-btn" rel="noopener noreferrer"><svg viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg><span>Instagram</span></a><a href="/go/2" class="link-btn" rel="noopener noreferrer"><svg viewBox="0 0 24 24"></svg><span>Reddit</span></a></div>
+<footer><a href="https://mydeck.bio/">Made with MyDeck</a><a href="https://mydeck.bio/signup">Create yours</a></footer>
+</main></body></html>"""
+MYDECK_GO = {
+    "/go/1": "https://www.instagram.com/carol.example/",
+    "/go/2": "https://www.reddit.com/user/Carol_Example-/",
+}
+MYDECK_KEPT = [
+    (f"https://{DECK}", ""), ("https://www.instagram.com/carol.example/", "Instagram"),     # as links.py stores it
+    ("https://www.reddit.com/user/Carol_Example-/", "Reddit"),
+]
+
+
+def deck_net(page=MYDECK_PAGE, go=None):
+    """A Net with the MyDeck page at carol.mydeck.bio/ and its /go/<n>
+    answers (``go``: {path: Location} as redirects, or {path: answer})."""
+    answers = {(DECK, "/"): html_answer(page.encode())}
+    for path, value in (MYDECK_GO if go is None else go).items():
+        answers[(DECK, path)] = redirect(value) if isinstance(value, str) else value
+    return Net(dns={DECK: [PUBLIC]}, pages=answers)
+
+
+def requested(net):
+    """(host, request line) of every request sent."""
+    return [(s.host, s.sent.split(b"\r\n", 1)[0].decode()) for s in net.socks]
+
+
+def kept(page):
+    return biofetch.shown_links(biofetch.read(page.text, page.url, page.resolved), page.url, ROUTES)
+
+
+@pytest.mark.parametrize("url", [
+    f"https://{DECK}/", f"https://{DECK}", DECK, "https://Carol.MyDeck.Bio/", f"https://www.{DECK}/",
+    f"https://{DECK}./", f"https://{DECK}:443/", "https://ｃａｒｏｌ.mydeck.bio/",
+])
+def test_a_mydeck_profile_is_its_subdomain(url):
+    net = deck_net(page="<p>hi</p>")
+    page = net.get(url)
+    assert page.url == f"https://{DECK}/" and page.resolved == {}
+    assert net.lookups == [DECK] and net.tls == [(PUBLIC, DECK)]
+
+
+@pytest.mark.parametrize("url, error", [
+    ("https://mydeck.bio/", "not the site's home page"),
+    ("https://mydeck.bio/carol", "not the site's home page"),
+    ("https://www.mydeck.bio/", "not the site's home page"),               # www. is dropped: the site itself
+    ("mydeck.bio", "not the site's home page"),
+    ("https://a.carol.mydeck.bio/", "not an allowed site: a.carol.mydeck.bio"),   # one label only
+    ("https://api.mydeck.bio/", "not an allowed site: api.mydeck.bio"),
+    ("https://cdn2.mydeck.bio/", "not an allowed site"),
+    ("https://admin.mydeck.bio/", "not an allowed site"),
+    ("https://www.www.mydeck.bio/", "not an allowed site"),
+    ("https://evilmydeck.bio/", "not an allowed site: evilmydeck.bio"),
+    ("https://carol.mydeck.bio.evil.example/", "not an allowed site"),
+    ("https://carol-.mydeck.bio/", "not an allowed site"),
+    ("http://carol.mydeck.bio/", "only https links"),
+    ("https://carol.mydeck.bio:8443/", "only https's own port"),
+    ("https://x@carol.mydeck.bio/", "login part"),
+])
+def test_mydeck_links_refused_before_anything_is_looked_up(url, error):
+    net = Net()
+    assert error in refused(net, url)
+    assert net.lookups == net.connects == []
+
+
+def test_the_allowed_list_names_subdomain_sites():
+    assert "<name>.mydeck.bio" in refused(Net(), "https://evil.example/a")
+
+
+def test_a_mydeck_redirect_is_checked_as_a_first_link_is():
+    net = deck_net(go={"/old": redirect("https://dave.mydeck.bio/")})
+    net.dns["dave.mydeck.bio"] = [PUBLIC]
+    net.pages[("dave.mydeck.bio", "/")] = html_answer(b"<p>dave</p>")
+    assert net.get(f"https://{DECK}/old").url == "https://dave.mydeck.bio/"
+    for location in ("https://mydeck.bio/", "https://a.b.mydeck.bio/", "https://api.mydeck.bio/"):
+        net = deck_net(go={"/old": redirect(location)})
+        assert "redirects elsewhere" in refused(net, f"https://{DECK}/old")
+        assert net.lookups == [DECK]
+
+
+def test_a_mydeck_page_resolves_its_go_links_on_its_own_host():
+    net = deck_net()
+    page = net.get(DECK)
+    assert page.resolved == {f"https://{DECK}/go/1": MYDECK_GO["/go/1"], f"https://{DECK}/go/2": MYDECK_GO["/go/2"]}
+    assert requested(net) == [(DECK, "GET / HTTP/1.1"), (DECK, "GET /go/1 HTTP/1.1"), (DECK, "GET /go/2 HTTP/1.1")]
+    # Each through the same checks (a lookup, its addresses, TLS on the
+    # page's own name), a gap before each; nothing a redirect names is
+    # fetched, not Instagram, not Reddit.
+    assert net.lookups == [DECK] * 3 and net.tls == [(PUBLIC, DECK)] * 3
+    assert net.sleeps == [biofetch.LOOKUP_GAP] * 2
+    assert kept(page) == (MYDECK_KEPT, 0)                       # no r2.dev image, no font, no mydeck.bio page
+
+
+def test_a_relative_location_is_made_absolute_and_kept_as_text():
+    net = deck_net(go={"/go/1": "/carol/about", "/go/2": "//shop.example/carol"})
+    page = net.get(DECK)
+    assert page.resolved == {f"https://{DECK}/go/1": f"https://{DECK}/carol/about",
+                             f"https://{DECK}/go/2": "https://shop.example/carol"}
+    assert len(net.socks) == 3                                  # neither is fetched
+    assert kept(page) == ([(f"https://{DECK}", ""), ("https://shop.example/carol", "Reddit")], 0)
+
+
+def test_a_go_link_that_fails_or_does_not_redirect_is_skipped():
+    net = deck_net(page="".join(f'<a href="/go/{n}">b{n}</a>' for n in range(1, 8)), go={
+        "/go/1": html_answer(b"<p>a page</p>"),                       # 200
+        "/go/2": html_answer(status="404 Not Found"),
+        "/go/3": b"garbage\r\n\r\n",                                    # not HTTP
+        "/go/4": html_answer(b"", status="302 Found"),                  # nowhere to go
+        "/go/5": "https://" + "a" * biofetch.URL_MAX + ".example/",    # too long
+        "/go/6": lambda: setattr(net, "delay", 100) or redirect("https://late.example/"),   # times out
+        "/go/7": lambda: setattr(net, "delay", 0) or redirect("https://shop.example/carol"),
+    })
+    page = net.get(DECK)
+    assert page.resolved == {f"https://{DECK}/go/7": "https://shop.example/carol"}
+    assert len(net.socks) == 8
+    assert kept(page) == ([(f"https://{DECK}", ""), ("https://shop.example/carol", "b7")], 0)
+
+
+def test_a_go_link_that_cannot_be_reached_is_skipped():
+    net = deck_net()
+    connect = net.connect
+
+    def refuse_go(family, sockaddr, timeout):
+        if net.connects:                                        # the page, then nothing answers
+            net.connects.append(sockaddr[0])
+            raise ConnectionRefusedError(111, "Connection refused")
+        return connect(family, sockaddr, timeout)
+    net.connect = refuse_go
+    page = net.get(DECK)
+    assert page.resolved == {} and net.connects == [PUBLIC] * 3
+
+
+def test_a_go_link_is_never_asked_on_another_host():
+    hrefs = ["https://dave.mydeck.bio/go/1", "//dave.mydeck.bio/go/2", "https://evil.example/go/3",
+             "https://mydeck.bio/go/4", "/go/5?x=1", "/go/abc", "/go/6/more", "/go/", "/go/7/",
+             f"https://{DECK}:8443/go/8", f"http://{DECK}/go/9", f"https://u@{DECK}/go/10", "/go/1234567890",
+             "https://api.mydeck.bio/go/11", "javascript:/go/12", "/Go/13"]
+    net = deck_net(page="".join(f'<a href="{h}">x</a>' for h in hrefs), go={})
+    net.dns.update({"dave.mydeck.bio": [PUBLIC], "mydeck.bio": [PUBLIC], "evil.example": [PUBLIC]})
+    page = net.get(DECK)
+    assert page.resolved == {} and net.lookups == [DECK] and len(net.socks) == 1 and net.sleeps == []
+
+
+def test_only_redirect_link_sites_ask_their_links():
+    page = '<a href="/go/1">Instagram</a><a href="https://linktr.ee/go/2">x</a>'
+    net = Net(pages={("linktr.ee", "/alice"): html_answer(page.encode())})
+    assert net.get("https://linktr.ee/alice").resolved == {} and len(net.socks) == 1
+    assert biofetch.redirect_link("/go/1", "https://linktr.ee/alice") is None
+    assert biofetch.redirect_link("/go/1", f"https://{DECK}/") == f"https://{DECK}/go/1"
+    assert biofetch.redirect_link(f"https://www.{DECK}/go/1", f"https://{DECK}/") == f"https://{DECK}/go/1"
+    assert biofetch.redirect_link("/go/1#top", f"https://{DECK}/") == f"https://{DECK}/go/1"
+
+
+def test_a_redirects_body_is_never_read():
+    body = b"<html>" + b"SECRET BODY " * 100 + b"</html>"
+    net = deck_net(go={"/go/1": html_answer(body, status="302 Found", headers={"Location": MYDECK_GO["/go/1"]}),
+                       "/go/2": html_answer(body)})               # nor a 200's
+    net.chunk = 1                                               # a byte per recv: what is not asked stays unread
+    page = net.get(DECK)
+    assert page.resolved == {f"https://{DECK}/go/1": MYDECK_GO["/go/1"]}
+    assert [s.out for s in net.socks[1:]] == [body, body]
+    assert all(s.closed for s in net.socks)
+
+
+def test_go_lookups_are_capped_and_counted_once():
+    n = biofetch.MAX_LOOKUPS + 10
+    page = "".join(f'<a href="/go/{i}">b{i}</a><a href="https://{DECK}/go/{i}">again</a>' for i in range(n))
+    net = deck_net(page=page, go={f"/go/{i}": f"https://shop.example/{i}" for i in range(n)})
+    got = net.get(DECK).resolved
+    assert len(got) == biofetch.MAX_LOOKUPS == len(net.socks) - 1
+    assert list(got) == [f"https://{DECK}/go/{i}" for i in range(biofetch.MAX_LOOKUPS)]
+    assert net.sleeps == [biofetch.LOOKUP_GAP] * biofetch.MAX_LOOKUPS
+
+
+def test_go_lookups_stop_at_the_import_time():
+    page = "".join(f'<a href="/go/{i}">b{i}</a>' for i in range(20))
+    net = deck_net(page=page, go={f"/go/{i}": f"https://shop.example/{i}" for i in range(20)})
+    net.delay = 0.1                                             # each piece of an answer takes 0.1 s
+    start = net.clock.t
+    got = net.fetcher(import_time=3).fetch(DECK).resolved
+    assert 0 < len(got) < 10 and len(net.socks) == len(got) + 1
+    assert net.clock.t <= start + 3
+
+
+def test_a_slow_go_lookup_has_its_own_timeout():
+    net = deck_net(go={"/go/1": lambda: setattr(net, "delay", 100) or redirect(MYDECK_GO["/go/1"]),
+                       "/go/2": lambda: setattr(net, "delay", 0) or redirect(MYDECK_GO["/go/2"])})
+    start = net.clock.t
+    page = net.get(DECK)
+    assert page.resolved == {f"https://{DECK}/go/2": MYDECK_GO["/go/2"]}
+    assert net.clock.t - start <= 2 * biofetch.LOOKUP_GAP + biofetch.LOOKUP_TIMEOUT + 0.01
+
+
+def test_mydeck_own_pages_are_not_links_to_keep():
+    own = biofetch._own(DECK)
+    assert own == ("mydeck.bio",)
+    for link in ("https://mydeck.bio/", "https://dave.mydeck.bio/", f"https://{DECK}/go/1", "https://www.mydeck.bio/x"):
+        assert biofetch._visitor_url(link, own) == (None, "plumbing")
+    assert biofetch._visitor_url("https://pub-0a1b2c3d4e5f.r2.dev/x", ()) == (None, "plumbing")
+    assert biofetch._visitor_url("https://linktr.ee/dave", own) == ("https://linktr.ee/dave", None)
+
+
+def test_a_mydeck_import_end_to_end(bio, client, monkeypatch):
+    net = deck_net()
+    monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
+    r = bio_import(client, bio["id"], url=f"https://{DECK}/")
+    assert r["url"] == f"https://{DECK}/"
+    assert {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]} == {
+        ("instagram", "carol.example"): "new", ("reddit", "Carol_Example-"): "new"}
+    assert r["links"] == {"saved": 3, "already": 0, "elsewhere": 0, "over": 0, "dropped": 0}
+    assert saved(client, bio["id"]) == MYDECK_KEPT
+    assert set(net.lookups) == {DECK} and len(net.socks) == 3
+
+
+def test_a_mydeck_import_without_answers_keeps_the_page(bio, client, monkeypatch):
+    net = deck_net(go={"/go/1": html_answer(status="500 Oops"), "/go/2": html_answer()})
+    monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
+    r = bio_import(client, bio["id"], url=DECK)
+    assert r["accounts"] == [] and r["links"]["saved"] == 1 and r["links"]["dropped"] == 0
+    assert saved(client, bio["id"]) == [(f"https://{DECK}", "")]
