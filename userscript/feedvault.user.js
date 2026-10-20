@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.5.0
+// @version      0.6.0
 // @description  Marks Instagram, X and TikTok posts you already have in FeedVault, saves the ones you don't, and keeps link-in-bio pages' links in its Links
 // @author       Cotions
 // @match        https://www.instagram.com/*
@@ -20,6 +20,8 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @run-at       document-idle
 // @updateURL    http://localhost:3380/userscript/feedvault.user.js
 // @downloadURL  http://localhost:3380/userscript/feedvault.user.js
@@ -108,6 +110,7 @@ const SITES = {
 };
 
 const SITE = Object.values(SITES).find((s) => s.hosts.includes(location.hostname)) || null;
+const SITE_KEY = Object.keys(SITES).find((k) => SITES[k] === SITE) || null;
 
 // Link-in-bio sites: a person's page is one path on the host. The same hosts
 // as backend/biofetch.py SITES and the @match lines above (a test checks the
@@ -192,11 +195,22 @@ if (SITE || BIO_HOST) GM_addStyle(`
     content: ""; width: 7px; height: 7px; border-radius: 50%;
     background: #4ade80; box-shadow: 0 0 6px #4ade80;
   }
+  /* The corner panel: where place() puts it (right/bottom, or left/top
+     while it is dragged by its grip). */
   .fv-panel {
     position: fixed; right: 18px; bottom: 18px; z-index: 2147483000;
     display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
     max-width: 320px; font: 600 12px/16px ui-monospace, "JetBrains Mono", monospace;
   }
+  .fv-body { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .fv-grip {
+    cursor: grab; user-select: none; touch-action: none;
+    padding: 0 8px; border-radius: 999px; color: #e8ecf6; background: rgba(10, 12, 17, 0.88);
+    box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.35); font: 700 11px/14px ui-monospace, monospace;
+  }
+  .fv-grip::before { content: "⠿ FV"; }
+  .fv-grip:hover { box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.8); }
+  .fv-grip[data-drag] { cursor: grabbing; }
   .fv-btn {
     all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
     padding: 5px 11px; border-radius: 999px; color: #e8ecf6; background: rgba(10, 12, 17, 0.88);
@@ -230,8 +244,10 @@ if (SITE || BIO_HOST) GM_addStyle(`
   }
   /* A tile's Save: bottom right, clear of the "saved" badge's corner, of
      Instagram's carousel and reel icons (top right) and of TikTok's view
-     count and X's ALT and duration labels (bottom left). Shown while the
-     tile is hovered or focused; always once a save is under way or failed. */
+     count (bottom left). On X, top right: X puts its own button on media
+     bottom right (Grok's edit image), its ALT and duration labels bottom
+     left. Shown while the tile is hovered or focused; always once a save
+     is under way or failed. */
   .fv-tile-save {
     all: unset; box-sizing: border-box;
     position: absolute; right: 6px; bottom: 6px; z-index: 6;
@@ -244,6 +260,7 @@ if (SITE || BIO_HOST) GM_addStyle(`
   :hover > .fv-tile-save, :focus-within > .fv-tile-save, .fv-tile-save:not([data-state="idle"]) {
     opacity: 1; pointer-events: auto;
   }
+  .fv-tile-save[data-fv-site="x"] { top: 6px; bottom: auto; }
   .fv-tile-save:hover, .fv-tile-save:focus-visible { box-shadow: 0 0 0 1px rgba(232, 236, 246, 0.9); }
   .fv-tile-save[data-state="busy"] { cursor: default; }
   .fv-tile-save[data-state="failed"], .fv-tile-save[data-state="offline"] { box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.85); }
@@ -354,7 +371,7 @@ function paintTiles() {
 // not, and only a real one saves.
 function addTileSave(a) {
   hold(a);
-  const b = el("button", { class: TILE_SAVE_CLASS, type: "button" });
+  const b = el("button", { class: TILE_SAVE_CLASS, type: "button", "data-fv-site": SITE_KEY });
   b.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -420,21 +437,96 @@ function link(href, text, cls = "") {
   return el("a", { href, target: "_blank", rel: "noreferrer", ...(cls ? { class: cls } : {}) }, text);
 }
 
-// The panel in the corner: one button (or link) and, below it, a note.
+// The panel's spot, per site (hostname), kept in the script's own storage
+// (never the page's): its right and bottom offsets, as the user dropped it.
+// None: the site's default. X keeps its own floating buttons (Grok, the
+// messages drawer) in the bottom-right corner: its panel starts left of them.
+const PANEL_SPOTS = { x: { right: 90, bottom: 18 } };
+const PANEL_SPOT = { right: 18, bottom: 18 };
+const SPOT_KEY = `panel:${location.hostname}`;
+
+function savedSpot() {
+  const s = GM_getValue(SPOT_KEY, null);
+  return s && Number.isFinite(s.right) && Number.isFinite(s.bottom) ? s : null;
+}
+
+const clamp = (v, max) => Math.max(0, Math.min(v, Math.max(0, max)));
+
+// The panel at its spot, inside the window. It is anchored by its bottom
+// right corner, as its buttons are: a longer note grows it up and left.
+function place(p) {
+  const s = savedSpot() || PANEL_SPOTS[SITE_KEY] || PANEL_SPOT;
+  const r = p.getBoundingClientRect();
+  Object.assign(p.style, { left: "", top: "",
+    right: `${clamp(s.right, innerWidth - r.width)}px`, bottom: `${clamp(s.bottom, innerHeight - r.height)}px` });
+}
+
+// The panel's grip: drag it to move the panel, double-click it to put the
+// panel back in its default spot. Only the user's own pointer acts.
+function grip(p) {
+  const g = el("div", { class: "fv-grip", title: "Drag to move, double-click to put back" });
+  let drag = null;
+  g.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    if (!e.isTrusted || e.button !== 0) return;
+    e.preventDefault();
+    const r = p.getBoundingClientRect();
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
+    g.setPointerCapture(e.pointerId);
+    g.dataset.drag = "1";
+  });
+  g.addEventListener("pointermove", (e) => {
+    if (!drag || !e.isTrusted || e.pointerId !== drag.id) return;
+    // A few pixels' wobble is a click (a double-click's), not a move.
+    if (!drag.moved && Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 4) return;
+    const r = p.getBoundingClientRect();
+    drag.moved = true;
+    Object.assign(p.style, { right: "auto", bottom: "auto",
+      left: `${clamp(e.clientX - drag.dx, innerWidth - r.width)}px`,
+      top: `${clamp(e.clientY - drag.dy, innerHeight - r.height)}px` });
+  });
+  const drop = (e) => {
+    if (!drag || !e.isTrusted || e.pointerId !== drag.id) return;
+    const { moved } = drag;
+    drag = null;
+    g.removeAttribute("data-drag");
+    if (moved) {
+      const r = p.getBoundingClientRect();
+      GM_setValue(SPOT_KEY, { right: Math.round(innerWidth - r.right), bottom: Math.round(innerHeight - r.bottom) });
+    }
+    place(p);
+  };
+  g.addEventListener("pointerup", drop);
+  g.addEventListener("pointercancel", drop);
+  g.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.isTrusted) return;
+    GM_setValue(SPOT_KEY, null);
+    place(p);
+  });
+  return g;
+}
+
+// The panel in the corner: its grip, then one button (or link) and, below
+// it, a note.
 function panel(key) {
   let p = document.querySelector(".fv-panel");
   if (p && p.dataset.key === key) return p;
   p?.remove();
   p = el("div", { class: "fv-panel" });
   p.dataset.key = key;
+  p.append(grip(p), el("div", { class: "fv-body" }));
   document.body.appendChild(p);
+  place(p);
   return p;
 }
 
 function render(p, sig, build) {
   if (p.dataset.sig === sig) return;           // unchanged: keep the DOM (and focus) as it is
   p.dataset.sig = sig;
-  p.replaceChildren(...build());
+  p.querySelector(":scope > .fv-body").replaceChildren(...build());
+  place(p);                                    // its new size, inside the window
 }
 
 // ``settings``: true for a link to Settings → Downloaders, or the link's own text.
@@ -957,6 +1049,10 @@ function paint() {
 
 if (SITE || BIO_HOST) {
   GM_registerMenuCommand("Add this page to FeedVault Links", addPage);
+  addEventListener("resize", () => {
+    const p = document.querySelector(".fv-panel");
+    if (p) place(p);
+  });
   let raf = null;
   new MutationObserver(() => {
     if (raf) return;

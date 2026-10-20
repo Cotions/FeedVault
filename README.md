@@ -327,11 +327,14 @@ the post page and in the dialog a grid opens on Instagram): it downloads that
 one post, and turns into the link once it is indexed. It shows Queued,
 Saving… and, when it fails, why; with FeedVault stopped it says "FeedVault is
 not running". Several saves in a row queue up (at most 20 at once,
-`save_queue_max` in the config).
+`save_queue_max` in the config). The corner panel these buttons sit in can be
+dragged by its **⠿ FV** grip; it remembers its spot per site (on X it starts
+left of X's own corner buttons), and a double-click on the grip puts it back.
 
 Grid tiles (a profile's grid, timelines, search results, the "more posts"
 under a post) get the same, without opening the post: a tile FeedVault does
-not have shows a small **Save** in its bottom-right corner while the pointer
+not have shows a small **Save** in its bottom-right corner (top-right on X,
+where X has its own button bottom right) while the pointer
 is on it (or it has the keyboard focus), and keeps showing Sending…, Queued,
 Saving… or "Failed — retry" (why, in its tooltip) until the tile turns
 "saved". Each tile saves its own post, several at once, and a post page and
