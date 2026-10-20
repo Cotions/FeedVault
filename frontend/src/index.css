@@ -3380,6 +3380,12 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
   .person-hero .avatar-edit { width: min(200px, 60%); }
 }
 .person-links { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Review and its icon-only Re-review as one split button: they wrap together,
+   share a 1px border, and the hovered half draws its whole border on top. */
+.link-pair { display: inline-flex; }
+.link-pair > a:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.link-pair > a + a { margin-left: -1px; padding: 7px 10px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.link-pair > a:hover { position: relative; }
 .person-new { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .person-new:empty { display: none; }
 /* Sections apart by a rule, as Settings' cookie notes are. */
