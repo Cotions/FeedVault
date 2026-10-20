@@ -317,6 +317,24 @@ def test_a_saved_post_seeds_nothing_wrong_for_a_new_source(env, client, fake):
     assert sync["state"] == "done" and sync["result"]["added"] == 1, sync
 
 
+def test_a_post_saved_into_a_new_sources_folder_links_its_account(env, client, fake):
+    """A person's X source that never synced: one tweet saved from the
+    browser lands in its folder, and the source takes the account, linked
+    to the person (not left among the accounts not linked)."""
+    p = post(client, "/api/people", {"name": "Some One"})["person"]
+    src = add(client, "https://x.com/someone", person=p["id"])
+    assert src["account"] is None
+    fake.put(X_PROFILE, x_account((1, 2)))
+    job = save_now(client, X_LINK)
+    assert job["state"] == "done" and job["result"]["folder"] == src["folder"], job
+    assert job["result"]["account"] == {"platform": "twitter", "id": "900"}
+    assert job["result"]["person"] == p["id"]
+    src = get(client, f"/api/sources/{src['id']}")
+    assert src["account"] == {"platform": "twitter", "id": "900"} and src["person"]["id"] == p["id"]
+    assert [a["id"] for a in get(client, f"/api/people/{p['id']}")["accounts"]] == ["900"]
+    assert next(a for a in get(client, "/api/authors") if a["id"] == "900")["person"]["id"] == p["id"]
+
+
 def test_a_file_already_there_is_kept(env, client, fake):
     fake.put(X_PROFILE, x_account((1, 1)))
     folder = env["media"] / "twitter" / "someone"

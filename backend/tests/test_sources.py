@@ -3,7 +3,7 @@ import json
 import os
 
 from conftest import H
-from fakes import owner, write_filename_post, write_meta, write_post
+from fakes import gallery_dl_case, owner, write_filename_post, write_meta, write_post
 
 import db
 import scanner
@@ -606,14 +606,16 @@ def test_source_added_to_a_person_without_an_account(env, client):
     assert get(client, f"/api/sources/{s['id']}")["person"] is None
 
 
-def test_adopt_after_the_first_download(env, client):
+def test_adopt_after_the_first_download(env, client, monkeypatch):
     archive(env)
     p = post(client, "/api/people", {"name": "Newcomer"})["person"]
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer", "person": p["id"]})["source"]
     conn = db.connect()
     assert sources.adopt(conn, s["id"], env["roots"], TS) == []          # nothing downloaded yet
     write_post(env["media"] / "instagram" / "newcomer", "N1", TS, owner("newcomer", 555), "image")
-    scanner.index_dirs(env["roots"], [str(env["media"] / "instagram" / "newcomer")])
+    with monkeypatch.context() as m:           # indexed without taking it: a sync's end does
+        m.setattr(sources, "adopt_all", lambda *a: [])
+        scanner.index_dirs(env["roots"], [str(env["media"] / "instagram" / "newcomer")])
     assert sources.adopt(conn, s["id"], env["roots"], TS) == ["sources", "person_accounts"]
     s = get(client, f"/api/sources/{s['id']}")
     assert s["account"] == {"platform": "instagram", "id": "555"} and s["person"]["id"] == p["id"]
@@ -621,16 +623,132 @@ def test_adopt_after_the_first_download(env, client):
     assert sources.adopt(conn, s["id"], env["roots"], TS) == []          # once
 
 
-def test_adopt_never_takes_an_account_from_its_person(env, client):
+def test_adopt_never_takes_an_account_from_its_person(env, client, monkeypatch):
     archive(env)
     other = post(client, "/api/people", {"name": "Other"})["person"]
     p = post(client, "/api/people", {"name": "Newcomer"})["person"]
     s = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer", "person": p["id"]})["source"]
     write_post(env["media"] / "instagram" / "newcomer", "N1", TS, owner("newcomer", 555), "image")
-    scanner.index_dirs(env["roots"], [str(env["media"] / "instagram" / "newcomer")])
+    with monkeypatch.context() as m:
+        m.setattr(sources, "adopt_all", lambda *a: [])
+        scanner.index_dirs(env["roots"], [str(env["media"] / "instagram" / "newcomer")])
     post(client, f"/api/people/{other['id']}/accounts", {"add": [{"platform": "instagram", "id": "555"}]})
     assert sources.adopt(db.connect(), s["id"], env["roots"], TS) == ["sources"]
     assert get(client, f"/api/sources/{s['id']}")["person"]["id"] == other["id"]      # the account's person wins
+
+
+# ---------------------------------------------------------------------------
+# A source takes its account when its folder is indexed, not only after a sync
+# ---------------------------------------------------------------------------
+
+def authors_person(client, aid):
+    """The person an account shows under on Creators (None: not linked)."""
+    return next(a for a in get(client, "/api/authors") if a["id"] == aid)["person"]
+
+
+def test_a_post_indexed_into_a_new_sources_folder_gives_it_its_account(env, client, monkeypatch):
+    """A person's source that never synced, a post put in its folder (a Save
+    of one post, files moved there) and that folder indexed alone: the
+    source takes the account and links it to its person, so the account is
+    not left among the accounts not linked."""
+    archive(env)
+    p = post(client, "/api/people", {"name": "Newcomer"})["person"]
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer", "person": p["id"]})["source"]
+    folder = env["media"] / "instagram" / "newcomer"
+    folder.mkdir(parents=True)
+    scanner.index_dirs(env["roots"], [str(folder)])                   # empty: nothing to take
+    assert get(client, f"/api/sources/{s['id']}")["account"] is None
+    noted = []
+    monkeypatch.setattr(userdata, "changed", noted.append)
+    write_post(folder, "N1", TS, owner("newcomer", 555), "image")
+    scanner.index_dirs(env["roots"], [str(folder)], new=True)
+    assert {"sources", "person_accounts"} <= set(noted)                  # their JSON files are written
+    s = get(client, f"/api/sources/{s['id']}")
+    assert s["account"] == {"platform": "instagram", "id": "555"} and s["person"]["id"] == p["id"]
+    assert [a["id"] for a in get(client, f"/api/people/{p['id']}")["accounts"]] == ["555"]
+    assert authors_person(client, "555") == {"id": p["id"], "name": "Newcomer"}
+    assert sources.adopt(db.connect(), s["id"], env["roots"], TS) == []  # nothing left for a sync's end
+
+
+def test_a_rescan_gives_a_source_left_without_its_account_its_account(env, client, monkeypatch):
+    """What a post saved into a new source's folder left before sources took
+    their account there (an X source of a person, never synced, one tweet
+    saved into its folder: the account shown alone, not linked): the next
+    rescan repairs it."""
+    p = post(client, "/api/people", {"name": "Caimaii"})["person"]
+    s = post(client, "/api/sources", {"target": "https://x.com/example_user1", "person": p["id"]})["source"]
+    assert (s["tool"], s["account"]) == ("gallery-dl", None)
+    gallery_dl_case("twitter/photo", s["folder"])
+    with monkeypatch.context() as m:
+        m.setattr(sources, "adopt_all", lambda *a: [])
+        scanner.index_dirs(env["roots"], [s["folder"]], new=True)
+    assert get(client, f"/api/sources/{s['id']}")["account"] is None
+    assert authors_person(client, "641286") is None                      # "Accounts — not linked"
+    scanner.scan(env["roots"])
+    assert get(client, f"/api/sources/{s['id']}")["account"] == {"platform": "twitter", "id": "641286"}
+    assert authors_person(client, "641286") == {"id": p["id"], "name": "Caimaii"}
+    assert [a["id"] for a in get(client, f"/api/people/{p['id']}")["accounts"]] == ["641286"]
+
+
+def test_an_indexed_folder_never_takes_an_account_from_its_person(env, client):
+    """The account is another person's already (indexed elsewhere under an
+    older handle, so adding the source found none): the source takes it,
+    and shows with that person."""
+    archive(env)
+    write_post(env["media"] / "elsewhere", "N0", TS - 86400, owner("oldname", 555), "image")
+    scanner.index_dirs(env["roots"], [str(env["media"] / "elsewhere")])
+    other = post(client, "/api/people", {"name": "Other"})["person"]
+    post(client, f"/api/people/{other['id']}/accounts", {"add": [{"platform": "instagram", "id": "555"}]})
+    p = post(client, "/api/people", {"name": "Newcomer"})["person"]
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer", "person": p["id"]})["source"]
+    assert s["account"] is None
+    write_post(env["media"] / "instagram" / "newcomer", "N1", TS, owner("newcomer", 555), "image")
+    scanner.index_dirs(env["roots"], [str(env["media"] / "instagram" / "newcomer")], new=True)
+    s = get(client, f"/api/sources/{s['id']}")
+    assert s["account"] == {"platform": "instagram", "id": "555"} and s["person"]["id"] == other["id"]
+    assert authors_person(client, "555")["id"] == other["id"]
+    assert get(client, f"/api/people/{p['id']}")["accounts"] == []
+
+
+def test_an_indexed_folder_links_nothing_for_a_source_with_no_person(env, client, monkeypatch):
+    """Its person deleted, or added to nobody: the source only takes the account."""
+    archive(env)
+    gone = post(client, "/api/people", {"name": "Gone"})["person"]
+    a = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer", "person": gone["id"]})["source"]
+    b = post(client, "/api/sources", {"tool": "instaloader", "target": "loner"})["source"]
+    delete(client, f"/api/people/{gone['id']}")
+    folders = [str(env["media"] / "instagram" / t) for t in ("newcomer", "loner")]
+    write_post(folders[0], "N1", TS, owner("newcomer", 555), "image")
+    write_post(folders[1], "L1", TS, owner("loner", 556), "image")
+    noted = []
+    monkeypatch.setattr(userdata, "changed", noted.append)
+    scanner.index_dirs(env["roots"], folders, new=True)
+    assert "sources" in noted and "person_accounts" not in noted
+    for s, aid in ((a, "555"), (b, "556")):
+        s = get(client, f"/api/sources/{s['id']}")
+        assert s["account"] == {"platform": "instagram", "id": aid} and s["person"] is None
+        assert authors_person(client, aid) is None
+    assert db.connect().execute("SELECT COUNT(*) FROM person_accounts").fetchone()[0] == 0
+
+
+def test_two_new_sources_of_one_account_link_it_once(env, client):
+    """Two sources with no account whose folders one indexing gives the same
+    account: the first links it to its person, the other only takes it (an
+    account never moves from one person to another)."""
+    archive(env)
+    first = post(client, "/api/people", {"name": "First"})["person"]
+    second = post(client, "/api/people", {"name": "Second"})["person"]
+    a = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer", "person": first["id"]})["source"]
+    b = post(client, "/api/sources", {"tool": "instaloader", "target": "newcomer.old",
+                                      "person": second["id"]})["source"]
+    folders = [str(env["media"] / "instagram" / t) for t in ("newcomer", "newcomer.old")]
+    write_post(folders[0], "N1", TS, owner("newcomer", 555), "image")
+    write_post(folders[1], "N2", TS - 86400, owner("newcomer.old", 555), "image")
+    scanner.index_dirs(env["roots"], folders, new=True)
+    for s in (a, b):
+        s = get(client, f"/api/sources/{s['id']}")
+        assert s["account"] == {"platform": "instagram", "id": "555"} and s["person"]["id"] == first["id"]
+    assert get(client, f"/api/people/{second['id']}")["accounts"] == []
 
 
 # ---------------------------------------------------------------------------

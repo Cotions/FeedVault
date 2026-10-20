@@ -9,7 +9,8 @@ A source belongs to an account (platform and author id, as indexed) once one
 is known, and then shows with whoever that account is linked to: link the
 account to a person later and the source follows. A source added to a person
 for a profile not downloaded yet has no account; it keeps that person until
-its first sync finds one (see adopt).
+posts indexed in its folder give it one: its sync's, a post saved there, or
+files put there and a rescan (see adopt, adopt_all).
 
 A source is added by pasting a profile link: the link's host picks the tool
 from the routing table in the config (``routes``, editable in Settings), and
@@ -724,8 +725,8 @@ def _owner(conn, row, accounts):
 
 
 def _sync_owner(conn, row, accounts, cache=None):
-    """_owner, for Don't sync: a source not tied to an account yet (its
-    first sync not done) stands for the account create() found for it
+    """_owner, for Don't sync: a source not tied to an account yet
+    stands for the account create() found for it
     (_first_sync_account), and that account's person when it has no person
     of its own. ``cache``: one dict a caller going through many sources
     passes to each call (see _first_sync_account)."""
@@ -759,8 +760,8 @@ def _first_sync_account(conn, row, accounts, cache):
 
 
 def not_synced(conn, row, accounts=None, flags=None, cache=None):
-    """Whether a source row is not synced: its account (before its first
-    sync, the one create() found for it), the person it shows with, or the
+    """Whether a source row is not synced: its account (before it has one,
+    the one create() found for it), the person it shows with, or the
     person it was added to, is set to Don't sync (nosync.py). ``accounts``,
     ``flags`` (nosync.flags) and ``cache`` (_sync_owner): read once by a
     caller going through many."""
@@ -1199,15 +1200,20 @@ def _folder_account(conn, platform, folder, roots, accounts=None):
         key = people.canonical(conn, platform, os.path.basename(folder).lower())
         if key in accounts:
             return key
-    prefix = folder.rstrip(os.sep) + os.sep
-    # The paths under the folder, as a range of meta_path's unique index
-    # ("/" + 1 is "0"); "+" keeps the planner off the platform index.
     found = conn.execute(
         "SELECT author_id, COUNT(*) FROM posts WHERE +platform = ? AND +author_id IS NOT NULL "
         "AND meta_path >= ? AND meta_path < ? GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1",
-        (platform, prefix, prefix[:-1] + chr(ord(os.sep) + 1))).fetchone()
+        (platform, *_paths_under(folder))).fetchone()
     key = people.canonical(conn, platform, found[0]) if found else None
     return key if key in accounts else None
+
+
+def _paths_under(folder):
+    """The paths under a folder, as a range of meta_path's unique index
+    ("/" + 1 is "0"); the queries' "+" keeps the planner off the platform
+    index."""
+    prefix = folder.rstrip(os.sep) + os.sep
+    return prefix, prefix[:-1] + chr(ord(os.sep) + 1)
 
 
 def new_row(tool, platform, target):
@@ -1373,13 +1379,46 @@ def adopt(conn, sid, roots, now):
     src = row(conn, sid)
     if src is None or src["author_id"] is not None:
         return []
-    key = _folder_account(conn, src["platform"], src["folder"], roots)
+    accounts = db.accounts(conn)
+    with conn:
+        return _adopt(conn, src, roots, now, accounts, set())
+
+
+def adopt_all(conn, roots, now):
+    """After indexing (scanner.py), in its transaction: what adopt does, for
+    every source with no account whose folder holds posts now, however
+    they came (a sync, a post saved into it, files put there and a
+    rescan). Commits nothing. Returns which user tables changed."""
+    rows = [r for r in conn.execute("SELECT * FROM sources WHERE author_id IS NULL ORDER BY id").fetchall()
+            if _has_posts(conn, r["platform"], r["folder"])]
+    if not rows:
+        return []
+    accounts, linked, changed = db.accounts(conn), set(), set()
+    for src in rows:
+        changed.update(_adopt(conn, src, roots, now, accounts, linked))
+    return sorted(changed)
+
+
+def _has_posts(conn, platform, folder):
+    """Whether posts of an author on ``platform`` are indexed under ``folder``
+    (those _folder_account counts): one lookup on meta_path's index, so the
+    accounts are read only for a source about to take one."""
+    return conn.execute("SELECT 1 FROM posts WHERE +platform = ? AND +author_id IS NOT NULL "
+                        "AND meta_path >= ? AND meta_path < ? LIMIT 1",
+                        (platform, *_paths_under(folder))).fetchone() is not None
+
+
+def _adopt(conn, src, roots, now, accounts, linked):
+    """adopt for one source row with no account, in the caller's
+    transaction. ``accounts``: db.accounts; ``linked``: the accounts linked
+    by this pass (their rows do not say so yet): never one from a person."""
+    key = _folder_account(conn, src["platform"], src["folder"], roots, accounts)
     if key is None:
         return []
-    link = src["person_id"] is not None and people.exists(conn, src["person_id"]) \
-        and not db.accounts(conn)[key]["person"]
-    with conn:
-        conn.execute("UPDATE sources SET author_id = ? WHERE id = ?", (key[1], sid))
-        if link:
-            people._attach(conn, src["person_id"], [key], now)
+    link = src["person_id"] is not None and key not in linked and not accounts[key]["person"] \
+        and people.exists(conn, src["person_id"])
+    conn.execute("UPDATE sources SET author_id = ? WHERE id = ?", (key[1], src["id"]))
+    if link:
+        people._attach(conn, src["person_id"], [key], now)
+        linked.add(key)
     return ["sources", "person_accounts"] if link else ["sources"]

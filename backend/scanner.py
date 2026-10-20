@@ -22,6 +22,7 @@ import db
 import hashing
 import parsers
 import people
+import sources
 import userdata
 
 # Folders that never hold posts but may hold images (icons in packages).
@@ -322,7 +323,7 @@ def _scan(roots):
         db.save_copies(conn, copies, started, prune=True)
         db.save_profiles(conn, profiles, prune=True)
         db.save_account_files(conn, account_files, prune=walked)
-        changed = people.refresh_aliases(conn)
+        changed = _owners(conn, roots)
         conn.execute("DELETE FROM unmatched")
         conn.executemany("INSERT OR REPLACE INTO unmatched(path, size, mtime, reason) VALUES (?, ?, ?, ?)",
                          unmatched)
@@ -347,9 +348,20 @@ def _finish_restores(roots):
     return trash.finish_restores(roots, data_dir)
 
 
+def _owners(conn, roots):
+    """After indexing, in its transaction: links moved to an account's id
+    (people.refresh_aliases), and sources with no account take their
+    folder's, linked to their person when it has none (sources.adopt_all):
+    a post saved into the folder or files put there count, not only a
+    sync's. Returns the user tables changed."""
+    changed = people.refresh_aliases(conn)     # first: an account is taken by its id, not an alias
+    return sorted({*changed, *sources.adopt_all(conn, roots, int(time.time()))})
+
+
 def _changed(tables):
     """Note the user tables a scan changed (links moved to an account's id,
-    see people.refresh_aliases), for userdata.py to write."""
+    see people.refresh_aliases; sources that took an account), for
+    userdata.py to write."""
     for name in tables:
         userdata.changed(name)
 
@@ -584,7 +596,7 @@ def index_dirs_locked(roots, dirs, new=False, since=None, later=None):
     db.save_copies(conn, copies, now, prune=False)
     db.save_profiles(conn, profiles, prune=False)
     db.save_account_files(conn, account_files, prune=False, dirs=read)
-    changed = people.refresh_aliases(conn)
+    changed = _owners(conn, roots)
     conn.commit()
     if later is None and pending:
         threading.Thread(target=_enrich_apart, args=(pending, now), daemon=True, name="enrich").start()
