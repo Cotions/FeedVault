@@ -1,6 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { acceptRename, createSource, cancelJob, dismissRename, getScripts, resolveSource, updateSource } from "../lib/api";
+import {
+  acceptRename, createPerson, createSource, cancelJob, dismissRename, getPeople, getScripts, resolveSource, setSourcePerson,
+  updateSource,
+} from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
@@ -20,6 +24,8 @@ import { cookiesSession } from "../lib/browserProfiles";
 import ConfirmDialog from "./ConfirmDialog";
 import DiscardDialog from "./DiscardDialog";
 import { useUnsaved } from "../lib/unsaved";
+import { focusLost, restoreFocus, trapTab } from "../lib/layout";
+import PersonPicker from "./PersonPicker";
 
 /* Where a source stands: its sync now (queued, waiting out the pause,
    running), else how its last one went. */
@@ -180,15 +186,32 @@ export function NotSyncedChip({ title = "Set to Don't sync: kept, never synced. 
 }
 
 /* One source: its profile, what it downloads, tool, folder, schedule, last
-   sync and Sync; its profile on the site, Options and Remove in its ⋯
-   menu. ``onSaved``: after its options changed. One set to Don't sync is
-   marked so and keeps Remove only: no Options, no Sync, no schedule line
-   (its schedule waits for the switch to go off). */
-export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = false }) {
+   sync and Sync; its profile on the site, Options, its creator (link,
+   move, unlink) and Remove in its ⋯ menu. ``onSaved``: after its options
+   changed; ``onLinked``: after its person did (the people's cards move
+   too), else onSaved. One set to Don't sync is marked so and keeps its
+   creator and Remove only: no Options, no Sync, no schedule line (its
+   schedule waits for the switch to go off). */
+export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked = onSaved, flash = false }) {
+  const toast = useToast();
   const [editing, setEditing] = useState(false);
+  const [linking, setLinking] = useState(false);
   const url = safeUrl(s.url);
   const summary = optionsSummary(s);
   const off = !!s.no_sync;
+  const along = s.account ? "; its account goes with it" : "";
+
+  async function unlink() {
+    try {
+      const r = await setSourcePerson(s.id, null);
+      if (!r?.ok) { toast(r?.error || "Could not unlink.", "err"); return; }
+      toast(`${sourceName(s)} is no longer ${s.person.name}'s.`);
+      onLinked?.(r.source);
+    } catch (err) {
+      toast(err.message, "err");
+    }
+  }
+
   return (
     <li className={`source-row${flash ? " is-flash" : ""}${off ? " is-nosync" : ""}`} data-source-id={s.id}>
       <PlatformIcon platform={s.platform} />
@@ -215,11 +238,16 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
         url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(s.platform)} (opens the site)` },
         !off && { label: "Options", icon: "settings", disabled: !!job, onSelect: () => setEditing(true),
                   title: job ? "Its sync is queued or running" : "What this source downloads" },
+        { label: s.person ? "Move to creator…" : "Link to creator…", icon: "users", onSelect: () => setLinking(true),
+          title: s.person ? `Show it with someone other than ${s.person.name}${along}` : `Show it with a person, one there is or a new one${along}` },
+        s.person && { label: "Unlink from creator", icon: "close", onSelect: unlink,
+                      title: `Back to the sources linked to nobody${s.account ? `; its account leaves ${s.person.name} too` : ""}. No post or file is touched` },
         "separator",
         { label: "Remove", icon: "trash", danger: true, disabled: !!job, onSelect: () => onRemove(s),
           title: job ? "Cancel its sync first" : "Forget this source; files and posts stay" },
       ]} />
       {editing && !off && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
+      {linking && <SourcePersonDialog source={s} onClose={() => setLinking(false)} onLinked={onLinked} />}
     </li>
   );
 }
@@ -608,6 +636,96 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
         The changed choices for {sourceName(s)} are not saved.
       </DiscardDialog>
     </>
+  );
+}
+
+/* Who a source shows with: a person there is (PersonPicker), or a new one
+   by name (its handle to start with). Escape or a click beside it closes
+   it, Tab stays inside, focus goes back where it was. The backend takes
+   its account along (docs/API.md "Sources").
+
+   Props: source, onClose, onLinked(source) */
+export function SourcePersonDialog({ source: s, onClose, onLinked }) {
+  const toast = useToast();
+  const boxRef = useRef(null);
+  const titleId = useId();
+  const nameId = useId();
+  const { data: people } = useApi(getPeople, "");
+  const [active, setActive] = useState(null);
+  const [name,   setName]   = useState(s.tool === "instaloader" ? s.target : "");
+  const [busy,   setBusy]   = useState(false);
+  const [error,  setError]  = useState(null);
+  const others = (people || []).filter(p => p.id !== s.person?.id);
+  useEffect(() => {
+    const prev = document.activeElement;
+    return () => restoreFocus(prev);
+  }, []);
+  useEffect(() => {
+    function onKey(e) {
+      if (!focusLost()) return;
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+      else trapTab(e, boxRef.current);
+    }
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  // To a person: one there is, or (``make``, a name) a new one.
+  async function link(person, make = null) {
+    setBusy(true);
+    setError(null);
+    try {
+      if (make) {
+        const r = await createPerson(make);
+        if (!r?.ok) { setError(r?.error || "Could not create the person."); return; }
+        person = r.person;
+      }
+      const r = await setSourcePerson(s.id, person.id);
+      if (!r?.ok) { setError(r?.error || "Could not link."); return; }
+      toast(`${sourceName(s)} is now ${person.name}'s.`);
+      onLinked?.(r.source);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return createPortal(
+    <div className="modal-overlay"
+         onKeyDown={e => {
+           if (e.key === "Escape" && !e.nativeEvent.isComposing) { e.stopPropagation(); e.preventDefault(); onClose(); return; }
+           trapTab(e, boxRef.current);
+         }}
+         onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={boxRef} className="modal assign-modal" role="dialog" aria-modal="true"
+           aria-labelledby={titleId} aria-busy={busy || undefined}>
+        <h2 id={titleId} className="modal-title">
+          <Icon name="users" size={16} />{s.person ? `Move ${sourceName(s)} to…` : `Link ${sourceName(s)} to…`}
+        </h2>
+        {s.person && <p className="creator-sub">Now {s.person.name}&apos;s{s.account ? "; its account moves with it" : ""}.</p>}
+        <div className="link-assign-pick">
+          <PersonPicker people={people ? others : null} recent={[]} active={active} onActive={setActive} label="Creator"
+                        none={false} disabled={busy} autoFocus
+                        onPick={o => { if (!busy && o?.person) link(o.person); }} />
+        </div>
+        <form className="source-person-new" onSubmit={e => { e.preventDefault(); if (name.trim()) link(null, name.trim()); }}>
+          <label htmlFor={nameId} className="creator-sub">Or a new creator</label>
+          <input id={nameId} type="text" maxLength={64} value={name} disabled={busy} placeholder="Name"
+                 onChange={e => setName(e.target.value)} />
+          <button type="submit" className="btn-secondary" disabled={busy || !name.trim()}>
+            <Icon name="plus" size={14} />Create and link
+          </button>
+        </form>
+        {error && <div className="msg err" role="alert">{error}</div>}
+        <div className="link-assign-foot">
+          <span className="quick-add-hint dim"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> link · <kbd>Esc</kbd> cancel</span>
+          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

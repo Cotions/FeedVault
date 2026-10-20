@@ -1875,6 +1875,17 @@ def update_source(sid):
         reset = list(sources.OPTION_KEYS)
     if reset is not None and (not isinstance(reset, list) or any(k not in sources.OPTION_KEYS for k in reset)):
         return jsonify({"ok": False, "error": f"reset must be true or a list of: {', '.join(sources.OPTION_KEYS)}"}), 400
+    # "person": the person it is added to (an id), or null for none; alone,
+    # or with options (written once they are).
+    person = body.get("person")
+    if "person" in body and person is not None:
+        if not isinstance(person, int) or isinstance(person, bool) or not 0 <= person < 2**53:
+            return jsonify({"ok": False, "error": "person must be a person id or null"}), 400
+        if not people.exists(conn, person):
+            return jsonify({"ok": False, "error": "no such person"}), 400
+    if "person" in body and body.get("options") is None and not reset:
+        _set_source_person(conn, sid, person)
+        return jsonify({"ok": True, "source": _source_or_404(sid)})
     if body.get("options") is None and reset:
         body["options"] = {}
     if not isinstance(body.get("options"), dict):
@@ -1913,8 +1924,25 @@ def update_source(sid):
     # A new schedule or session: a source the scheduler stopped is tried again.
     if options["schedule"] != s["options"]["schedule"] or options["session"] != s["options"]["session"]:
         sources.resume(conn, sid)
+    if "person" in body:
+        _set_source_person(conn, sid, person)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
+def _set_source_person(conn, sid, pid):
+    """sources.set_person, and what it changes noted: its account, taken
+    along, moves between people; one unlinked from a person set to Don't
+    sync keeps the switch (as /api/people/<id>/accounts does)."""
+    carried = nosync.count_accounts(conn)
+    before = people.account_set(conn, pid) if pid is not None else None
+    removed = sources.set_person(conn, sid, pid, int(time.time()))
+    if removed and nosync.is_on(conn, person=removed[0]):
+        nosync.carry(conn, [removed[1]])
+    _note_carried(conn, carried)
+    if removed or (pid is not None and people.account_set(conn, pid) != before):
+        _people_changed()
+    userdata.changed("sources")
 
 
 @app.post("/api/source-defaults/apply")

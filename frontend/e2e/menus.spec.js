@@ -4,9 +4,12 @@
 // button, the menu in the window and on top of every card (the top layer),
 // turned upward near the bottom of the window; the Muted and Not synced
 // markers that show what its switches are set to; the person page's
-// Rename, from its menu, giving focus back to it. A person is made for the
-// tests and deleted after; every switch is turned off again.
-import { test, expect, openPage, idle, menuItem, openMenu } from "./fixtures.js";
+// Rename, from its menu, giving focus back to it; a source's creator, set
+// from its menu and from the person page. People and a source are made for
+// the tests and deleted after; every switch is turned off again.
+import {
+  test, expect, openPage, idle, menuItem, openMenu, checkLayout, dismissToasts, formatFindings, settle,
+} from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -246,5 +249,79 @@ test("a person's ⋯ menu: Rename gives focus back to it, Delete person still as
     await idle(page);
   } finally {
     await request.delete(`/api/people/${person.id}`, { headers: H });
+  }
+});
+
+test("a source's creator: Link to creator…, Move, Unlink, and the person page's Add an account", async ({ page, request }, testInfo) => {
+  const stamp = Date.now();
+  const handle = `e2e_link_${stamp}`;
+  const name = `E2E link ${stamp}`;
+  const person = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person;
+  const src = (await (await request.post("/api/sources", {
+    headers: H, data: { target: `https://x.com/${handle}` } })).json()).source;
+  expect(src?.person).toBeNull();
+  const made = [];
+  const personOf = async () => (await (await request.get(`/api/sources/${src.id}`, { headers: H })).json()).person;
+  const label = `More for x.com/${handle}`;
+  try {
+    // Creators: loose, linked from its ⋯ menu to a person there is.
+    await openPage(page, { name: "Creators", path: "/creators" });
+    const row = page.locator(`.source-row[data-source-id="${src.id}"]`);
+    await expect(row).toBeVisible();
+    await idle(page);
+    const menu = await openMenu(page, row, label);
+    await expect(menu.getByRole("menuitem", { name: "Unlink from creator" })).toHaveCount(0);
+    await menu.getByRole("menuitem", { name: "Link to creator…" }).click();
+    const dialog = page.getByRole("dialog", { name: `Link x.com/${handle} to…` });
+    await expect(dialog).toBeVisible();
+    const field = dialog.getByRole("combobox", { name: "Creator" });
+    await expect(field).toBeFocused();
+    await dismissToasts(page);
+    await settle(page);
+    const found = await checkLayout(page, testInfo, { view: "Link to creator", size: "1280x800", scope: ".modal-overlay" });
+    await page.screenshot({ path: testInfo.outputPath("link-to-creator.png") });
+    expect(found, `layout findings:\n${formatFindings(found)}`).toEqual([]);
+    await field.fill(name);
+    await page.keyboard.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await expect(row, "it leaves the loose sources").toHaveCount(0);
+    expect((await personOf())?.id).toBe(person.id);
+
+    // Their page lists it; Move to a new creator, made by name in the dialog.
+    await page.goto(`/people/${person.id}`);
+    const mine = page.locator(`.source-row[data-source-id="${src.id}"]`);
+    await expect(mine).toBeVisible();
+    await idle(page);
+    await (await menuItem(page, mine, label, "Move to creator…")).click();
+    const move = page.getByRole("dialog", { name: `Move x.com/${handle} to…` });
+    await move.getByRole("textbox", { name: "Or a new creator" }).fill(`${name} new`);
+    await move.getByRole("button", { name: "Create and link" }).click();
+    await expect(move).toHaveCount(0);
+    await expect(mine, "it leaves this person's page").toHaveCount(0);
+    const moved = await personOf();
+    expect(moved?.name).toBe(`${name} new`);
+    made.push(moved.id);
+
+    // Unlinked from there: loose again.
+    await page.goto(`/people/${moved.id}`);
+    const theirs = page.locator(`.source-row[data-source-id="${src.id}"]`);
+    await expect(theirs).toBeVisible();
+    await idle(page);
+    await (await menuItem(page, theirs, label, "Unlink from creator")).click();
+    await expect(theirs).toHaveCount(0);
+    expect(await personOf()).toBeNull();
+
+    // A person's Add an account lists a loose source that never synced, and links it.
+    await page.goto(`/people/${person.id}`);
+    const add = page.getByRole("combobox", { name: "Add an account" });
+    await add.click();
+    await add.fill(handle);
+    await expect(page.getByRole("option", { name: new RegExp(handle) })).toContainText("not synced yet");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(`.source-row[data-source-id="${src.id}"]`)).toBeVisible();
+    expect((await personOf())?.id).toBe(person.id);
+  } finally {
+    await request.delete(`/api/sources/${src.id}`, { headers: H });
+    for (const id of [person.id, ...made]) await request.delete(`/api/people/${id}`, { headers: H });
   }
 });

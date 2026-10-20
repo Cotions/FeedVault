@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { platformLabel, platformShort } from "../lib/fmt";
 import { accountKey, accountText, matchedFormer, matches, personText } from "../lib/people";
+import { sourceName } from "../lib/sources";
 import PersonAvatar from "./PersonAvatar";
 
 const MAX_SHOWN = 60;
@@ -19,11 +20,13 @@ function accountSub(a, query) {
    which cannot search and lists 130 handles in one go.
 
    value: { person: id } | { platform, id } | null
-   onChange({ person } | { account } | null)
+   onChange({ person } | { account } | { source } | null)
    platform: list only accounts of that platform. exclude: account keys to
-   leave out. people: null to offer accounts only. */
+   leave out. people: null to offer accounts only. sources: sources to
+   offer after the accounts (a person's page: those with no account yet,
+   so none is an account listed too), matched by target. */
 export default function CreatorPicker({
-  people = null, accounts = [], value = null, onChange, platform = "", exclude,
+  people = null, accounts = [], sources = [], value = null, onChange, platform = "", exclude,
   allLabel = "All", label = "Creator", placeholder = "Search name or handle…", className = "",
 }) {
   const [open,   setOpen]   = useState(false);
@@ -42,8 +45,12 @@ export default function CreatorPicker({
       if (a.id == null || (platform && a.platform !== platform) || exclude?.has(accountKey(a))) continue;
       if (!query || matches(accountText(a), query)) out.push({ key: accountKey(a), account: a });
     }
+    for (const s of sources) {
+      if (platform && s.platform !== platform) continue;
+      if (!query || matches(s.target.toLowerCase(), query)) out.push({ key: `source:${s.id}`, source: s });
+    }
     return out.slice(0, MAX_SHOWN);
-  }, [people, accounts, platform, exclude, query]);
+  }, [people, accounts, sources, platform, exclude, query]);
 
   // The list hangs from the field's left edge. When that would run it past
   // the right edge of the room it has (the window, or a scrolling box around
@@ -84,7 +91,7 @@ export default function CreatorPicker({
     setOpen(false);
     setQuery("");
     inputRef.current?.blur();
-    onChange(o ? (o.person ? { person: o.person } : { account: o.account }) : null);
+    onChange(o ? (o.person ? { person: o.person } : o.source ? { source: o.source } : { account: o.account }) : null);
   }
 
   function onKeyDown(e) {
@@ -153,6 +160,11 @@ export default function CreatorPicker({
                     <span className="picker-sub" title={personSub(o.person)}>{personSub(o.person)}</span>
                   </span>
                 </span>
+              ) : o.source ? (
+                <>
+                  <span className="picker-handle">{sourceName(o.source)}</span>
+                  <span className="picker-sub">{platformLabel(o.source.platform)} · source, not synced yet</span>
+                </>
               ) : (
                 <>
                   <span className="picker-handle">@{o.account.handle || o.account.id}</span>
