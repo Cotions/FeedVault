@@ -697,8 +697,6 @@ def _check(g, choice, keepers, hashes):
         if idxs is not None and not idxs <= {i["idx"] for i in m["items"]}:
             return "an item to trash is not in its post"
     whole = {mid for mid, idxs in plan.items() if idxs is None}
-    if len(whole) == len(members):
-        return "keep at least one member"
     if g["pending"]:
         return "still being hashed; try again when hashing is done"
     if whole & keepers:
@@ -720,8 +718,8 @@ def resolve(choices, roots, data_dir, threshold=SIMILAR_DEFAULT):
     """Trash some members of each group, or some items of them, and keep the
     rest. ``choices`` is [{"group": id, "keep": member id}] (every other
     member goes, whole) or [{"group": id, "trash": {member id: None | [idx]}}]
-    (each member whole, or just those items of a post; one member at least
-    must stay whole). Similar groups (found at ``threshold``) only one at a
+    (each member whole, or just those items of a post; every member may go,
+    the whole group with them). Similar groups (found at ``threshold``) only one at a
     time, never in bulk. Every group is rebuilt and checked under the same
     lock as the move (see _check); a group that fails is skipped whole. A
     group is resolved once every member but one had something trashed;
@@ -767,6 +765,9 @@ def resolve(choices, roots, data_dir, threshold=SIMILAR_DEFAULT):
             # Of the members left, the suggested one (else the first) takes on
             # the tags and collections of the posts trashed whole, and becomes
             # the post if it is a copy whose post is trashed: one heir, not several.
+            # Every member trashed whole: no heir, the group just goes.
+            if not left:
+                continue
             kept = next((m for m in left if m["id"] == g["suggested"]), left[0])
             carry.extend((m["post_id"], kept["post_id"]) for m in whole
                          if m["type"] == "post" and m["post_id"] != kept["post_id"])

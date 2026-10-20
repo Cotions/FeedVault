@@ -228,9 +228,11 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
     const base = { [id]: "keep" };
     return Object.fromEntries(g.members.map(m => [m.id, m.id === id ? "keep" : trashMode(g, m, base)]));
   });
+  // Every member kept, or every member trashed whole (no kept post is left
+  // for a picture to match).
+  const setAll = mode => setPlan(() => Object.fromEntries(g.members.map(m => [m.id, mode])));
   const why = g.pending ? "Wait until every file is hashed"
     : !words ? "Tick the members to trash first"
-    : allGo ? "Keep one member at least: untick one"
     : `Move ${words} to the trash. A post trashed whole goes with every item of it${lost ? `, ${plural(lost, "item")} found nowhere else among them` : ""}`;
   const choice = { group: g.id, trash: g.members.filter(m => md[m.id].mode !== "keep")
     .map(m => (md[m.id].mode === "post" ? m.id : { member: m.id, items: md[m.id].items })) };
@@ -275,6 +277,18 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
         <div className="page-head-spacer" />
         {!selectMode && (
           <>
+            {!allGo && (
+              <button type="button" className="btn-ghost" onClick={() => setAll("post")} disabled={busy}
+                title="Mark every member for the trash, whole">
+                Tick all
+              </button>
+            )}
+            {(whole > 0 || parts > 0) && (
+              <button type="button" className="btn-ghost" onClick={() => setAll("keep")} disabled={busy}
+                title="Keep every member: nothing marked for the trash">
+                Untick all
+              </button>
+            )}
             <button type="button" className="btn-ghost" onClick={() => onDismiss(g)} disabled={busy}
               title="Not a duplicate: hide this group (restore it from Dismissed below)">
               Not a duplicate
@@ -282,8 +296,8 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
             <button
               type="button"
               className="btn-danger-soft"
-              onClick={() => onResolve(g, choice, { words, bytes: frees, lost, whole, parts })}
-              disabled={busy || g.pending || !words || allGo}
+              onClick={() => onResolve(g, choice, { words, bytes: frees, lost, whole, parts, allGo })}
+              disabled={busy || g.pending || !words}
               title={why}
             >
               <Icon name="trash" size={14} />Trash selected · {fmtBytes(frees)}
@@ -292,9 +306,9 @@ function Group({ g, index, busy, selectMode, selectable: canSelect, selected, on
         )}
       </div>
       {!selectMode && (
-        <p className={`dup-plan${lost ? " is-lossy" : ""}`}>
+        <p className={`dup-plan${lost || allGo ? " is-lossy" : ""}`}>
           {!words ? "Nothing marked for the trash: tick a member to trash it."
-            : allGo ? "Every member is marked for the trash: keep one at least."
+            : allGo ? <><Icon name="warn" size={13} />Every member is marked for the trash: the whole group goes · {words} · {fmtBytes(frees)}</>
             : <>Trashes {words} · {fmtBytes(frees)} · {lost
               ? <><Icon name="warn" size={13} />loses {plural(lost, "item")} found nowhere else</>
               : "loses nothing found nowhere else"}</>}
@@ -622,13 +636,13 @@ export default function Duplicates() {
   }
 
   // One click when nothing found nowhere else goes; a plan that loses such
-  // items (only a post trashed whole can) asks first. A similar group always
-  // asks: its posts only look alike.
-  function resolveOne(g, choice, { words, bytes, lost, whole, parts }) {
+  // items (only a post trashed whole can) asks first, and so does trashing
+  // every member. A similar group always asks: its posts only look alike.
+  function resolveOne(g, choice, { words, bytes, lost, whole, parts, allGo }) {
     const choices = [choice];
-    if (g.kind !== "similar" && lost === 0) { run(choices); return; }
+    if (g.kind !== "similar" && lost === 0 && !allGo) { run(choices); return; }
     setDlgError(null);
-    setConfirm({ choices, count: 1, bytes, lost, one: true, similar: g.kind === "similar", words, whole, parts,
+    setConfirm({ choices, count: 1, bytes, lost, one: true, similar: g.kind === "similar", words, whole, parts, allGo,
       unit: g.kind === "copies" ? "copy" : "post" });
   }
 
@@ -857,12 +871,13 @@ export default function Duplicates() {
                 author.
               </p>
             )}
+            {confirm.allGo && <p>No member is kept: <strong>the whole group</strong> goes.</p>}
             <p>
               {confirm.whole > 0 && <>
                 A {confirm.unit} trashed whole goes with <strong>every item</strong> of it, not only the one that
                 matched{confirm.lost > 0
-                  ? <>: that is <strong className="dup-warn">{plural(confirm.lost, "item")} found nowhere else</strong>{confirm.similar ? " (nothing in the posts you keep resembles them)" : ""}.</>
-                  : "; the members you keep hold all of it."}{" "}
+                  ? <>: that is <strong className="dup-warn">{plural(confirm.lost, "item")} found nowhere else</strong>{confirm.similar && !confirm.allGo ? " (nothing in the posts you keep resembles them)" : ""}.</>
+                  : confirm.allGo ? "." : "; the members you keep hold all of it."}{" "}
               </>}
               {confirm.parts > 0 && <>
                 A {confirm.similar ? "picture" : "shared item"} trashed on its own leaves the rest of its post in place.{" "}
