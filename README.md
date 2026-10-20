@@ -10,7 +10,9 @@ FeedVault does not download anything itself. It reads what
 [gallery-dl](https://github.com/mikf/gallery-dl) and [yt-dlp](https://github.com/yt-dlp/yt-dlp) write. A post whose files disappear stays in the index, marked missing.
 
 The **Review** page is for sorting: one post at a time, keep or trash it from
-the keyboard. Deleting moves files to `.feedvault-trash/` inside the media
+the keyboard. **Re-review** (on a creator's Feed and page, and when a review is
+done) goes through the same posts again, the kept ones too: they stay kept
+unless you trash them. Deleting moves files to `.feedvault-trash/` inside the media
 folder; only **Empty trash** in Settings → Library, and purging an entry
 on the **Trash** page, remove them for good.
 

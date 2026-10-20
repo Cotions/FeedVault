@@ -1,6 +1,6 @@
 // Desktop, 1440x900: every page loads clean, the Feed shows posts, Review
 // decides from the keyboard, and a person's link-in-bio import (faked).
-import { test, expect, PAGES, openPage, keepTrashUndo, stressData, idle, fakeBioImport, BIO_ACCOUNTS } from "./fixtures.js";
+import { test, expect, PAGES, openPage, keepTrashUndo, reviewLeft, stressData, idle, fakeBioImport, BIO_ACCOUNTS } from "./fixtures.js";
 
 test.describe("every page in the nav loads, no console error, no failed /api request", () => {
   for (const p of PAGES) {
@@ -124,6 +124,104 @@ test("Review: the shortcuts dialog holds focus and gives it back", async ({ page
   await expect(dialog).toHaveCount(0);
   await expect(button).toBeFocused();
   await expect(page.locator(".review-session")).toHaveText("0 kept · 0 trashed");
+});
+
+// Re-review (again=1): a creator's posts again, kept ones too. A post kept
+// before says so; K moves on and leaves it kept, and so does its undo (no
+// call clears it); D trashes as ever. The usual Review still leaves kept
+// posts out. Each post's decision is put back as it was after.
+test("Review: re-review goes through a creator's kept posts too and leaves them kept", async ({ page, request }) => {
+  const S = stressData();
+  const authors = await (await request.get("/api/authors", { headers: H })).json();
+  const a = authors.find(x => x.count >= 3 && x.count <= 20 && x.id != null && !(x.platform === S.post.platform && x.id === S.author.id));
+  expect(a, "a creator with 3 to 20 posts").toBeTruthy();
+  const scope = new URLSearchParams({ platform: a.platform, author: a.id });
+  const list = async (review = "") => (await (await request.get(
+    `/api/posts?${scope}&sort=posted&limit=200${review ? `&review=${review}` : ""}`, { headers: H })).json()).posts;
+  const decide = (posts, decision) => posts.length && request.post("/api/review", { headers: H, data: { posts, decision } });
+  const decisionOf = async p => (await list()).find(x => x.id === p.id)?.decision ?? null;
+  const href = p => `/p/${encodeURIComponent(p.platform)}/${encodeURIComponent(p.post_id)}`;
+  const posts = await list();
+  expect(posts.length).toBeGreaterThanOrEqual(3);
+  const was = posts.filter(p => p.decision === "keep").map(p => p.id);
+  const [p0, p1, p2] = posts;
+  const sent = [];
+  page.on("request", r => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/review") sent.push(r.postDataJSON()); });
+  const open = page.locator(".review-open");
+  const kept = page.locator(".review-byline .review-kept");
+  const session = page.locator(".review-session");
+  try {
+    // Every post kept: the usual Review has nothing left, and offers the re-review.
+    await decide(posts.map(p => p.id), "keep");
+    await page.goto(`/review?${scope}`);
+    await expect(page.getByRole("heading", { level: 3, name: "Nothing left to review in this scope" })).toBeVisible();
+    await page.getByRole("link", { name: "Re-review all posts, kept too" }).click();
+    await expect(page).toHaveURL(`/review?${scope}&again=1`);
+    await expect(page.getByRole("heading", { level: 2, name: "Re-review" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Posts to review" })).toHaveValue("1");
+    await expect(page.locator(".review-progress")).toContainText("left in this pass");
+    expect(await reviewLeft(page)).toBe(posts.length);
+    await expect(open).toHaveAttribute("href", href(p0));
+    await expect(kept).toHaveText("Kept");
+
+    // The newest kept, the next two not.
+    await decide([p1.id, p2.id], null);
+    await page.reload();
+    expect(await reviewLeft(page)).toBe(posts.length);
+    await expect(open).toHaveAttribute("href", href(p0));
+    await expect(kept).toBeVisible();
+    await idle(page);
+
+    await page.keyboard.press("k");
+    await expect(session).toHaveText("1 kept · 0 trashed");
+    await expect(open).toHaveAttribute("href", href(p1));
+    await expect(kept).toHaveCount(0);
+    await expect(page.locator(".review-left")).toHaveText(String(posts.length - 1));
+    expect(await decisionOf(p0)).toBe("keep");
+
+    await page.keyboard.press("z");
+    await expect(session).toHaveText("0 kept · 0 trashed");
+    await expect(open).toHaveAttribute("href", href(p0));
+    await expect(kept).toBeVisible();
+    expect(await decisionOf(p0)).toBe("keep");
+    expect(sent).toEqual([]);
+
+    // D trashes p1, and p2 comes; Z brings p1 back. Once p1's media has
+    // loaded: a video still loading asks for its file again after it went
+    // to the trash, and that 404 is a console error.
+    await page.keyboard.press("k");
+    await expect(open).toHaveAttribute("href", href(p1));
+    await idle(page);
+    await page.keyboard.press("d");
+    await expect(session).toHaveText("1 kept · 1 trashed");
+    await expect(open).toHaveAttribute("href", href(p2));
+    await expect(page.locator(".review-left")).toHaveText(String(posts.length - 2));
+    await page.keyboard.press("z");
+    await expect(session).toHaveText("1 kept · 0 trashed");
+    await expect(open).toHaveAttribute("href", href(p1));
+    expect(await decisionOf(p0)).toBe("keep");
+    expect(await decisionOf(p1)).toBeNull();
+    await idle(page);
+
+    // The usual Review of the creator leaves the kept post out.
+    await page.goto(`/review?${scope}`);
+    await expect(page.getByRole("heading", { level: 2, name: "Review" })).toBeVisible();
+    expect(await reviewLeft(page)).toBe((await list("unreviewed")).length);
+    await expect(open).toHaveAttribute("href", href(p1));
+    await expect(kept).toHaveCount(0);
+    await idle(page);
+
+    // The Feed of the creator, and a person's page, link to it.
+    await page.goto(`/?${scope}`);
+    await expect(page.getByRole("link", { name: "Re-review", exact: true })).toHaveAttribute("href", `/review?${scope}&again=1`);
+    await idle(page);
+    await page.goto(`/people/${S.person}`);
+    await expect(page.getByRole("link", { name: "Re-review", exact: true })).toHaveAttribute("href", `/review?person=${S.person}&again=1`);
+    await idle(page);
+  } finally {
+    await decide(posts.filter(p => !was.includes(p.id)).map(p => p.id), null);
+    await decide(was, "keep");
+  }
 });
 
 // #159's touch sizes are for a touch screen: with a mouse at 1440x900 the
