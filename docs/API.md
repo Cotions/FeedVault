@@ -1762,9 +1762,12 @@ rebuilt index gets them back. One source per tool and target.
 A source belongs to an **account** once one is known, and is shown with the
 person that account is linked to: linking the account later moves the source
 with it. A source added to a person for a profile that has no posts yet has
-`account` `null` and keeps that person; its first sync that indexes posts
-sets `account`, and links that account to the person when the account has
-no person yet.
+`account` `null` and keeps that person; the first indexing that finds posts
+in its folder sets `account` (its folder's account), and links that account
+to the person when the account has no person yet (never taken from another
+person). Any indexing counts, not only its sync's: a post saved into the
+folder (the Save button), files put there and a rescan. A rescan also
+repairs a source left without its account by an older version.
 
 ```json
 { "id": 4, "tool": "instaloader", "platform": "instagram", "target": "somebody",
@@ -1807,7 +1810,7 @@ no person yet.
 - `account`: the indexed account the source belongs to (an alias is
   replaced by the id it stands for), or `null`. `person`: the account's
   person, else the person the source was added to, else `null`.
-- `no_sync`: its account (before its first sync, its folder's account,
+- `no_sync`: its account (before it has one, its folder's account,
   else the one with its link's handle), the person it shows under, or the
   person it was added to is set to [Don't sync](#dont-sync): the source is
   kept but never synced.
@@ -2137,8 +2140,11 @@ instaloader --latest-stamps <data_directory>/instaloader/stamps.ini [--fast-upda
   not at all, never over a file already there (it then stays in `_saved/`).
   Both folders are indexed again: the posts keep their ids, so their
   `first_seen`, tags, decisions and collections stay with them. A source
-  whose account is found only by its first sync (adopted) gets them after
-  that sync. The job log says how many moved.
+  with no account when its sync starts gets them after that sync too, once
+  it has one (its folder indexed, see [Sources](#sources)); one that got
+  its account outside a sync (a post saved into its folder, a rescan) gets
+  them right before its next sync, as above. The job log says how many
+  moved.
 - **First sync.** When `stamps.ini` has no entry for the target yet, it is
   seeded with the newest trustworthy `posted_at` FeedVault has for the
   source's account (and the account's numeric id, when it has one), so the
@@ -2606,9 +2612,9 @@ userscript's routes, see [Security rules](#security-rules)).
 
 A source counts as its account's, and as the person it shows under; one
 added to a person set to Don't sync stays not synced even when its account
-is linked to someone else. One not tied to an account yet (its first sync
-not done) counts as its folder's account, else, its folder still empty, as
-the account with its link's handle.
+is linked to someone else. One not tied to an account yet counts as its
+folder's account, else, its folder still empty, as the account with its
+link's handle.
 
 A person who leaves keeps nothing syncing that did not: when a person set
 to Don't sync is deleted, or an account leaves them (unlinked, added to
@@ -2894,7 +2900,9 @@ instaloader --dirname-pattern <data_directory>/instaloader/saving/<shortcode>
   folder's files are, the layout a sync would detect (see
   [How a sync runs](#how-a-sync-runs)), the handle in place of the target.
   A file already there is never overwritten (the copy downloaded is
-  dropped). Then that folder is indexed.
+  dropped). Then that folder is indexed: a source of that folder with no
+  account yet takes the owner's, and links it to its person when the
+  account has none (see [Sources](#sources)), so `result.person` names them.
 - A post this adds to the index (not one a sync got first) is listed in
   table `saved_posts` (`post_id`, `saved_at`), user data written to
   `<data_directory>/userdata/saved_posts.json` 2 s after the last change:
@@ -2940,7 +2948,8 @@ yt-dlp [--ignore-config] --write-info-json --write-thumbnail --no-playlist
   the owner's gallery-dl and yt-dlp posts, else `<first media
   root>/<platform>/<name>` (made: the folder a new source for the profile
   would download into), else `<first media root>/_saved`. A file already
-  there is never overwritten. Then that folder is indexed.
+  there is never overwritten. Then that folder is indexed, as for an
+  Instagram save (a source of it with no account yet takes the owner's).
 - The indexed post's entries go into the download archives as trashing
   would add them (gallery-dl's per file, yt-dlp's `<platform> <id>`
   line): a later sync of the profile skips it (with either tool for X;

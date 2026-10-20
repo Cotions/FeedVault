@@ -710,6 +710,8 @@ def _start(params, note, argv=None):
     src = _queued_source(conn, params, argv)
     options = _options(src)
     roots = config.load()["media_roots"]
+    if src["author_id"] is None:
+        _no_account.add(src["id"])            # its saved posts are gathered again once it has one (_ended)
     moved = save.gather(conn, src, roots, note)
     _seed_stamp(conn, src, options, note, moved, roots)
     _keep_trashed(src["id"], _trashed(conn, roots))
@@ -721,6 +723,7 @@ def _start(params, note, argv=None):
 
 
 _trashed_before = {}                           # source id -> trashed posts not in the index when its sync starts
+_no_account = set()                            # source ids whose instaloader sync started with no account (_start)
 
 
 def _retrash_dir():
@@ -1304,6 +1307,8 @@ def _ended(job):
     # could not start). FeedVault stopped it: the file stays, for resume().
     _take_trashed(sid, keep_file=job["state"] == "interrupted" or waits)
     listed = _listed.pop(sid, None)
+    had_none = sid in _no_account
+    _no_account.discard(sid)
     r = job["result"] or {}
     conn = db.connect()
     src = sources.row(conn, sid)
@@ -1334,13 +1339,14 @@ def _ended(job):
                        keys=("full_history", "since", "first_posts"))
     if job["state"] in ("done", "failed"):
         roots = config.load()["media_roots"]
-        adopted = sources.adopt(conn, sid, roots, job["ended_at"])
-        changed.update(adopted)
-        if adopted and src["tool"] == "instaloader":
+        changed.update(sources.adopt(conn, sid, roots, job["ended_at"]))
+        known = sources.row(conn, sid)
+        if had_none and known is not None and known["author_id"] is not None:
             import save                        # it imports this module
-            # Its account is known only now: its saved posts join the folder.
+            # Its account is known only now (taken as its folder was indexed,
+            # or by adopt): its saved posts join the folder.
             try:
-                save.gather(conn, sources.row(conn, sid), roots, lambda text: print(f"[sync] source {sid}: {text}"))
+                save.gather(conn, known, roots, lambda text: print(f"[sync] source {sid}: {text}"))
             except Exception as e:             # they join it before its next sync instead
                 print(f"[sync] source {sid}: could not move its saved posts: {e}")
         if src["tool"] == "instaloader":

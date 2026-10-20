@@ -508,19 +508,48 @@ def test_saved_symlink_is_moved_as_a_link(env, client, fake, tmp_path):
 
 def test_saved_post_moves_once_the_first_sync_finds_the_account(env, client, fake):
     """Saved under an older handle: the source's target names no account
-    before its first sync, which then finds it (adopt); the saved post
-    (gone from the profile since) moves into the folder after it."""
+    before its first sync, which then finds it (its folder indexed, before
+    the sync ends); the saved post (gone from the profile since) moves into
+    the folder after it."""
     fake.set({"oldname": {"id": 4242, "posts": [{"shortcode": CODE, "ts": TS + 10 * DAY}]}})
     save_now(client)
     fake.set({"newname": {"id": 4242, "posts": [{"shortcode": "CNEWNAME001", "ts": TS + 20 * DAY}]}})
     s = add_source(client, target="newname")
     job = sync_now(client, s["id"])
     assert job["result"]["added"] == 1
+    assert get(client, f"/api/sources/{s['id']}")["account"] == {"platform": "instagram", "id": "4242"}
     folder = env["media"] / "instagram" / "newname"
     assert (folder / f"newname-2024-06-11-{CODE}.json.xz").is_file()
     assert not [n for n in os.listdir(env["media"] / "_saved") if CODE in n]
     meta = db.connect().execute("SELECT meta_path FROM posts WHERE id = ?", (f"instagram:{CODE}",)).fetchone()[0]
     assert meta.startswith(str(folder))
+
+
+def test_a_save_into_a_new_sources_folder_gives_it_its_account(env, client, fake):
+    """A post saved into the folder of a source that never synced gives it
+    its account, linked to its person, with no sync. A post saved earlier
+    under an older handle (in _saved) joins the folder right before its
+    first sync, as for any source with an account."""
+    fake.set({"oldname": {"id": 4242, "posts": [{"shortcode": CODE, "ts": TS + 10 * DAY}]}})
+    save_now(client)
+    p = post(client, "/api/people", {"name": "New Name"})["person"]
+    s = add_source(client, target="newname", person=p["id"])
+    assert s["account"] is None
+    fake.set({"newname": {"id": 4242, "posts": [{"shortcode": "CNEWNAME001", "ts": TS + 20 * DAY}]}})
+    job = save_now(client, "CNEWNAME001")
+    folder = env["media"] / "instagram" / "newname"
+    assert job["state"] == "done" and job["result"]["folder"] == str(folder), job
+    assert job["result"]["account"] == {"platform": "instagram", "id": "4242"}
+    assert job["result"]["person"] == p["id"]
+    s = get(client, f"/api/sources/{s['id']}")
+    assert s["account"] == {"platform": "instagram", "id": "4242"} and s["person"]["id"] == p["id"]
+    assert [a["id"] for a in get(client, f"/api/people/{p['id']}")["accounts"]] == ["4242"]
+    assert [n for n in os.listdir(env["media"] / "_saved") if CODE in n]      # a save gathers nothing
+    job = sync_now(client, s["id"])
+    assert job["state"] == "done", job
+    assert (folder / f"newname-2024-06-11-{CODE}.json.xz").is_file()
+    assert not [n for n in os.listdir(env["media"] / "_saved") if CODE in n]
+    assert any(f"1 saved post moved from _saved into {folder}" in ln["text"] for ln in jobs.log(job["id"])["lines"])
 
 
 # ---------------------------------------------------------------------------
