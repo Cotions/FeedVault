@@ -13,6 +13,7 @@ import {
   optionsOf, optionsSummary, scheduleShort, scheduleText, scriptHref, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
+import ActionMenu from "./ActionMenu";
 import PlatformIcon from "./PlatformIcon";
 import BrowserPick from "./BrowserPick";
 import { cookiesSession } from "../lib/browserProfiles";
@@ -170,7 +171,7 @@ export function InheritBadge({ source: s }) {
 
 /* "Not synced": its account or person is set to Don't sync (docs/API.md
    "Don't sync"), so the source is kept but never runs. */
-export function NotSyncedChip({ title = "Set to Don't sync: kept, never synced. Turn it off on its card or page" }) {
+export function NotSyncedChip({ title = "Set to Don't sync: kept, never synced. Turn it off from the ⋯ menu of its card or page" }) {
   return (
     <span className="chip nosync-chip" title={title}>
       <Icon name="syncOff" size={11} />Not synced
@@ -179,9 +180,10 @@ export function NotSyncedChip({ title = "Set to Don't sync: kept, never synced. 
 }
 
 /* One source: its profile, what it downloads, tool, folder, schedule, last
-   sync, Options, Sync and Remove. ``onSaved``: after its options changed.
-   One set to Don't sync is marked so and keeps Remove only: no Options, no
-   Sync, no schedule line (its schedule waits for the switch to go off). */
+   sync and Sync; its profile on the site, Options and Remove in its ⋯
+   menu. ``onSaved``: after its options changed. One set to Don't sync is
+   marked so and keeps Remove only: no Options, no Sync, no schedule line
+   (its schedule waits for the switch to go off). */
 export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = false }) {
   const [editing, setEditing] = useState(false);
   const url = safeUrl(s.url);
@@ -207,25 +209,16 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, flash = f
       </span>
       <ToolBadge tool={s.tool} />
       {!off && <SourceStatus source={s} job={job} />}
-      {url && (
-        <a href={url} className="icon-btn" target="_blank" rel="noreferrer noopener"
-           title={`Profile on ${platformLabel(s.platform)} (opens the site)`}
-           aria-label={`${sourceName(s)} on ${platformLabel(s.platform)}`}>
-          <Icon name="external" size={15} />
-        </a>
-      )}
       {job && <Link to="/jobs" className="btn-ghost">Log</Link>}
-      {!off && (
-        <button type="button" className="btn-ghost" disabled={!!job} onClick={() => setEditing(true)}
-                title={job ? "Its sync is queued or running" : "What this source downloads"}>
-          Options
-        </button>
-      )}
       {!off && <SyncButton source={s} job={job} onSync={onSync} />}
-      <button type="button" className="btn-ghost" disabled={!!job} onClick={() => onRemove(s)}
-              title={job ? "Cancel its sync first" : "Forget this source; files and posts stay"}>
-        Remove
-      </button>
+      <ActionMenu label={`More for ${sourceName(s)}`} items={[
+        url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(s.platform)} (opens the site)` },
+        !off && { label: "Options", icon: "settings", disabled: !!job, onSelect: () => setEditing(true),
+                  title: job ? "Its sync is queued or running" : "What this source downloads" },
+        "separator",
+        { label: "Remove", icon: "trash", danger: true, disabled: !!job, onSelect: () => onRemove(s),
+          title: job ? "Cancel its sync first" : "Forget this source; files and posts stay" },
+      ]} />
       {editing && !off && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
     </li>
   );

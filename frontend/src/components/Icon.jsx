@@ -46,6 +46,8 @@ const PATHS = {
   bookmark:  <><path d="M6.5 3.8h11a1 1 0 0 1 1 1v15.6L12 16.3l-6.5 4.1V4.8a1 1 0 0 1 1-1z" /></>,
   menu:      <><path d="M4 6.5h16" /><path d="M4 12h16" /><path d="M4 17.5h16" /></>,
   grip:      <><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" /></>,
+  // Three filled dots: a menu of more actions (components/ActionMenu.jsx).
+  more:      <><circle cx="5.5" cy="12" r="1.7" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" /><circle cx="18.5" cy="12" r="1.7" fill="currentColor" stroke="none" /></>,
   link:      <><path d="M10.2 13.8a4 4 0 0 0 5.7 0l3.2-3.2a4 4 0 0 0-5.7-5.7l-1.2 1.2" /><path d="M13.8 10.2a4 4 0 0 0-5.7 0l-3.2 3.2a4 4 0 0 0 5.7 5.7l1.2-1.2" /></>,
   terminal:  <><rect x="3" y="4.5" width="18" height="15" rx="2" /><path d="m7.2 9.6 2.8 2.4-2.8 2.4" /><path d="M12.6 14.6h4.4" /></>,
   pencil:    <><path d="M4 20h4.2L19.4 8.8a2.1 2.1 0 0 0-3-3L5.2 17z" /><path d="M14.9 5.4 18.6 9" /></>,

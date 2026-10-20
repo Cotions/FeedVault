@@ -1,7 +1,7 @@
 // Desktop, 1440x900: every page loads clean, the Feed shows posts, Review
 // decides from the keyboard, and a person's link-in-bio import (faked).
 import { test, expect, PAGES, openPage, keepTrashUndo, reviewLeft, stressData, idle, fakeBioImport, BIO_ACCOUNTS,
-  openBioImport } from "./fixtures.js";
+  openBioImport, menuItem } from "./fixtures.js";
 
 test.describe("every page in the nav loads, no console error, no failed /api request", () => {
   for (const p of PAGES) {
@@ -590,7 +590,7 @@ test("Browser profile: picked in Settings and on a source, a missing one stays s
     // A source's own: its Options, under Login.
     names = ["cotions", "default", "test", "TRND"];
     const row = page.locator(`.source-row[data-source-id="${made.source.id}"]`);
-    await row.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, row, /^More for /, "Options")).click();
     const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
     const login = dialog.getByRole("combobox", { name: "Login a sync uses" });
     await expect(login).toHaveValue("");
@@ -605,7 +605,7 @@ test("Browser profile: picked in Settings and on a source, a missing one stays s
     const { sources } = await (await request.get("/api/sources", { headers: H })).json();
     expect(sources.find(s => s.id === made.source.id).options.session)
       .toEqual({ mode: "cookies", browser: "firefox", profile: "TRND" });
-    await row.getByRole("button", { name: "Options" }).click();
+    await (await menuItem(page, row, /^More for /, "Options")).click();
     await expect(login).toHaveValue("cookies");
     await expect(own).toHaveValue("TRND");
     await login.selectOption("");
@@ -686,9 +686,10 @@ test("Creators: an account's Make creator makes it a person, and the page stays"
   expect(a).toBeTruthy();
   try {
     await openPage(page, { name: "Creators", path: "/creators" });
-    const make = page.getByRole("button", { name: `Make @${a.handle} a creator`, exact: true });
-    const card = page.locator(".creator-card").filter({ has: make });
-    await make.click();
+    // In the card's ⋯ menu ("More for @handle"), with Review, Options and the switches.
+    const label = `More for @${a.handle}`;
+    const card = page.locator(".creator-card").filter({ has: page.getByRole("button", { name: label, exact: true }) });
+    await (await menuItem(page, card, label, "Make creator")).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText(`Make @${a.handle} a creator`);
     const field = dialog.getByRole("textbox", { name: "Name" });

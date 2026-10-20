@@ -144,6 +144,27 @@ export async function reviewLeft(page) {
   return Number((await left.textContent()).replace(/,/g, ""));
 }
 
+/* ── ⋯ menus (ActionMenu) ───────────────────────────────────── */
+
+// The ⋯ menu named ``label`` ("More for @handle", "More for <person>"; a
+// RegExp such as /^More for / for a row known by its id only), opened by a
+// click on its button inside ``scope`` (the page or a row, a card); what it
+// returns is the open menu.
+export async function openMenu(page, scope, label) {
+  await scope.getByRole("button", { name: label, exact: true }).click();
+  // One menu is open at a time: the expanded button names it.
+  const menu = page.getByRole("menu", { name: label, exact: true });
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+// The item ``name`` of that menu, once open: what a test clicks or checks
+// where the row or the card had its own button.
+export async function menuItem(page, scope, label, name) {
+  const menu = await openMenu(page, scope, label);
+  return menu.getByRole("menuitem", { name, exact: true });
+}
+
 /* ── Toasts (#121) ──────────────────────────────────────────── */
 
 // Keep and its undo (POST /api/review) answer ok and change nothing.

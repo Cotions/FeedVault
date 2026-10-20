@@ -3,7 +3,7 @@
 // from another (#120), and typed edits are never dropped without asking
 // (#125). People, collections and links are made for each test and removed
 // after it.
-import { test, expect, idle, openAddLink } from "./fixtures.js";
+import { test, expect, idle, openAddLink, menuItem } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -36,8 +36,9 @@ test("a person's page keeps nothing of the previous person (#120)", async ({ pag
     await expect(page.locator("h2.page-title")).toHaveText(`E2E one ${stamp}`);
     await idle(page);
 
-    // Rename open, nothing changed yet: nothing to lose, so the app goes on.
-    await page.getByRole("button", { name: "Rename" }).click();
+    // Rename open (from the head's ⋯ menu), nothing changed yet: nothing
+    // to lose, so the app goes on.
+    await (await menuItem(page, page, `More for E2E one ${stamp}`, "Rename")).click();
     await expect(page.getByRole("textbox", { name: "Name", exact: true })).toHaveValue(`E2E one ${stamp}`);
     await forwardTo(page, `/people/${two}`);
     await expect(page.locator("h2.page-title")).toHaveText(`E2E two ${stamp}`);

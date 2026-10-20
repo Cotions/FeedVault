@@ -165,7 +165,7 @@ test("editing a link shows its whole notes", async ({ page }) => {
 // scrollers) that went as the field lost focus.
 test("Tab goes on from a person's Add an account picker", async ({ page }) => {
   await page.goto(`/people/${stressData().person}`);
-  await expect(page.locator(".person-new button")).toBeVisible();
+  await expect(page.locator(".page-head .action-menu-btn")).toBeVisible();
   await idle(page);
   const picker = page.getByRole("combobox", { name: "Add an account" });
   await picker.focus();
@@ -184,7 +184,7 @@ test("Tab goes on from a person's Add an account picker", async ({ page }) => {
 // drops it: Keep editing keeps it, Discard empties and folds the form.
 test("a person's page folds its link-in-bio import and Add a link", async ({ page }) => {
   await page.goto(`/people/${stressData().person}`);
-  await expect(page.locator(".person-new button")).toBeVisible();
+  await expect(page.locator(".page-head .action-menu-btn")).toBeVisible();
   await idle(page);
   const importButton = page.getByRole("button", { name: "Import from link-in-bio…" });
   const addButton = page.locator(".person-link-add").getByRole("button", { name: "Add link…" });

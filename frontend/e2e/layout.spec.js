@@ -234,6 +234,27 @@ const DIALOGS = [
     scope: ".notif-panel",
   },
   {
+    // An account card's ⋯ menu (Review, Options, Make creator, the
+    // switches), in the top layer over the cards around it.
+    name: "Creators › An account's ⋯ menu",
+    open: async page => {
+      await openPage(page, { name: "Creators", path: "/creators" });
+      await page.locator(".creator-card:not(.person-card) .action-menu-btn").first().click();
+      await expect(page.getByRole("menu")).toBeVisible();
+    },
+    scope: ".action-menu",
+  },
+  {
+    // The stress person's (a 60-character name): Rename, Mute, Don't sync, Delete person.
+    name: "Person › The head's ⋯ menu",
+    open: async page => {
+      await openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title"));
+      await page.locator(".page-head .action-menu-btn").click();
+      await expect(page.getByRole("menuitem", { name: "Delete person" })).toBeVisible();
+    },
+    scope: ".action-menu",
+  },
+  {
     name: "Feed › Creator picker open",
     open: async page => {
       await openPage(page, PAGES[0]);
@@ -334,7 +355,8 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
 // The person page and the Links page line up, with the stress person (no
 // source, two links with a long title, address, notes and name), at
 // 1280x800, 1440x900 and 1920x1080:
-//  - Mute is on the line of Feed … Trash, at the right edge of the sections.
+//  - The muted marker (the person reported muted) is on the line of
+//    Feed … Trash, at the right edge of the sections, where Mute was.
 //  - Every section after the first is set apart by a rule, below the one
 //    before it; the empty Sources says so in a line, not a 48px gap.
 //  - The link-in-bio import, opened, is a box inside Accounts, as wide as
@@ -349,7 +371,14 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
   test.skip(testInfo.project.name === "layout-zoom", "measured at three desktop sizes");
   const problems = [];
   const near = (a, b, px = 1) => Math.abs(a - b) <= px;
-  await openUrl(page, `/people/${S.person}`, pg => pg.locator(".person-new button"));
+  // Muted in what /api/new answers (nothing is changed): its marker shows.
+  await page.route(url => url.pathname === "/api/new", async route => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const muted = body.muted || {};
+    await route.fulfill({ response: res, json: { ...body, muted: { ...muted, people: [...(muted.people || []), S.person] } } });
+  });
+  await openUrl(page, `/people/${S.person}`, pg => pg.locator(".person-new .state-chip"));
   await openBioImport(page);
   await openAddLink(page);
   await stillPage(page);
@@ -360,7 +389,7 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
     const m = await page.evaluate(() => {
       const box = e => e.getBoundingClientRect();
       const nav = box(document.querySelector(".person-links a"));
-      const mute = box(document.querySelector(".person-new button"));
+      const mute = box(document.querySelector(".person-new .state-chip"));
       const sections = [...document.querySelectorAll(".person-section")];
       // About comes first, beside the portrait at the top of the card.
       const accounts = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Accounts"));
@@ -378,8 +407,8 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
         titleRight: title.right, buttonRight: button.right,
       };
     });
-    if (!near(m.nav, m.mute, 2)) problems.push(`${at}: Mute is centred at y=${m.mute}, the Feed … Trash line at y=${m.nav}`);
-    if (!near(m.muteRight, m.sectionRight)) problems.push(`${at}: Mute ends at x=${m.muteRight}, the sections at x=${m.sectionRight}`);
+    if (!near(m.nav, m.mute, 2)) problems.push(`${at}: the muted marker is centred at y=${m.mute}, the Feed … Trash line at y=${m.nav}`);
+    if (!near(m.muteRight, m.sectionRight)) problems.push(`${at}: the muted marker ends at x=${m.muteRight}, the sections at x=${m.sectionRight}`);
     m.rules.forEach((r, i) => {
       if (r.border < 1) problems.push(`${at}: section ${i + 2} has no rule above it`);
       if (r.top < r.above - 0.5) problems.push(`${at}: section ${i + 2} (top ${r.top}) overlaps the one before it (bottom ${r.above})`);
