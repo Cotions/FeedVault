@@ -1524,12 +1524,13 @@ import); `backend/biofetch.py`.
   - the bio site's own pages: the host of the page fetched and its
     subdomains (`linktr.ee/s/about`, `ugc.production.linktr.ee`,
     `media.link.me`, `about.link.me`), and
-    `linktree.com` / `later.com` for Linktree / Linkin.bio. Another
-    person's page on the same site is left out with them; a page on
-    another bio site is kept;
+    `linktree.com` / `later.com` for Linktree / Linkin.bio; for a site
+    where a profile is a subdomain (`mydeck.bio`), the whole site and all
+    its subdomains. Another person's page on the same site is left out
+    with them; a page on another bio site is kept;
   - hosts that serve a page's parts or count its visitors (`cloudfront.net`,
     `amazonaws.com`, `googleapis.com`, `gstatic.com`, `googletagmanager.com`,
-    `fbcdn.net`, `sentry.io`, `schema.org`, `w3.org` and the like, and any
+    `fbcdn.net`, `r2.dev`, `sentry.io`, `schema.org`, `w3.org` and the like, and any
     subdomain named `cdn`, `static`, `assets`, `img`, `images`, `media`,
     `fonts`, `js`, `css`, `ugc`, `api`, `analytics`, `tracking`… on any
     site);
@@ -1563,14 +1564,30 @@ import); `backend/biofetch.py`.
   (`<script id="__NEXT_DATA__">`, `type="application/json"` or
   `application/ld+json`), which some sites draw their links from. No script
   runs, the page itself is never stored or logged (the server's log has
-  its URL and the counts above), and no link in it is fetched.
+  its URL and the counts above), and no link in it is fetched, but for
+  one narrow case: on `mydeck.bio`, whose buttons are `/go/<n>` links on
+  the page's own host that redirect to where they go (the address is
+  nowhere in the page), each such link (path exactly `/go/<digits>`, no
+  query, on the page's exact host; never a link to another host) is asked
+  once, by the same fetch and its rules, for its status line and headers
+  only, without following and without reading its body. The `Location` of
+  a 301, 302, 303, 307 or 308, made absolute, is then read as the
+  button's link, with the button's label, and goes through everything
+  above like any other (it is suggested when it is a profile); it is never
+  fetched. Any other answer, an error or a timeout leaves that button out
+  without a word. At most 30 such lookups per import, 0.4 s apart, 5 s
+  each, and the whole import (page and lookups) within 40 s.
 - **The fetch.** One page, the URL given, and its redirects:
   - **Sites**: `https` on port 443, no login part, the host exactly one of
     `linktr.ee`, `beacons.ai`, `lnk.bio`, `solo.to`, `campsite.bio`,
-    `linkin.bio`, `allmylinks.com`, `link.me` (a leading `www.` and a
-    trailing dot are dropped, and an IDN is compared in its ASCII form, so
-    a look-alike name matches nothing). Sites where a profile is a subdomain or the user's
-    own domain are left out: a host check cannot tell them from any site.
+    `linkin.bio`, `allmylinks.com`, `link.me`, or a person's own
+    subdomain of `mydeck.bio` (`<name>.mydeck.bio`, whose `/` is the
+    profile: one label only, never `mydeck.bio` itself, `a.b.mydeck.bio`,
+    nor a name the site keeps for itself such as `api`, `app`, `admin`,
+    `cdn`, `static`, `mail`). A leading `www.` and a trailing dot are
+    dropped, and an IDN is compared in its ASCII form, so a look-alike
+    name matches nothing. Sites where a profile is the user's own domain
+    are left out: a host check cannot tell them from any site.
     A link with spaces, control characters or `\` is refused, and the
     pasted one must name a page, not the site's home.
   - **Addresses**: every address the host resolves to must be public
@@ -1584,13 +1601,14 @@ import); `backend/biofetch.py`.
     request carries `Host`, a `User-Agent` naming FeedVault, `Accept:
     text/html`, `Accept-Encoding: identity` and `Connection: close` only.
   - **Limits**: at most 3 redirects (301, 302, 303, 307, 308), each checked
-    again from scratch (site, port, addresses); 10 s for the whole fetch
+    again from scratch (site, subdomain, port, addresses); 10 s for the whole fetch
     (lookups, connections, TLS and every byte, redirects included); 2 MB of
     body, counted while reading; 32 KB of headers; `text/html` only; any
     `Content-Encoding` but `identity` refused; any status that is not 2xx
     (or a redirect) is an error.
   - **One at a time**, at least 5 s apart (a link refused before any
-    request does not count).
+    request does not count); `mydeck.bio`'s redirect lookups are part of
+    the import they belong to.
 - Errors are `{ "ok": false, "error": "…" }`, short and specific: 400 for
   the link (`only https links`, `not an allowed site: …`), 403 when the
   switch is off or the request comes from another site's page (see
@@ -1622,7 +1640,7 @@ rules](#security-rules)).
 
 - `page_url`: what the bio-import fetch accepts as the pasted link (https,
   port 443, the host one of the sites above exactly, a page and not the
-  site's home), else a 400 with why (`not an allowed site: …`, `only https
+  site's home; not a `mydeck.bio` page, where the userscript does not run), else a 400 with why (`not an allowed site: …`, `only https
   links`…). It is saved first, untitled.
 - `links`: at most 1000, each `{ "url", "title" }` (`title` may be left
   out or `null`): `url` text of at most 2048 characters starting

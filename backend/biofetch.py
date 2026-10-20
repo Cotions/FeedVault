@@ -9,7 +9,9 @@ or the PyPI version check (downloaders.py). So this is kept small and
 bounded:
 
 - off unless ``bio_import`` is on in the config (Settings → Downloads);
-- ``https`` on port 443 to a host on SITES only, exactly (no subdomains);
+- ``https`` on port 443 to a host on SITES only, exactly (no subdomains),
+  or to a person's own subdomain of a SUBDOMAIN_SITES site (one label,
+  never the site itself nor a name it keeps for its own workings);
 - every address the host resolves to must be public, and the connection
   goes to the address that was checked, with TLS verifying the real host
   name, so DNS cannot answer one thing to the check and another to the
@@ -18,8 +20,17 @@ bounded:
   Referer; a fixed User-Agent naming FeedVault;
 - at most MAX_REDIRECTS redirects, each checked again from scratch, all of
   it within TIMEOUT seconds and MAX_BYTES of body, uncompressed HTML only;
-- one fetch at a time, at least MIN_GAP seconds apart, and never a link
-  found in the page: the caller only parses what comes back.
+- one import at a time, at least MIN_GAP seconds apart, and never a link
+  found in the page: the caller only parses what comes back. One narrow
+  exception, for sites whose buttons are redirects on their own host
+  (REDIRECT_LINKS: mydeck.bio's /go/<n>, whose address is nowhere in the
+  page): a link on the page's own exact host whose request target is the
+  site's pattern is asked once, by the same fetcher and its rules, for its
+  status line and headers only (never its body), without following; the
+  Location it answers is where the button goes, taken as a link found in
+  the page and never fetched. At most MAX_LOOKUPS per import, LOOKUP_GAP
+  seconds apart, each within LOOKUP_TIMEOUT, all of the import within
+  IMPORT_TIME; one that fails or does not redirect is left out.
 
 The page's body is never logged or stored; its URL may be logged. It is
 read with html.parser and json only (never run). Only the profile links
@@ -48,10 +59,11 @@ import links
 import people
 import sources
 
-# Link-in-bio sites whose every profile is a path on one host. Left out:
-# sites where a profile is a subdomain or the user's own domain (carrd.co,
-# bio.link, Linktree's and Beacons' custom domains, komi.io, taplink.cc's
-# custom domains): a host check cannot tell one of those from any other site.
+# Link-in-bio sites whose every profile is a path on one host. Sites where
+# a profile is a subdomain are in SUBDOMAIN_SITES. Left out: sites where it
+# is the user's own domain (Linktree's and Beacons' custom domains,
+# taplink.cc's custom domains), which a host check cannot tell from any
+# other site, and subdomain sites not added yet (carrd.co, bio.link, komi.io).
 SITES = {
     "linktr.ee": "Linktree, the most used one: linktr.ee/<name>",
     "beacons.ai": "Beacons, common with TikTok and Instagram creators: beacons.ai/<name>",
@@ -62,12 +74,33 @@ SITES = {
     "allmylinks.com": "AllMyLinks: allmylinks.com/<name>",
     "link.me": "Linkme: link.me/<name>",
 }
+# Link-in-bio sites whose every profile is a subdomain: <name>.<site>/ is
+# the profile. One label only, never the site itself nor _NOT_PROFILES.
+SUBDOMAIN_SITES = {
+    "mydeck.bio": "MyDeck: <name>.mydeck.bio",
+}
+# Subdomains a site keeps for its own workings, not a person's page (any
+# name _ASSET_LABEL tells as one too: cdn2, static, media, api…).
+_NOT_PROFILES = frozenset({
+    "www", "app", "admin", "dashboard", "mail", "smtp", "imap", "ftp", "ns1", "ns2", "mx", "blog", "help",
+    "support", "docs", "status", "auth", "login", "account", "accounts", "dev", "staging", "beta", "test", "go",
+})
+# Sites whose buttons are links on the page's own host that redirect to
+# where they go, the address in no part of the page: the request target
+# (path, no query) such a link must be, exactly. See the module's docstring.
+REDIRECT_LINKS = {
+    "mydeck.bio": re.compile(r"/go/[0-9]{1,9}"),
+}
 PORT = 443
 URL_MAX = 2000
 TIMEOUT = 10                                   # seconds for everything: lookups, connects, TLS, every byte
 MAX_BYTES = 2 * 1024 * 1024                    # of body, counted as it is read
 MAX_REDIRECTS = 3
 MIN_GAP = 5                                    # seconds between two fetches
+MAX_LOOKUPS = 30                               # redirect links (REDIRECT_LINKS) asked per import
+LOOKUP_GAP = 0.4                               # seconds before each of them
+LOOKUP_TIMEOUT = 5                             # seconds for each, as TIMEOUT is for the page
+IMPORT_TIME = 40                               # seconds for the whole import: the page and every lookup
 HEAD_MAX = 32 * 1024                           # bytes of status line and headers
 HEADERS_MAX = 100
 REDIRECTS = (301, 302, 303, 307, 308)
@@ -142,14 +175,52 @@ def check_url(text, first=True):
     if port not in (None, PORT):
         raise Refused("only https's own port (443)")
     host = _host(u.hostname)
-    if host not in SITES:
-        raise Refused(f"not an allowed site: {host or u.hostname or 'no host'} "
-                      f"(allowed: {', '.join(sorted(SITES))})")
     path = u.path or "/"
-    if first and path.strip("/") == "":
+    # A subdomain site's own host is its home page; a person's page there
+    # is <name>.<site>/, so its path may be "/".
+    if host in SUBDOMAIN_SITES or (host in SITES and first and path.strip("/") == ""):
         raise Refused("paste the link to a person's page, not the site's home page")
+    if host not in SITES and not _profile_host(host):
+        allowed = [*sorted(SITES), *(f"<name>.{site}" for site in sorted(SUBDOMAIN_SITES))]
+        raise Refused(f"not an allowed site: {host or u.hostname or 'no host'} (allowed: {', '.join(allowed)})")
     target = quote(path, safe=_SAFE) + (f"?{quote(u.query, safe=_SAFE + '?')}" if u.query else "")
     return host, target, f"https://{host}{target}"
+
+
+def site_of(host):
+    """The SITES or SUBDOMAIN_SITES name a host (as _host gives it) is on:
+    the site itself or, for SUBDOMAIN_SITES, any subdomain of it. Else None."""
+    if host in SITES:
+        return host
+    return next((site for site in SUBDOMAIN_SITES if host == site or (host or "").endswith("." + site)), None)
+
+
+def _profile_host(host):
+    """Whether a host is a person's page on a SUBDOMAIN_SITES site: one
+    label above the site's name (never a.b.<site>), not one the site keeps
+    for itself (_NOT_PROFILES, _ASSET_LABEL)."""
+    site = site_of(host)
+    if site not in SUBDOMAIN_SITES or host == site:
+        return False
+    label = host[:-len(site) - 1]
+    return ("." not in label and _LABEL_RE.fullmatch(label) is not None and label not in _NOT_PROFILES
+            and _ASSET_LABEL.fullmatch(label) is None)
+
+
+def redirect_link(href, page_url):
+    """The URL (as check_url gives it) of a link of the page at
+    ``page_url`` that its site answers with a redirect to where the link
+    goes (REDIRECT_LINKS): on the page's own host exactly, its request
+    target the site's pattern. Else None: no other link is ever asked."""
+    try:
+        host = check_url(page_url, first=False)[0]
+        pattern = REDIRECT_LINKS.get(site_of(host))
+        if pattern is None or not isinstance(href, str):
+            return None
+        to, target, url = check_url(urljoin(page_url, href.strip()), first=False)
+    except ValueError:                         # Refused too
+        return None
+    return url if to == host and pattern.fullmatch(target) else None
 
 
 def public(address):
@@ -195,8 +266,11 @@ _CHARSET_ALIASES = {"windows-874": "cp874", "windows-31j": "cp932", "x-sjis": "s
 # ---------------------------------------------------------------------------
 
 class Page:
-    def __init__(self, url, text):
-        self.url, self.text = url, text
+    """A page fetched. ``resolved``: {a redirect link's URL (redirect_link):
+    the address its redirect names}, for the links that answered one."""
+
+    def __init__(self, url, text, resolved=None):
+        self.url, self.text, self.resolved = url, text, resolved or {}
 
 
 def system_resolve(host, port, timeout):
@@ -306,16 +380,20 @@ class Fetcher:
     """Fetches one allowed page. ``resolve(host, port, timeout)`` gives
     [(family, sockaddr)], ``connect(family, sockaddr, timeout)`` a connected
     socket and ``wrap(sock, host)`` its TLS layer; tests replace them, and
-    ``clock``, so no test opens a socket."""
+    ``clock`` and ``sleep``, so no test opens a socket or waits."""
 
     def __init__(self, resolve=system_resolve, connect=system_connect, wrap=system_wrap, clock=time.monotonic,
-                 timeout=TIMEOUT, max_bytes=MAX_BYTES, max_redirects=MAX_REDIRECTS):
-        self.resolve, self.connect, self.wrap, self.clock = resolve, connect, wrap, clock
+                 sleep=time.sleep, timeout=TIMEOUT, max_bytes=MAX_BYTES, max_redirects=MAX_REDIRECTS,
+                 max_lookups=MAX_LOOKUPS, import_time=IMPORT_TIME):
+        self.resolve, self.connect, self.wrap, self.clock, self.sleep = resolve, connect, wrap, clock, sleep
         self.timeout, self.max_bytes, self.max_redirects = timeout, max_bytes, max_redirects
+        self.max_lookups, self.import_time = max_lookups, import_time
 
     def fetch(self, url):
-        """The Page at ``url``, after at most max_redirects redirects, or raises Refused."""
-        deadline = self.clock() + self.timeout
+        """The Page at ``url``, after at most max_redirects redirects, with
+        where its redirect links go (_resolve), or raises Refused."""
+        started = self.clock()
+        deadline = started + self.timeout
         host, target, url = check_url(url)
         for hop in range(self.max_redirects + 1):
             try:
@@ -331,7 +409,7 @@ class Fetcher:
             except OSError as e:
                 raise Refused(f"could not reach {host}: {e.strerror or type(e).__name__}", 502)
             if kind == "page":
-                return Page(url, value)
+                return self._resolve(Page(url, value), host, started + self.import_time)
             if hop == self.max_redirects:
                 break
             try:
@@ -339,6 +417,30 @@ class Fetcher:
             except Refused as e:
                 raise Refused(f"the page redirects elsewhere: {e}", 502)
         raise Refused("too many redirects", 502)
+
+    def _resolve(self, page, host, end):
+        """The page, with where its redirect links go (Page.resolved): each
+        distinct one (redirect_link), in order, at most max_lookups, asked
+        on the page's own host for its status line and headers only, by the
+        same rules as the page, LOOKUP_GAP seconds after the request before,
+        all of it before ``end``. A redirect's Location, made absolute, is
+        kept as text; anything else (an error, no redirect, too late) is
+        left out without a word. Nothing it names is fetched."""
+        if REDIRECT_LINKS.get(site_of(host)) is None:
+            return page
+        found = dict.fromkeys(filter(None, (redirect_link(h, page.url) for h in read(page.text).hrefs)))
+        for go in list(found)[:self.max_lookups]:
+            if self.clock() + LOOKUP_GAP >= end:
+                break
+            self.sleep(LOOKUP_GAP)
+            deadline = min(self.clock() + LOOKUP_TIMEOUT, end)
+            try:
+                kind, value = self._one(host, check_url(go, first=False)[1], deadline, head_only=True)
+                if kind == "redirect" and len(value) <= URL_MAX:
+                    page.resolved[go] = urljoin(go, value)
+            except (_Late, OSError, ValueError):   # Refused, a timeout, TLS, a Location urljoin refuses
+                continue
+        return page
 
     def _addresses(self, host, deadline):
         found = self.resolve(host, PORT, deadline - self.clock())
@@ -349,8 +451,10 @@ class Fetcher:
                 raise Refused(f"{host}'s address is not public ({sockaddr[0]})", 502)
         return found
 
-    def _one(self, host, target, deadline):
-        """("page", text) or ("redirect", location) of one request."""
+    def _one(self, host, target, deadline, head_only=False):
+        """("page", text) or ("redirect", location) of one request; with
+        ``head_only``, ("redirect", location) or ("other", status), the body
+        never read."""
         if deadline - self.clock() <= 0:
             raise _Late()
         found = self._addresses(host, deadline)
@@ -376,11 +480,11 @@ class Fetcher:
             sock.close()
             raise
         try:
-            return self._exchange(tls, host, target, deadline)
+            return self._exchange(tls, host, target, deadline, head_only)
         finally:
             tls.close()
 
-    def _exchange(self, sock, host, target, deadline):
+    def _exchange(self, sock, host, target, deadline, head_only=False):
         request = (f"GET {target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {USER_AGENT}\r\n"
                    "Accept: text/html\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n")
         left = deadline - self.clock()
@@ -395,6 +499,8 @@ class Fetcher:
             if not location:
                 raise Refused(f"the site answered {status} with nowhere to go", 502)
             return "redirect", location
+        if head_only:
+            return "other", status
         if not 200 <= status < 300:
             raise Refused(f"the site answered {status}", 502)
         kind, _, params = headers.get("content-type", "").partition(";")
@@ -484,8 +590,9 @@ _last = [None]                                 # clock() of the last fetch
 
 
 def fetch(url, clock=time.monotonic):
-    """FETCHER.fetch(url), one at a time and MIN_GAP seconds apart. A link
-    refused before anything is fetched does not count."""
+    """FETCHER.fetch(url), its redirect links' lookups with it, one at a
+    time and MIN_GAP seconds apart. A link refused before anything is
+    fetched does not count."""
     check_url(url)
     if not _busy.acquire(blocking=False):
         raise Refused("another link-in-bio page is being fetched; try again in a moment", 429)
@@ -567,9 +674,11 @@ class _Links(HTMLParser):
             self._close_anchor()
 
 
-def read(text):
+def read(text, page_url=None, resolved=None):
     """A page parsed once, for page_links and shown_links. Malformed HTML
-    gives what was read before it broke."""
+    gives what was read before it broke. ``resolved`` (Page.resolved): each
+    redirect link of the page at ``page_url`` that answered one is read as
+    the address it named, its label kept; any other stays as it is."""
     parser = _Links()
     try:
         parser.feed(text)
@@ -580,6 +689,14 @@ def read(text):
         parser.blocks.append("".join(parser._json))
         parser._json = None
     parser._close_anchor()
+    if resolved:
+        to = {}
+        for href in set(parser.hrefs):
+            go = redirect_link(href, page_url)
+            if go in resolved:
+                to[href] = resolved[go]
+        parser.hrefs = [to.get(h, h) for h in parser.hrefs]
+        parser.anchors = [(to.get(h, h), label) for h, label in parser.anchors]
     return parser
 
 
@@ -735,7 +852,7 @@ _ASSET_SITES = frozenset({
     "googlesyndication.com", "googleadservices.com", "cloudflareinsights.com", "sentry.io", "datadoghq.com",
     "newrelic.com", "nr-data.net", "bugsnag.com", "segment.com", "segment.io", "hotjar.com", "amplitude.com",
     "mixpanel.com", "statsig.com", "clarity.ms", "scorecardresearch.com", "cookielaw.org", "onetrust.com",
-    "cookiebot.com", "recaptcha.net", "hcaptcha.com", "stripe.network",
+    "cookiebot.com", "recaptcha.net", "hcaptcha.com", "stripe.network", "r2.dev",
     "w3.org", "schema.org", "ogp.me", "gmpg.org", "xmlns.com", "purl.org",     # namespaces, not pages
 })
 # The same, told by a subdomain's name on any site (cdn.example.com,
@@ -769,6 +886,18 @@ _PLUMBING_KEY = re.compile(
 _CONSTANT_KEY = re.compile(r"[A-Z0-9]+(?:_[A-Z0-9]+)+")      # GRAPHQL_API_ENDPOINT: the site's settings
 # An address written in a label: a word that starts as one.
 _ADDRESS_IN_LABEL = re.compile(r"(?:https?://|www\.)\S+|(?:[a-z0-9-]+\.)+[a-z]{2,}/\S*", re.IGNORECASE)
+
+
+def _own(host):
+    """The bio site's own names for a page on ``host``: the host and its
+    other names (_ALSO_OWN), or for a SUBDOMAIN_SITES page the whole site,
+    so every other profile and page of it is the site's own too."""
+    if not host:
+        return ()
+    site = site_of(host)
+    if site in SUBDOMAIN_SITES:
+        return (site,)
+    return (host, *_ALSO_OWN.get(host, ()))
 
 
 def _key(name):
@@ -881,8 +1010,7 @@ def shown_links(page, page_url, table):
     links.clean_url gives them, titles as clean_label does; "" for none."""
     parser = page if isinstance(page, _Links) else read(page)
     first = links.clean_url(page_url)
-    host = _host(urlsplit(page_url).hostname)
-    own = (host, *_ALSO_OWN.get(host, ())) if host else ()
+    own = _own(_host(urlsplit(page_url).hostname))
     found, budget = list(parser.anchors), [_JSON_NODES]
     for block in parser.blocks:
         found.extend(_json_shown(block, budget))
@@ -918,8 +1046,11 @@ def sent_links(page_url, sent):
     is [(link, label)], checked as text by the caller (an http or https
     address, bounded). The bio site's own pages and a page's parts are left
     out without a word; ``dropped`` counts the links refused. Raises
-    Refused for the page's address (check_url: https, on SITES, a page)."""
+    Refused for the page's address (check_url: https, on SITES, a page; the
+    userscript runs on no SUBDOMAIN_SITES page)."""
     host, _, first = check_url(page_url)
+    if host not in SITES:
+        raise Refused(f"not an allowed site: {host} (the browser saves links from {', '.join(sorted(SITES))})")
     first = links.clean_url(first)
     own = (host, *_ALSO_OWN.get(host, ()))
     out, refused = {first: ""}, set()
