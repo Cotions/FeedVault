@@ -12,6 +12,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import DeleteErrors from "../components/DeleteErrors";
 import SelectionBar from "../components/SelectionBar";
 import PageHeader from "../components/PageHeader";
+import Video from "../components/Video";
 
 const PAGE = 50;
 const MAX_PAGE = 500;      // the backend's limit; a reload refetches what was loaded
@@ -467,7 +468,7 @@ function Compare({ g, at, md, onMove, onTrash, onKeepOnly, onClose }) {
           {!item?.url || broken === item.url ? (
             <span className="big-file-ph"><Icon name="image" size={40} /></span>
           ) : item.kind === "video" ? (
-            <video key={item.url} src={item.url} controls muted loop autoPlay playsInline
+            <Video key={item.url} src={item.url} controls muted loop autoPlay playsInline
               onError={() => setBroken(item.url)} />
           ) : (
             <img key={item.url} src={item.url} alt="" onError={() => setBroken(item.url)} />
@@ -554,18 +555,23 @@ export default function Duplicates() {
   const hashing = !!status?.running;
   useEffect(() => {
     let alive = true;
-    let was = null;
+    let was = null, shown = "";
+    // Not in a hidden tab: it polls again the moment the tab shows. An
+    // answer like the last one leaves the page as it is (no re-render).
     function poll() {
+      if (document.hidden) return;
       getDuplicatesStatus().then(s => {
         if (!alive) return;
-        setStatus(s);
+        const text = JSON.stringify(s);
+        if (text !== shown) { shown = text; setStatus(s); }
         if (was?.running && (!s.running || s.phase !== was.phase)) reload();
         was = s;
       }, () => {});
     }
     poll();
     const t = setInterval(poll, STATUS_POLL_MS);
-    return () => { alive = false; clearInterval(t); };
+    document.addEventListener("visibilitychange", poll);
+    return () => { alive = false; clearInterval(t); document.removeEventListener("visibilitychange", poll); };
   }, [reload]);
 
   // A page that comes back after the tab or threshold changed is dropped.

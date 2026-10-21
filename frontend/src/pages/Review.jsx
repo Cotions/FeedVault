@@ -20,6 +20,7 @@ import { useFiltersOpen } from "../lib/useFiltersOpen";
 import FiltersToggle from "../components/FiltersToggle";
 import PageHeader from "../components/PageHeader";
 import { PAGE, initial, listPlace, nextUndecided, reducer } from "../lib/reviewQueue";
+import Video from "../components/Video";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
 
@@ -42,6 +43,10 @@ import { PAGE, initial, listPlace, nextUndecided, reducer } from "../lib/reviewQ
 
 const TOP_UP_BELOW = 10;
 const PRELOAD_AHEAD = 2;
+// Full posts kept in memory: past this many, those more than
+// FULL_KEPT_BEHIND places behind the current one are dropped.
+const FULL_KEPT = 80;
+const FULL_KEPT_BEHIND = 30;
 const MUTE_KEY = "feedvault.review.muted";
 
 function readMuted() {
@@ -155,13 +160,25 @@ function ReviewSession({ scope, scopeControls, againTo }) {
       .finally(() => { fetchingRef.current = false; });
   }, [exhausted, undecidedAhead, place.offset, scope]);
 
-  // Full posts (media lists) for the current one and the next few.
+  // Full posts (media lists) for the current one and the next few. Those
+  // well behind the current one are let go as new ones come: a long session
+  // no longer holds every post it went through. Going back that far fetches
+  // the post again, as for one never shown.
+  const placeRef = useRef({ queue, pos });
+  useEffect(() => { placeRef.current = { queue, pos }; });
   const fetchFull = useCallback(p => {
     requested.current.add(p.id);
-    getPost(p.platform, p.post_id).then(
-      fp => setFull(f => ({ ...f, [p.id]: fp })),
-      e  => setFull(f => ({ ...f, [p.id]: { error: e } })),
-    );
+    const add = value => setFull(f => {
+      const n = { ...f, [p.id]: value };
+      if (Object.keys(n).length <= FULL_KEPT) return n;
+      const { queue, pos } = placeRef.current;
+      const near = new Set(queue.slice(Math.max(0, pos - FULL_KEPT_BEHIND)).map(q => String(q.id)));
+      near.add(String(p.id));
+      for (const id of Object.keys(n)) if (!near.has(id)) delete n[id];
+      for (const id of requested.current) if (!near.has(String(id))) requested.current.delete(id);
+      return n;
+    });
+    getPost(p.platform, p.post_id).then(add, e => add({ error: e }));
   }, []);
   useEffect(() => {
     for (const p of [cur, ...upcoming]) {
@@ -500,7 +517,7 @@ function ReviewSession({ scope, scopeControls, againTo }) {
     stage = <div className="review-empty"><Icon name="warn" size={28} /><p>This file is missing on disk.</p></div>;
   } else if (m.kind === "video") {
     stage = (
-      <video
+      <Video
         key={m.id}
         ref={videoRef}
         className="review-media"
@@ -539,7 +556,7 @@ function ReviewSession({ scope, scopeControls, againTo }) {
           )}
           {busy && <span className="review-busy"><Icon name="refresh" size={14} className="spin" /></span>}
           <div hidden aria-hidden="true">
-            {preloadVideos.map(url => <video key={url} src={url} preload="auto" muted />)}
+            {preloadVideos.map(url => <Video key={url} src={url} preload="auto" muted />)}
           </div>
         </div>
 

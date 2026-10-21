@@ -394,14 +394,25 @@ input[type="text"].header-search:focus {
   cursor: help;
 }
 .status-dot.online {
+  position: relative;
   background: var(--glow);
-  box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.16), 0 0 12px rgba(var(--glow-rgb), 0.7);
+}
+/* The pulse is a cross-fade of its two glows, one on each pseudo-element:
+   opacity runs on the compositor, where an animated box-shadow restyled and
+   repainted the header on every frame for as long as the app was open. */
+.status-dot.online::before,
+.status-dot.online::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
   animation: pulse 2.4s ease-in-out infinite;
 }
-@keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.14), 0 0 10px rgba(var(--glow-rgb), 0.6); }
-  50%      { box-shadow: 0 0 0 4px rgba(var(--glow-rgb), 0.22), 0 0 16px rgba(var(--glow-rgb), 0.85); }
-}
+.status-dot.online::before { box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.14), 0 0 10px rgba(var(--glow-rgb), 0.6); }
+.status-dot.online::after  { box-shadow: 0 0 0 4px rgba(var(--glow-rgb), 0.22), 0 0 16px rgba(var(--glow-rgb), 0.85); animation-name: pulseIn; }
+@keyframes pulse   { 50% { opacity: 0; } }
+@keyframes pulseIn { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
 .status-label { color: var(--muted); font-size: 12px; margin-left: auto; }
 
 .app-body {

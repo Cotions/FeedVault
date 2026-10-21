@@ -679,6 +679,7 @@ def init(path):
     config.make_private_dir(os.path.dirname(path))
     migrate(path)
     _path = path
+    _detach()
     _local.__dict__.clear()
     with _cache_lock:
         _cache.clear()
@@ -775,17 +776,52 @@ def backup(conn, dest):
         os.remove(stale)
 
 
+class _ClosedWithThread:
+    """Closes a thread's connection when the thread ends. A sqlite3
+    connection is part of a reference cycle (its statement cache refers back
+    to it), so the end of its thread does not free it: only the garbage
+    collector does, whenever it gets to it. Each request runs in a thread of
+    its own, so a backend left open (a jobs poll every few seconds, a video
+    on loop) piled up two open files per request, the database and its WAL,
+    towards the process's limit. This holder has no cycle: dropped with the
+    thread's locals, it closes the connection there and then."""
+
+    __slots__ = ("conn",)
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __del__(self):
+        conn, self.conn = self.conn, None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:                  # one that cannot close: nothing more to do
+                pass
+
+
 def connect():
-    """One connection per thread, reused."""
+    """One connection per thread, reused; closed when the thread ends."""
     conn = getattr(_local, "conn", None)
     if conn is None or getattr(_local, "path", None) != _path:
         conn = sqlite3.connect(_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        _detach()
         _local.conn = conn
         _local.path = _path
+        _local.closer = _ClosedWithThread(conn)
     return conn
+
+
+def _detach():
+    """Let go of this thread's connection without closing it: code that
+    still holds it (a profile switch's caller) may finish with it, and the
+    garbage collector closes it as before."""
+    closer = getattr(_local, "closer", None)
+    if closer is not None:
+        closer.conn = None
 
 
 # ---------------------------------------------------------------------------

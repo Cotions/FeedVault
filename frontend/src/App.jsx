@@ -49,6 +49,8 @@ const JOBS_PAGE_POLL_MS   = 3000;
 // ends, or (a drag cancelled outside the window tells nothing) when no
 // dragover came for this long.
 const DRAG_GONE_MS        = 600;
+// An idle jobs poll that brought nothing new still re-renders this often.
+const JOBS_SAME_MS        = 60000;
 // Desktop notifications on: a hidden tab still polls, now and then.
 const DESKTOP_POLL_MS     = 60000;
 const DESKTOP_MAX         = 5;               // notifications shown at once; the bell lists the rest
@@ -281,8 +283,16 @@ export default function App() {
     });
   }, []);
 
+  // A poll's answer replaces the state only when it differs from the last
+  // one: an identical answer (the usual idle poll) would re-render the whole
+  // app, the page under it included, for nothing. While a job is active, and
+  // once a minute otherwise, the jobs answer is applied anyway: the "2m ago"
+  // and "starts in 40 s" the pages show move on with those renders.
+  const lastScan = useRef("");
+  const lastJobs = useRef({ text: "", at: 0 });
   const applyScan = useCallback(s => {
-    setScan(s);
+    const text = JSON.stringify(s);
+    if (text !== lastScan.current) { lastScan.current = text; setScan(s); }
     // A scan that was running and now is not has just finished: refresh.
     if (wasRunning.current && !s.running) setRefreshKey(k => k + 1);
     wasRunning.current = !!s.running;
@@ -296,7 +306,12 @@ export default function App() {
   // indexed anything. Jobs started elsewhere (and fast ones that end between
   // two polls) count too.
   const applyJobs = useCallback(list => {
-    setJobList(list);
+    const text = JSON.stringify(list);
+    const now = Date.now();
+    if (text !== lastJobs.current.text || list.running || list.queued || now - lastJobs.current.at >= JOBS_SAME_MS) {
+      lastJobs.current = { text, at: now };
+      setJobList(list);
+    }
     const notes = list.notifications;
     desktopRef.current = !!notes?.desktop && desktopAllowed();
     const known = notifSeen.current;
@@ -399,6 +414,7 @@ export default function App() {
     const r = await startScan();
     if (r?.ok || r?.error === "already running") {
       wasRunning.current = true;
+      lastScan.current = "";
       setScan(s => ({ last: s?.last ?? null, ...s, running: true }));
     }
     return r;

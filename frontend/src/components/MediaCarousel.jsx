@@ -3,6 +3,7 @@ import Icon from "./Icon";
 import { fmtBytes } from "../lib/fmt";
 import { PHONE } from "../lib/layout";
 import { useSwipe } from "../lib/swipe";
+import Video from "./Video";
 
 function MissingMedia({ item, label = "File missing on disk" }) {
   return (
@@ -27,7 +28,7 @@ function Slide({ item, alt, active }) {
   if (failed) return <MissingMedia item={item} label="Could not load this file" />;
   if (item.kind === "video") {
     return (
-      <video
+      <Video
         ref={videoRef}
         className="media-el"
         src={item.url}

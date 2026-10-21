@@ -4,6 +4,7 @@ import Icon from "./Icon";
 import PlatformIcon from "./PlatformIcon";
 import TagChips from "./TagChips";
 import { excerpt, fmtShortDate, fmtFullDate, platformLabel, postPath, authorFeedPath } from "../lib/fmt";
+import Video from "./Video";
 
 /* One tile in the masonry feed. The cover keeps its natural aspect ratio (the
    grid is CSS columns, so tall and wide media sit side by side). Text-only
@@ -61,7 +62,7 @@ export default function PostCard({ post, index = 0, selectMode = false, selected
           {broken ? (
             <div className="post-cover-broken"><Icon name="image" size={26} /><span>media unavailable</span></div>
           ) : videoOnly ? (
-            <video
+            <Video
               className="post-cover-media"
               src={`${cover.url}#t=0.1`}
               preload="metadata"
