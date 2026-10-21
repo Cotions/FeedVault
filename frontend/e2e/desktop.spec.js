@@ -458,6 +458,135 @@ test("deleting posts from the Feed updates the new counts at once", async ({ pag
   await idle(page);
 });
 
+/* ── A delete's Undo ─────────────────────────────────────────── */
+// "Sometimes I have no clue if the undo even worked": every delete's toast
+// has an Undo, which puts back what went and says what came back, with the
+// post one click away. Deleted and restored for real on the throwaway
+// vault, never the stress creator's posts (the layout checks open them):
+// those of small creators, from the end of the list, one each.
+const postHref = p => `/p/${encodeURIComponent(p.platform)}/${encodeURIComponent(p.post_id)}`;
+async function smallCreatorsPosts(request, nth) {
+  const S = stressData();
+  const authors = (await (await request.get("/api/authors", { headers: H })).json())
+    .filter(a => a.count >= 2 && a.count <= 20 && a.id != null && a.handle && !(a.platform === S.post.platform && a.id === S.author.id));
+  const a = authors.at(-nth);
+  expect(a, `a small creator (${nth} from the end)`).toBeTruthy();
+  const scope = new URLSearchParams({ platform: a.platform, author: a.id });
+  const { posts } = await (await request.get(`/api/posts?${scope}&sort=posted&limit=200`, { headers: H })).json();
+  return { feed: `/?${scope}`, handle: a.handle, posts };
+}
+
+test("Feed: a delete's Undo puts the post back and says what came back", async ({ page, request }) => {
+  const { feed, handle, posts } = await smallCreatorsPosts(request, 1);
+  const p = posts[0];
+  await page.goto(feed);
+  const card = page.locator(`article.post-card[data-post-id="${p.id}"]`);
+  await expect(card).toBeVisible();
+  await idle(page);
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await card.locator(".select-check").click();
+  await page.getByRole("button", { name: "Delete…" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete 1 post" }).click();
+  await expect(card).toHaveCount(0);
+
+  const deleted = page.locator(".toast", { hasText: "1 post moved to the trash" });
+  await deleted.getByRole("button", { name: "Undo" }).click();
+  const told = page.locator(".toast", { hasText: `Restored @${handle}'s post (` });
+  await expect(told).toHaveClass(/toast-ok/);
+  await expect(deleted).toHaveCount(0);
+  await expect(told.getByRole("link", { name: "Open post" })).toHaveAttribute("href", postHref(p));
+  // The Feed read the index again: the post is back.
+  await expect(card).toBeVisible();
+  await idle(page);
+});
+
+// The post's page goes back to the Feed right after its delete: the
+// toast's Undo is the app's, not the page's, and works from there.
+test("Post page: Delete post goes back, and the toast's Undo still brings it back", async ({ page, request }) => {
+  const { feed, handle, posts } = await smallCreatorsPosts(request, 2);
+  const p = posts[0];
+  await page.goto(feed);
+  const card = page.locator(`article.post-card[data-post-id="${p.id}"]`);
+  await card.locator("a.post-cover, a.post-textbody").first().click();
+  await expect(page).toHaveURL(postHref(p));
+  await page.locator(".post-page-head").getByRole("button", { name: "Delete post" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete post" }).click();
+  await expect(page).toHaveURL(feed);
+  await expect(page.locator("article.post-card").first()).toBeVisible();
+  await expect(card).toHaveCount(0);
+
+  await page.locator(".toast", { hasText: "Post moved to the trash" }).getByRole("button", { name: "Undo" }).click();
+  const told = page.locator(".toast", { hasText: `Restored @${handle}'s post (` });
+  await expect(card).toBeVisible();
+  await told.getByRole("link", { name: "Open post" }).click();
+  await expect(page).toHaveURL(postHref(p));
+  await expect(page.locator(".post-page-head")).toContainText(`@${handle}`);
+  await idle(page);
+});
+
+// A restore by post id puts back the post's latest deletion: of two items
+// deleted from one post, the first one's Undo would bring back the second,
+// so it says so and leaves it to the Trash page; the second's brings its
+// own item back.
+test("Post page: an item's Undo puts that item back, never one deleted after it", async ({ page, request }) => {
+  const S = stressData();
+  const { posts } = await (await request.get("/api/posts?kind=carousel&sort=posted&limit=200", { headers: H })).json();
+  const p = posts.filter(x => x.media_count >= 3 && x.author?.handle && !(x.platform === S.post.platform && x.author.id === S.author.id)).at(-1);
+  expect(p, "a carousel of 3 items or more").toBeTruthy();
+  const n = p.media_count;
+  const count = page.locator(".carousel-count");
+  const items = async () => (await (await request.get(`/api/posts/${p.platform}/${encodeURIComponent(p.post_id)}`, { headers: H })).json()).media.length;
+  try {
+    await page.goto(postHref(p));
+    await expect(count).toHaveText(`1/${n}`);
+    for (const left of [n - 1, n - 2]) {
+      await page.getByRole("button", { name: "Delete this item" }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "Delete item" }).click();
+      await expect(count).toHaveText(`1/${left}`);
+    }
+    const deleted = page.locator(".toast", { hasText: "Item moved to the trash" });
+    await expect(deleted).toHaveCount(2);
+
+    await deleted.first().getByRole("button", { name: "Undo" }).click();
+    const refused = page.locator(".toast", { hasText: `Not undone: something else was deleted from @${p.author.handle}'s post since` });
+    await expect(refused).toHaveClass(/toast-err/);
+    await expect(refused.getByRole("link", { name: "Trash" })).toHaveAttribute("href", "/trash");
+    await expect(count).toHaveText(`1/${n - 2}`);
+
+    await deleted.first().getByRole("button", { name: "Undo" }).click();
+    const told = page.locator(".toast", { hasText: `Restored the item to @${p.author.handle}'s post (` });
+    await expect(told).toBeVisible();
+    await expect(told.getByRole("link")).toHaveCount(0);    // on that post's page already
+    await expect(count).toHaveText(`1/${n - 1}`);
+    await idle(page);
+  } finally {
+    // The first item, from the Trash as the toast said (its latest deletion now).
+    for (let i = 0; i < 2 && await items() < n; i++) {
+      await request.post("/api/trash/restore", { headers: H, data: { posts: [p.id] } });
+    }
+  }
+  expect(await items()).toBe(n);
+});
+
+test("Storage: a big file's Undo puts it back", async ({ page, request }) => {
+  const S = stressData();
+  const { largest } = await (await request.get("/api/storage", { headers: H })).json();
+  const f = largest.find(x => x.author?.handle && !(x.platform === S.post.platform && x.author.id === S.author.id));
+  expect(f, "a big file of another creator than the stress one").toBeTruthy();
+  await openPage(page, PAGES.find(x => x.name === "Storage"));
+  const big = page.locator(".big-file", { has: page.locator(`a[href="${postHref(f)}"]`) });
+  const before = await big.count();
+  await big.first().getByRole("button", { name: /to the trash$/ }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: /^Trash / }).click();
+  await expect(big).toHaveCount(before - 1);
+
+  await page.locator(".toast", { hasText: "Moved to the trash" }).getByRole("button", { name: "Undo" }).click();
+  const told = page.locator(".toast", { hasText: new RegExp(`^Restored (the item to )?@${f.author.handle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'s post \\(`) });
+  await expect(told.getByRole("link", { name: "Open post" })).toHaveAttribute("href", postHref(f));
+  await expect(big).toHaveCount(before);
+  await idle(page);
+});
+
 // #139: jobs that only wait (queued, pausing between downloads) show a
 // still icon, not a spinner, and the pause reads "starts in 13 s" as on
 // Creators. The waiting jobs are faked into GET /api/jobs: nothing runs.

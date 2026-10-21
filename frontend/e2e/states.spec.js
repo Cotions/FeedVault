@@ -737,7 +737,7 @@ test.describe("toasts stay clear of the bottom buttons", () => {
       await bar.getByRole("button", { name: /^Keep/ }).click();
       await expect(page.locator(".review-session")).toHaveText(/^1 kept/);
       await undo.click();
-      await expect(page.locator(".toast", { hasText: "Undone." })).toBeVisible();
+      await expect(page.locator(".toast", { hasText: "Keep undone:" })).toBeVisible();
       await settle(page);
       expect(await underToasts(page, ".review-actions button"), `${s.label}: buttons under a toast`).toEqual([]);
       await dismissToasts(page);

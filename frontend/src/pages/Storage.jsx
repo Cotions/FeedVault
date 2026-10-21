@@ -4,6 +4,7 @@ import { getStorage, getConfig, getPeople, deleteItems } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
+import { useUndoDelete } from "../lib/useUndoDelete";
 import { fmtBytes, fmtInt, platformLabel, plural, authorFeedPath } from "../lib/fmt";
 import Bars from "../components/Bars";
 import StatsHero from "../components/StatsHero";
@@ -181,6 +182,7 @@ function BigFile({ item, index, onTrash }) {
 export default function Storage() {
   const { refreshKey, running, start } = useScan();
   const toast = useToast();
+  const undoOf = useUndoDelete();
   const [params, setParams] = useSearchParams();
   const person = params.get("person") || "";
   const load = useCallback(() => getStorage(person || undefined), [person]);
@@ -201,15 +203,19 @@ export default function Storage() {
     setBusy(true);
     setDlgError(null);
     try {
-      const r = await deleteItems({ media: [item.media_id] });
+      const r = await deleteItems({ media: [item.media_id], from: "storage" });
       const done = (r?.media || []).includes(item.media_id);
       if (!r?.ok && !done && !r?.errors?.length) { setDlgError(r?.error || "Nothing could be moved."); return; }
       setPending(null);
       setDelErrors(r.errors?.length ? r.errors : null);
       if (done) {
         setGone(prev => new Set(prev).add(item.media_id));
-        const post = (r.posts || []).includes(item.post) ? " The post had no other files and went with it." : "";
-        toast(`Moved to the trash (${plural(r.files ?? 0, "file")}, ${fmtBytes(r.bytes ?? 0)}).${post}`);
+        const whole = (r.posts || []).includes(item.post);
+        const post = whole ? " The post had no other files and went with it." : "";
+        // Undo restores the post's latest deletion: this file (and the post, if it went too).
+        const of = { id: item.post, platform: item.platform, post_id: item.post_id, author: item.author };
+        toast(`Moved to the trash (${plural(r.files ?? 0, "file")}, ${fmtBytes(r.bytes ?? 0)}).${post}`, "ok",
+          undoOf([of], whole ? "post" : "item"));
       }
       reload();
     } catch (e) {
@@ -354,7 +360,7 @@ export default function Storage() {
         {pending && (
           <p>
             Move this {pending.kind} by @{pending.author?.handle || pending.author?.id} ({fmtBytes(pending.bytes)}) to
-            the trash? If it is the post's only file, the whole post goes with it. You can restore it from the Trash page; the space is freed once the trash is emptied.
+            the trash? If it is the post's only file, the whole post goes with it. Undo, or the Trash page, brings it back; the space is freed once the trash is emptied.
           </p>
         )}
       </ConfirmDialog>

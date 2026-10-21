@@ -1,6 +1,8 @@
 // Review's queue: every post fetched in the session, in server order, with
 // a local status (keep/trash) and the current position. The model is
 // described in pages/Review.jsx; no React here, so `npm test` checks it.
+import { plural } from "./fmt.js";
+import { TRASH_LINK, restoreErrors, restoreNotes, whosePost } from "./restore.js";
 
 export const PAGE = 50;
 
@@ -67,12 +69,14 @@ export function reducer(s, a) {
     }
     case "restored": {
       // A restore re-indexes the post and gives its media new ids: the cover
-      // fetched with the queue points at an id that is gone (#90). Without
-      // it the stage says "Loading…" until the post's full data is back.
+      // fetched with the queue points at an id that is gone (#90). It takes
+      // the cover of the post read again (a.cover), or none: a stage with
+      // no full post shows that cover, never a file that is gone.
       const i = s.queue.findIndex(p => p.id === a.id);
-      if (i === -1 || !s.queue[i].cover) return s;
+      const cover = a.cover ?? null;
+      if (i === -1 || (!s.queue[i].cover && !cover)) return s;
       const queue = [...s.queue];
-      queue[i] = { ...queue[i], cover: null };
+      queue[i] = { ...queue[i], cover };
       return { ...s, queue };
     }
     case "goto":
@@ -88,4 +92,39 @@ export function reducer(s, a) {
     default:
       return s;
   }
+}
+
+// The undo stack's entries: { type: "keep" | "trash" | "item", post (the
+// queue's summary), index, already (a keep of a post kept before), itemIndex
+// and postGone (an item, the post's last) }.
+
+// What Z undoes next, for the line under Review's buttons: "kept @someone",
+// "trashed @someone (post)", "trashed item 2 of @someone".
+export function undoLabel(e) {
+  const who = `@${e.post.author?.handle || "unknown"}`;
+  if (e.type === "keep") return `kept ${who}`;
+  if (e.type === "trash") return `trashed ${who} (post)`;
+  return e.postGone ? `trashed ${who}'s last item (post)` : `trashed item ${e.itemIndex + 1} of ${who}`;
+}
+
+// The toast once Z has undone ``e`` and the session is back on its post:
+// what came back (``r``: the restore's answer, after a trash) and what is
+// left to do. ``keys``: there is a keyboard to name K on.
+export function undoneToast(e, r, { keys = true } = {}) {
+  if (e.type === "keep") {
+    return {
+      kind: "ok",
+      text: e.already ? `Back on ${whosePost(e.post)}: it stays kept, as before this session.`
+        : `Keep undone: ${whosePost(e.post)} is undecided again.`,
+    };
+  }
+  const whole = e.type === "trash" || e.postGone;
+  const files = plural(r?.files ?? 0, "file");
+  let text = whole ? `Restored ${whosePost(e.post)} (${files}), back on it.`
+    : `Restored item ${e.itemIndex + 1} of ${whosePost(e.post)} (${files}), back on it.`;
+  // A re-review's post kept before comes back kept (the trash kept its decision).
+  if (whole) text += e.post.decision === "keep" ? " It is kept, as before." : keys ? " Press K to keep it." : "";
+  const errors = restoreErrors(r);
+  if (errors) text += ` ${errors}`;
+  return { kind: errors ? "err" : "ok", text: text + restoreNotes(r), link: errors ? TRASH_LINK : undefined };
 }
