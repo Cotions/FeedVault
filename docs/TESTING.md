@@ -447,6 +447,59 @@ What a windowed list keeps:
 - **Entry animations** play on the first rows only: rows mounted while
   scrolling come in as they are.
 
+### Long sessions
+
+```bash
+cd frontend && npm run build
+FEEDVAULT_E2E_PYTHON=../backend/venv/bin/python npm run perf:long -- [--minutes 5] [--every 15] [--page review|post] [--reduced-motion] [--json out.json]
+```
+
+`e2e/longsession.js` leaves a page open with a video playing on loop, as a
+user leaves Review running: the browser tests' throwaway instance, its demo
+videos swapped for a 2 s WebM the browser records itself (canvas and
+MediaRecorder: no ffmpeg, nothing downloaded), then every `--every` seconds,
+after a forced garbage collection, the JS heap, DOM nodes, listeners and
+`<video>` elements, the main thread's work (script, style, layout, as % of
+the time), the frames drawn and the slowest one, and the backend's memory,
+open files and threads (`/proc`). It exits 1 when the heap grows by more
+than `--max-heap-mb` (8), the nodes or listeners by more than 10 %, or the
+backend's open files by more than 20. `--reduced-motion` stops the
+backdrop's rain, to see what it costs.
+
+Review on its videos, headless Chromium at 1440×900, 8 minutes:
+
+| | before | after |
+|---|---:|---:|
+| backend open files | +8 a minute, without end | flat (17) |
+| frames drawn a second | 27 | 41 |
+| slowest frame | 83 to 217 ms | 50 ms |
+| main thread: script | 7.2 % | 4.2 % |
+| DOM nodes | 1672 | 1036 |
+| JS heap growth | +0.34 MB | +0.47 MB (noise: flat) |
+
+What it found:
+
+- **Open files.** Each request runs in a thread of its own, with its own
+  SQLite connection (`db.connect`). A connection is in a reference cycle,
+  so the end of its thread did not close it: only the garbage collector
+  did, when it got to it, and the jobs poll alone left two files open
+  (database and WAL) every 15 s, towards the process's limit. A holder
+  without a cycle now closes it with the thread (`db._ClosedWithThread`).
+- **The backdrop's rain** drew each glyph from one of ~600 small canvases
+  (each a DOM node and a texture) and built a string key per cell per
+  frame; it now blits from one atlas canvas. It skips every other frame on
+  a screen over 100 Hz, and draws nothing while something is fullscreen.
+- **The status dot's pulse** animated a `box-shadow`, restyled and
+  repainted on the main thread every frame for as long as the app was
+  open; it is now a cross-fade of two glows (opacity, on the compositor).
+- **Polls**: an idle jobs answer like the last one no longer re-renders the
+  whole app (once a minute still, for the "2m ago" texts); Duplicates' status
+  poll stops in a hidden tab and skips identical answers.
+- **Videos** (`components/Video.jsx`) empty their `src` when they leave the
+  page, so a removed one (Review's previous post, its preloads) frees its
+  decoder and buffers at once rather than at the next collection; Review
+  keeps the full posts of the last 30 places behind it, not all of them.
+
 ### Regression tests
 
 `backend/tests/test_perf.py` runs in the backend suite without timing
@@ -468,6 +521,8 @@ anything:
   buckets say;
 - instaloader's parser goes over a folder's names a fixed number of times,
   and its name index matches what its old pattern matched.
+- requests answered in threads of their own (as the server does) leave no
+  database file open once their thread is gone, garbage collector off.
 
 `frontend/e2e/lists.spec.js` (desktop project) gives each list page
 thousands of invented rows (the real answer plus `page.route`, nothing

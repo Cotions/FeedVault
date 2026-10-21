@@ -10,7 +10,7 @@ import { useEffect, useRef } from "react";
    the document and drops wrap around it, which keeps the density uniform no
    matter where you are scrolled to.
 
-   Every glyph is pre-rendered once into a small sprite and the frame loop only
+   Every glyph is pre-rendered once into a sprite atlas and the frame loop only
    blits those. Calling fillText several hundred times a frame is what made the
    fall stutter. Columns fully outside the viewport are skipped before any of
    their cells are touched, so a very long page costs no more than a short one.
@@ -22,6 +22,9 @@ import { useEffect, useRef } from "react";
 const DENSITY  = 110;  // columns per viewport-height of document
 const MAX_DROPS = 420; // ceiling for very long pages
 const SPECKS = 90;
+// Frames closer together than this are skipped: a 120 Hz screen draws the
+// rain at 60/s, 144 Hz at 72/s; at 100 Hz and under every frame is drawn.
+const MIN_FRAME_MS = 9.5;
 const COLOURS = ["#5b9dff", "#f472b6", "#a855f7", "#c4b5fd", "#e8ecf6"];
 // Half-width katakana and a few symbols: the standard rain alphabet, and every
 // glyph occupies the same cell so a column never reflows.
@@ -30,33 +33,49 @@ const CELL = 17;    // vertical spacing between glyphs in a column
 const SPRITE = 26;  // sprite box; no glow to leave room for, so it fits the cell
 const BASE = 16;    // font size the sprites are drawn at; blitted scaled down
 
+// A glyph is its index in GLYPHS, a colour its index in COLOURS.
 function pick() {
-  return GLYPHS[(Math.random() * GLYPHS.length) | 0];
+  return (Math.random() * GLYPHS.length) | 0;
 }
 
-/* One sprite per (glyph, colour, head) triple, built on first use and kept for
-   the life of the page. Bounded by the alphabet, so it tops out around 600
-   little canvases and settles within a few seconds of load. */
-const sprites = new Map();
-function sprite(ch, colour, head) {
-  const key = `${ch}|${colour}|${head ? 1 : 0}`;
-  let c = sprites.get(key);
-  if (c) return c;
+/* Every (glyph, colour) sprite and every head sprite (one paler tint for all
+   colours) lives in a single atlas canvas, each cell drawn on first use and
+   kept for the life of the page. One source image for every blit, where
+   ~600 little canvases each had to be a texture of their own, and no
+   string key built per cell per frame (a steady drip for the GC). Row c is
+   colour c, the last row the heads. */
+let atlas = null;
+function sheet() {
+  if (atlas) return atlas;
   // Baked at device resolution, or a retina screen blits a 1x glyph upscaled
   // and the rain goes soft.
   const ss = Math.min(window.devicePixelRatio || 1, 2);
-  c = document.createElement("canvas");
-  c.width = c.height = Math.round(SPRITE * ss);
-  const g = c.getContext("2d");
-  g.setTransform(ss, 0, 0, ss, 0, 0);
+  const cell = Math.round(SPRITE * ss);
+  const canvas = document.createElement("canvas");
+  canvas.width = cell * GLYPHS.length;
+  canvas.height = cell * (COLOURS.length + 1);
+  const g = canvas.getContext("2d");
   g.font = `${BASE}px "JetBrains Mono", ui-monospace, monospace`;
   g.textAlign = "center";
   g.textBaseline = "middle";
-  // Flat ink, no shadow. The head is only a paler tint of the same colour.
-  g.fillStyle = head ? "#eef1f8" : colour;
-  g.fillText(ch, SPRITE / 2, SPRITE / 2);
-  sprites.set(key, c);
-  return c;
+  atlas = { canvas, g, ss, cell, drawn: new Uint8Array(GLYPHS.length * (COLOURS.length + 1)) };
+  return atlas;
+}
+
+// Draws glyph ``gi`` in colour ``ci`` (the head's tint if ``head``) as a
+// ``box``-wide square centred on (x, y).
+function blit(ctx, gi, ci, head, x, y, box) {
+  const a = sheet();
+  const row = head ? COLOURS.length : ci;
+  const n = row * GLYPHS.length + gi;
+  if (!a.drawn[n]) {
+    a.drawn[n] = 1;
+    a.g.setTransform(a.ss, 0, 0, a.ss, gi * a.cell, row * a.cell);
+    // Flat ink, no shadow. The head is only a paler tint of the same colour.
+    a.g.fillStyle = head ? "#eef1f8" : COLOURS[ci];
+    a.g.fillText(GLYPHS[gi], SPRITE / 2, SPRITE / 2);
+  }
+  ctx.drawImage(a.canvas, gi * a.cell, row * a.cell, a.cell, a.cell, x - box / 2, y - box / 2, box, box);
 }
 
 export default function CyberBackground() {
@@ -94,11 +113,18 @@ export default function CyberBackground() {
       d.len = 6 + Math.round(depth * 14);
       d.y = first ? Math.random() * fieldH : -CELL * d.len - Math.random() * h * 0.3;
       d.speed = 40 + depth * 130;                // px/s downward
-      d.colour = COLOURS[(Math.random() * COLOURS.length) | 0];
-      d.chars = Array.from({ length: d.len }, pick);
-      // Each cell rewrites on its own clock, so the trail churns instead of the
-      // whole column flipping at once.
-      d.next = Array.from({ length: d.len }, () => t + Math.random() * 1.2);
+      d.colour = (Math.random() * COLOURS.length) | 0;
+      // The column's arrays are reused when it wraps: a drop resets every few
+      // seconds, and new arrays each time were a steady drip for the GC.
+      d.chars = d.chars || [];
+      d.next = d.next || [];
+      d.chars.length = d.next.length = d.len;
+      for (let i = 0; i < d.len; i++) {
+        d.chars[i] = pick();
+        // Each cell rewrites on its own clock, so the trail churns instead of
+        // the whole column flipping at once.
+        d.next[i] = t + Math.random() * 1.2;
+      }
       d.hit = 0;
     }
 
@@ -128,7 +154,7 @@ export default function CyberBackground() {
        brush the field many times a second, and allocating per touch would hand
        the GC a steady drip of garbage. Speck y is a world coordinate too. */
     const specks = Array.from({ length: SPECKS }, () => ({
-      x: 0, y: 0, vy: 0, life: 0, born: 1, ch: "0", colour: "#fff",
+      x: 0, y: 0, vy: 0, life: 0, born: 1, ch: 0, colour: 0,
     }));
     let speckAt = 0;
 
@@ -149,6 +175,13 @@ export default function CyberBackground() {
 
     function frame(now) {
       raf = requestAnimationFrame(frame);
+      // Every other frame on a fast screen (MIN_FRAME_MS): a 120 or 144 Hz
+      // one drew the whole field twice as often for a fall that looks the
+      // same, next to a video decoding and every frosted panel re-blurring
+      // what is behind it. Nothing to draw while an element is fullscreen
+      // (Review, a video): it covers the backdrop.
+      if (last && now - last < MIN_FRAME_MS) return;
+      if (document.fullscreenElement) { last = 0; return; }
       const dt = last ? Math.min((now - last) / 1000, 0.05) : 0.016;
       last = now;
       const t = now / 1000;
@@ -211,8 +244,7 @@ export default function CyberBackground() {
           const fade = 1 - i / d.len;
           ctx.globalAlpha = Math.min(0.9,
             (head ? dim * 2.6 : dim * fade * fade) + d.hit * (head ? 0.35 : 0.16));
-          ctx.drawImage(sprite(d.chars[i], d.colour, head && d.hit < 0.2),
-                        d.x - box / 2, y - box / 2, box, box);
+          blit(ctx, d.chars[i], d.colour, head && d.hit < 0.2, d.x, y, box);
         }
       }
 
@@ -226,8 +258,7 @@ export default function CyberBackground() {
         if (y < -speckBox || y > h + speckBox) continue;
         const k = Math.max(0, p.life / p.born);
         ctx.globalAlpha = k * k * 0.5;              // squared: soft tail
-        ctx.drawImage(sprite(p.ch, p.colour, false),
-                      p.x - speckBox / 2, y - speckBox / 2, speckBox, speckBox);
+        blit(ctx, p.ch, p.colour, false, p.x, y, speckBox);
       }
 
       ctx.globalAlpha = 1;

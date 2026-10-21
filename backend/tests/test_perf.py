@@ -363,3 +363,44 @@ def test_media_index_matches_what_the_pattern_did(seed):
             for idx, n in index.get(base, ()):
                 got.setdefault(idx, set()).add(n)
             assert got == old_media_names(base, names), (base, names)
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="counts open files in /proc")
+def test_request_threads_leave_no_database_files_open(client):
+    """The server answers each request in a thread of its own, which opens
+    its own connection (db.connect). A connection is in a reference cycle,
+    so before db._ClosedWithThread it stayed open, with the database and its
+    WAL, until the garbage collector ran: a tab left open (the jobs poll, a
+    video on loop) piled up open files towards the process's limit. Counted
+    with the collector off, as between its rare full passes."""
+    import gc
+
+    def poll():
+        assert client.get("/api/jobs", headers={"X-FeedVault": "1"}).status_code == 200
+
+    def opened():
+        n = 0
+        for f in os.listdir("/proc/self/fd"):
+            try:
+                n += os.readlink(f"/proc/self/fd/{f}").startswith(db._path)
+            except OSError:                    # the listing's own, gone
+                pass
+        return n
+
+    def in_thread():
+        t = threading.Thread(target=poll)
+        t.start()
+        t.join()
+
+    poll()                                     # this thread's own connection, and the data_version one
+    in_thread()                                # the WAL index, opened once for all
+    was = gc.isenabled()
+    gc.disable()
+    try:
+        before = opened()
+        for _ in range(30):
+            in_thread()
+        assert opened() == before
+    finally:
+        if was:
+            gc.enable()
