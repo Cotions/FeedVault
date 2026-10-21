@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  attributeChoices, attributeFiltersOn, attributesMatch, cleanGender, countryFlag, countryName, countryOptions, filtersOn,
+  accountChips, ACCOUNTS_SHOWN, attributeChoices, attributeFiltersOn, attributesMatch, cleanGender, countryFlag, countryName, countryOptions, filtersOn,
   mergeSet, mergeStopping, NO_FILTERS, notSynced, personText, sameLabels, syncFilter, syncMatch, withLabel,
 } from "../src/lib/people.js";
 
@@ -122,4 +122,26 @@ test("a merge's Don't sync warning holds for the set it was given for only", () 
   assert.equal(mergeStopping(merge, mergeSet([{ id: 3 }, { id: 9 }], [a])), 0);
   assert.equal(mergeStopping({ name: "N" }, set), 0);
   assert.equal(mergeStopping(null, set), 0);
+});
+
+test("a card's accounts: each its own chip while they fit, else one per platform and +n", () => {
+  const acc = (platform, handle) => ({ platform, id: handle, handle });
+  const handles = ({ chips, rest }) => [chips.map(c => c.map(a => a.handle)), rest.map(a => a.handle)];
+  assert.equal(ACCOUNTS_SHOWN, 3);
+  assert.deepEqual(handles(accountChips([])), [[], []]);
+  // Three or fewer: one chip each, two on a platform too.
+  const three = [acc("instagram", "a"), acc("instagram", "b"), acc("tiktok", "c")];
+  assert.deepEqual(handles(accountChips(three)), [[["a"], ["b"], ["c"]], []]);
+  // More: grouped by platform, in the order they first come.
+  const six = [acc("instagram", "a"), acc("twitter", "t"), acc("instagram", "b"), acc("tiktok", "k"),
+               acc("instagram", "c"), acc("instagram", "d")];
+  assert.deepEqual(handles(accountChips(six)), [[["a", "b", "c", "d"], ["t"], ["k"]], []]);
+  assert.deepEqual(handles(accountChips(six.filter(a => a.platform === "instagram"))), [[["a", "b", "c", "d"]], []]);
+  // More platforms than chips: the first few, the accounts of the rest counted.
+  const many = [...six, acc("youtube", "y"), acc("bluesky", "s1"), acc("bluesky", "s2")];
+  assert.deepEqual(handles(accountChips(many)), [[["a", "b", "c", "d"], ["t"], ["k"]], ["y", "s1", "s2"]]);
+  // Every account is in a chip or in the rest, once.
+  const { chips, rest } = accountChips(many);
+  assert.equal(chips.flat().length + rest.length, many.length);
+  assert.deepEqual(handles(accountChips(many, 5)), [[["a", "b", "c", "d"], ["t"], ["k"], ["y"], ["s1", "s2"]], []]);
 });

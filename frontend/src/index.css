@@ -3358,8 +3358,6 @@ main[tabindex]:focus-visible { outline: none; box-shadow: none; }
 .portrait-badges .side-badge { box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
 .person-card.is-portrait .creator-id { flex: none; gap: 4px; padding: 10px 12px 0; }
 .person-card.is-portrait .creator-name { font-size: 13.5px; }
-/* One line of accounts: every card in a row about as tall (each chip's title has its handle). */
-.person-card.is-portrait .person-chips { flex-wrap: nowrap; overflow: hidden; }
 .person-card.is-portrait .person-stats {
   flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
   padding: 6px 8px 10px 12px;
@@ -3390,7 +3388,12 @@ main[tabindex]:focus-visible { outline: none; box-shadow: none; }
 }
 button.creator-main { background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .person-card .creator-id { gap: 5px; }
-.person-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+/* One line of accounts, in either view: every card in a row about as tall
+   (each chip's title has its handles). A platform's "×n" and the "+n" are
+   never cut; a handle is. */
+.person-chips { display: flex; flex-wrap: nowrap; gap: 4px; min-width: 0; overflow: hidden; }
+.person-chips .platform-chip.is-group, .person-chips .platform-chip.is-more { flex-shrink: 0; }
+.person-chips .platform-chip.is-more { color: var(--muted); background: transparent; }
 .platform-chip { text-transform: none; gap: 5px; }
 /* A person's accounts: a long handle is cut (its title has it), never runs
    over the count and the card's buttons. */
