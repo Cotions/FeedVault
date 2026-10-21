@@ -208,33 +208,49 @@ export async function dismissToasts(page) {
 }
 
 // Review: keep, trash, undo, by the actions given (keys or taps), checked by
-// the session's counts, the count left and which post is current.
+// the session's counts, the count left and which post is current; and by
+// what the page says of it: the line beside the title (what Z undoes
+// next), the undo's toast and the mark on the post it brought back.
 export async function keepTrashUndo(page, { keep, trash, undo }) {
   const session = page.locator(".review-session");
   const leftNow = page.locator(".review-left");
   const open = page.locator(".review-open");          // the current post's own page: one per post
+  const last = page.locator(".review-last");
+  const handle = page.locator(".review-byline .post-byline-handle");
   const left = await reviewLeft(page);
   expect(left).toBeGreaterThan(2);
   await expect(session).toHaveText("0 kept · 0 trashed");
+  await expect(last).toHaveText("Nothing to undo yet.");
   const first = await open.getAttribute("href");
+  const firstBy = (await handle.textContent()).trim();
 
   await keep();
   await expect(session).toHaveText("1 kept · 0 trashed");
   await expect(leftNow).toHaveText(String(left - 1));
   await expect(open).not.toHaveAttribute("href", first);
+  await expect(last).toHaveText(`Last: kept ${firstBy}`);
   const second = await open.getAttribute("href");
+  const secondBy = (await handle.textContent()).trim();
 
   await trash();
   await expect(session).toHaveText("1 kept · 1 trashed");
   await expect(leftNow).toHaveText(String(left - 2));
   await expect(open).not.toHaveAttribute("href", second);
+  await expect(last).toHaveText(`Last: trashed ${secondBy} (post)`);
 
   // Undo brings the trashed post back, as the current one, without asking
-  // for its old cover (#90): any console error fails the test.
+  // for its old cover (#90): any console error fails the test. Its toast
+  // says what came back; the post is marked and on the stage already, read
+  // again before the session went back to it (no "Loading…").
   await undo();
+  const told = page.locator(".toast", { hasText: `Restored ${secondBy}'s post (` });
+  await expect(told).toContainText(/\(\d+ files?\), back on it\./);
+  await expect(page.locator(".review-stage")).not.toContainText("Loading");
   await expect(session).toHaveText("1 kept · 0 trashed");
   await expect(leftNow).toHaveText(String(left - 1));
   await expect(open).toHaveAttribute("href", second);
+  await expect(page.locator(".review-byline .review-back")).toHaveText("Restored");
+  await expect(last).toHaveText(`Last: kept ${firstBy}`);
 }
 
 /* ── Layout checks (layout.spec.js) ─────────────────────────── */

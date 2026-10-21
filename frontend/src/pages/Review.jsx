@@ -19,7 +19,8 @@ import { useSwipe } from "../lib/swipe";
 import { useFiltersOpen } from "../lib/useFiltersOpen";
 import FiltersToggle from "../components/FiltersToggle";
 import PageHeader from "../components/PageHeader";
-import { PAGE, initial, listPlace, nextUndecided, reducer } from "../lib/reviewQueue";
+import { PAGE, initial, listPlace, nextUndecided, reducer, undoLabel, undoneToast } from "../lib/reviewQueue";
+import { forgetDeletion, noteDeletion, restoredToast } from "../lib/restore";
 import Video from "../components/Video";
 
 /* Review: one unreviewed post at a time, decided from the keyboard.
@@ -39,7 +40,12 @@ import Video from "../components/Video";
    list and only a trash takes it off, so the offset counts every post held
    but the trashed ones (lib/reviewQueue.js's listPlace has both rules). A
    post kept before the session says so ("Kept"); K on it moves on and
-   leaves it as it is, and so does undoing that K. */
+   leaves it as it is, and so does undoing that K.
+
+   Undo (Z) goes back one decision at a time, this session only (the Trash
+   page has the rest). The line beside the title says what it undoes next,
+   its toast what it did, and the post it brings back is marked ("Restored",
+   "Back, undecided") until it is left. */
 
 const TOP_UP_BELOW = 10;
 const PRELOAD_AHEAD = 2;
@@ -61,6 +67,9 @@ function errorText(r, fallback) {
   }
   return r?.error || fallback;
 }
+
+// The mark on the post an undo brought back, by what was undone.
+const BACK_LABEL = { restored: "Restored", item: "Item restored", undecided: "Back, undecided", back: "Back" };
 
 const SHORTCUTS = [
   ["K / Enter", "Keep, next post"],
@@ -94,6 +103,8 @@ function ReviewSession({ scope, scopeControls, againTo }) {
   const [item, setItem] = useState(0);
   const [itemFor, setItemFor] = useState(null);
   const [undo, setUndo] = useState([]);
+  const [back, setBack] = useState(null);         // { id, kind, n }: the post an undo brought back
+  const backN = useRef(0);
   const [session, setSession] = useState({ kept: 0, trashed: 0, items: 0 });
   const [busy, setBusy] = useState(false);
   const [help, setHelp] = useState(false);
@@ -121,6 +132,8 @@ function ReviewSession({ scope, scopeControls, againTo }) {
     setItem(0);
     setTagging(false);
   }
+  // An undo's mark stays on its post until another one is current.
+  if (back && back.id !== cur?.id) setBack(null);
   const safeItem = Math.min(item, Math.max(0, media.length - 1));
   const m = media[safeItem];
 
@@ -186,12 +199,6 @@ function ReviewSession({ scope, scopeControls, againTo }) {
     }
   }, [cur, upcoming, fetchFull]);
 
-  function refetchFull(p) {
-    requested.current.delete(p.id);
-    setFull(f => { const n = { ...f }; delete n[p.id]; return n; });
-    fetchFull(p);
-  }
-
   // Preload: the next item of this post, and the first item of the next posts.
   const preloadVideos = [];
   const preloadImages = [];
@@ -235,20 +242,23 @@ function ReviewSession({ scope, scopeControls, againTo }) {
     dispatch({ type: "decide", id: cur.id, decision: "keep" });
   });
 
+  // Each trash notes its deletion (lib/restore.js): an Undo of a delete
+  // elsewhere (a toast's) must not put back one made here since.
   const trashPost = () => cur && run(async () => {
-    const r = await deleteItems({ posts: [cur.id] });
+    const r = await deleteItems({ posts: [cur.id], from: "review" });
     if (!r?.posts?.includes(cur.id)) { toast(errorText(r, "The post could not be trashed."), "err"); return; }
     started();   // the new counts (jobs poll) follow now
     if (r.errors?.length) toast(errorText(r, ""), "err");
-    setUndo(u => [...u, { type: "trash", post: cur, index: pos }]);
+    setUndo(u => [...u, { type: "trash", post: cur, index: pos, token: noteDeletion([cur.id]) }]);
     setSession(s => ({ ...s, trashed: s.trashed + 1 }));
     dispatch({ type: "decide", id: cur.id, decision: "trash" });
   });
 
   const trashItem = () => cur && m && run(async () => {
-    const r = await deleteItems({ media: [m.id] });
+    const r = await deleteItems({ media: [m.id], from: "review" });
     if (!r?.media?.includes(m.id)) { toast(errorText(r, "The item could not be trashed."), "err"); return; }
     if (r.errors?.length) toast(errorText(r, ""), "err");
+    const token = noteDeletion([cur.id]);
     let postGone = false;
     try {
       const fp = await getPost(cur.platform, cur.post_id);
@@ -258,7 +268,7 @@ function ReviewSession({ scope, scopeControls, againTo }) {
       if (e.status !== 404) throw e;
       postGone = true;
     }
-    setUndo(u => [...u, { type: "item", post: cur, index: pos, itemIndex: safeItem, postGone }]);
+    setUndo(u => [...u, { type: "item", post: cur, index: pos, itemIndex: safeItem, postGone, token }]);
     setSession(s => ({ ...s, items: s.items + 1, trashed: s.trashed + (postGone ? 1 : 0) }));
     if (postGone) {
       toast("That was the last item: the post is gone.");
@@ -266,34 +276,53 @@ function ReviewSession({ scope, scopeControls, againTo }) {
     }
   });
 
+  // Back on the post of the decision undone, marked, with a toast that says
+  // what came back: a bare "Undone." left it unclear whether anything had.
   const undoLast = () => undo.length && run(async () => {
     const e = undo[undo.length - 1];
+    const id = e.post.id;
+    const whole = e.type === "trash" || e.postGone;
+    let r = null;
     if (e.type === "keep") {
       if (!e.already) {
-        const r = await setDecision([e.post.id], null);
-        if (!r?.ok) { toast(r?.error || "Undo failed.", "err"); return; }
+        const d = await setDecision([id], null);
+        if (!d?.ok) { toast(d?.error || "Undo failed.", "err"); return; }
       }
       setSession(s => ({ ...s, kept: s.kept - 1 }));
-      dispatch({ type: "undecide", id: e.post.id, index: e.index });
+      dispatch({ type: "undecide", id, index: e.index });
     } else {
-      const r = await restorePosts([e.post.id]);
-      if (!r?.posts?.includes(e.post.id)) { toast(errorText(r, "Could not restore from the trash."), "err"); return; }
-      if (r.errors?.length) toast(errorText(r, ""), "err");
-      // Restoring re-indexes the post, so its media ids may have changed:
-      // its full data and its queue cover are both stale (#90).
-      refetchFull(e.post);
-      dispatch({ type: "restored", id: e.post.id });
-      if (e.type === "trash" || e.postGone) {
+      r = await restorePosts([id], { from: "undo" });
+      if (!r?.posts?.includes(id)) {
+        const t = restoredToast(r, [e.post], whole ? "post" : "item");
+        toast(t.text, t.kind, t.link);
+        return;
+      }
+      forgetDeletion([id], e.token);
+      started();   // the new counts (jobs poll) follow now
+      // Restoring re-indexes the post and gives its media new ids (#90): it
+      // is read again before the session goes back to it, so the stage shows
+      // it at once rather than "Loading…", and its queue cover is the new one.
+      let fp;
+      try { fp = await getPost(e.post.platform, e.post.post_id); } catch (err) { fp = { error: err }; }
+      requested.current.add(id);
+      setFull(f => ({ ...f, [id]: fp }));
+      dispatch({ type: "restored", id, cover: fp.cover });
+      if (whole) {
         setSession(s => ({ ...s, trashed: s.trashed - 1, items: s.items - (e.type === "item" ? 1 : 0) }));
-        dispatch({ type: "undecide", id: e.post.id, index: e.index });
+        dispatch({ type: "undecide", id, index: e.index });
       } else {
         setSession(s => ({ ...s, items: s.items - 1 }));
         dispatch({ type: "goto", index: e.index });
       }
-      if (e.type === "item") setItem(e.itemIndex);
+      // On the item that came back, not the post's first.
+      setItemFor(id);
+      setItem(e.type === "item" ? e.itemIndex : 0);
+      setTagging(false);
     }
     setUndo(u => u.slice(0, -1));
-    toast("Undone.");
+    setBack({ id, kind: e.type === "keep" ? (e.already ? "back" : "undecided") : whole ? "restored" : "item", n: ++backN.current });
+    const t = undoneToast(e, r, { keys: !window.matchMedia(PHONE).matches });
+    toast(t.text, t.kind, t.link);
   });
 
   const curTags = cur ? tagsOf[cur.id] ?? post?.tags ?? cur.tags ?? [] : [];
@@ -462,7 +491,7 @@ function ReviewSession({ scope, scopeControls, againTo }) {
       root.removeProperty("--review-bar-h");
     };
   }, []);
-  // Toasts ("Undone.") above the buttons, the bar's on a phone, the panel's
+  // Toasts (an undo's) above the buttons, the bar's on a phone, the panel's
   // on a desktop: never over "?" or Undo.
   useToastClearance(barRef);
 
@@ -472,6 +501,8 @@ function ReviewSession({ scope, scopeControls, againTo }) {
   const alt = cur ? excerpt(cur.text, 140) || `Post by @${handle}` : "";
   const skipped = undecidedHeld - undecidedAhead;
   const doneAll = !cur && exhausted;
+  const marked = cur && back?.id === cur.id ? back : null;
+  const last = undo.length ? undoLabel(undo[undo.length - 1]) : null;
 
   let stage;
   if (state.error && !cur) {
@@ -539,10 +570,24 @@ function ReviewSession({ scope, scopeControls, againTo }) {
 
   return (
     <div className="review-page">
-      <PageHeader title={scope.again ? "Re-review" : "Review"} />
+      {/* What Z undoes next, on the title's line: there it takes no height
+          from the panel (the post's info has little left at 1280x800) and
+          moves no button. */}
+      <PageHeader
+        className="review-head"
+        title={scope.again ? "Re-review" : "Review"}
+        actions={
+          <p className="review-last" title={last ? `Last: ${last}` : undefined}>
+            <Icon name="undo" size={12} />
+            {last ? <span><span className="dim">Last:</span> {last}</span> : <span className="dim">Nothing to undo yet.</span>}
+          </p>
+        }
+      />
       <div className="review" ref={rootRef}>
         <div className="review-stage" ref={stageRef} {...swipe}>
           {stage}
+          {/* Lit for a moment on the post an undo brought back: a new one each undo. */}
+          {marked && <span key={marked.n} className="review-back-ring" aria-hidden="true" />}
           {media.length > 1 && cur && (
             <>
               <button type="button" className="carousel-arrow prev" onClick={e => act(e, () => stepItem(-1))} aria-label="Previous item (←)">
@@ -577,6 +622,11 @@ function ReviewSession({ scope, scopeControls, againTo }) {
               <div className="review-byline">
                 <PlatformIcon platform={cur.platform} />
                 <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
+                {marked && (
+                  <span className="chip review-back" title="Undone: this post is back where it was">
+                    <Icon name="undo" size={11} />{BACK_LABEL[marked.kind]}
+                  </span>
+                )}
                 {cur.decision === "keep" && status[cur.id] !== "trash" && (
                   <span className="chip review-kept" title="Marked as kept before this session"><span className="kept-dot" aria-hidden="true" />Kept</span>
                 )}
