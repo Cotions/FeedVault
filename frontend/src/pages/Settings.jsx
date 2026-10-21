@@ -8,6 +8,7 @@ import { useToast } from "../lib/toast";
 import { JobLog } from "./Jobs";
 import { fmtAgo, fmtBytes, fmtFullDate, platformLabel, plural } from "../lib/fmt";
 import { formError, formOf, optionsOf } from "../lib/sourceOptions";
+import { MAX_LINK_LABEL, MAX_LINK_LABELS, linkSite } from "../lib/links";
 import { NoFfmpeg, SourceOptions, ToolBadge } from "../components/Sources";
 import PlatformIcon from "../components/PlatformIcon";
 import Icon from "../components/Icon";
@@ -1359,6 +1360,119 @@ function RoutesCard({ saved, onSaved, msg, setMsg, onDirty }) {
   );
 }
 
+/* What a saved link with no title is called, by its site (linklabels.py):
+   one rule per site, cut as a link's site is (linkSite), so a pasted
+   address does. The label is read at each display, never written into the
+   links: an edit or a removal changes every link of the site at once. */
+function LinkLabelsCard({ saved, onSaved, msg, setMsg, onDirty }) {
+  const fromSaved = () => Object.entries(saved).map(([site, label]) => ({ site, label }));
+  const [rows,   setRows]   = useState(fromSaved);
+  const [saving, setSaving] = useState(false);
+  const ref = useRef(null);
+  const location = useLocation();
+  useEffect(() => {
+    if (location.hash === "#link-labels") ref.current?.scrollIntoView({ block: "start" });
+  }, [location.hash, location.key]);
+
+  // Each row as it will go (an empty one is left out): its site cut, its label's spaces collapsed.
+  const read = rows.map(r => {
+    const text = r.label.split(/\s+/).filter(Boolean).join(" ");
+    return { ...r, cut: linkSite(r.site), text, empty: !r.site.trim() && !text };
+  });
+  const filled = read.filter(r => !r.empty);
+  const count = {};
+  for (const r of filled) if (r.cut) count[r.cut] = (count[r.cut] || 0) + 1;
+  // What is wrong with a row, said under it; Save waits until none is, and every row has a label.
+  const problem = r => (!r.cut ? "Not a site: type a host such as patreon.com, or paste an address"
+    : count[r.cut] > 1 ? `${r.cut} has another rule above or below`
+    : r.text.length > MAX_LINK_LABEL ? `At most ${MAX_LINK_LABEL} characters` : null);
+  const blocked = filled.some(r => problem(r) || !r.text) || filled.length > MAX_LINK_LABELS;
+  const sent = Object.fromEntries(filled.map(r => [r.cut || r.site.trim(), r.text]));
+  const dirty = JSON.stringify(filled.map(r => [r.cut || r.site.trim(), r.text])) !== JSON.stringify(Object.entries(saved));
+  useReportDirty(onDirty, "Link labels", dirty);
+
+  function edit(i, change) {
+    setRows(list => list.map((r, j) => (j === i ? { ...r, ...change } : r)));
+    setMsg(null);
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    if (blocked) return;
+    setSaving(true);
+    setMsg(null);
+    try {
+      const r = await saveSettings({ link_labels: sent });
+      if (r?.ok) { onSaved(); setMsg({ ok: true, text: "Saved. Every link of these sites with no title of its own shows its label." }); }
+      else setMsg({ ok: false, text: r?.error || "Save failed." });
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card" id="link-labels" ref={ref}>
+      <div className="card-title">Link labels</div>
+      <p className="page-lede">
+        What a saved link with no title is called, by its site: <code>patreon.com</code> → “Patreon”. A site covers
+        its subdomains too. A title you gave a link always wins. A site with no label here that FeedVault does not
+        sync (not in Link routing) shows its own name, such as “Patreon.com”; one it syncs shows the link’s address.
+      </p>
+      <form className="insta-form" onSubmit={save}>
+        {rows.length > 0 && (
+          <ul className="route-list">
+            {rows.map((r, i) => {
+              const row = read[i];
+              const why = !row.empty && problem(row);
+              const cut = row.cut && row.cut !== r.site.trim().toLowerCase() ? row.cut : null;
+              return (
+                <li key={i} className="link-label-row">
+                  <div className="route-row">
+                    <input type="text" className="insta-input route-host" aria-label="Site" placeholder="patreon.com"
+                           spellCheck={false} autoComplete="off" maxLength={2048} value={r.site}
+                           aria-invalid={why && !row.cut ? true : undefined}
+                           onChange={e => edit(i, { site: e.target.value })} />
+                    <input type="text" className="insta-input link-label-text" placeholder="Patreon"
+                           aria-label={`Label for ${row.cut || r.site.trim() || "this site"}`} maxLength={MAX_LINK_LABEL}
+                           value={r.label} onChange={e => edit(i, { label: e.target.value })} />
+                    <button type="button" className="del-btn del-btn-danger" aria-label={`Remove ${r.site.trim() || "this rule"}`}
+                            title="Remove" onClick={() => { setRows(list => list.filter((_, j) => j !== i)); setMsg(null); }}>
+                      <Icon name="trash" size={15} />
+                    </button>
+                  </div>
+                  {why ? <div className="link-label-hint is-err">{why}</div>
+                    : (cut || (!row.empty && !row.text)) && (
+                      <div className="link-label-hint dim">
+                        {cut && <>Saved as <code>{cut}</code></>}{cut && !row.text && " · "}{!row.text && "Give it a label"}
+                      </div>
+                    )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <div className="settings-actions">
+          <button type="button" className="btn-secondary" disabled={rows.length >= MAX_LINK_LABELS}
+                  onClick={() => { setRows(list => [...list, { site: "", label: "" }]); setMsg(null); }}>
+            <Icon name="plus" size={14} />Add a label
+          </button>
+          <button type="submit" className="btn-primary" disabled={saving || !dirty || blocked}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+          {dirty && (
+            <button type="button" className="btn-ghost" onClick={() => { setRows(fromSaved()); setMsg(null); }}>
+              Discard changes
+            </button>
+          )}
+        </div>
+        {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="alert">{msg.text}</div>}
+      </form>
+    </div>
+  );
+}
+
 const TABS = [
   { id: "library",    label: "Library",    icon: "folder" },
   { id: "profiles",   label: "Profiles",   icon: "vault" },
@@ -1368,7 +1482,7 @@ const TABS = [
   { id: "about",      label: "About",      icon: "info" },
 ];
 // Cards linked to from elsewhere (/settings#downloaders), and their tab.
-const ANCHORS = { downloaders: "downloads", "bio-import": "downloads", "download-defaults": "sync", "slim-metadata": "sync" };
+const ANCHORS = { downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "download-defaults": "sync", "slim-metadata": "sync" };
 
 function tabOf(hash) {
   const h = hash.replace(/^#/, "");
@@ -1432,6 +1546,8 @@ export default function Settings() {
               <div className="settings-group" hidden={tab !== "downloads"}>
                 <DownloadersCard saved={config.tools || {}} onSaved={reload} onDirty={onDirty} />
                 <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} onDirty={onDirty} />
+                <LinkLabelsCard key={JSON.stringify(config.link_labels)} saved={config.link_labels || {}} onSaved={reload}
+                                {...note("link_labels")} onDirty={onDirty} />
                 <BioImportCard on={config.bio_import === true} onSaved={reload} />
               </div>
               <div className="settings-group" hidden={tab !== "sync"}>

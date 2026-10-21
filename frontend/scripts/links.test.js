@@ -1,7 +1,10 @@
 // Checks for lib/links.js: the address a link form sends (#126). Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_TITLE, droppedUrl, externalUrl, importedParts, mayCarryUrl, sharedTitle, urlLines, urlProblem, withScheme } from "../src/lib/links.js";
+import {
+  MAX_TITLE, droppedUrl, externalUrl, importedParts, linkLabel, linkName, linkSite, mayCarryUrl, sharedTitle, urlLines, urlProblem,
+  withScheme,
+} from "../src/lib/links.js";
 import { NO_PERSON, personOptions } from "../src/lib/people.js";
 
 test("an address with no scheme gets https://", () => {
@@ -119,5 +122,31 @@ test("what a link-in-bio import kept, in words", () => {
   // An answer that is not the shape expected says nothing it does not know.
   for (const odd of [undefined, null, {}, { saved: "<b>7</b>", already: -1, dropped: 1.5, over: null }]) {
     assert.deepEqual(importedParts(odd), ["No new link to save"]);
+  }
+});
+
+test("a link is shown by its title, else its site's label, else its address", () => {
+  const url = "https://www.patreon.com/someone";
+  assert.equal(linkLabel({ url, title: "Her page", label: "Patreon" }), "Her page");
+  assert.equal(linkLabel({ url, title: "", label: "Patreon" }), "Patreon");
+  assert.equal(linkLabel({ url, title: "", label: "Patreon.com" }), "Patreon.com");
+  assert.equal(linkLabel({ url: "https://instagram.com/someone", title: "", label: null }), "instagram.com/someone");
+  assert.equal(linkLabel({ url: "http://example.org/x", title: "" }), "example.org/x");   // an answer with no label
+});
+
+test("a link's buttons are named by its title or address, never the label two links share", () => {
+  assert.equal(linkName({ url: "https://www.patreon.com/a", title: "", label: "Patreon" }), "www.patreon.com/a");
+  assert.equal(linkName({ url: "https://www.patreon.com/b", title: "B", label: "Patreon" }), "B");
+});
+
+test("a rule's site is cut as the server cuts a link's", () => {
+  for (const [text, site] of [
+    ["patreon.com", "patreon.com"], ["https://www.patreon.com/someone", "patreon.com"], ["  WWW.Patreon.COM/ ", "patreon.com"],
+    ["someone.substack.com", "substack.com"], ["www.bbc.co.uk/news", "bbc.co.uk"], ["//ko-fi.com/x", "ko-fi.com"],
+    ["http://patreon.com:8080/x?y#z", "patreon.com"], ["192.168.1.20", "192.168.1.20"], ["http://[::1]/", "::1"],
+  ]) assert.equal(linkSite(text), site, text);
+  for (const text of [null, 3, "", "  ", "localhost", "patreon", "javascript:alert(1)", "ftp://patreon.com",
+    "https://user@patreon.com", "patreon .com", "a..com"]) {
+    assert.equal(linkSite(text), null, String(text));
   }
 });
