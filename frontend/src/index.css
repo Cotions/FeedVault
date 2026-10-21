@@ -2132,7 +2132,7 @@ code.profile-row-path:not(.dim) { color: var(--text-dim); }
 /* Settings → Sync, Metadata files: the clean-up of the files on disk, under the switch */
 .slim-existing { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
 .slim-existing .page-lede { margin-bottom: 0; }
-.slim-existing .settings-actions { flex-wrap: wrap; }
+.slim-existing .settings-actions, .trash-card-actions { flex-wrap: wrap; }   /* the Trash card's three on a phone */
 /* Settings → Sync, Metadata files: one column of modes per tool, side by
    side while they fit. */
 .metadata-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 22px; }

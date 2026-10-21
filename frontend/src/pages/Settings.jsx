@@ -250,7 +250,7 @@ function TrashCard() {
           )}
         </>
       )}
-      <div className="settings-actions">
+      <div className="settings-actions trash-card-actions">
         <Link to="/trash" className="btn-secondary" title="See what is in the trash, restore or delete single posts">
           <Icon name="search" size={14} />Browse the trash
         </Link>
