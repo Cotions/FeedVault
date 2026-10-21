@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect } from "react";
 import { accountText, matches } from "./people.js";
+import { linkLabel } from "./links.js";
 
 /* The header's search box searches the page it is on, when that page has
    something to search (as ChannelVault's does): Creators (people, accounts
@@ -45,11 +46,12 @@ export const LINKS_Q_MAX = 200;
 /* What a search finds, every word of it somewhere (lib/people.js matches):
    a person by name or label, an account by any handle, name, id or folder
    it was known by, a source by its target or address, a link by its
-   address, title or notes. */
+   address, notes or what it is called (lib/links.js linkLabel: its title,
+   else its site's label), as /api/links matches it. */
 export const personMatches  = (p, q) => matches([p.name, ...(p.labels || [])].join(" ").toLowerCase(), q);
 export const accountMatches = (a, q) => matches(accountText(a), q);
 export const sourceMatches  = (s, q) => matches([s.target, s.url, s.tool].filter(Boolean).join(" ").toLowerCase(), q);
-export const linkMatches    = (l, q) => matches([l.url, l.title, l.notes].filter(Boolean).join(" ").toLowerCase(), q);
+export const linkMatches    = (l, q) => matches([l.url, linkLabel(l), l.notes].filter(Boolean).join(" ").toLowerCase(), q);
 
 /* The Creators page's search: { people, accounts } that match, in the
    order the page lists them (people as given, accounts most posts first,

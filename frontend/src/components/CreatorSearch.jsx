@@ -17,7 +17,7 @@ const SHOWN = 60;
    (lib/search.js): what matches, in three sections, each one hidden when
    nothing in it matches. Creators (a person by name or label) open their
    page; Accounts (any handle, linked to someone or not) their posts in the
-   Feed, with their person one click away; Links (address, title or notes)
+   Feed, with their person one click away; Links (address, title or label, notes)
    open in a new tab, their person one click away too.
 
    Props: query, people (/api/people), accounts (/api/authors), refreshKey. */

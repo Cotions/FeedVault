@@ -42,6 +42,9 @@ test("an account matches by any handle, name or id; a source by target or addres
   assert.ok(linkMatches(l, "patreon"));
   assert.ok(linkMatches(l, "monthly ada"));
   assert.ok(!linkMatches(l, "discord"));
+  // No title: the label it shows (lib/links.js linkLabel); a title hides it.
+  assert.ok(linkMatches({ url: "https://ko-fi.com/ada", title: "", label: "Ko-fi tips", notes: "" }, "tips"));
+  assert.ok(!linkMatches({ url: "https://ko-fi.com/ada", title: "Support", label: "Ko-fi tips", notes: "" }, "tips"));
 });
 
 test("Creators: people and accounts, linked or not, in the order given; nothing for an empty search", () => {
