@@ -8,7 +8,7 @@ import { useToast } from "../lib/toast";
 import { useSelection } from "../lib/useSelection";
 import { platformLabel, authorFeedPath, fmtBytes, fmtInt, plural } from "../lib/fmt";
 import {
-  accountKey, accountRef, mergeSet, mergeStopping, accountText, attributeChoices, attributeFiltersOn, attributesMatch, countryFlag, countryName, filtersOn,
+  accountChips, accountKey, accountRef, mergeSet, mergeStopping, accountText, attributeChoices, attributeFiltersOn, attributesMatch, countryFlag, countryName, filtersOn,
   matchedFormer, matches, NO_FILTERS, notSynced, personPath, personText, suggestName, syncFilter, syncMatch,
 } from "../lib/people";
 import Icon from "../components/Icon";
@@ -148,6 +148,32 @@ function CardLabels({ labels }) {
   );
 }
 
+// A card's accounts on one line (lib/people accountChips): a platform with
+// several shows its icon and "×n", and "+n" counts the platforms past the
+// first few. Each chip's title names its accounts; the person page lists them.
+const accountLine = a => `${platformLabel(a.platform)} @${a.handle || a.id}`;
+function CardAccounts({ accounts }) {
+  if (!accounts.length) return <span className="person-chips"><span className="creator-sub">No account linked</span></span>;
+  const { chips, rest } = accountChips(accounts);
+  return (
+    <span className="person-chips">
+      {chips.map(([a, ...more]) => more.length ? (
+        <span key={a.platform} className="chip platform-chip is-group"
+              title={`${platformLabel(a.platform)}: ${[a, ...more].map(x => `@${x.handle || x.id}`).join(", ")}`}>
+          <PlatformIcon platform={a.platform} size={12} inChip /><span className="chip-text">×{more.length + 1}</span>
+        </span>
+      ) : (
+        <span key={accountKey(a)} className="chip platform-chip" title={accountLine(a)}>
+          <PlatformIcon platform={a.platform} size={12} inChip /><span className="chip-text">@{a.handle || a.id}</span>
+        </span>
+      ))}
+      {rest.length > 0 && (
+        <span className="chip platform-chip is-more" title={rest.map(accountLine).join(", ")}>+{rest.length}</span>
+      )}
+    </span>
+  );
+}
+
 function PersonCard({ person: p, index, settled, portrait, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted,
   onNoSync, flash }) {
   const where = countryName(p.country);
@@ -168,14 +194,7 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
           {p.country && <span className="person-flag" role="img" aria-label={where} title={where}>{countryFlag(p.country)}</span>}
           {p.name}
         </span>
-        <span className="person-chips">
-          {p.accounts.length === 0 && <span className="creator-sub">No account linked</span>}
-          {p.accounts.map(a => (
-            <span key={accountKey(a)} className="chip platform-chip" title={`${platformLabel(a.platform)} @${a.handle || a.id}`}>
-              <PlatformIcon platform={a.platform} size={12} inChip /><span className="chip-text">@{a.handle || a.id}</span>
-            </span>
-          ))}
-        </span>
+        <CardAccounts accounts={p.accounts} />
         <CardLabels labels={p.labels} />
         <StateChips name={p.name} muted={!!muted} noSync={notSynced(p)}
                     noSyncTitle={p.no_sync ? `${p.name} is set to Don't sync: nothing is downloaded from them. Sync again from their ⋯ menu`
