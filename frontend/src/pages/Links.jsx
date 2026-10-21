@@ -19,13 +19,15 @@ import Bookmarklet from "../components/Bookmarklet";
 import { AssignDialog, AssignPicker, LinkForm, LinkRow } from "../components/Links";
 import { KIND_LABEL, copyUrls, linkLabel } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
+import { useHeaderSearch } from "../lib/search";
 import { useWindow } from "../lib/windowing";
 import { Gap } from "../components/WinGap";
 
 /* Every saved link: a creator's Linktree, Patreon or site, an interview, an
    article, tied to a person or to no one. Add at the top; filter by kind
    (social or other, read from the address), site and person, or search the
-   address, title and notes. Nothing is fetched: a link is its text, opened
+   address, title and notes (the header's search box, lib/search.js).
+   Nothing is fetched: a link is its text, opened
    in a new tab when followed. The filters live in the address (?kind=,
    ?site=, ?person= an id or "none", ?q=), so a reload or Back keeps them.
 
@@ -38,14 +40,14 @@ export default function Links() {
   const { refreshKey } = useScan();
   const { unsortedLinks, refresh } = useJobs();
   const toast = useToast();
+  const search = useHeaderSearch();
   const [params, setParams] = useSearchParams();
   const kind   = ["social", "other"].includes(params.get("kind")) ? params.get("kind") : "";
   const site   = params.get("site") || "";
   const rawPerson = params.get("person") || "";
   const person = rawPerson === "none" ? "none" : /^\d+$/.test(rawPerson) ? Number(rawPerson) : null;   // null: anyone
-  const q      = (params.get("q") || "").trim();      // the search, once typing pauses
+  const q      = (params.get("q") || "").trim();      // the header's search, once typing pauses
   const unsortedView = person === "none";
-  const [query,    setQuery]    = useState(q);        // the search box, as typed
   const [removing, setRemoving] = useState(null);     // the link to delete
   const [flash,    setFlash]    = useState(null);     // the id of a link to point at (a URL saved already)
   const [busy,     setBusy]     = useState(false);
@@ -69,30 +71,13 @@ export default function Links() {
     return next;
   }, { replace: true }), [setParams]);
 
-  // The box follows the address when that changes otherwise (Back, Clear);
-  // ``written`` is the last search it sent, so its own does not echo back.
-  const written = useRef(q);
-  useEffect(() => {
-    if (q !== written.current) { written.current = q; setQuery(q); }
-  }, [q]);
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (query.trim() === written.current) return;
-      written.current = query.trim();
-      setFilters({ q: query.trim() });
-    }, 250);
-    return () => clearTimeout(t);
-  }, [query, setFilters]);
   function clearFilters() {
-    written.current = "";
-    setQuery("");
     setParams(new URLSearchParams(), { replace: true });
   }
   // Kept editing instead of searching: the box shows the search in force.
   function keepEditing() {
     unsaved.keep();
-    written.current = q;
-    setQuery(q);
+    search.reset();
   }
 
   const load = useCallback(() => getLinks({ kind, site, person, q }), [kind, site, person, q]);
@@ -311,16 +296,6 @@ export default function Links() {
       <PageHeader
         title="Links"
         sub={!data ? "…" : filtered ? `${fmtInt(links.length)} of ${fmtInt(total)}` : fmtInt(total)}
-        actions={
-          <input
-            type="text"
-            className="page-filter"
-            placeholder="Search links…"
-            aria-label="Search links"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-          />
-        }
       />
       <div className="card links-add">
         <h3 className="card-title">Add a link</h3>

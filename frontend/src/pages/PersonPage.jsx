@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { getAuthors, getConfig, getPeopleAttributes, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
-  createLink, updateLink, deleteLink, orderPersonLinks, setSourcePerson } from "../lib/api";
+  createLink, updateLink, deleteLink, orderPersonLinks, setSourcePerson, getPostsSummary } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
@@ -28,6 +28,7 @@ import AvatarDialog from "../components/AvatarDialog";
 import { LinkForm, LinkRow } from "../components/Links";
 import { copyUrls } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
+import { accountMatches, linkMatches, sourceMatches, useSearchName } from "../lib/search";
 
 /* One account of theirs: its profile on the site, its posts, Don't sync
    and Unlink in its ⋯ menu. personOff: the person's name when they are set
@@ -87,14 +88,18 @@ function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync }) 
    with the person preset; edit and delete in place. onDirty(bool): whether
    the link being edited has unsaved changes; onAddDirty(bool): whether the
    new link's form has something typed. */
-function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
+function PersonLinks({ person: p, query = "", onChanged, onDirty, onAddDirty }) {
   const toast = useToast();
   const { refresh } = useJobs();
   const [busy,     setBusy]     = useState(false);
   const edit = useOneEdit();                          // the link being edited, and whether it has changes
   const [removing, setRemoving] = useState(null);
   const [dlgError, setDlgError] = useState(null);
-  const links = p.links || [];
+  const all = p.links || [];
+  // While the header's search has something in it: the links it matches,
+  // not moved up or down (their places are among all of them), nor added.
+  const searching = !!query.trim();
+  const links = searching ? all.filter(l => linkMatches(l, query)) : all;
   const groups = [["Socials", links.filter(l => l.kind === "social")], ["Other", links.filter(l => l.kind !== "social")]];
   useEffect(() => { onDirty(edit.dirty); }, [edit.dirty, onDirty]);
 
@@ -129,7 +134,7 @@ function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
   }
 
   return (
-    <section className="person-section person-links-section">
+    <section className="person-section person-links-section" hidden={searching && !links.length}>
       <div className="person-section-head">
         <h3 className="card-title">Links <span className="page-count">{links.length}</span></h3>
         {links.length > 0 && (
@@ -139,7 +144,7 @@ function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
           </button>
         )}
       </div>
-      {links.length === 0 && <div className="empty">No link saved for them yet: a Linktree, a Patreon, their site, an interview…</div>}
+      {all.length === 0 && <div className="empty">No link saved for them yet: a Linktree, a Patreon, their site, an interview…</div>}
       {groups.map(([name, group]) => group.length > 0 && (
         <div key={name} className="person-link-group">
           <h4 className="link-group-title">{name}</h4>
@@ -156,14 +161,14 @@ function PersonLinks({ person: p, onChanged, onDirty, onAddDirty }) {
               </li>
             ) : (
               <LinkRow key={l.id} link={l} showPerson={false} busy={busy}
-                       onUp={{ ok: i > 0, run: () => move(group, i, -1) }}
-                       onDown={{ ok: i < group.length - 1, run: () => move(group, i, 1) }}
+                       onUp={!searching && { ok: i > 0, run: () => move(group, i, -1) }}
+                       onDown={!searching && { ok: i < group.length - 1, run: () => move(group, i, 1) }}
                        onEdit={x => edit.open(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
             ))}
           </ul>
         </div>
       ))}
-      <div className="person-link-add">
+      <div className="person-link-add" hidden={searching}>
         <h4 className="link-group-title">Add a link</h4>
         <LinkForm busy={busy} idPrefix="person-link-add" onDirty={onAddDirty} folded
                   onSubmit={async body => {
@@ -198,6 +203,18 @@ export default function PersonPage() {
   const navigate = useNavigate();
   const load = useCallback(() => getPerson(id), [id]);
   const { data: p, error, reload } = useApi(load, refreshKey);
+  // The header's search (lib/search.js), in ?q=: their accounts, sources and
+  // links that match, and how many of their posts, in place of the page.
+  // What is typed elsewhere on it stays, hidden, until the search is cleared.
+  const [params] = useSearchParams();
+  const q = params.get("q") || "";
+  const searching = !!q.trim();
+  useSearchName(p?.name);
+  // Their posts the Feed would show for it: counted, the Feed one click away.
+  const postsLoad = useCallback(() => (searching
+    ? getPostsSummary({ person: id, q: q.trim() }).then(r => ({ ...r, q: q.trim() }))
+    : Promise.resolve(null)), [searching, id, q]);
+  const postsApi = useApi(postsLoad, refreshKey);
   const { data: authors } = useApi(getAuthors, refreshKey);
   const suggestApi = useApi(getSuggestions, refreshKey);
   const { data: config } = useApi(getConfig, refreshKey);
@@ -240,7 +257,9 @@ export default function PersonPage() {
     about.labels != null && !sameLabels(about.labels, p.labels) && ["labels", about.labels],
   ].filter(Boolean));
   const aboutDirty = Object.keys(aboutChanges);
-  const unsaved = useUnsaved(notesDirty || renameDirty || aboutDirty.length > 0 || linkEdits || newLink || newSource);
+  // A search on the page (?q=) hides what is typed, never drops it: it goes through.
+  const unsaved = useUnsaved(notesDirty || renameDirty || aboutDirty.length > 0 || linkEdits || newLink || newSource,
+    (from, to) => from.pathname === to.pathname);
 
   const linked = useMemo(() => new Set((p?.accounts || []).map(accountKey)), [p]);
 
@@ -383,6 +402,11 @@ export default function PersonPage() {
   const fresh = (newApi.data?.by_person || []).find(r => r.id === p.id);
   // Set to Don't sync, they or one account: those sources are kept, never run.
   const live = mine.filter(s => !s.no_sync);
+  const accounts = searching ? p.accounts.filter(a => accountMatches(a, q)) : p.accounts;
+  const sourcesShown = searching ? mine.filter(s => sourceMatches(s, q)) : mine;
+  const linksFound = searching ? (p.links || []).filter(l => linkMatches(l, q)).length : 0;
+  const postsFound = searching && postsApi.data?.q === q.trim() ? postsApi.data.posts : null;
+  const nothing = searching && !accounts.length && !sourcesShown.length && !linksFound && postsFound === 0;
 
   return (
     <>
@@ -418,10 +442,27 @@ export default function PersonPage() {
         )}
       />
       <div className="card person-page">
+        {/* Searching: how many of their posts match, first. */}
+        {searching && (
+          <section className="person-section person-search" aria-label={`Search results for ${q.trim()}`}>
+            <h3 className="card-title">Posts</h3>
+            <p className="creator-sub">
+              {postsFound == null ? "Searching their posts…" : (
+                <>
+                  {plural(postsFound, "post")} of theirs {postsFound === 1 ? "matches" : "match"} “{q.trim()}”.{" "}
+                  {postsFound > 0 && (
+                    <Link to={scoped("/", { q: q.trim() })} className="text-link">Show in the Feed</Link>
+                  )}
+                </>
+              )}
+            </p>
+            {nothing && <div className="empty">Nothing else of theirs matches: no account, source or link.</div>}
+          </section>
+        )}
         {/* Their portrait (2:3, as Stash shows a performer) beside who they
             are, at the top of the card: in the page's head it would move
             the title off where every page has it (#93). */}
-        <div className="person-hero">
+        <div className="person-hero" hidden={searching}>
           <button type="button" className="avatar-edit is-portrait" onClick={() => setPicture(true)}
                   title={p.avatar ? "Change picture" : "Add a picture"}
                   aria-label={p.avatar ? `Change ${p.name}'s picture` : `Add a picture of ${p.name}`}>
@@ -477,13 +518,13 @@ export default function PersonPage() {
           </div>
         </div>
 
-        <section className="person-section">
-          <h3 className="card-title">Accounts <span className="page-count">{p.accounts.length}</span></h3>
+        <section className="person-section" hidden={searching && !accounts.length}>
+          <h3 className="card-title">Accounts <span className="page-count">{searching ? `${accounts.length} of ${p.accounts.length}` : p.accounts.length}</span></h3>
           {p.accounts.length === 0 ? (
             <div className="empty">No account linked yet. Add one below.</div>
           ) : (
             <ul className="person-accounts">
-              {p.accounts.map(a => (
+              {accounts.map(a => (
                 <AccountRow
                   key={accountKey(a)}
                   account={a}
@@ -495,6 +536,7 @@ export default function PersonPage() {
               ))}
             </ul>
           )}
+          <div hidden={searching}>
           <div className="person-add">
             <CreatorPicker
               accounts={authors || []}
@@ -529,19 +571,20 @@ export default function PersonPage() {
             onAdded={() => { reload(); suggestApi.reload(); sources.reload(); }}
             onImported={() => { reload(); refresh(); }}   // their Links block, and the nav's counts
           />
+          </div>
         </section>
 
-        <section className="person-section">
+        <section className="person-section" hidden={searching && !sourcesShown.length}>
           <div className="person-section-head">
-            <h3 className="card-title">Sources <span className="page-count">{mine.length}</span></h3>
-            {live.length > 0 && (
+            <h3 className="card-title">Sources <span className="page-count">{searching ? `${sourcesShown.length} of ${mine.length}` : mine.length}</span></h3>
+            {!searching && live.length > 0 && (
               <button type="button" className="btn-primary" disabled={busy} onClick={syncAll}
                       title="Sync each source of this person, one after another">
                 <Icon name="refresh" size={14} /> Sync {live.length > 1 ? `all ${live.length}` : ""}
               </button>
             )}
           </div>
-          {p.no_sync && (
+          {p.no_sync && !searching && (
             <p className="creator-sub nosync-note">
               Don&apos;t sync is on: FeedVault downloads nothing of theirs, no source can be added, and{" "}
               {mine.length ? "their sources stay listed but never run" : "none is suggested"}. What is downloaded stays.
@@ -554,18 +597,18 @@ export default function PersonPage() {
             </div>
           ) : (
             <ul className="source-list">
-              {mine.map(s => (
+              {sourcesShown.map(s => (
                 <SourceRow key={s.id} source={s} job={sources.jobOf(s)} onSync={sources.sync} onRemove={setRemoving}
                            onSaved={sources.reload} onLinked={() => { reload(); sources.reload(); }} />
               ))}
             </ul>
           )}
-          {!p.no_sync && <AddSource person={p.id} onAdded={sources.reload} onDirty={setNewSource} />}
+          {!p.no_sync && <div hidden={searching}><AddSource person={p.id} onAdded={sources.reload} onDirty={setNewSource} /></div>}
         </section>
 
-        <PersonLinks person={p} onChanged={reload} onDirty={setLinkEdits} onAddDirty={setNewLink} />
+        <PersonLinks person={p} query={q} onChanged={reload} onDirty={setLinkEdits} onAddDirty={setNewLink} />
 
-        <section className="person-section">
+        <section className="person-section" hidden={searching}>
           <h3 className="card-title">Notes</h3>
           <textarea
             className="person-notes"

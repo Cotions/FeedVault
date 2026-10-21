@@ -144,7 +144,8 @@ export function LinkForm({
    Only an http(s) address is ever a link (safeUrl); anything else is text.
    On the Links page: ``select`` ({ checked, onClick(event) }) puts a
    checkbox first (shift-click for a range), ``onAssign`` an "Assign…" on a
-   link of no one, and ``children`` (the open assign picker) go under it. */
+   link of no one, and ``children`` (the open assign picker) go under it.
+   Without onEdit and onDelete (a search's results) it is read only. */
 export function LinkRow({
   link: l, showPerson = true, busy = false, onEdit, onDelete, onUp, onDown, flash = false, index, select, onAssign, children,
 }) {
@@ -200,8 +201,8 @@ export function LinkRow({
             <Icon name="arrowDown" size={14} />
           </button>
         )}
-        <button type="button" className="btn-ghost" disabled={busy} onClick={() => onEdit(l)} aria-label={`Edit ${label}`}>Edit</button>
-        <button type="button" className="btn-ghost" disabled={busy} onClick={() => onDelete(l)} aria-label={`Delete ${label}`}>Delete</button>
+        {onEdit && <button type="button" className="btn-ghost" disabled={busy} onClick={() => onEdit(l)} aria-label={`Edit ${label}`}>Edit</button>}
+        {onDelete && <button type="button" className="btn-ghost" disabled={busy} onClick={() => onDelete(l)} aria-label={`Delete ${label}`}>Delete</button>}
       </span>
       {children}
     </li>
