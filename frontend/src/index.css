@@ -2616,7 +2616,9 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
     box-shadow: 0 -12px 28px -18px rgba(0, 0, 0, 0.9);
   }
   .review-actions > button { grid-column: span 3; justify-content: center; min-height: 46px; padding: 8px 10px; }
-  .review-actions:has(.btn-danger-soft) > button { grid-column: span 2; font-size: 12.5px; }
+  /* The bar has no room to hold a slot for a button that does nothing. */
+  .review-actions > .btn-danger-soft.is-single { display: none; }
+  .review-actions:has(.btn-danger-soft:not(.is-single)) > button { grid-column: span 2; font-size: 12.5px; }
   .review-actions-row { display: contents; }
   .review-actions-row .btn-secondary { min-height: 40px; padding: 6px 4px; }
   /* No Fullscreen button (an iPhone, on a picture): Mute takes its cell. */

@@ -74,6 +74,28 @@ test("Review: K keeps, D trashes, Z undoes", async ({ page }) => {
   });
 });
 
+// "Trash this item" came and went with the number of items, and Keep and
+// Trash post moved under the pointer from one post to the next.
+test("Review: Keep and Trash post stay put from a single item to an album", async ({ page }) => {
+  await openPage(page, { name: "Review", path: "/review" });
+  const bar = page.locator(".review-actions");
+  const item = bar.getByRole("button", { name: /^Trash this item/ });
+  const seen = new Map();
+  for (let i = 0; i < 40 && seen.size < 2; i++) {
+    await expect(item).toBeVisible();
+    const album = await page.locator(".review-stage .carousel-dot, .review-stage .carousel-arrow").count() > 0;
+    if (album) await expect(item).toBeEnabled(); else await expect(item).toBeDisabled();
+    if (!seen.has(album)) {
+      seen.set(album, await Promise.all(["Keep", "Trash post"].map(async n =>
+        Math.round((await bar.getByRole("button", { name: new RegExp(`^${n}`) }).boundingBox()).y))));
+    }
+    await page.keyboard.press("ArrowDown");
+    await idle(page);
+  }
+  expect([...seen.keys()].sort()).toEqual([false, true]);
+  expect(seen.get(true)).toEqual(seen.get(false));
+});
+
 // QA pass 4: Enter on a focused link (the author, a hashtag, "Open post
 // page") kept the post and moved on, instead of following the link.
 test("Review: Enter on a focused link follows it and decides nothing", async ({ page }) => {
