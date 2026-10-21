@@ -2380,6 +2380,8 @@ code.profile-row-path:not(.dim) { color: var(--text-dim); }
   border: 1px solid rgba(var(--glow-rgb), 0.35);
 }
 button.toast-link { background: none; font: inherit; font-weight: 600; cursor: pointer; }
+/* Its action on its way (an Undo's restore): the toast stays until the answer. */
+button.toast-link:disabled { cursor: progress; opacity: 0.75; }
 .toast-link:hover { background: rgba(var(--accent-rgb), 0.16); }
 .toast-err .toast-link { color: #ffb3b5; border-color: rgba(229, 72, 77, 0.45); }
 .toast-err .toast-link:hover { background: rgba(229, 72, 77, 0.14); }
