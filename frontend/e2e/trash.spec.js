@@ -49,7 +49,7 @@ test("History: a deleted post shows as in the trash, comes back from there, and 
     await expect(day.locator(".trash-day-head")).toHaveText("Today");
     // Newest first: the deletion just made.
     const row = page.locator(".trash-event").filter({ hasText: /^Deleted/ }).first();
-    await expect(row.locator(".trash-event-title")).toHaveText(/^Deleted/);
+    await expect(row.locator(".trash-event-title")).toHaveText("Deleted from its post page");
     await expect(row.locator(".trash-event-meta")).toContainText(`@${post.author.handle}`);
     await expect(row.locator(".trash-state")).toHaveText("In the trash");
     await expect(row.locator(".trash-event-thumb img")).toBeVisible();
@@ -59,7 +59,7 @@ test("History: a deleted post shows as in the trash, comes back from there, and 
     await expect(row.locator(".trash-state")).toHaveText("Restored");
     const open = row.getByRole("link", { name: `Open @${post.author.handle}'s post` });
     await expect(open).toBeVisible();
-    await expect(page.locator(".toast", { hasText: "Restored 1 post" }).getByRole("link", { name: "Open post" })).toBeVisible();
+    await expect(page.locator(".toast", { hasText: `Restored @${post.author.handle}'s post` }).getByRole("link", { name: "Open post" })).toBeVisible();
     // The restore's own event comes in on top.
     await expect(page.locator(".trash-event").first().locator(".trash-event-title")).toHaveText("Restored from the trash");
     await idle(page);
@@ -108,7 +108,7 @@ test("Trash: a restore shows on its entry at once, the rest stays usable, and no
     release();
     await expect(a.locator(".trash-entry-state")).toHaveText("Restored");
     await expect(a.getByRole("link", { name: /^Open @.*'s post$/ })).toBeVisible();
-    await expect(page.locator(".toast", { hasText: "Restored 1 post" }).getByRole("link", { name: "Open post" })).toBeVisible();
+    await expect(page.locator(".toast", { hasText: /^Restored @.*'s post/ }).getByRole("link", { name: "Open post" })).toBeVisible();
     // Counted out here, not by loading the list again.
     await expect(count).toHaveText(new RegExp(`^${(before - 1).toLocaleString("en-US")} entr`));
     await dismissToasts(page);

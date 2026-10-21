@@ -6,6 +6,7 @@ import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
 import { useSelection } from "../lib/useSelection";
 import { useApi } from "../lib/useApi";
+import { restoredToast } from "../lib/restore";
 import { fmtAgo, fmtBytes, fmtClock, fmtDay, fmtFullDate, fmtInt, platformLabel, postPath } from "../lib/fmt";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -56,34 +57,15 @@ function filterText(authors, author, when, person) {
 
 const plural = (n, word, many = `${word}s`) => `${fmtInt(n)} ${n === 1 ? word : many}`;
 
-// What a restore says besides the counts: where posts went when their
-// folder was gone, and posts whose earlier review decision is not known
-// (trashed before decisions were kept with them).
-function restoreNotes(r) {
-  const notes = [];
-  const folders = list => [...new Set(list)].join(", ");
-  if (r.moved?.length) {
-    notes.push(`Their folder was gone: put back in the account's folder now (${folders(r.moved.map(m => m.to))}).`);
-  }
-  if (r.recreated?.length) {
-    notes.push(`Their folder was gone and was made again (${folders(r.recreated.map(m => m.folder))}).`);
-  }
-  const unknown = r.decision_unknown?.length ?? 0;
-  if (unknown) {
-    notes.push(`Earlier review decision not known for ${plural(unknown, "post")} (trashed by an older FeedVault).`);
-  }
-  return notes.length ? ` ${notes.join(" ")}` : "";
-}
-
-// The toast a restore that put files back shows; a single post gets a link to it.
-function restoredToast(r, entries) {
-  const n = r.posts?.length ?? 0;
-  const one = n === 1 ? entries.find(e => e.post === r.posts[0] && e.platform && e.post_id) : null;
-  return [
-    `Restored ${plural(n, "post")} (${plural(r.files, "file")}). ${n === 1 ? "It is" : "They are"} back in the feed.${restoreNotes(r)}`,
-    "ok",
-    one ? { to: postPath(one), label: "Open post" } : undefined,
-  ];
+// The toast of a restore that put files back, worded as an Undo's: what
+// came back, with Open post for one post. The files that could not come
+// back are in the page's DeleteErrors, not repeated here.
+function backToast(r, entries) {
+  const came = entries.filter(e => r.posts?.includes(e.post));
+  const posts = [...new Map(came.map(e => [e.post, { id: e.post, platform: e.platform, post_id: e.post_id, author: e.author }])).values()];
+  const t = restoredToast({ ...r, errors: [] }, posts, came.every(e => e.partial) ? "item" : "post");
+  const linked = posts.length === 1 && posts[0].platform && posts[0].post_id;
+  return [t.text, t.kind, linked ? t.link : undefined];
 }
 
 function itemsLabel(e) {
@@ -384,7 +366,7 @@ function TrashContents({ tabs }) {
       }
       if (r.files) {
         started();   // the new counts (jobs poll) follow now
-        toast(...restoredToast(r, list));
+        toast(...backToast(r, list));
       }
     } catch (e) {
       failed(list, e.message);
@@ -771,7 +753,7 @@ function TrashHistory({ tabs }) {
       }
       if (r.files) {
         started();
-        toast(...restoredToast(r, [e]));
+        toast(...backToast(r, [e]));
       }
       setTick(t => t + 1);                      // the restore's own event, at the top
     } catch (err) {
