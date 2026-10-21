@@ -195,12 +195,14 @@ export function activateProfile(id) { return post(`/api/profiles/${seg(id)}/acti
 
 /* ── Deleting (files move to <root>/.feedvault-trash/) ───── */
 
-// body { posts: [id], media: [mediaId] }; either list may be omitted.
+// body { posts: [id], media: [mediaId] }; either list may be omitted. `from`: the page
+// asking ("review", "feed", "post", "storage"), for the Trash page's History.
 // → { ok, posts, media, files, bytes, errors: [{ path, error }] }
-export function deleteItems({ posts, media } = {}) {
+export function deleteItems({ posts, media, from } = {}) {
   const body = {};
   if (posts?.length) body.posts = posts;
   if (media?.length) body.media = media;
+  if (from) body.from = from;
   return post("/api/delete", body);
 }
 export function getTrash()   { return get("/api/trash"); }
@@ -214,14 +216,20 @@ export function checkTrash() { return post("/api/trash/check"); }
 // → { ok, entries, keys, files, bytes, dropped, errors }
 export function purgeTrash(body) { return post("/api/trash/purge", body); }
 // Puts exactly those entries back (partial deletes too) → { ok, posts, files, errors }
-export function restoreEntries(keys) { return post("/api/trash/restore", { keys }); }
+export function restoreEntries(keys) { return post("/api/trash/restore", { keys, from: "trash" }); }
+// What was deleted, restored and deleted for good, newest first → { total, upto, events }.
+// params: offset, limit, post, upto. See docs/API.md "Trash history".
+export function getTrashHistory(params = {}) { return get(`/api/trash/history${qs(params)}`); }
 
 /* ── Review (keep or trash) ──────────────────────────────── */
 
 // decision: "keep" or null to clear → { ok, posts }
 export function setDecision(posts, decision) { return post("/api/review", { posts, decision }); }
-// Moves posts' files back out of the trash → { ok, posts, files, errors }
-export function restorePosts(posts) { return post("/api/trash/restore", { posts }); }
+// Moves posts' files back out of the trash → { ok, posts, files, errors }.
+// `from`: "undo" for a toast's or Review's Undo, for the Trash page's History.
+export function restorePosts(posts, { from } = {}) {
+  return post("/api/trash/restore", from ? { posts, from } : { posts });
+}
 
 /* ── Duplicates (see docs/API.md "Duplicates") ───────────── */
 

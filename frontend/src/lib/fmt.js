@@ -145,6 +145,25 @@ export function fmtStamp(ts) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/* A list grouped by day (the Trash page's History): "Today", "Yesterday",
+   then "Mon Oct 14", with the year once it differs. Local time. */
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+export function fmtDay(ts, now = Date.now()) {
+  const d = new Date(ts * 1000);
+  const start = t => { const x = new Date(t); x.setHours(0, 0, 0, 0); return x.getTime(); };
+  const days = Math.round((start(now) - start(d.getTime())) / 86400000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  const label = `${WEEKDAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  return d.getFullYear() === new Date(now).getFullYear() ? label : `${label}, ${d.getFullYear()}`;
+}
+
+// "09:05", local time: a row under its day's heading.
+export function fmtClock(ts) {
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 // The feed filtered by one tag.
 export function tagFeedPath(name) {
   return `/?${new URLSearchParams({ tag: name })}`;

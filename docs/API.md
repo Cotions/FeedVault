@@ -520,12 +520,13 @@ Only **Empty trash** and **purge** (below) remove files for good.
 
 | Method | Path | Returns |
 |---|---|---|
-| POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18] }` (either list may be omitted, not both; at most 5000 of each are taken) → see below |
+| POST | `/api/delete` | body `{ "posts": ["instagram:C8x…"], "media": [17, 18], "from": "review" }` (either list may be omitted, not both; at most 5000 of each are taken; `from` optional, see [Trash history](#trash-history)) → see below |
 | GET | `/api/trash` | `{ "files": 12, "bytes": 1048576, "roots": [{ "root": "/abs", "path": "/abs/.feedvault-trash", "files": 12, "bytes": 1048576 }] }`: the trash as `GET /api/trash/items` counts it (`trash` there), from the manifests, without looking at any trashed file (see [Trash contents](#trash-contents)) |
 | POST | `/api/trash/empty` | permanently removes every trash folder → `{ "ok": true, "files": 12, "bytes": 1048576 }`: every file that was in them, counted on disk right before |
 | GET | `/api/trash/items?offset=&limit=&platform=&author=&person=&since=&before=&upto=` | what is in the trash, one entry per deletion, see [Trash contents](#trash-contents) |
 | POST | `/api/trash/check` | looks at every trashed file now → `{ "ok": true, "entries": 7, "files": 21, "bytes": 52428800, "missing": 1 }`, see [Trash contents](#trash-contents) |
 | POST | `/api/trash/purge` | body `{ "keys": ["…"] }` or `{ "filter": { "platform": …, "author": …, "person": …, "since": …, "before": …, "upto": … } }` → permanently deletes those entries' files, see [Trash contents](#trash-contents) |
+| GET | `/api/trash/history?offset=&limit=&post=&upto=` | what was deleted, restored and deleted for good, newest first, and where each post is now, see [Trash history](#trash-history) |
 | GET | `/trash/<key>/thumb` | small JPEG of a trashed entry (no header needed, like `/media`) |
 
 `/api/delete` removes each listed post with all its files (media, posters,
@@ -734,7 +735,9 @@ keeps its lines.
 Delete, restore and purge never run at the same time (they share the
 manifest). A scan takes the same lock one folder at a time (and for its
 end), so a delete or a restore during a long rescan waits for the folder
-being read, not for the scan. The folders they change after the scan read
+being read, not for the scan. A delete or a restore that has waited 30 s
+does nothing and answers `{ "ok": false, "error": "a scan is running; try
+again in a moment" }`. The folders they change after the scan read
 them are read again at its end, before it marks anything missing.
 
 A delete moves each post's files, writes their lines, then drops the posts
@@ -743,6 +746,61 @@ in between, the next scan finishes the job: a post whose metadata file is
 not where the index has it, but in a trash folder on a line of that post
 (not of an extra copy), is dropped from the index (with its decision, which
 its lines keep) instead of being kept as missing.
+
+### Trash history
+
+The manifests say what is in the trash now; a restored or purged entry
+leaves no line there. So every delete, restore and purge also adds one
+event per entry to `<data_directory>/userdata/trash-history.jsonl`, beside
+the other user data, so rebuilding the index loses none of it: one JSON
+object per line, appended (one write per action), readable by you only
+(0600). It keeps the last 90 days, at most 10,000 events; the append that
+takes it 1,000 past that (or finds its oldest event a day past 90) rewrites
+it without the oldest, so no other append rewrites it. An event never
+holds a path: the post, its platform, author, kind and items, the files
+and bytes, and its trash entry's key.
+
+| `action` | When | `from` |
+|---|---|---|
+| `deleted` | `POST /api/delete` (one event per entry it made: a post, items of one, an extra copy), and resolving duplicates | the page that asked: `review`, `feed`, `post`, `storage`; `duplicates` for `POST /api/duplicates/resolve` |
+| `restored` | `POST /api/trash/restore`, or a restore cut short finished later | `trash` (the Trash page), `undo` (a toast's or Review's Undo); `scan` for one finished by a scan |
+| `purged` | `POST /api/trash/purge`: one event per entry, or one that counts them (`entries`) past 100 | `null` |
+| `emptied` | `POST /api/trash/empty` with anything in the trash: one event that counts what went (`entries`, `files`, `bytes`) | `null` |
+
+`from` in the body of `POST /api/delete` and `POST /api/trash/restore` is
+optional; a value not in that list (or not a string) is `null`, never an
+error. A sync putting a post it brought back in the trash again is not
+logged: nothing you did.
+
+`GET /api/trash/history?offset=&limit=&post=&upto=` (`limit` 1 to 200,
+default 60; `post`: one post's events only):
+
+```json
+{
+  "total": 42, "upto": 1727500000123,
+  "events": [
+    { "at": 1727500000, "at_ms": 1727500000123, "action": "deleted", "from": "review",
+      "post": "instagram:C8x…", "platform": "instagram", "post_id": "C8x…",
+      "author": { "id": "123456", "handle": "somebody" }, "kind": "carousel", "posted_at": 1727481600,
+      "items": 1, "of": 5, "partial": true, "copy": false, "files": 1, "bytes": 204800, "entries": null,
+      "state": "in_trash", "restore_key": "…", "open": true, "thumb_url": "/trash/…/thumb" }
+  ]
+}
+```
+
+- `at_ms` is unique and always rising: the newest event is first. Paging
+  sends the first page's `upto` back, so events logged since do not shift
+  the pages that follow.
+- `state` is where it is now. `in_trash`: its entry is still in the trash,
+  or, for a whole post, the post's newest deletion is (deleted again
+  since); `POST /api/trash/restore` with `{ "keys": [restore_key] }` takes
+  it back. `restored`: a restore of its entry was logged, or the post (a
+  whole one) is in the index again. `gone`: deleted for good (a purge, Empty
+  trash), or nowhere to be found; every `purged` and `emptied` event is.
+- `open`: the post is in the index now (`/p/<platform>/<post_id>` opens it).
+- `thumb_url`: the entry's trash thumbnail while it is in the trash, the
+  post's cover once it is back (`null` for a video without a poster when
+  ffmpeg is missing, and when gone).
 
 ## Review (keep or trash)
 
@@ -758,7 +816,7 @@ name in the same folder, fsynced, renamed over it, the folder fsynced.
 | Method | Path | Returns |
 |---|---|---|
 | POST | `/api/review` | body `{ "posts": ["instagram:C8x…"], "decision": "keep" }` or `"decision": null` to clear → `{ "ok": true, "posts": [...] }` |
-| POST | `/api/trash/restore` | body `{ "posts": ["instagram:C8x…"] }` → moves those posts' files back out of the trash (their most recent deletion) and re-indexes them at once → `{ "ok": true, "posts": [...], "files": 4, "errors": [], "moved": [], "recreated": [], "decision_unknown": [] }` |
+| POST | `/api/trash/restore` | body `{ "posts": ["instagram:C8x…"], "from": "undo" }` (`from` optional, see [Trash history](#trash-history)) → moves those posts' files back out of the trash (their most recent deletion) and re-indexes them at once → `{ "ok": true, "posts": [...], "files": 4, "errors": [], "moved": [], "recreated": [], "decision_unknown": [] }` |
 
 Every post summary carries `"decision": "keep"` or `"decision": null`.
 `/api/posts` takes `review=unreviewed` (no decision yet) or `review=kept`, and

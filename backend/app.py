@@ -51,6 +51,7 @@ import sources
 import sync
 import thumbs
 import trash
+import trash_history
 import userdata
 from parsers import yt_dlp
 
@@ -541,7 +542,9 @@ def delete_items():
     if not posts and not media:
         return jsonify({"ok": False, "error": "nothing to delete"}), 400
     cfg = config.load()
-    report = trash.delete(posts[:5000], media[:5000], cfg["media_roots"], cfg["data_directory"])
+    # ``from``: the page that asked, for the trash's History; anything else is no page.
+    report = trash.delete(posts[:5000], media[:5000], cfg["media_roots"], cfg["data_directory"],
+                          source=trash_history.source(body.get("from"), "deleted"))
     if report["posts"]:
         userdata.changed("decisions")          # a removed post takes its decision with it
     if report["posts"] or report["media"]:
@@ -563,8 +566,21 @@ def trash_restore():
         return jsonify({"ok": False, "error": "posts or keys must be a non-empty list of ids"}), 400
     cfg = config.load()
     report = trash.restore((posts or [])[:500], cfg["media_roots"], cfg["data_directory"],
-                           keys=(keys or [])[:5000])     # decisions.json follows a Keep put back
+                           keys=(keys or [])[:5000],     # decisions.json follows a Keep put back
+                           source=trash_history.source(body.get("from"), "restored"))
     return jsonify(report)
+
+
+@app.get("/api/trash/history")
+def trash_history_list():
+    cfg = config.load()
+    return jsonify(trash.history(
+        cfg["media_roots"], cfg["data_directory"],
+        offset=_int_arg("offset", 0, 0, 10**9),
+        limit=_int_arg("limit", 60, 1, 200),
+        post=request.args.get("post") or None,
+        upto=_int_arg("upto", 0, 0, 2**53) if request.args.get("upto") else None,
+    ))
 
 
 def _accounts_of(pid):

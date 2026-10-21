@@ -1035,14 +1035,32 @@ def summaries(conn, rows):
                 "SELECT post_id, COUNT(*), COALESCE(SUM(CASE WHEN missing = 0 THEN size END), 0) FROM media "
                 f"WHERE post_id IN ({marks}) GROUP BY post_id", ids):
             counts[pid] = (count, size)
-        # The first item as _cover() picks it: by idx, ties in media_post_size's order.
-        for m in conn.execute(
-                "SELECT post_id, id, kind, poster_path FROM (SELECT post_id, id, kind, poster_path, "
-                "ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY idx, missing, size, id) AS n "
-                f"FROM media WHERE post_id IN ({marks})) WHERE n = 1", ids):
-            firsts[m["post_id"]] = m
+        firsts = _firsts(conn, ids)
     return [summary(conn, r, tags.get(r["id"], []), (counts.get(r["id"], (0, 0)), firsts.get(r["id"])))
             for r in rows]
+
+
+def _firsts(conn, ids):
+    """{post id: its first media row (post_id, id, kind, poster_path)} of
+    ``ids``, as _cover() picks it: by idx, ties in media_post_size's order."""
+    marks = ", ".join("?" for _ in ids)
+    return {m["post_id"]: m for m in conn.execute(
+        "SELECT post_id, id, kind, poster_path FROM (SELECT post_id, id, kind, poster_path, "
+        "ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY idx, missing, size, id) AS n "
+        f"FROM media WHERE post_id IN ({marks})) WHERE n = 1", ids)} if ids else {}
+
+
+def covers(conn, ids):
+    """{post id: its cover (_cover_of), or None} of those of ``ids`` that
+    are in the index (the Trash page's History: the posts back from the
+    trash), in two queries."""
+    ids = list(dict.fromkeys(ids))[:1000]
+    if not ids:
+        return {}
+    marks = ", ".join("?" for _ in ids)
+    here = [r[0] for r in conn.execute(f"SELECT id FROM posts WHERE id IN ({marks})", ids)]
+    firsts = _firsts(conn, here)
+    return {pid: _cover_of(firsts.get(pid)) for pid in here}
 
 
 def post_tags(conn, post_id):

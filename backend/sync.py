@@ -885,7 +885,8 @@ def _put_back(sid, before, folder, note):
     if not back:
         return []
     cut = _cut_metadata(db.connect(), back, base)
-    report = trash.delete(back, [], cfg["media_roots"], cfg["data_directory"])
+    # Nothing the user did: not in the trash's History (trash_history).
+    report = trash.delete(back, [], cfg["media_roots"], cfg["data_directory"], history=False)
     gone = report["posts"]
     if gone:
         note(f"{len(gone)} trashed post{'' if len(gone) == 1 else 's'} came back with this sync "
