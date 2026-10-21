@@ -69,6 +69,28 @@ test("a DELETE can carry a JSON body (restoring a dismissed duplicate)", async (
                           ["/api/duplicates/dismissed?kind=copies", "GET", undefined, undefined]]);
 });
 
+test("deletes and restores say which page asked, for the trash's History", async () => {
+  const sent = [];
+  globalThis.fetch = async (url, opts) => {
+    sent.push([url, opts?.body && JSON.parse(opts.body)]);
+    return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+  };
+  await api.deleteItems({ posts: ["instagram:P1"], from: "review" });
+  await api.deleteItems({ media: [3] });
+  await api.restorePosts(["instagram:P1"], { from: "undo" });
+  await api.restorePosts(["instagram:P1"]);
+  await api.restoreEntries(["k1"]);
+  await api.getTrashHistory({ offset: 60, limit: 60, upto: 1727500000123, post: undefined });
+  assert.deepEqual(sent, [
+    ["/api/delete", { posts: ["instagram:P1"], from: "review" }],
+    ["/api/delete", { media: [3] }],
+    ["/api/trash/restore", { posts: ["instagram:P1"], from: "undo" }],
+    ["/api/trash/restore", { posts: ["instagram:P1"] }],
+    ["/api/trash/restore", { keys: ["k1"], from: "trash" }],
+    ["/api/trash/history?offset=60&limit=60&upto=1727500000123", undefined],
+  ]);
+});
+
 // Last: the profile this page was loaded in stays for the rest of the file.
 test("the page's profile is sent once known, and a switch elsewhere restarts the page", async () => {
   const sent = [];

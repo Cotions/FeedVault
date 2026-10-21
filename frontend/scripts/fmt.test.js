@@ -2,7 +2,7 @@
 // `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { distinctTail, fmtIn, plural } from "../src/lib/fmt.js";
+import { distinctTail, fmtClock, fmtDay, fmtIn, plural } from "../src/lib/fmt.js";
 
 // #139: a job waiting out the pause reads the same on Jobs as on Creators.
 test("how long until a time: seconds under a minute, else minutes rounded up", () => {
@@ -36,4 +36,16 @@ test("a folder label shows the parents it takes to tell paths apart", () => {
   assert.equal(distinctTail("/m/one/same", ["/m/one/same", "/m/two/same"]), "one/same");
   assert.equal(distinctTail("/m/one/same/", ["/m/one/same", "/m/one/same"]), "same");
   assert.equal(distinctTail("/", ["/"]), "/");
+});
+
+// The Trash page's History groups its rows by day, local time.
+test("a day reads Today, Yesterday, then its date; a time reads as the clock", () => {
+  const at = (y, m, d, h = 12, min = 0) => new Date(y, m, d, h, min).getTime() / 1000;
+  const now = new Date(2026, 9, 21, 0, 30).getTime();   // just after midnight
+  assert.equal(fmtDay(at(2026, 9, 21, 0, 10), now), "Today");
+  assert.equal(fmtDay(at(2026, 9, 20, 23, 59), now), "Yesterday");
+  assert.equal(fmtDay(at(2026, 9, 19), now), "Mon Oct 19");
+  assert.equal(fmtDay(at(2025, 11, 31), now), "Wed Dec 31, 2025");
+  assert.equal(fmtClock(at(2026, 9, 21, 9, 5)), "09:05");
+  assert.equal(fmtClock(at(2026, 9, 21, 23, 59)), "23:59");
 });

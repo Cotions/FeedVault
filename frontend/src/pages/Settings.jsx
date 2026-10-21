@@ -254,6 +254,9 @@ function TrashCard() {
         <Link to="/trash" className="btn-secondary" title="See what is in the trash, restore or delete single posts">
           <Icon name="search" size={14} />Browse the trash
         </Link>
+        <Link to="/trash?view=history" className="btn-secondary" title="What was deleted and restored lately, and from where">
+          <Icon name="clock" size={14} />History
+        </Link>
         <button type="button" className="btn-danger" onClick={() => { setDlgErr(null); setMsg(null); setConfirm(true); }} disabled={!files}>
           <Icon name="trash" size={14} />Empty trash…
         </button>

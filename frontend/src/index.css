@@ -2801,6 +2801,74 @@ a.review-link { display: inline-flex; align-items: center; gap: 7px; border-radi
 a.big-file-author:hover { color: var(--accent-hover); text-decoration: underline; }
 .trash-entry-when { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trash-match { color: #ffd59a; align-self: center; }
+/* In the trash / History */
+.trash-views { align-items: center; margin-bottom: 14px; }
+.trash-page .trash-views + .page-lede { margin-top: 0; }
+/* An entry being restored, then back: it stays where it was (no layout
+   shift), dimmed, with what happened in the middle of its picture, clear
+   of the badges in its corners. */
+.trash-entry.is-restoring .big-file-link img, .trash-entry.is-restored .big-file-link img { opacity: 0.45; }
+.trash-entry.is-restored { border-color: rgba(var(--glow-rgb), 0.45); }
+.trash-entry-state {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; border-radius: 6px; white-space: nowrap;
+  font-size: 12px; font-weight: 700;
+  color: var(--text); background: rgba(10, 12, 17, 0.85);
+}
+.trash-entry.is-restored .trash-entry-state { color: #a5f0bf; }
+
+/* History: one row per event, under its day. */
+.trash-day + .trash-day { margin-top: 18px; }
+.trash-day-head {
+  margin: 0 0 6px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.4px;
+  color: var(--muted);
+}
+.trash-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.trash-event {
+  display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 8px 0; min-height: 64px;
+  border-top: 1px solid var(--border);
+}
+.trash-event:first-child { border-top: 0; }
+.trash-event-thumb {
+  width: 48px; height: 48px; border-radius: 8px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-soft); color: var(--muted);
+}
+.trash-event-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.trash-event.is-gone .trash-event-thumb { opacity: 0.6; }
+.trash-event-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.trash-event-what { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.trash-event-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trash-event-meta {
+  display: flex; flex-wrap: wrap; gap: 2px 0;
+  font-size: 12px; color: var(--text-dim);
+}
+.trash-event-meta > * { min-width: 0; overflow-wrap: anywhere; }   /* a 60-character handle wraps */
+.trash-event-meta > * + *::before { content: "·"; margin: 0 6px; color: var(--muted); }
+.trash-event-meta time { color: var(--muted); }
+.trash-state {
+  flex-shrink: 0;
+  padding: 2px 7px; border-radius: 6px;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700; white-space: nowrap;
+}
+.trash-state-in_trash { color: #ffd59a; background: rgba(255, 213, 154, 0.08); border: 1px solid rgba(255, 213, 154, 0.3); }
+.trash-state-restored { color: #a5f0bf; background: rgba(47, 158, 79, 0.14); border: 1px solid rgba(74, 222, 128, 0.3); }
+.trash-state-gone     { color: var(--muted); border: 1px solid var(--border); }
+.trash-event-act { display: flex; justify-content: flex-end; }
+/* As wide as "Restoring…", so the button does not change size under the pointer. */
+.trash-event-btn { padding: 6px 12px; font-size: 12.5px; height: 32px; min-width: 124px; white-space: nowrap; text-decoration: none; }
+@media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
+  .trash-event { grid-template-columns: 44px minmax(0, 1fr); row-gap: 8px; }
+  .trash-event-thumb { width: 44px; height: 44px; }
+  .trash-event-what { flex-wrap: wrap; row-gap: 4px; }
+  .trash-event-title { white-space: normal; }
+  .trash-event-act { grid-column: 2; justify-content: flex-start; }
+  .trash-event-act:empty { display: none; }
+  .trash-event-btn { height: 40px; }
+}
 
 /* ── Duplicates page ────────────────────────────────────── */
 .dup-kinds { align-items: center; }
