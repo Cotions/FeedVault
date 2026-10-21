@@ -143,21 +143,31 @@ def _order(links):
     return sorted(links, key=lambda x: (x["kind"] != "social", x["position"] is None, x["position"] or 0, x["id"]))
 
 
-def listing(conn, person=None, no_person=False, kind_=None, site_=None, q=None):
+def listing(conn, person=None, no_person=False, kind_=None, site_=None, q=None, q_sites=()):
     """{"links": the links that match, newest first (a person's in their
-    order), "sites": [{"site", "count"}] over every link, for a filter}."""
+    order), "sites": [{"site", "count"}] over every link, for a filter}.
+    ``q_sites``: the sites whose label holds ``q`` (linklabels.matching): a
+    link with no title on one of them matches too, by the label it shows."""
     where, args = [], []
     if no_person:
         where.append("l.person_id IS NULL")
     elif person is not None:
         where.append("l.person_id = ?")
         args.append(person)
+    untitled = [*where, "l.title = ''"], list(args)
     if q:
         like = "%" + re.sub(r"([\\%_])", r"\\\1", q) + "%"
         where.append("(l.url LIKE ? ESCAPE '\\' OR l.title LIKE ? ESCAPE '\\' OR l.notes LIKE ? ESCAPE '\\')")
         args += [like] * 3
-    rows = conn.execute(f"{_SELECT}{' WHERE ' + ' AND '.join(where) if where else ''} "
-                        "ORDER BY l.created_at DESC, l.id DESC", args).fetchall()
+    order = " ORDER BY l.created_at DESC, l.id DESC"
+    rows = conn.execute(f"{_SELECT}{' WHERE ' + ' AND '.join(where) if where else ''}{order}", args).fetchall()
+    if q and q_sites:
+        # A site is read from the URL, not stored: those links are picked here.
+        found = {r["id"] for r in rows}
+        extra = [r for r in conn.execute(f"{_SELECT} WHERE {' AND '.join(untitled[0])}{order}", untitled[1])
+                 if r["id"] not in found and site(r["url"]) in q_sites]
+        if extra:
+            rows = sorted(rows + extra, key=lambda r: (-r["created_at"], -r["id"]))
     out = [x for x in map(_link, rows)
            if (kind_ is None or x["kind"] == kind_) and (site_ is None or x["site"] == site_)]
     if person is not None and not no_person:

@@ -35,6 +35,20 @@ export function matchedFormer(a, query) {
 }
 
 export const accountKey = a => `${a.platform}:${a.id}`;
+
+// A person card's accounts on one line: each in a chip of its own while
+// they fit; past that, one chip per platform (its accounts in a list: the
+// card shows "×n" for more than one) in the order they first come, the
+// first few of them, and the accounts of the rest for a "+n" chip. The
+// person page lists them all.
+export const ACCOUNTS_SHOWN = 3;
+export function accountChips(accounts, shown = ACCOUNTS_SHOWN) {
+  if (accounts.length <= shown) return { chips: accounts.map(a => [a]), rest: [] };
+  const byPlatform = new Map();
+  for (const a of accounts) byPlatform.set(a.platform, [...(byPlatform.get(a.platform) || []), a]);
+  const groups = [...byPlatform.values()];
+  return { chips: groups.slice(0, shown), rest: groups.slice(shown).flat() };
+}
 export const accountRef = a => ({ platform: a.platform, id: a.id });
 
 // What a merge is of (its people and accounts), in any order: the key its

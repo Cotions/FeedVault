@@ -187,7 +187,7 @@ function PersonLinks({ person: p, query = "", onChanged, onDirty, onAddDirty }) 
         onConfirm={remove}
         onCancel={() => setRemoving(null)}
       >
-        <p className="link-confirm">{removing?.title ? <>{removing.title}<br /></> : null}<code>{removing?.url}</code></p>
+        <p className="link-confirm">{removing?.title || removing?.label ? <>{removing.title || removing.label}<br /></> : null}<code>{removing?.url}</code></p>
       </ConfirmDialog>
       <DiscardDialog open={edit.asking} onDiscard={edit.discard} onKeep={edit.keep}>
         <p>The changes to the link you are editing are not saved.</p>

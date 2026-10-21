@@ -34,6 +34,7 @@ import hashing
 import info_cookies
 import jobs
 import library
+import linklabels
 import links
 import news
 import nosync
@@ -1189,7 +1190,7 @@ def get_person(pid):
     p = people.person(conn, pid) if people.exists(conn, pid) else None
     if p is None:
         return jsonify({"ok": False, "error": "no such person"}), 404
-    return jsonify({**p, "links": links.of_person(conn, pid)})
+    return jsonify({**p, "links": _labelled(links.of_person(conn, pid))})
 
 
 @app.post("/api/people/<int:pid>")
@@ -1514,11 +1515,20 @@ def _link_now():
     return int(time.time())
 
 
+def _labelled(items, cfg=None):
+    """Links (dicts, or one, or None) with the ``label`` of their site
+    (linklabels.py: Settings → Link labels), read afresh for each answer."""
+    if items is None:
+        return None
+    linklabels.apply(config.load() if cfg is None else cfg, items if isinstance(items, list) else [items])
+    return items
+
+
 def _taken(lid):
     """The 409 for a URL saved already: the link that has it, with its
     person, so the page can say whose it is."""
     return jsonify({"ok": False, "error": "that link is saved already", "id": lid,
-                    "link": None if lid is None else links.get(db.connect(), lid)}), 409
+                    "link": None if lid is None else _labelled(links.get(db.connect(), lid))}), 409
 
 
 @app.get("/api/links")
@@ -1529,8 +1539,12 @@ def list_links():
         return jsonify({"ok": False, "error": "kind must be social or other"}), 400
     if len(q) > links.MAX_QUERY:
         return jsonify({"ok": False, "error": f"q must be at most {links.MAX_QUERY} characters"}), 400
-    return jsonify(links.listing(db.connect(), person=None if v == "none" else _person_arg(), no_person=v == "none",
-                                 kind_=kind, site_=request.args.get("site") or None, q=q or None))
+    cfg = config.load()
+    out = links.listing(db.connect(), person=None if v == "none" else _person_arg(), no_person=v == "none",
+                        kind_=kind, site_=request.args.get("site") or None, q=q or None,
+                        q_sites=linklabels.matching(cfg, q) if q else ())
+    _labelled(out["links"], cfg)
+    return jsonify(out)
 
 
 @app.post("/api/links")
@@ -1555,7 +1569,7 @@ def create_link():
     except sqlite3.IntegrityError:             # saved by another request in between
         return _taken(links.find(conn, url))
     userdata.changed("links")
-    return jsonify({"ok": True, "link": link})
+    return jsonify({"ok": True, "link": _labelled(link)})
 
 
 @app.post("/api/links/<int:lid>")
@@ -1582,7 +1596,7 @@ def update_link(lid):
     except sqlite3.IntegrityError:
         return _taken(links.find(conn, url))
     userdata.changed("links")
-    return jsonify({"ok": True, "link": link})
+    return jsonify({"ok": True, "link": _labelled(link)})
 
 
 @app.delete("/api/links/<int:lid>")
@@ -1627,7 +1641,7 @@ def assign_links():
         userdata.changed("links")
     # A link deleted right after is left out, not given as null.
     out = [x for x in (links.get(conn, i) for i in dict.fromkeys(ids)) if x is not None]
-    return jsonify({"ok": True, "moved": moved, "skipped": skipped, "links": out})
+    return jsonify({"ok": True, "moved": moved, "skipped": skipped, "links": _labelled(out)})
 
 
 @app.post("/api/links/delete")
@@ -1670,7 +1684,7 @@ def order_person_links(pid):
         return jsonify({"ok": False, "error": error}), 400
     links.reorder(conn, pid, ids)
     userdata.changed("links")
-    return jsonify({"ok": True, "links": links.of_person(conn, pid)})
+    return jsonify({"ok": True, "links": _labelled(links.of_person(conn, pid))})
 
 
 # ---------------------------------------------------------------------------
@@ -2086,6 +2100,7 @@ def _public_config(cfg):
             "profile": {"id": cfg["active_profile"], "name": cfg["profile_name"]},
             "version": config.__version__, "tools": cfg.get("tools") or {},
             "instaloader": sync.settings(cfg), "routes": sources.routes(cfg),
+            "link_labels": linklabels.rules(cfg),
             "gallery-dl": sync.tool_settings("gallery-dl", cfg), "yt-dlp": sync.tool_settings("yt-dlp", cfg),
             "youtube_max_seconds": yt_dlp.youtube_max_seconds(cfg),
             "check_updates": cfg.get("check_updates") is True,
@@ -2141,6 +2156,10 @@ def _set_config(body):
                                               "\"full\", \"slim\" or \"none\" }"}), 400
     if "routes" in body:
         changes["routes"], error = sources.clean_routes(body["routes"])
+        if error:
+            return jsonify({"ok": False, "error": error})
+    if "link_labels" in body:
+        changes["link_labels"], error = linklabels.clean_rules(body["link_labels"])
         if error:
             return jsonify({"ok": False, "error": error})
     for tool in ("gallery-dl", "yt-dlp"):

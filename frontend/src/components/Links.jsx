@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { getRecentLinkPeople } from "../lib/api";
 import { plural, safeUrl } from "../lib/fmt";
 import { personPath } from "../lib/people";
-import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, linkLabel, withScheme } from "../lib/links";
+import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, linkLabel, linkName, withScheme } from "../lib/links";
 import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 import Icon from "./Icon";
 import CreatorPicker from "./CreatorPicker";
@@ -139,7 +139,8 @@ export function LinkForm({
   );
 }
 
-/* One link: its title (or address) opening the site in a new tab, the
+/* One link: its title (else its site's label, else its address) opening
+   the site in a new tab, the address under it when the label is not it, the
    site and kind, its person (``showPerson``), notes, and the row's actions.
    Only an http(s) address is ever a link (safeUrl); anything else is text.
    On the Links page: ``select`` ({ checked, onClick(event) }) puts a
@@ -150,7 +151,11 @@ export function LinkRow({
   link: l, showPerson = true, busy = false, onEdit, onDelete, onUp, onDown, flash = false, index, select, onAssign, children,
 }) {
   const href = safeUrl(l.url);
-  const label = linkLabel(l);
+  const shown = linkLabel(l);
+  // The buttons' names: the title or the address, one per link (two links of
+  // a site share its label).
+  const label = linkName(l);
+  const named = !!(l.title || l.label);           // shown is not the address: the address goes under it
   return (
     <li className={`link-row${flash ? " is-flash" : ""}${select?.checked ? " is-selected" : ""}${children ? " is-assigning" : ""}`}
         data-link-id={l.id} data-index={index}>
@@ -163,17 +168,17 @@ export function LinkRow({
       <span className="link-row-main">
         <span className="link-row-head">
           {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="link-row-title" title={l.title ? `${l.title}\n${l.url}` : l.url}>
-              {label}
+            <a href={href} target="_blank" rel="noopener noreferrer" className="link-row-title" title={named ? `${shown}\n${l.url}` : l.url}>
+              {shown}
             </a>
-          ) : <span className="link-row-title">{label}</span>}
+          ) : <span className="link-row-title">{shown}</span>}
           <span className={`chip link-kind is-${l.kind}`} title={l.kind === "social" ? "A social or creator platform" : "Any other site"}>
             {KIND_LABEL[l.kind] || l.kind}
           </span>
         </span>
         <span className="link-row-sub creator-sub">
           <span className="link-site">{l.site}</span>
-          {l.title && <span className="link-url" title={l.url}>{l.url}</span>}
+          {named && <span className="link-url" title={l.url}>{l.url}</span>}
         </span>
         {l.notes && <span className="link-notes" title={l.notes}>{l.notes}</span>}
       </span>

@@ -732,6 +732,59 @@ test("Creators: an account's Make creator makes it a person, and the page stays"
   }
 });
 
+// A person with many accounts: their card shows one line of at most three
+// chips and a "+n" (lib/people accountChips), a platform with several as
+// its icon and "×n", each chip's title naming its accounts; one with three
+// shows each. Both views, 1280 and 1440 wide. Two people invented in
+// /api/people's answer (page.route: nothing is written).
+test("Creators: a card's accounts stay on one line, grouped past three, the rest in +n", async ({ page }) => {
+  const tag = "E2E accounts";
+  const acc = (platform, handle) => ({ platform, id: `e2e-${handle}`, handle, name: handle, count: 1, bytes: 10,
+    aliases: [], handles: [], names: [] });
+  const many = [
+    acc("instagram", "ig.one"), acc("twitter", "tw.one"), acc("instagram", "ig.two"), acc("tiktok", "tt.one"),
+    acc("instagram", "ig.three"), acc("youtube", "yt.one"), acc("bluesky", "bs.one"), acc("bluesky", "bs.two"),
+  ];
+  const three = [acc("instagram", "a.first"), acc("instagram", "a.second"), acc("tiktok", "a.third")];
+  const person = (id, name, accounts) => ({ id, name, accounts, count: accounts.length, bytes: 10 * accounts.length,
+    avatar: null, country: "", gender: "", labels: [], no_sync: false, notes: "", newest: 1700000000,
+    platforms: [...new Set(accounts.map(a => a.platform))] });
+  await page.route(url => url.pathname === "/api/people", async route => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: [...(await res.json()),
+      person(990001, `${tag} many`, many), person(990002, `${tag} three`, three)] });
+  });
+  await openPage(page, { name: "Creators", path: "/creators" });
+  await page.getByRole("textbox", { name: "Filter creators" }).fill(tag);
+  const card = name => page.locator(".person-card", { hasText: `${tag} ${name}` }).locator(".person-chips");
+  for (const width of [1440, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const view of ["Portraits", "Compact"]) {
+      await page.getByRole("group", { name: "Show people as" }).getByRole("button", { name: view }).click();
+      const chips = card("many").locator(".platform-chip");
+      await expect(chips).toHaveText(["×3", "@tw.one", "@tt.one", "+3"]);
+      await expect(chips.nth(0)).toHaveAttribute("title", "Instagram: @ig.one, @ig.two, @ig.three");
+      await expect(chips.nth(1)).toHaveAttribute("title", "X @tw.one");
+      await expect(chips.nth(3)).toHaveAttribute("title", "YouTube @yt.one, Bluesky @bs.one, Bluesky @bs.two");
+      await expect(card("three").locator(".platform-chip")).toHaveText(["@a.first", "@a.second", "@a.third"]);
+      // One line, the "×n" and "+n" whole, inside the card.
+      for (const name of ["many", "three"]) {
+        const line = await card(name).evaluate(el => {
+          const box = el.getBoundingClientRect();
+          return [...el.children].map(c => {
+            const r = c.getBoundingClientRect();
+            return { top: Math.round(r.top), inside: r.left >= box.left - 0.5 && r.right <= box.right + 0.5,
+                     whole: c.scrollWidth <= c.clientWidth + 1 || !c.matches(".is-group, .is-more") };
+          });
+        });
+        expect(new Set(line.map(c => c.top)).size, `${name}, ${view} at ${width}`).toBe(1);
+        expect(line.every(c => c.inside && c.whole), `${name}, ${view} at ${width}`).toBe(true);
+      }
+    }
+  }
+  await idle(page);
+});
+
 // Select mode in Portraits: the whole card is one button, its count line
 // included (a click there toggles it), with nothing interactive inside it;
 // shift-click selects the cards between. Three people made for the test,
