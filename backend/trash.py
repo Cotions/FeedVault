@@ -35,6 +35,7 @@ import organize
 import scanner
 import sources
 import thumbs
+import trash_history
 from parsers import IMAGE_EXT, VIDEO_EXT, ext_of
 
 TRASH_NAME = scanner.TRASH_NAME
@@ -77,7 +78,7 @@ def _free_name(dest):
 
 
 def _move(path, roots, line):
-    """Move one file to its root's trash and log it. Returns (size, trash path)."""
+    """Move one file to its root's trash and log it. Returns its manifest line."""
     root, rel = _root_for(path, roots)
     size = os.lstat(path).st_size
     dest = _free_name(os.path.join(trash_dir(root), rel))
@@ -88,10 +89,10 @@ def _move(path, roots, line):
         raise TrashError(f"could not move to the trash: {e.strerror or e}") from e
     scanner.touched([os.path.dirname(path)])   # a scan under way reads the folder again
     now = time.time()
+    line = {"from": path, "to": dest, **line, "at": int(now), "at_ms": _next_stamp(roots, now), "size": size}
     with open(os.path.join(trash_dir(root), MANIFEST), "a", encoding="utf-8") as f:
-        f.write(json.dumps({"from": path, "to": dest, **line, "at": int(now), "at_ms": _next_stamp(roots, now),
-                            "size": size}) + "\n")
-    return size, dest
+        f.write(json.dumps(line) + "\n")
+    return line
 
 
 def _post_info(post, items, partial):
@@ -146,28 +147,33 @@ def _move_all(files, roots, post_id, info, report, data_dir):
         if not os.path.lexists(path):
             continue                            # already gone: nothing to move
         try:
-            size, dest = _move(path, roots, {"post": post_id, "batch": report["batch"], **info, **fields})
-            report["bytes"] += size
+            line = _move(path, roots, {"post": post_id, "batch": report["batch"], **info, **fields})
+            report["bytes"] += line["size"]
             report["files"] += 1
+            report["lines"].append(line)
             if fields.get("role") == "media":   # thumbnails are keyed by the media file
-                thumbs.move(data_dir, path, dest)   # the Trash page shows it from there
+                thumbs.move(data_dir, path, line["to"])   # the Trash page shows it from there
         except (TrashError, OSError) as e:
             ok = False
             report["errors"].append({"path": path, "error": str(e)})
     return ok
 
 
-def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
+def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None, source=None, history=True):
     """Move posts, media items and extra copies (db.save_copies) to the trash.
 
     ``pick(conn)``, when given, runs under the write lock before anything
     moves and returns the (post ids, copy ids) to delete instead, or (post
     ids, copy ids, media ids), so a caller can check the index and the files
-    in the same lock as the move."""
+    in the same lock as the move.
+
+    Each trash entry it makes is a "deleted" event of the history
+    (trash_history), ``source`` its ``from``; none with ``history`` False."""
     report = {"ok": True, "posts": [], "media": [], "copies": [], "files": 0, "bytes": 0, "errors": [],
-              "batch": uuid.uuid4().hex}
+              "batch": uuid.uuid4().hex, "lines": []}
     if not db.write_lock.acquire(timeout=30):
         report.pop("batch")
+        report.pop("lines")
         return {**report, "ok": False, "error": "a scan is running; try again in a moment"}
     try:
         conn = db.connect()
@@ -212,8 +218,13 @@ def delete(post_ids, media_ids, roots, data_dir, copy_ids=(), pick=None):
             report["media"].append(mid)
         conn.commit()
     finally:
-        db.write_lock.release()
+        try:
+            if history:                         # what moved is in the trash, whatever came after
+                _log(data_dir, "deleted", source, _entries_of(roots, report["lines"]))
+        finally:
+            db.write_lock.release()
     report.pop("batch")
+    report.pop("lines")
     return report
 
 
@@ -332,10 +343,12 @@ def _on_disk(roots):
 
 
 def empty(roots, data_dir=None):
-    """Permanently delete every trash folder under the media roots."""
+    """Permanently delete every trash folder under the media roots. The
+    history gets one "emptied" event that counts them, however many."""
     with db.write_lock:
         changed = finish_restores(roots, data_dir)     # their files are back: not in the trash
         before = _on_disk(roots)
+        entries = len(_all_entries(roots))
         gone = set()
         for r in before["roots"]:
             for line in _read_manifest(r["root"]):
@@ -345,6 +358,9 @@ def empty(roots, data_dir=None):
             if os.path.isdir(r["path"]) and os.path.basename(r["path"]) == TRASH_NAME:
                 shutil.rmtree(r["path"])
         forgotten = _forget_gone(roots, gone)
+        if entries or before["files"]:
+            trash_history.add(data_dir, [{"action": "emptied", "from": None, "entries": entries,
+                                          "files": before["files"], "bytes": before["bytes"]}])
     scanner._changed(changed)
     return {"ok": True, "files": before["files"], "bytes": before["bytes"], "forgotten": forgotten}
 
@@ -371,7 +387,8 @@ def _forget_gone(roots, gone):
 # ---------------------------------------------------------------------------
 
 _cache = {}                     # manifest path -> ((mtime_ns, size, inode), lines, entries, entries by key,
-#                                  bytes read up to, their sha1)
+#                                  bytes read up to, their sha1, each line's text in the file or None,
+#                                  each line's _line_key)
 _cache_lock = threading.Lock()
 
 
@@ -406,8 +423,9 @@ def _manifest_path(root):
 
 
 def _parse(data):
-    """The manifest lines in ``data`` (bytes of whole lines)."""
-    lines = []
+    """The manifest lines in ``data`` (bytes of whole lines), and each one's
+    text as read (None unless ASCII, as json.dumps writes them)."""
+    lines, texts = [], []
     for raw in data.splitlines():
         try:
             line = json.loads(raw)
@@ -416,7 +434,14 @@ def _parse(data):
         if isinstance(line, dict) and isinstance(line.get("to"), str) \
                 and isinstance(line.get("from"), str):
             lines.append(line)
-    return lines
+            texts.append(raw.decode("ascii") if raw.isascii() else None)
+    return lines, texts
+
+
+def _texts(lines, parsed, texts):
+    """The text of each of ``lines`` (_rebased of ``parsed``) as read: None
+    for a line _rebased changed."""
+    return [t if line is p else None for line, p, t in zip(lines, parsed, texts)]
 
 
 _MARK = os.sep + TRASH_NAME + os.sep
@@ -481,19 +506,26 @@ def _load(root):
     view = memoryview(data)
     h = hashlib.sha1(view[:hit[4]] if hit and hit[4] <= end else b"")
     if hit and hit[0][2] == st.st_ino and hit[4] <= end and h.digest() == hit[5]:
-        lines = hit[1] + _rebased(_parse(data[hit[4]:end]), root)
-        entries = _group(root, lines, prior=hit[3], start=len(hit[1]))
+        parsed, texts = _parse(data[hit[4]:end])
+        new = _rebased(parsed, root)
+        lines = hit[1] + new
+        texts = hit[6] + _texts(new, parsed, texts)
+        keys = hit[7] + [_line_key(root, line) for line in new]
+        entries = _group(root, lines, prior=hit[3], start=len(hit[1]), keys=keys)
         h.update(view[hit[4]:end])
     else:
-        lines = _rebased(_parse(data[:end]), root)
-        entries = _group(root, lines)
+        parsed, texts = _parse(data[:end])
+        lines = _rebased(parsed, root)
+        texts = _texts(lines, parsed, texts)
+        keys = [_line_key(root, line) for line in lines]
+        entries = _group(root, lines, keys=keys)
         h = hashlib.sha1(view[:end])
     digest = h.digest()
     by_key = {g["key"]: g for g in entries}
     with _stamp_lock:
         _last_stamp = max(_last_stamp or 0, max((g["stamp"] for g in entries), default=0))
     with _cache_lock:
-        _cache[path] = (sig, lines, entries, by_key, end, digest)
+        _cache[path] = (sig, lines, entries, by_key, end, digest, texts, keys)
     return lines, entries, by_key
 
 
@@ -519,11 +551,68 @@ def in_trash(roots, wanted):
 def _write_manifest(root, lines):
     """config.write_private: a temp file of a unique name, never through a
     symlink left in the trash folder, fsynced, renamed over the manifest
-    (private=False: the trash is in a media root, its mode stays as it was)."""
-    def dump(f):
-        for line in lines:
-            f.write(json.dumps(line) + "\n")
-    config.write_private(_manifest_path(root), dump, private=False)
+    (private=False: the trash is in a media root, its mode stays as it was).
+
+    Under db.write_lock, with lines _load returned: one read and left as it
+    was is written as it was read, not encoded again, and the cache becomes
+    what was written, only the entries a line was added to, changed in or
+    dropped from grouped again. Restoring one post from a trash of 50,000
+    lines neither encodes them all twice nor parses them all for the next list."""
+    path = _manifest_path(root)
+    with _cache_lock:
+        hit = _cache.get(path)
+    # Each line's place in the cache, by identity: the cache keeps its lines
+    # alive, so no other object has their id.
+    if hit:
+        pos = {id(line): i for i, line in enumerate(hit[1])}
+        was = [pos.get(id(line)) for line in lines]
+    else:
+        was = [None] * len(lines)
+    texts = [hit[6][i] if i is not None and hit[6][i] else json.dumps(line) for line, i in zip(lines, was)]
+    data = "".join(t + "\n" for t in texts)
+    config.write_private(path, lambda f: f.write(data), private=False)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return
+    if not all(isinstance(line.get("to"), str) and isinstance(line.get("from"), str)
+               for line, i in zip(lines, was) if i is None):
+        with _cache_lock:
+            _cache.pop(path, None)               # what _parse would skip: read again
+        return
+    keys = [hit[7][i] if i is not None else _line_key(root, line) for line, i in zip(lines, was)]
+    entries = _regroup(root, lines, keys, was, hit)
+    raw = data.encode("utf-8")
+    with _cache_lock:
+        _cache[path] = ((st.st_mtime_ns, st.st_size, st.st_ino), lines, entries, {g["key"]: g for g in entries},
+                        len(raw), hashlib.sha1(raw).digest(), texts, keys)
+
+
+def _regroup(root, lines, keys, was, hit):
+    """_group(root, lines), from ``hit`` (the cache _write_manifest wrote
+    over; ``was``: each line's place there, or None): an entry none of
+    whose lines was added, changed or dropped is kept, only its place in
+    the file (seq) brought up to date."""
+    if not hit:
+        return _group(root, lines, keys=keys)
+    touched = {k for k, i in zip(keys, was) if i is None}
+    kept = set(was)
+    touched.update(k for i, k in enumerate(hit[7]) if i not in kept)
+    seq, again, again_keys = {}, [], []
+    for i, k in enumerate(keys):
+        seq[k] = i
+        if k in touched:
+            again.append(lines[i])
+            again_keys.append(k)
+    out = []
+    for g in _group(root, again, keys=again_keys):
+        g["seq"] = seq[g["key"]]
+        out.append(g)
+    for g in hit[2]:
+        k = g["key"]
+        if k in seq and k not in touched:
+            out.append(g if g["seq"] == seq[k] else {**g, "seq": seq[k]})
+    return out
 
 
 def entry_key(root, post, batch):
@@ -572,14 +661,15 @@ def _roles(lines):
     return out
 
 
-def _group(root, lines, prior=None, start=0):
+def _group(root, lines, prior=None, start=0, keys=None):
     """Entries of ``lines``. With ``prior`` (entries by key of
     ``lines[:start]``), only the lines from ``start`` on are grouped: the
-    entries they belong to are made anew, the others kept as they were."""
+    entries they belong to are made anew, the others kept as they were.
+    ``keys``: each line's _line_key, worked out already."""
     groups = {}
     for seq in range(start, len(lines)):
         line = lines[seq]
-        key = _line_key(root, line)
+        key = keys[seq] if keys is not None else _line_key(root, line)
         g = groups.get(key)
         if g is None:
             old = prior.get(key) if prior else None
@@ -834,9 +924,11 @@ def thumb(roots, key, data_dir):
 # Restore and purge
 # ---------------------------------------------------------------------------
 
-def restore(post_ids, roots, data_dir=None, keys=None):
+def restore(post_ids, roots, data_dir=None, keys=None, source=None):
     """Put files back, then re-index them: each post's most recent deletion
-    (``post_ids``), or exactly the entries named by ``keys``.
+    (``post_ids``), or exactly the entries named by ``keys``. What each
+    entry got back is a "restored" event of the history, ``source`` its
+    ``from``.
 
     A file goes back where it was, never over another one. When its folder
     is gone (the account's folder renamed since it was deleted) it goes to
@@ -850,28 +942,35 @@ def restore(post_ids, roots, data_dir=None, keys=None):
     finished by the next one, or by the next scan (finish_restores).
 
     ``decision_unknown``: posts back without a decision whose lines are from
-    before deletions kept it (#155): it may have been a Keep."""
+    before deletions kept it (#155): it may have been a Keep.
+
+    A scan holds db.write_lock while it indexes a folder: after 30 seconds
+    of waiting for it, nothing is restored (``error``), as for delete."""
     report = {"ok": True, "posts": [], "files": 0, "errors": [], "moved": [], "recreated": [],
               "decision_unknown": []}
     wanted = set(post_ids or ())
     wanted_keys = set(keys or ())
-    with db.write_lock:
+    if not db.write_lock.acquire(timeout=30):
+        return {**report, "ok": False, "error": "a scan is running; try again in a moment"}
+    restored = []
+    try:
         changed = finish_restores(roots, data_dir)
         plans = []                               # (root, lines, {line index: destination}, homes)
         for root in roots:
-            lines = _read_manifest(root)
+            lines, _, by_key = _load(root)
             if not lines:
                 continue
             latest = {}                          # post -> batch of its latest deletion
             for e in lines:
                 if e.get("post") in wanted:
                     latest[e["post"]] = e.get("batch")
+            # The lines of the entries asked for, by identity: no key worked out per line.
+            named = {id(e) for k in wanted_keys if k in by_key for e in by_key[k]["lines"]}
             homes = {}                           # (post, folder) -> (where its files go, how), see _home
             chosen = {}
             for i, e in enumerate(lines):
                 pid = e.get("post")
-                if not (pid in latest and e.get("batch") == latest[pid]) \
-                        and _line_key(root, e) not in wanted_keys:
+                if not (pid in latest and e.get("batch") == latest[pid]) and id(e) not in named:
                     continue
                 src, orig = e.get("to"), e.get("from")
                 try:
@@ -896,7 +995,7 @@ def restore(post_ids, roots, data_dir=None, keys=None):
                                        for i, e in enumerate(lines)])
                 plans.append((root, lines, chosen, homes))
 
-        restored, done = [], []
+        done = []
         for root, lines, chosen, homes in plans:
             moved = set()
             for i, dest in chosen.items():
@@ -931,6 +1030,10 @@ def restore(post_ids, roots, data_dir=None, keys=None):
         for (root, lines, chosen, homes), moved in zip(plans, done):
             # The lines of the files that did not move lose their mark.
             _write_manifest(root, [e for i, e in enumerate(lines) if i not in moved])
+        _log(data_dir, "restored", source,
+             [g for (root, lines, _, _), moved in zip(plans, done) for g in _group(root, [lines[i] for i in sorted(moved)])])
+    finally:
+        db.write_lock.release()
     scanner._changed(dict.fromkeys(changed))
     if restored:
         hashing.kick()                           # files back from the trash may need hashing again
@@ -1034,12 +1137,14 @@ def finish_restores(roots, data_dir=None):
     is done, as the restore would have (_put_back), and dropped; any other
     loses its mark (its file did not move). Called before a restore, a
     purge, emptying the trash, and by each scan (one at startup). Returns
-    the user tables changed, for scanner._changed once the lock is free."""
-    rewrites, restored = [], []
+    the user tables changed, for scanner._changed once the lock is free.
+    What it finds back is a "restored" event of the history, from "scan"."""
+    rewrites, restored, entries = [], [], []
     for root in roots:
         lines = _read_manifest(root)
         if not any(RESTORING in e for e in lines):
             continue
+        back_here = len(restored)
         keep = []
         for e in lines:
             if RESTORING not in e:
@@ -1057,6 +1162,7 @@ def finish_restores(roots, data_dir=None):
             else:
                 keep.append(line)
         rewrites.append((root, keep))
+        entries += _group(root, [line for line, _ in restored[back_here:]])
     if not rewrites:
         return []
     changed, _ = _put_back(restored, roots, data_dir)
@@ -1064,6 +1170,7 @@ def finish_restores(roots, data_dir=None):
         _write_manifest(root, keep)
     if restored:
         print(f"[trash] finished a restore cut short: {len(restored)} files were back, their lines dropped")
+        _log(data_dir, "restored", "scan", entries)
     return changed
 
 
@@ -1094,12 +1201,19 @@ def _prune_dirs(path, root):
 
 def purge(roots, keys, data_dir, match=None):
     """Permanently delete the files of the given entries and drop their lines.
-    ``match`` (_matches arguments) picks the entries instead of ``keys``."""
+    ``match`` (_matches arguments) picks the entries instead of ``keys``.
+    Each entry deleted is a "purged" event of the history; more than
+    trash_history.PURGE_EACH of them, one event that counts them."""
     with db.write_lock:
         changed = finish_restores(roots, data_dir)     # their files are back: not in the trash
         if match is not None:
             keys = [g["key"] for g in _all_entries(roots) if _matches(g, **match)]
+        # As they were, for the history: their lines and files are gone after.
+        was = {k: g for root in roots for k, g in _load(root)[2].items()}
+        now = time.monotonic()
+        sizes = {k: _measured_now(was[k], False, now)[:2] for k in set(keys) if k in was}
         report = _purge(roots, keys, data_dir)
+        _log_purged(data_dir, [was[k] for k in report["keys"] if k in was], sizes, report)
     scanner._changed(changed)
     return report
 
@@ -1110,17 +1224,19 @@ def _purge(roots, keys, data_dir):
     wanted = set(keys)
     gone = set()
     for root in roots:
-        lines = _read_manifest(root)
-        if not any(_line_key(root, e) in wanted for e in lines):
+        lines, _, by_key = _load(root)
+        # The lines of the entries asked for, by identity: no key worked out per line.
+        mine = {id(e): k for k in wanted if k in by_key for e in by_key[k]["lines"]}
+        if not mine:
             continue
         keep, failed, done, posts = [], set(), set(), {}
         # A stale line (its file put back by hand, or by a restore cut short
         # before the manifest was rewritten) can name the same trash path as
         # a later deletion: that file is the later entry's, never removed here.
-        claimed = {e.get("to") for e in lines if _line_key(root, e) not in wanted}
+        claimed = {e.get("to") for e in lines if id(e) not in mine}
         for e in lines:
-            key = _line_key(root, e)
-            if key not in wanted:
+            key = mine.get(id(e))
+            if key is None:
                 keep.append(e)
                 continue
             posts[key] = e.get("post")
@@ -1201,3 +1317,129 @@ def merge_again(roots, post_ids, data_dir):
         left = {g["public"]["post"] for g in _all_entries(roots) if g["key"] in set(drop) - set(report["keys"])}
         merged = [pid for pid in merged if pid not in left]
     return merged
+
+
+# ---------------------------------------------------------------------------
+# The history (trash_history): what was deleted, restored, deleted for good
+# ---------------------------------------------------------------------------
+
+def _entries_of(roots, lines):
+    """The entries of lines _move just wrote (their trash path under their
+    root as resolved), keyed as _load keys them: by the root as set."""
+    tops = {}
+    for root in roots:
+        tops.setdefault(os.path.realpath(root), root)
+    by_root = {}
+    for line in lines:
+        i = line["to"].find(_MARK)
+        root = tops.get(line["to"][:i]) if i > 0 else None
+        if root is not None:
+            by_root.setdefault(root, []).append(line)
+    return [g for root, ls in by_root.items() for g in _group(root, ls)]
+
+
+# What an event keeps of its entry: never a path.
+_EVENT = ("key", "post", "platform", "post_id", "batch", "author", "kind", "posted_at", "items", "of",
+          "partial", "copy")
+
+
+def _log(data_dir, action, source, entries, sizes=None):
+    """One event per entry (_group's) in the history: its files and bytes
+    from ``sizes`` ({key: (bytes, files)}), else as its lines recorded."""
+    events = []
+    for g in entries:
+        if sizes and g["key"] in sizes:
+            size, files = sizes[g["key"]]
+        else:
+            size = sum(line["size"] for line in g["lines"] if isinstance(line.get("size"), int))
+            files = len(g["lines"])
+        events.append({"action": action, "from": source, **{k: g["public"][k] for k in _EVENT},
+                       "files": files, "bytes": size})
+    trash_history.add(data_dir, events)
+
+
+def _log_purged(data_dir, entries, sizes, report):
+    """A purge's events: one per entry, or, past PURGE_EACH, one that
+    counts them (their keys kept, for history's states)."""
+    if len(entries) > trash_history.PURGE_EACH:
+        trash_history.add(data_dir, [{"action": "purged", "from": None, "entries": len(entries),
+                                      "files": report["files"], "bytes": report["bytes"],
+                                      "keys": [g["key"] for g in entries]}])
+    elif entries:
+        _log(data_dir, "purged", None, entries, sizes)
+
+
+# What a History row shows of its event (not the keys a purge kept).
+_SHOWN = ("at", "at_ms", "action", "from", "post", "platform", "post_id", "author", "kind", "posted_at",
+          "items", "of", "partial", "copy", "files", "bytes", "entries")
+
+
+def history(roots, data_dir, offset=0, limit=60, post=None, upto=None):
+    """The Trash page's History: trash_history's events newest first
+    (``post``: one post's; ``upto``: none logged after a first page's
+    ``upto``), each with where its post or items are now (``state``):
+
+        in_trash    its entry is still in the trash; for a whole post, the
+                    post's newest deletion is (deleted again since).
+                    ``restore_key``: the entry a restore takes back
+        restored    back: a restore of its entry was logged, or the post
+                    (a whole one) is in the index again
+        gone        deleted for good (a purge, Empty trash), or nowhere
+
+    A purge or an Empty trash is gone. ``open``: the post is in the index
+    now. ``thumb_url``: the trash entry's thumbnail while in the trash, the
+    post's cover once back (none for a video without a poster when ffmpeg
+    is missing). Only the log, the manifests and the index are read: no
+    path is ever sent, no file looked at."""
+    log, restored = trash_history.events(data_dir)
+    rows = [e for e in reversed(log) if (post is None or e["post"] == post) and (upto is None or e["at_ms"] <= upto)]
+    newest_ms = log[-1]["at_ms"] if log else 0
+    out = {"total": len(rows), "upto": newest_ms if upto is None else min(upto, newest_ms), "events": []}
+    page = rows[offset:offset + limit]
+    if not page:
+        return out
+    trashed, newest = {}, {}                    # key -> entry; post -> its newest whole entry
+    for root in roots:
+        for g in _load(root)[1]:
+            trashed[g["key"]] = g
+            p = g["public"]
+            if p["post"] and not p["partial"] and not p["copy"]:
+                n = newest.get(p["post"])
+                if n is None or (g["stamp"], g["seq"]) > (n["stamp"], n["seq"]):
+                    newest[p["post"]] = g
+    gone, emptied = set(), 0                    # keys deleted for good; the last Empty trash
+    for e in log:
+        if e["action"] == "purged":
+            gone.update(e["keys"] or ([e["key"]] if e["key"] else []))
+        elif e["action"] == "emptied":
+            emptied = e["at_ms"]
+    here = db.covers(db.connect(), [e["post"] for e in page if e["post"]])
+    ffmpeg = thumbs.have_ffmpeg()
+    for e in page:
+        state, back = _state(e, trashed, newest, restored, gone, emptied, here)
+        row = {**{k: e[k] for k in _SHOWN}, "state": state, "restore_key": back, "open": e["post"] in here,
+               "thumb_url": None}
+        if back is not None:
+            row["thumb_url"] = f"/trash/{back}/thumb" if _thumb_source(trashed[back], ffmpeg) else None
+        elif state == "restored" and here.get(e["post"]):
+            cover = here[e["post"]]
+            row["thumb_url"] = cover["url"] if cover["kind"] == "image" or cover["poster"] else None
+        out["events"].append(row)
+    return out
+
+
+def _state(e, trashed, newest, restored, gone, emptied, here):
+    """(state, the key of the entry a restore takes back) of an event: see
+    history. ``here``: the posts in the index."""
+    if e["action"] not in ("deleted", "restored"):
+        return "gone", None
+    key = e["key"]
+    if key in trashed:
+        return "in_trash", key
+    if key in gone or e["at_ms"] < emptied and key not in restored:
+        return "gone", None
+    if not e["partial"] and not e["copy"]:     # a whole post: where the post is now
+        if e["post"] in newest:
+            return "in_trash", newest[e["post"]]["key"]
+        return ("restored" if e["post"] in here else "gone"), None
+    return ("restored" if key in restored else "gone"), None

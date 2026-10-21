@@ -775,7 +775,7 @@ def resolve(choices, roots, data_dir, threshold=SIMILAR_DEFAULT):
                 promote.append((kept["post_id"], kept["folder"], kept["kept"]))
         return posts, copies, media
 
-    report = trash.delete([], [], roots, data_dir, pick=pick)
+    report = trash.delete([], [], roots, data_dir, pick=pick, source="duplicates")
     if "error" in report:
         return {**report, "resolved": [], "skipped": skipped}
     gone = set(report["posts"]) | {f"copy:{c}" for c in report["copies"]}
