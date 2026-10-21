@@ -3323,6 +3323,13 @@ main[tabindex]:focus-visible { outline: none; box-shadow: none; }
 .creators-people-head .creators-section { margin: 0; flex: 1; }
 .links-tabs.creators-view { margin-bottom: 0; }
 .creator-grid + .creators-section { margin-top: 22px; }
+/* The header's search on Creators: Creators, Accounts, Links, one under
+   the other. */
+.creator-search-section + .creator-search-section { margin-top: 22px; }
+.creator-search-section:first-child .creators-section { margin-top: 4px; }
+/* Wider cards than the page's: an account carries its person's chip too. */
+.creator-search .creator-grid { grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); }
+.creator-search .person-chip { max-width: 160px; }
 .creators-view .links-tab { min-height: 28px; padding: 3px 12px; font-size: 12.5px; }
 
 /* Portraits: a grid of tall cards, as Stash shows performers. The picture
@@ -3485,6 +3492,10 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
    links (the box and its sub-heading come with the open form). */
 .bio-import-fold { margin-top: 12px; }
 .person-link-add:has(> .link-form-open) { padding: 0; border: none; }
+/* The header's search on a person's page: what does not match is hidden,
+   not gone, so what was typed in it is still there after. */
+.person-hero[hidden], .person-section[hidden], .person-link-add[hidden] { display: none; }
+.person-search .creator-sub { white-space: normal; }
 .person-link-add:has(> .link-form-open) > .link-group-title { display: none; }
 :is(.bio-import-open, .link-form-open) { display: inline-flex; align-items: center; gap: 7px; }
 .bio-import-form > .btn-ghost, .link-form-actions > .btn-ghost { flex-shrink: 0; }

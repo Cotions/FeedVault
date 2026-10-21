@@ -571,7 +571,7 @@ test("quick-add: the nav's + Link saves a typed address to no one; no clipboard 
 test("quick-add: Alt+L while typing types, it does not open", async ({ page }) => {
   await stubClipboard(page, null);
   await openPage(page, { name: "Links", path: "/links" });
-  await page.getByRole("textbox", { name: "Search posts" }).press("Alt+l");
+  await page.getByRole("textbox", { name: "Search links" }).press("Alt+l");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await idle(page);
 });

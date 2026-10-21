@@ -497,6 +497,16 @@ or any other you type), a country, and labels of your own ("cosplay",
 flag and labels on their card, filters people by gender, country and
 label, and its search box matches them too.
 
+The **search box in the header** (`/` or Ctrl-K) searches the page you are
+on. On Creators it lists what matches in three parts: creators (by name or
+label), accounts (any handle, linked to someone or not, each a click from
+its posts and its person) and saved links (address, title or notes). On a
+person's page it narrows their accounts, sources and links, and counts
+their posts that match, one click from the Feed. On Links it searches the
+links. Esc or the × goes back to the page as it was, and the search stays
+in the address, so a reload or Back keeps it. Anywhere else it searches
+the Feed's posts.
+
 A person can have a **profile picture**, a portrait (2:3, as Stash shows
 performers): click the portrait placeholder at the top of their page, then
 upload one (or drop or paste it), pick a picture from their posts, or take

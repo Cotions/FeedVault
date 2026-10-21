@@ -8,6 +8,7 @@ import { ProfilesContext } from "./lib/profiles";
 import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
+import { SearchContext, scopeText, searchScope } from "./lib/search";
 import { droppedUrl, mayCarryUrl } from "./lib/links";
 import { desktopAllowed, notificationPath } from "./lib/notify";
 import { FOCUSABLE, PHONE } from "./lib/layout";
@@ -106,17 +107,20 @@ export default function App() {
     setTimeout(() => setToasts(list => list.filter(t => t.id !== id)), link ? 9000 : kind === "err" ? 7000 : 4000);
   }, []);
 
-  // The search box drives the Feed's `q` query parameter, so reload and Back
-  // both restore a search. The input keeps its own state and pushes to the URL
+  // The search box searches the page it is on when that page searches itself
+  // (lib/search.js: the Feed, Creators, a person, Links), in that page's `q`
+  // query parameter, so reload and Back both restore a search; anywhere else
+  // it drives the Feed's. The input keeps its own state and pushes to the URL
   // after a short pause: binding it straight to the URL lost keystrokes,
   // because router navigations commit in a transition and the controlled input
   // re-rendered with the stale value in between.
-  const onFeed = location.pathname === "/";
-  const urlQ   = onFeed ? new URLSearchParams(location.search).get("q") || "" : "";
+  const scope  = searchScope(location.pathname);
+  const urlQ   = scope ? new URLSearchParams(location.search).get("q") || "" : "";
   const [query,      setQuery]      = useState(urlQ);
   const [seenUrlQ,   setSeenUrlQ]   = useState(urlQ);
   const [lastPushed, setLastPushed] = useState(urlQ);
-  // The URL changed under us (Back, a hashtag link, leaving the feed): adopt it,
+  const [searchName, setSearchName] = useState(null);    // the person whose page it searches
+  // The URL changed under us (Back, a hashtag link, another page): adopt it,
   // unless it is just our own push landing.
   if (urlQ !== seenUrlQ) {
     setSeenUrlQ(urlQ);
@@ -126,15 +130,25 @@ export default function App() {
   useEffect(() => {
     if (query === urlQ) return;
     const t = setTimeout(() => {
-      const params = new URLSearchParams(onFeed ? location.search : "");
+      const params = new URLSearchParams(scope ? location.search : "");
       if (query) params.set("q", query); else params.delete("q");
       const search = params.toString();
       setLastPushed(query);
-      // Typing on the feed replaces the entry; typing elsewhere opens the feed.
-      navigate({ pathname: "/", search: search ? `?${search}` : "" }, { replace: onFeed });
-    }, onFeed ? 200 : 0);
+      // Typing on a page that searches itself replaces its entry; typing
+      // elsewhere opens the feed.
+      navigate({ pathname: scope ? location.pathname : "/", search: search ? `?${search}` : "" }, { replace: !!scope });
+    }, scope ? 200 : 0);
     return () => clearTimeout(t);
-  }, [query, urlQ, onFeed, location.search, navigate]);
+  }, [query, urlQ, scope, location.pathname, location.search, navigate]);
+
+  // A page that refused the search (Links' "Keep editing") puts the box back.
+  const urlQRef = useRef(urlQ);
+  useEffect(() => { urlQRef.current = urlQ; }, [urlQ]);
+  const searchCtx = useMemo(() => ({
+    setName: setSearchName,
+    reset: () => { setQuery(urlQRef.current); setLastPushed(urlQRef.current); },
+  }), [setQuery, setLastPushed]);
+  const searchText = scopeText(scope, searchName);
 
   // The phone's drawer closes first: it traps Tab and makes the rest inert.
   // Opened again while open (Alt+L), it stays as it is, typing and all; a
@@ -159,7 +173,11 @@ export default function App() {
         searchRef.current?.focus();
         searchRef.current?.select();
       } else if (e.key === "Escape" && e.target === searchRef.current) {
-        searchRef.current.blur();
+        // On a page that searches itself, Esc first drops the search: the
+        // page as it is without one. The Feed's stays, as it always has.
+        const own = searchScope(window.location.pathname);
+        if (own && !own.feed && searchRef.current.value) setQuery("");
+        else searchRef.current.blur();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -461,6 +479,7 @@ export default function App() {
     <JobsContext.Provider value={jobsCtx}>
     <ToastContext.Provider value={toast}>
     <ProfilesContext.Provider value={profilesCtx}>
+    <SearchContext.Provider value={searchCtx}>
       <CyberBackground />
       <ScrollManager />
       <header ref={headerRef}>
@@ -489,8 +508,8 @@ export default function App() {
             ref={searchRef}
             type="text"
             className="header-search"
-            placeholder="Search captions, authors, tag:name…"
-            aria-label="Search posts"
+            placeholder={searchText.placeholder}
+            aria-label={searchText.label}
             value={query}
             onChange={e => setQuery(e.target.value)}
           />
@@ -710,6 +729,7 @@ export default function App() {
           </div>
         ))}
       </div>
+    </SearchContext.Provider>
     </ProfilesContext.Provider>
     </ToastContext.Provider>
     </JobsContext.Provider>

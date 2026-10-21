@@ -33,6 +33,7 @@ import PageHeader from "../components/PageHeader";
 import { useUnsaved } from "../lib/unsaved";
 import { useWindow } from "../lib/windowing";
 import { Gap } from "../components/WinGap";
+import CreatorSearch from "../components/CreatorSearch";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -552,6 +553,18 @@ export default function Creators() {
   ], [people, unlinked]);
   const sel = useSelection(items, { resetKey: `${filter}|${JSON.stringify(attrs)}|${key}`, escapeBlocked: !!merge || !!each });
 
+  // The header's search (lib/search.js), in ?q=: while it has something in
+  // it the page shows what matches (CreatorSearch) instead of its grids, and
+  // leaves select mode. The sources panel stays, hidden, so a source being
+  // typed is still there after.
+  const q = params.get("q") || "";
+  const searching = !!q.trim();
+  const [wasSearching, setWasSearching] = useState(searching);
+  if (searching !== wasSearching) {                         // adjusting state during render, not in an effect
+    setWasSearching(searching);
+    if (searching && sel.active) sel.exit();
+  }
+
   // ?source=<id>, from a failed sync's notification (#123): that source's
   // row or card in view, and lit for a moment, as Links does a link saved
   // already. Nothing filtered or in select mode hides it.
@@ -780,7 +793,7 @@ export default function Creators() {
           ? `${plural(peopleAll.length, "person", "people")} · ${plural(data.length, "account")} · ${plural(total, "post")}`
           : "…"}
         actions={<>
-          {(data?.length > 8 || peopleAll.length > 8) && (
+          {!searching && (data?.length > 8 || peopleAll.length > 8) && (
             <input
               type="text"
               className="page-filter"
@@ -796,7 +809,7 @@ export default function Creators() {
               <Icon name="plus" size={14} /> New person
             </button>
           )}
-          {data?.length > 1 && (
+          {!searching && data?.length > 1 && (
             <button
               type="button"
               className={`btn-secondary select-toggle${sel.active ? " is-on" : ""}`}
@@ -811,8 +824,8 @@ export default function Creators() {
         </>}
       />
       <div className="card">
-        {/* Hidden, not gone, while filtering or selecting: a source being typed stays. */}
-        <section className="sources-panel" aria-label="Sources" hidden={sel.active || filtering}>
+        {/* Hidden, not gone, while filtering, searching or selecting: a source being typed stays. */}
+        <section className="sources-panel" aria-label="Sources" hidden={sel.active || filtering || searching}>
           <AddSource onAdded={sources.reload} onDirty={setNewSource} />
           <SyncAllBar count={sourceList.filter(src => !src.no_sync).length} syncAll={syncAll} />
           {loose.length > 0 && (
@@ -826,7 +839,7 @@ export default function Creators() {
           )}
         </section>
 
-        {!sel.active && !filtering && (
+        {!sel.active && !filtering && !searching && (
           <SourceSuggestions
             list={sources.data?.suggestions}
             busy={busy}
@@ -835,14 +848,16 @@ export default function Creators() {
           />
         )}
 
-        {!sel.active && !filtering && (
+        {!sel.active && !filtering && !searching && (
           <Suggestions data={suggestApi.data} busy={busy} onLink={linkSuggestion} onDismiss={dismiss} />
         )}
 
-        {peopleApi.data && <AttributeFilters people={peopleAll} accounts={data || []} value={attrs} onChange={changeAttrs} />}
+        {peopleApi.data && !searching && <AttributeFilters people={peopleAll} accounts={data || []} value={attrs} onChange={changeAttrs} />}
 
         {error && !data ? (
           <div className="empty">Could not load creators: {error.message}</div>
+        ) : searching ? (
+          <CreatorSearch query={q} people={peopleApi.data} accounts={data} refreshKey={key} />
         ) : loading ? (
           <div className="empty">Loading…</div>
         ) : empty ? (
