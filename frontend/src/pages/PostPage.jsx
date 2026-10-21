@@ -6,6 +6,7 @@ import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
+import { useUndoDelete } from "../lib/useUndoDelete";
 import { albumLabel, excerpt, fmt, fmtBytes, fmtFullDate, fmtIso, platformLabel, plural, safeUrl, authorFeedPath } from "../lib/fmt";
 import MediaCarousel from "../components/MediaCarousel";
 import RichText from "../components/RichText";
@@ -79,6 +80,7 @@ export default function PostPage() {
   const { data: post, error, loading, reload } = useApi(load, refreshKey);
   const toast = useToast();
   const { started } = useJobs();
+  const undoOf = useUndoDelete();
 
   // Pending deletion: null, { type: "post" }, or { type: "item", item, index }.
   const [confirm,   setConfirm]   = useState(null);
@@ -101,12 +103,14 @@ export default function PostPage() {
     setDlgError(null);
     try {
       if (confirm.type === "post") {
-        const r = await deleteItems({ posts: [post.id] });
+        const r = await deleteItems({ posts: [post.id], from: "post" });
         if (!r?.ok && !r?.posts?.length) { setDlgError(r?.error || "Nothing could be deleted."); return; }
         if (r.posts?.includes(post.id)) {
           started();   // the new counts (jobs poll) follow now
           setConfirm(null);
-          toast(`Post moved to the trash (${plural(r.files ?? 0, "file")} including metadata, ${fmtBytes(r.bytes ?? 0)}).`);
+          // Its Undo outlives this page, which goes back right away.
+          toast(`Post moved to the trash (${plural(r.files ?? 0, "file")} including metadata, ${fmtBytes(r.bytes ?? 0)}).`,
+            "ok", undoOf([post]));
           back();
           return;
         }
@@ -115,19 +119,20 @@ export default function PostPage() {
         reload();
       } else {
         const id = confirm.item.id;
-        const r = await deleteItems({ media: [id] });
+        const r = await deleteItems({ media: [id], from: "post" });
         if (!r?.ok && !r?.media?.length) { setDlgError(r?.error || "Nothing could be deleted."); return; }
         setConfirm(null);
         if (r.errors?.length) setDelErrors(r.errors);
         if (!r.media?.includes(id)) { reload(); return; }
         // Removing the last item removes the post: check before reloading.
+        // Either way its Undo is a restore of the post: its latest deletion.
         try {
           await getPost(platform, postId);
-          toast(`Item moved to the trash (${fmtBytes(r.bytes ?? 0)}).`);
+          toast(`Item moved to the trash (${fmtBytes(r.bytes ?? 0)}).`, "ok", undoOf([post], "item"));
           reload();
         } catch (e) {
           if (e.status !== 404) throw e;
-          toast("Last item deleted, so the post was removed.");
+          toast("Last item deleted, so the post was removed.", "ok", undoOf([post]));
           back();
         }
       }
@@ -204,12 +209,12 @@ export default function PostPage() {
           <p>
             Move item {confirm.index + 1} of {media.length} ({confirm.item.kind}
             {confirm.item.size != null ? `, ${fmtBytes(confirm.item.size)}` : ""}) to the trash?
-            The rest of the post stays. You can restore it from the Trash page; the space is freed once the trash is emptied.
+            The rest of the post stays. Undo, or the Trash page, brings it back; the space is freed once the trash is emptied.
           </p>
         ) : (
           <p>
             Move this post ({media.length} media item{media.length === 1 ? "" : "s"}, {fmtBytes(totalBytes)},
-            plus its thumbnails and metadata files) to the trash? You can restore it from the Trash page; the space is freed once the trash is emptied.
+            plus its thumbnails and metadata files) to the trash? Undo, or the Trash page, brings it back; the space is freed once the trash is emptied.
           </p>
         )}
       </ConfirmDialog>

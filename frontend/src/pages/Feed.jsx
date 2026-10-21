@@ -8,6 +8,7 @@ import { useSelection } from "../lib/useSelection";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
+import { useUndoDelete } from "../lib/useUndoDelete";
 import { KINDS, platformLabel, fmtBytes, fmtInt, plural } from "../lib/fmt";
 import { sameTag, searchTags, tagsMatch, withTags } from "../lib/tags";
 import { personPath } from "../lib/people";
@@ -147,6 +148,7 @@ export default function Feed() {
 
   /* ── Select mode ─────────────────────────────────────── */
   const toast = useToast();
+  const undoOf = useUndoDelete();
   const [confirmDel, setConfirmDel] = useState(false);
   const [tagging,    setTagging]    = useState(false);
   const [collecting, setCollecting] = useState(false);
@@ -237,7 +239,7 @@ export default function Feed() {
     setDlgError(null);
     try {
       const ids = selectedPosts.map(p => p.id);
-      const r = await deleteItems({ posts: ids });
+      const r = await deleteItems({ posts: ids, from: "feed" });
       const gone = new Set(r?.posts || []);
       if (!r?.ok && gone.size === 0) { setDlgError(r?.error || "Nothing could be deleted."); return; }
       setResult(prev => ({
@@ -251,7 +253,8 @@ export default function Feed() {
       setConfirmDel(false);
       setDelErrors(r.errors?.length ? r.errors : null);
       if (gone.size) {
-        toast(`${plural(gone.size, "post")} moved to the trash (${plural(r.files ?? 0, "file")} including metadata, ${fmtBytes(r.bytes ?? 0)}).`);
+        toast(`${plural(gone.size, "post")} moved to the trash (${plural(r.files ?? 0, "file")} including metadata, ${fmtBytes(r.bytes ?? 0)}).`,
+          "ok", undoOf(selectedPosts.filter(p => gone.has(p.id))));
       }
       if (gone.size < ids.length && !r.errors?.length) {
         toast(`${plural(ids.length - gone.size, "post")} could not be deleted.`, "err");
@@ -631,7 +634,7 @@ export default function Feed() {
             Move {selectedCount === 1 ? "this post" : `these ${selectedCount} posts`} and
             all {selectedCount === 1 ? "its" : "their"} files
             {selectedMedia > 0 && ` (${selectedMedia} media, ${fmtBytes(selectedBytes)})`} to the trash?
-            You can restore {selectedCount === 1 ? "it" : "them"} from the Trash page; the space is freed once the trash is emptied.
+            Undo, or the Trash page, brings {selectedCount === 1 ? "it" : "them"} back; the space is freed once the trash is emptied.
           </p>
         </ConfirmDialog>
       </div>

@@ -55,6 +55,12 @@ const JOBS_SAME_MS        = 60000;
 // Desktop notifications on: a hidden tab still polls, now and then.
 const DESKTOP_POLL_MS     = 60000;
 const DESKTOP_MAX         = 5;               // notifications shown at once; the bell lists the rest
+// How long a toast shows: one with an action (Undo) long enough to reach
+// it, one with a link a while, an error longer than news. The time stops
+// while the pointer is on the toast or focus is in it, and once it leaves
+// there are at least TOAST_RESUME_MS left.
+const TOAST_MS        = { action: 15000, link: 9000, err: 7000, ok: 4000 };
+const TOAST_RESUME_MS = 2000;
 
 /* A page about one entity (a person, a collection, a post), mounted afresh
    for each: going from one to the next in the app (a link between two
@@ -103,9 +109,10 @@ export default function App() {
 
   const toast = useCallback((text, kind = "ok", link) => {
     const id = ++toastId.current;
-    setToasts(list => [...list.slice(-3), { id, text, kind, link }]);
-    setTimeout(() => setToasts(list => list.filter(t => t.id !== id)), link ? 9000 : kind === "err" ? 7000 : 4000);
+    const ms = link?.onClick ? TOAST_MS.action : link ? TOAST_MS.link : kind === "err" ? TOAST_MS.err : TOAST_MS.ok;
+    setToasts(list => [...list.slice(-3), { id, text, kind, link, ms }]);
   }, []);
+  const dismissToast = useCallback(id => setToasts(list => list.filter(t => t.id !== id)), []);
 
   // The search box searches the page it is on when that page searches itself
   // (lib/search.js: the Feed, Creators, a person, Links), in that page's `q`
@@ -446,9 +453,10 @@ export default function App() {
   useEffect(() => { loadProfiles(); }, [loadProfiles]);
   const profilesCtx = useMemo(() => ({ profiles, reload: loadProfiles }), [profiles, loadProfiles]);
 
+  const refresh = useCallback(() => setRefreshKey(k => k + 1), []);
   const scanCtx = useMemo(
-    () => ({ status: scan, running, start, refreshKey }),
-    [scan, running, start, refreshKey],
+    () => ({ status: scan, running, start, refreshKey, refresh }),
+    [scan, running, start, refreshKey, refresh],
   );
 
   // The backend exits right after answering, so the response may never land.
@@ -704,36 +712,69 @@ export default function App() {
       )}
 
       <div className="toasts" role="status" aria-live="polite">
-        {toasts.map(t => (
-          <div key={t.id} className={`toast toast-${t.kind}`}>
-            <Icon name={t.kind === "err" ? "warn" : t.kind === "info" ? "info" : "check"} size={15} />
-            <span>{t.text}</span>
-            {t.link?.onClick ? (
-              <button type="button" className="toast-link"
-                onClick={() => { setToasts(list => list.filter(x => x.id !== t.id)); t.link.onClick(); }}>
-                {t.link.label}
-              </button>
-            ) : t.link && (
-              <Link to={t.link.to} className="toast-link" onClick={() => setToasts(list => list.filter(x => x.id !== t.id))}>
-                {t.link.label}
-              </Link>
-            )}
-            <button
-              type="button"
-              className="del-btn"
-              onClick={() => setToasts(list => list.filter(x => x.id !== t.id))}
-              aria-label="Dismiss"
-            >
-              <Icon name="close" size={13} />
-            </button>
-          </div>
-        ))}
+        {toasts.map(t => <Toast key={t.id} toast={t} onDismiss={dismissToast} />)}
       </div>
     </SearchContext.Provider>
     </ProfilesContext.Provider>
     </ToastContext.Provider>
     </JobsContext.Provider>
     </ScanContext.Provider>
+  );
+}
+
+/* One toast. It goes once its time is up (TOAST_MS), a time that stops
+   while the pointer is on it or focus is in it, so it can be read and its
+   Undo reached. An action that returns a promise (an Undo's request) keeps
+   it, its button busy ("Undo…"), until the answer: the action toasts what
+   it did, and this one goes. */
+function Toast({ toast: t, onDismiss }) {
+  const [hover,  setHover]  = useState(false);
+  const [focus,  setFocus]  = useState(false);
+  const [acting, setActing] = useState(false);
+  const left = useRef(t.ms);
+  const { id } = t;
+  useEffect(() => {
+    if (hover || focus || acting) return;
+    const from = Date.now();
+    const timer = setTimeout(() => onDismiss(id), left.current);
+    return () => {
+      clearTimeout(timer);
+      left.current = Math.max(TOAST_RESUME_MS, left.current - (Date.now() - from));
+    };
+  }, [hover, focus, acting, id, onDismiss]);
+
+  async function act() {
+    const done = t.link.onClick();
+    if (done && typeof done.then === "function") {
+      setActing(true);
+      try { await done; } catch { /* the action toasts its own failure */ }
+    }
+    onDismiss(id);
+  }
+
+  return (
+    <div
+      className={`toast toast-${t.kind}`}
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => setHover(false)}
+      onFocus={() => setFocus(true)}
+      onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setFocus(false); }}
+    >
+      <Icon name={t.kind === "err" ? "warn" : t.kind === "info" ? "info" : "check"} size={15} />
+      <span>{t.text}</span>
+      {t.link?.onClick ? (
+        <button type="button" className="toast-link" onClick={act} disabled={acting} aria-busy={acting || undefined}>
+          {acting ? `${t.link.label}…` : t.link.label}
+        </button>
+      ) : t.link && (
+        <Link to={t.link.to} className="toast-link" onClick={() => onDismiss(id)}>
+          {t.link.label}
+        </Link>
+      )}
+      <button type="button" className="del-btn" onClick={() => onDismiss(id)} aria-label="Dismiss">
+        <Icon name="close" size={13} />
+      </button>
+    </div>
   );
 }
 
