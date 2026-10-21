@@ -3944,6 +3944,11 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .route-row .insta-input { margin-left: 0; }
 .route-host { flex: 1; min-width: 0; max-width: 280px; }    /* shrinks on a phone: the tool and Remove stay in view */
 .route-tool { min-width: 130px; }
+/* Settings → Link labels: a site and its label, what is wrong under them. */
+.link-label-row { display: flex; flex-direction: column; gap: 3px; }
+.link-label-text { flex: 1; min-width: 0; max-width: 280px; }
+.link-label-hint { font-size: 12px; overflow-wrap: anywhere; }
+.link-label-hint.is-err { color: #ffb3b5; }
 
 /* ── Notifications (the sidebar's bell) ─────────────────── */
 .side-bell { position: relative; }

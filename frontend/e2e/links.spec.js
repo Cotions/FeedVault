@@ -66,24 +66,25 @@ test("a person's Links: add, reorder, edit and delete", async ({ page }) => {
     await form.getByRole("button", { name: "Add link" }).click();
     // Socials first, then the others in the order added.
     const titles = section.locator(".link-row .link-row-title");
-    await expect(titles).toHaveText([`www.patreon.com/e2e${stamp}`, "First", "Second"]);
+    // No title: its site's own name (FeedVault does not sync patreon.com, linklabels.py).
+    await expect(titles).toHaveText(["Patreon.com", "First", "Second"]);
     await expect(section.locator(".link-group-title")).toHaveText(["Socials", "Other", "Add a link"]);
 
     await section.getByRole("button", { name: "Move Second up" }).click();
-    await expect(titles).toHaveText([`www.patreon.com/e2e${stamp}`, "Second", "First"]);
+    await expect(titles).toHaveText(["Patreon.com", "Second", "First"]);
     await page.reload();
-    await expect(titles).toHaveText([`www.patreon.com/e2e${stamp}`, "Second", "First"]);
+    await expect(titles).toHaveText(["Patreon.com", "Second", "First"]);
 
     await section.getByRole("button", { name: "Edit First" }).click();
     const edit = section.locator(".link-row.is-editing");
     await edit.getByLabel("Title").fill("First, edited");
     await edit.getByRole("button", { name: "Save" }).click();
-    await expect(titles).toHaveText([`www.patreon.com/e2e${stamp}`, "Second", "First, edited"]);
+    await expect(titles).toHaveText(["Patreon.com", "Second", "First, edited"]);
     await expectSafeAnchor(section.locator(".link-row", { hasText: "First, edited" }), `https://e2e-${stamp}.example/one`);
 
     await section.getByRole("button", { name: "Delete Second" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete link" }).click();
-    await expect(titles).toHaveText([`www.patreon.com/e2e${stamp}`, "First, edited"]);
+    await expect(titles).toHaveText(["Patreon.com", "First, edited"]);
     await idle(page);
   } finally {
     // The person's links stay, tied to no one, once the person is gone: both cleared.
@@ -117,7 +118,7 @@ test("a link-in-bio import shows the links it saved in the person's Links", asyn
     await expect(box.locator(".bio-import-kept")).toHaveText("3 links saved to their Links");
 
     const titles = section.locator(".link-row .link-row-title");
-    await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "My Patreon", "<img src=x onerror=alert(1)>"]);
+    await expect(titles).toHaveText(["Linktr.ee", "My Patreon", "<img src=x onerror=alert(1)>"]);
     await expect(section.locator(".link-group-title:visible")).toHaveText(["Socials", "Other"]);   // Add a link folded
     expect(await section.locator("img").count(), "a label is text, never markup").toBe(0);
     for (const [i, link] of found.entries()) await expectSafeAnchor(section.locator(".link-row").nth(i), link.url);
@@ -127,17 +128,76 @@ test("a link-in-bio import shows the links it saved in the person's Links", asyn
     const edit = section.locator(".link-row.is-editing");
     await edit.getByLabel("Title").fill("Patreon, mine");
     await edit.getByRole("button", { name: "Save" }).click();
-    await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "Patreon, mine", "<img src=x onerror=alert(1)>"]);
+    await expect(titles).toHaveText(["Linktr.ee", "Patreon, mine", "<img src=x onerror=alert(1)>"]);
     await box.getByRole("button", { name: "Import" }).click();
     await expect(box.locator(".bio-import-kept")).toHaveText("No new link to save · 3 links already there");
-    await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "Patreon, mine", "<img src=x onerror=alert(1)>"]);
+    await expect(titles).toHaveText(["Linktr.ee", "Patreon, mine", "<img src=x onerror=alert(1)>"]);
     await page.reload();
-    await expect(titles).toHaveText([`linktr.ee/e2e${stamp}`, "Patreon, mine", "<img src=x onerror=alert(1)>"]);
+    await expect(titles).toHaveText(["Linktr.ee", "Patreon, mine", "<img src=x onerror=alert(1)>"]);
     await idle(page);
   } finally {
     const { links } = await (await page.request.get(`/api/links?person=${pid}`, { headers: H })).json();
     for (const l of links) await page.request.delete(`/api/links/${l.id}`, { headers: H });
     await page.request.delete(`/api/people/${pid}`, { headers: H });
+  }
+});
+
+// Settings → Link labels: a rule names every untitled link of its site,
+// at once and with no change to the links; a title still wins, a site given
+// twice waits, and removing the rule gives the site's own name back.
+test("Link labels: a rule names the untitled links of its site", async ({ page }) => {
+  const stamp = Date.now();
+  const made = [];
+  for (const data of [{ url: `https://www.patreon.com/e2e-label-${stamp}` },
+    { url: `https://patreon.com/e2e-label-${stamp}-titled`, title: `Titled ${stamp}` }]) {
+    made.push((await (await page.request.post("/api/links", { headers: H, data })).json()).link.id);
+  }
+  const rows = page.locator(".link-row");
+  const titles = rows.locator(".link-row-title");
+  try {
+    await page.goto(`/links?q=e2e-label-${stamp}`);
+    await expect(titles).toHaveText([`Titled ${stamp}`, "Patreon.com"]);   // no rule, a site FeedVault does not sync
+
+    await page.goto("/settings#link-labels");
+    const card = page.locator("#link-labels");
+    await card.getByRole("button", { name: "Add a label" }).click();
+    await card.getByRole("textbox", { name: "Site", exact: true }).fill("https://www.patreon.com/someone");
+    await expect(card.locator(".link-label-hint")).toHaveText("Saved as patreon.com · Give it a label");
+    await expect(card.getByRole("button", { name: "Save" })).toBeDisabled();
+    await card.getByRole("textbox", { name: "Label for patreon.com" }).fill(`  Patreon   ${stamp} `);
+    await expect(card.locator(".link-label-hint")).toHaveText("Saved as patreon.com");
+    // The same site again: said, and Save waits.
+    await card.getByRole("button", { name: "Add a label" }).click();
+    await card.getByRole("textbox", { name: "Site", exact: true }).nth(1).fill("patreon.com");
+    await expect(card.locator(".link-label-hint.is-err").first()).toHaveText("patreon.com has another rule above or below");
+    await expect(card.getByRole("button", { name: "Save" })).toBeDisabled();
+    await card.getByRole("button", { name: "Remove patreon.com" }).click();
+    await card.getByRole("button", { name: "Save" }).click();
+    await expect(card.locator(".msg.ok")).toBeVisible();
+    await expect(card.getByRole("textbox", { name: "Site", exact: true })).toHaveValue("patreon.com");
+    await expect(card.getByRole("textbox", { name: "Label for patreon.com" })).toHaveValue(`Patreon ${stamp}`);
+
+    await page.goto(`/links?q=e2e-label-${stamp}`);
+    await expect(titles).toHaveText([`Titled ${stamp}`, `Patreon ${stamp}`]);
+    const named = rows.filter({ hasText: `Patreon ${stamp}` });
+    await expect(named.locator(".link-url")).toHaveText(`https://www.patreon.com/e2e-label-${stamp}`);
+    await expect(named.getByRole("button", { name: `Edit www.patreon.com/e2e-label-${stamp}` })).toBeVisible();
+    // A search finds it by the label it shows.
+    await page.goto(`/links?q=${encodeURIComponent(`patreon ${stamp}`)}`);
+    await expect(titles).toHaveText([`Patreon ${stamp}`]);
+    const stored = await (await page.request.get(`/api/links?q=e2e-label-${stamp}`, { headers: H })).json();
+    expect(stored.links.map(l => l.title).sort()).toEqual(["", `Titled ${stamp}`]);   // never written into a link
+
+    await page.goto("/settings#link-labels");
+    await card.getByRole("button", { name: "Remove patreon.com" }).click();
+    await card.getByRole("button", { name: "Save" }).click();
+    await expect(card.getByRole("textbox", { name: "Site", exact: true })).toHaveCount(0);
+    await page.goto(`/links?q=e2e-label-${stamp}`);
+    await expect(titles).toHaveText([`Titled ${stamp}`, "Patreon.com"]);
+    await idle(page);
+  } finally {
+    await page.request.post("/api/config", { headers: H, data: { link_labels: {} } });
+    for (const id of made) await page.request.delete(`/api/links/${id}`, { headers: H });
   }
 });
 

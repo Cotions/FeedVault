@@ -8,8 +8,48 @@ export const MAX_NOTES = 5000;
 
 export const KIND_LABEL = { social: "Social", other: "Other" };
 
-// What a link is called in a row and in the buttons' names: its title, else its address without the scheme.
-export const linkLabel = l => l.title || l.url.replace(/^https?:\/\//, "");
+// What a link is called in a row and in the buttons' names: its title, else
+// its site's label (the server's `label`: Settings → Link labels, or the
+// name of a site FeedVault cannot sync), else its address without the scheme.
+export const linkLabel = l => l.title || l.label || bareUrl(l.url);
+
+// A link's address without its scheme, as a row shows it.
+export const bareUrl = url => url.replace(/^https?:\/\//, "");
+
+// A link in the names of its row's buttons and fields ("Edit …"): its title,
+// else its address, which tells two links of one site apart (they share its label).
+export const linkName = l => l.title || bareUrl(l.url);
+
+// Settings → Link labels: the server's caps (linklabels.py).
+export const MAX_LINK_LABEL = 80;
+export const MAX_LINK_LABELS = 500;
+
+// Second-level labels under a country code that are not a site of their own (links._SECOND_LEVEL).
+const SECOND_LEVEL = new Set(["co", "com", "net", "org", "gov", "ac", "edu", "ne", "or"]);
+
+/* The site a link-label rule is for, as the server will save it
+   (linklabels.clean_site, links.site): "https://www.patreon.com/x",
+   "www.Patreon.com" and "patreon.com" are all "patreon.com", a subdomain
+   is cut to the registrable part ("someone.substack.com" is
+   "substack.com"). null when the text names no host. The server decides;
+   this is for the form to show what will be saved, and to spot a site given
+   twice. */
+export function linkSite(text) {
+  if (typeof text !== "string" || !text.trim()) return null;
+  let url = text.trim();
+  if (!url.includes("://")) url = `https://${url.replace(/^\/+/, "")}`;
+  let parsed;
+  try { parsed = new URL(url); } catch { return null; }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) return null;
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  if (/^\[.*\]$/.test(host)) return host.slice(1, -1);
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host;
+  const labels = host.split(".");
+  if (labels.length < 2 || labels.some(l => !l)) return null;
+  const keep = labels.length >= 3 && labels.at(-1).length === 2 && SECOND_LEVEL.has(labels.at(-2)) ? 3 : 2;
+  const site = labels.slice(-keep).join(".");
+  return site.split(".").every(Boolean) ? site : null;
+}
 
 /* The address to send for what was typed: "example.org/x" (no scheme) is
    https://example.org/x, as a browser's address bar reads it. A typed

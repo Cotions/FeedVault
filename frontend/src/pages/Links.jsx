@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { getLinks, getPeople, createLink, updateLink, deleteLink, assignLinks, deleteLinks } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
@@ -17,7 +17,7 @@ import SelectionBar from "../components/SelectionBar";
 import Icon from "../components/Icon";
 import Bookmarklet from "../components/Bookmarklet";
 import { AssignDialog, AssignPicker, LinkForm, LinkRow } from "../components/Links";
-import { KIND_LABEL, copyUrls, linkLabel } from "../lib/links";
+import { KIND_LABEL, copyUrls, linkLabel, linkName } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
 import { useWindow } from "../lib/windowing";
 import { Gap } from "../components/WinGap";
@@ -326,7 +326,8 @@ export default function Links() {
         <h3 className="card-title">Add a link</h3>
         <p className="page-lede">
           A creator's Linktree, Patreon, site or Discord invite, an interview, an article: anything with an
-          address. FeedVault keeps the text only; it never opens the link itself.
+          address. FeedVault keeps the text only; it never opens the link itself. A link with no title is
+          named by its site: <Link to="/settings#link-labels" className="text-link">Link labels</Link>.
         </p>
         <LinkForm people={people || []} busy={busy} onSubmit={add} idPrefix="links-add" onDirty={setAdding} />
         <Bookmarklet />
@@ -405,7 +406,7 @@ export default function Links() {
                          onEdit={x => { setAssigning(null); edit.open(x.id); }}
                          onDelete={x => { setDlgError(null); setRemoving(x); }}>
                   {assigning === l.id && (
-                    <AssignPicker people={people} label={`Assign ${linkLabel(l)} to`} busy={busy}
+                    <AssignPicker people={people} label={`Assign ${linkName(l)} to`} busy={busy}
                                   onPick={p => assignOne(l, p)}
                                   onCancel={() => {
                                     setAssigning(null);
@@ -457,7 +458,7 @@ export default function Links() {
           onConfirm={remove}
           onCancel={() => setRemoving(null)}
         >
-          <p className="link-confirm">{removing?.title ? <>{removing.title}<br /></> : null}<code>{removing?.url}</code></p>
+          <p className="link-confirm">{removing?.title || removing?.label ? <>{removing.title || removing.label}<br /></> : null}<code>{removing?.url}</code></p>
         </ConfirmDialog>
         <DiscardDialog open={edit.asking || unsaved.asking}
                        onDiscard={edit.asking ? edit.discard : unsaved.discard}

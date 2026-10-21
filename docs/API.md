@@ -226,8 +226,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "source_defaults": [block, …] }` (see [Download defaults](#download-defaults)) |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "source_defaults": [block, …] }` (see [Download defaults](#download-defaults)) |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/profiles` | `{ "active": "default", "profiles": [profile, …] }`, see [Profiles](#profiles) |
 | POST | `/api/profiles` | body `{ "name", "data_directory", "media_roots": [...] }` → `{ "ok": true, "profile": profile, "active", "profiles" }`: a new profile, not switched to; see [Profiles](#profiles) |
 | POST | `/api/profiles/<id>` | body `{ "name" }` → `{ "ok": true, "active", "profiles" }`: renames it |
@@ -1685,7 +1685,7 @@ A **link**:
 
 ```json
 { "id": 12, "url": "https://www.patreon.com/somebody", "title": "Patreon", "notes": "",
-  "site": "patreon.com", "kind": "social", "person": { "id": 3, "name": "Some Body" },
+  "site": "patreon.com", "kind": "social", "label": "Patreon", "person": { "id": 3, "name": "Some Body" },
   "position": 2, "created_at": 1727500000 }
 ```
 
@@ -1704,6 +1704,10 @@ A **link**:
   request, never stored.
 - `title`: at most 300 characters, its whitespace collapsed; `""` for none.
   `notes`: at most 5000 characters.
+- `label`: what the link is called when it has no title, from its `site`
+  (see [Link labels](#link-labels)), or `null` (the dashboard then shows
+  the address). Read on every request, never stored: every answer with a
+  link has it.
 - `person`: `{ id, name }` or `null`. `position`: the link's place among its
   person's links, `null` for a link of no one.
 
@@ -1722,7 +1726,9 @@ A **link**:
   `person` is a person id (one that is not an id matches nothing) or `none`
   for links of no one; `kind` is `social` or `other` (anything else is a
   400); `site` matches `site` exactly; `q` (at most 200 characters) matches
-  any part of the URL, title or notes, without regard to (ASCII) case.
+  any part of the URL, title or notes, without regard to (ASCII) case, and
+  a link with no title whose site's rule label (see [Link labels](#link-labels))
+  holds it, without regard to case.
   `sites` counts every link by site, whatever the filters, for a site
   picker, most links first.
 - A URL saved already (once cleaned) is a 409
@@ -1762,6 +1768,39 @@ A **link**:
 - A bad body is a 400 `{ "ok": false, "error": "…" }`, a JSON body that is
   not an object too (see the top of this file); an unknown link
   or person id in the path a 404, an unknown `person` in a body a 400.
+
+### Link labels
+
+Settings → Downloads → **Link labels**: rules `site → label`, so a saved
+link with no title gets a readable name ("Patreon" in place of
+`www.patreon.com/somebody`). `GET /api/config` has `"link_labels": {
+"<site>": "<label>", … }`; `POST /api/config` with `{ "link_labels": {…}
+}` replaces the rules (`{}` removes them all). They are kept in
+`config.json`, shared by every [profile](#profiles), as the routing table
+is.
+
+- A site is cut as a link's `site` is: `https://www.patreon.com/x`,
+  `www.Patreon.com` and `patreon.com` are all saved as `patreon.com`;
+  `someone.substack.com` as `substack.com`. It must name a host: a domain
+  name of two parts or more, or an IP address. The same site given twice
+  (after cutting) is refused.
+- A label: 1 to 80 characters once its whitespace is collapsed, no control
+  character. At most 500 rules.
+- Anything else is `{ "ok": false, "error" }` and nothing is saved. A rule
+  in a hand-edited `config.json` that would be refused is left out; the
+  others hold.
+- A link's `label` is read on every request (`GET /api/links`, a person's
+  page and every other answer with a link), never written into the link:
+  editing or removing a rule changes every link of that site, and its
+  `title` is never touched (the [link-in-bio import](#link-in-bio-import)
+  stays insert-only). The dashboard shows a link's `title`, else its
+  `label`, else its address; the row's buttons keep the title or address
+  in their names, which tell two links of one site apart.
+- `label` is the rule's, for any site. With no rule: `null` for a site
+  FeedVault syncs (one the [routing table](#link-routing) in use covers:
+  the address says whose profile it is), else the site's own name, its
+  first letter a capital (`patreon.com` → `Patreon.com`, `bbc.co.uk` →
+  `Bbc.co.uk`; an IP address as it is).
 
 ## Sources
 
