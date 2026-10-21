@@ -277,6 +277,9 @@ test("a source's creator: Link to creator…, Move, Unlink, and the person page'
     const field = dialog.getByRole("combobox", { name: "Creator" });
     await expect(field).toBeFocused();
     await dismissToasts(page);
+    // Measured at rest: while the dialog still rises (modalRise, scale 0.98
+    // to 1), Cancel's 24px are 23.9 and the target rule fails by a hair.
+    await page.locator(".modal-overlay").evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)));
     await settle(page);
     const found = await checkLayout(page, testInfo, { view: "Link to creator", size: "1280x800", scope: ".modal-overlay" });
     await page.screenshot({ path: testInfo.outputPath("link-to-creator.png") });
