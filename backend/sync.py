@@ -1089,6 +1089,14 @@ MESSAGES = {
     "login_required": "Instagram wants a logged-in session for this; see Settings",
     "generic": "instaloader failed",
 }
+# instaloader output no FAILURES pattern knows but that says what to try,
+# with the exact strings in health.py: (pattern, what a generic failure's
+# message says instead of its line). Not a state: the account may be fine.
+HINTS = [
+    (re.compile(r"^HTTP redirect from https://www\.instagram\.com/graphql/query to https://www\.instagram\.com/$"),
+     "Instagram answered with its homepage instead of the posts: update instaloader, or wait if the account "
+     "was flagged"),
+]
 
 
 GALLERY_DL_FAILURES = health.GALLERY_DL
@@ -1119,6 +1127,12 @@ def _setup(tool, lines):
         return None
     import downloaders                         # it imports this module
     return lacks[1], downloaders.cookies_message(downloaders.detect_install(tool))
+
+
+def _hint(lines):
+    """What HINTS says to try for a failed instaloader run's output, else None."""
+    texts = [t.strip() for _, t in lines]
+    return next((hint for pattern, hint in HINTS if any(pattern.search(t) for t in texts)), None)
 
 
 def classify(lines, failures=None):
@@ -1228,7 +1242,10 @@ def _ended_as(params, code, lines, index, note, tool, session=None, ran=None):
         message = NO_SESSION["instaloader" if tool == "instaloader" else "tools"]
     # Tool output is untrusted text: no cookie, token or session path is kept (health.scrub).
     result["line"] = health.scrub(result["line"])
-    if result["error"] == "generic" and result["line"]:
+    hint = _hint(lines) if tool == "instaloader" and result["error"] == "generic" and ran in (None, tool) else None
+    if hint:
+        message = f"{message}: {hint}"
+    elif result["error"] == "generic" and result["line"]:
         message = f"{message}: {result['line'][:200]}"
     if added:
         message += f" ({notify.plural(added, 'new post')} before it stopped)"

@@ -857,6 +857,54 @@ def test_what_came_before_a_failure_is_indexed(env, client, fake, monkeypatch):
     assert get(client, "/api/posts/instagram/CNEWPOST001")["text"] == "New post 1 #fresh"
 
 
+_REAL_OUTCOME = sync._outcome
+
+
+def _failing_with(monkeypatch, texts):
+    """sync._outcome as if instaloader exited 1 after printing ``texts``
+    (instead of what an earlier call said it printed)."""
+    real = _REAL_OUTCOME
+    monkeypatch.setattr(sync, "_outcome", lambda p, code, lines, index, note: real(
+        p, 1, lines + list(enumerate(texts, 1000)), index, note))
+    monkeypatch.setattr(jobs._kinds[sync.KIND], "outcome", sync._outcome)
+
+
+def test_failed_runs_of_a_users_say_what_to_try(env, client, fake, monkeypatch):
+    """Two failed runs of a user's (test_health): an action block is a rate
+    limit; Instagram's homepage for the posts is still an error, whose
+    message says what to try instead of the line."""
+    from test_health import FEEDBACK_REQUIRED, HOMEPAGE, HOMEPAGE_CLOSING
+    carol_archive(env)
+    fake.set(carol_profile(new=0))
+    s = add_source(client)
+    _failing_with(monkeypatch, FEEDBACK_REQUIRED)
+    job = sync_now(client, s["id"])
+    assert (job["state"], job["result"]["error"], job["message"]) == ("failed", "rate_limited",
+                                                                      sync.MESSAGES["rate_limited"])
+    assert "feedback_required" in job["result"]["line"]
+    _failing_with(monkeypatch, HOMEPAGE + HOMEPAGE_CLOSING)
+    job = sync_now(client, s["id"])
+    assert (job["result"]["error"], job["result"]["line"]) == (
+        "generic", "someprofile: JSON Query to graphql/query: Expecting value: line 1 column 1 (char 0)")
+    assert job["message"] == ("instaloader failed: Instagram answered with its homepage instead of the posts: "
+                              "update instaloader, or wait if the account was flagged")
+    assert get(client, f"/api/sources/{s['id']}")["health"]["state"] == "error"
+    # A state a pattern knows keeps its own message.
+    _failing_with(monkeypatch, HOMEPAGE + ["someprofile: Login required."])
+    assert sync_now(client, s["id"])["message"] == sync.MESSAGES["login_required"]
+
+
+def test_a_generic_failures_line_is_never_the_saved_session(env, client, fake, monkeypatch):
+    carol_archive(env)
+    fake.set(carol_profile(new=0))
+    s = add_source(client)
+    _failing_with(monkeypatch, ["Retrieving posts from profile someprofile.", "", "someprofile: something new",
+                                "Saved session to <private path>", "[feedvault] indexing /some/folder"])
+    job = sync_now(client, s["id"])
+    assert (job["result"]["error"], job["result"]["line"]) == ("generic", "someprofile: something new")
+    assert job["message"] == "instaloader failed: someprofile: something new"
+
+
 def test_missing_instaloader(env, client, fake, monkeypatch):
     monkeypatch.setenv("PATH", str(env["tmp"]))
     s = add_source(client, "carol.cooks")

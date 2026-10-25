@@ -23,6 +23,9 @@ instaloadercontext.py, __main__.py)::
     rate_limited    "JSON Query to graphql/query: 429 Too Many Requests [retrying; skip with ^C]"
                     (_response_error: "<status> <reason>")
                     "Please wait a few minutes before you try again." (Instagram's message, relayed)
+                    "Download aborted: 400 Bad Request - "fail" status, message "feedback_required" when
+                     accessing https://www.instagram.com/graphql/query." (Instagram's action block, relayed;
+                     seen from 4.15.4 in a logged-in run: waiting is the fix)
     private         "<target>: Private but not followed."
                     "Profile <name>: private but not followed."
     login_required  "<target>: Login required."  /  "profile <name> requires login"
@@ -42,6 +45,13 @@ instaloadercontext.py, __main__.py)::
                      --load-cookies in an install without its optional browser_cookie3 module). The
                      site was never asked, so the account's state stays ``error``; setup() knows the
                      line, and the result says how to add the module (sync._setup)
+                    "HTTP redirect from https://www.instagram.com/graphql/query to https://www.instagram.com/"
+                     (instaloadercontext.py, then "JSON Query to graphql/query: Expecting value: line 1
+                     column 1 (char 0)"): Instagram answered the posts' query with its homepage, which an
+                     outdated instaloader (4.15.4; 4.16rc1 fixed it) and a flagged account both get. Left an
+                     ``error``; the result says what to try (sync.HINTS)
+    (any)           "Saved session to <path>." (instaloader saves the session as it ends, failed or not):
+                     never an error's line (classify(), BOILERPLATE)
 
 gallery-dl 1.32.14, read from its source (exception.py, job.py, output.py,
 cookies.py, extractor/common.py, twitter.py, tiktok.py); lines are
@@ -158,6 +168,7 @@ def _table(rows):
 INSTALOADER = _table([
     ("rate_limited", r"\b429 Too Many Requests\b"),
     ("rate_limited", r"Please wait a few minutes before you try again"),
+    ("rate_limited", r"\bfeedback_required\b"),
     ("private", r"\bprivate but not followed\b"),
     ("login_required", r"\bLogin required\.|\bprofile \S+ requires login\b"),
     ("login_required", r"Redirected to login page\."),
@@ -198,6 +209,8 @@ SETUP = {"instaloader": _table([
 ])}
 # instaloader's heading of the errors it repeats as it ends: never the line that says what went wrong.
 CLOSING = "Errors or warnings occurred:"
+# What a tool prints as it ends whatever went wrong: an error's line is the last line before it.
+BOILERPLATE = re.compile(r"^Saved session to ")
 
 
 # A new handle, as the tool names it; only instaloader does.
@@ -247,15 +260,16 @@ def _texts(lines):
 
 def classify(lines, table):
     """(state, line): the first state of ``table`` whose pattern a line
-    matches (the latest such line), else ("error", the last line). The
-    line is raw: scrub() it before storing it."""
+    matches (the latest such line), else ("error", the last line that is
+    not BOILERPLATE). The line is raw: scrub() it before storing it."""
     texts = _texts(lines)
     for state in dict.fromkeys(st for st, _ in table):
         patterns = [p for st, p in table if st == state]
         for t in reversed(texts):
             if any(p.search(t) for p in patterns):
                 return state, t
-    return "error", texts[-1] if texts else None
+    said = [t for t in texts if not BOILERPLATE.search(t)] or texts
+    return "error", said[-1] if said else None
 
 
 def setup(tool, lines):

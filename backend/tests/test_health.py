@@ -145,6 +145,8 @@ RECORDED = {
     "instaloader": [
         ("JSON Query to graphql/query: 429 Too Many Requests [retrying; skip with ^C]", "rate_limited"),
         ("carol: Please wait a few minutes before you try again.", "rate_limited"),
+        ('Download aborted: 400 Bad Request - "fail" status, message "feedback_required" when accessing '
+         "https://www.instagram.com/graphql/query.", "rate_limited"),
         ("carol: Private but not followed.", "private"),
         ("Download profile carol: Profile carol: private but not followed.", "private"),
         ("carol: Login required.", "login_required"),
@@ -229,6 +231,36 @@ def test_each_table_on_recorded_lines():
                            health.INSTALOADER) == ("error", "odd")
     # Progress counters are not a rate limit.
     assert health.classify([(1, "[429/1200] carol-2024-06-01-C.jpg json")], health.INSTALOADER)[0] == "error"
+
+
+# Two failed runs of a user's, paths scrubbed: an action block (logged in),
+# and Instagram's homepage for the posts' query (Firefox cookies, 4.15.4).
+FEEDBACK_REQUIRED = ["Loaded session from <private path>", "Logged in as someuser.",
+                     "[1/1] Downloading profile someprofile", "Retrieving posts from profile someprofile.", "",
+                     'Download aborted: 400 Bad Request - "fail" status, message "feedback_required" when accessing '
+                     "https://www.instagram.com/graphql/query.", "Saved session to <private path>",
+                     "[feedvault] indexing /some/folder"]
+HOMEPAGE = ["Retrieving posts from profile someprofile.", "",
+            "HTTP redirect from https://www.instagram.com/graphql/query to https://www.instagram.com/",
+            *["JSON Query to graphql/query: Expecting value: line 1 column 1 (char 0) [retrying; skip with ^C]"] * 3,
+            "someprofile: JSON Query to graphql/query: Expecting value: line 1 column 1 (char 0)",
+            "Saved session to <private path>"]
+HOMEPAGE_CLOSING = ["", "Errors or warnings occurred:",
+                    "someprofile: JSON Query to graphql/query: Expecting value: line 1 column 1 (char 0)"]
+
+
+def test_recorded_failures_of_a_users_runs():
+    numbered = lambda texts: list(enumerate(texts, 1))         # noqa: E731
+    assert health.classify(numbered(FEEDBACK_REQUIRED), health.INSTALOADER) == ("rate_limited", FEEDBACK_REQUIRED[5])
+    # Unknown: the line is the last one that says something, never the session being saved.
+    line = "someprofile: JSON Query to graphql/query: Expecting value: line 1 column 1 (char 0)"
+    assert health.classify(numbered(HOMEPAGE + HOMEPAGE_CLOSING), health.INSTALOADER) == ("error", line)
+    assert health.classify(numbered(HOMEPAGE), health.INSTALOADER) == ("error", line)
+    assert health.classify(numbered(HOMEPAGE + ["", "[feedvault] indexing /some/folder"]), health.INSTALOADER) == \
+        ("error", line)
+    # Nothing else said: that line all the same, rather than none.
+    assert health.classify(numbered(["Saved session to <private path>"]), health.INSTALOADER) == \
+        ("error", "Saved session to <private path>")
 
 
 @pytest.mark.parametrize("fail,state", [("429", "rate_limited"), ("login", "login_required"), ("private", "private"),
