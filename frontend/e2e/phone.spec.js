@@ -1,6 +1,7 @@
 // Phone, 375x812 with touch: no page scrolls sideways, the menu drawer,
-// Review's bar, the Feed's folded filters, and Storage's cards.
-import { test, expect, PAGES, openPage, keepTrashUndo, fakeDecisions, underToasts } from "./fixtures.js";
+// Review's bar, the Feed's folded filters, Storage's cards, and a person's
+// rating stars.
+import { test, expect, PAGES, openPage, keepTrashUndo, fakeDecisions, underToasts, stressData } from "./fixtures.js";
 
 test.describe("no page scrolls sideways", () => {
   for (const p of PAGES) {
@@ -126,4 +127,41 @@ test("Storage › Per creator: one card per row, none scrolls sideways", async (
     return { scrollWidth: w.scrollWidth, clientWidth: w.clientWidth };
   });
   expect(wrap.scrollWidth).toBeLessThanOrEqual(wrap.clientWidth);
+});
+
+test("a person's rating on a phone (390 and 375 wide): the stars fit, a tap rates", async ({ page, request }) => {
+  const H = { "X-FeedVault": "1" };
+  const S = stressData();
+  try {
+    await request.post(`/api/people/${S.person}`, { headers: H, data: { rating: 7 } });
+    for (const width of [390, 375]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`/people/${S.person}`);
+      const stars = page.getByRole("slider", { name: "Rating: 3.5 of 5" });
+      await stars.scrollIntoViewIfNeeded();
+      await expect(stars).toBeInViewport({ ratio: 1 });
+      const m = await page.locator(".about-rating").evaluate(el => {
+        const line = el.querySelector(".about-rating-line");
+        const s = el.querySelector(".rating-input").getBoundingClientRect();
+        const t = line.querySelector(".creator-sub").getBoundingClientRect();
+        return {
+          line: [line.scrollWidth, line.clientWidth],
+          page: [document.documentElement.scrollWidth, document.documentElement.clientWidth],
+          starsRight: s.right, starsHeight: s.height, textLeft: t.left, textRight: t.right,
+          field: el.getBoundingClientRect().right,
+        };
+      });
+      expect(m.line[0]).toBeLessThanOrEqual(m.line[1]);              // nothing wider than its row
+      expect(m.page[0]).toBeLessThanOrEqual(m.page[1]);              // no sideways scroll
+      expect(m.textLeft).toBeGreaterThanOrEqual(m.starsRight);       // "3.5 of 5" beside the stars, not over them
+      expect(m.textRight).toBeLessThanOrEqual(m.field + 0.5);
+      expect(m.starsHeight).toBeGreaterThanOrEqual(24);
+    }
+    // A tap on the right half of the fifth star: five stars.
+    const box = await page.locator(".rating-input").boundingBox();
+    await page.touchscreen.tap(box.x + box.width - 6, box.y + box.height / 2);
+    await expect(page.getByRole("slider", { name: "Rating: 5 of 5" })).toBeVisible();
+  } finally {
+    await request.post(`/api/people/${S.person}`, { headers: H, data: { rating: null } });
+  }
 });

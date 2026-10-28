@@ -199,7 +199,7 @@ source and built HTML and CSS point at no other origin.
 | `layout-zoom` | `layout.spec.js` | 1152×720 at 1.25 device pixels (1440×900 at 125% zoom) | The same layout rules (the title test is skipped) |
 | `states` | `states.spec.js` | 1280×800, 1440×900 | Focus rings (and Tab never dropping focus on `<body>`) on every page in the nav, a post and a person, hover, popovers, scrolled pages, jumps landing below the header |
 | `themes` | `themes.spec.js` | 1440×900 | WCAG AA text contrast in each of the 8 preset themes |
-| `phone` | `phone.spec.js`, `safe-area.spec.js` | 375×812 with touch (iPhone X, in Chromium) | No sideways scroll, the nav drawer, Review's bar, folded Feed filters, tables as cards, notch and home bar insets |
+| `phone` | `phone.spec.js`, `safe-area.spec.js` | 375×812 with touch (iPhone X, in Chromium) | No sideways scroll, the nav drawer, Review's bar, folded Feed filters, tables as cards, a person's rating stars on screen and beside their text at 390 and 375 wide (a tap rates), notch and home bar insets |
 
 ### Shards
 
