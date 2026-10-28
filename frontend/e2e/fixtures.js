@@ -1121,9 +1121,9 @@ export async function openAddLink(page) {
 export async function fakeBioImport(page, { found = null } = {}) {
   const sent = { imports: [], links: [], sources: [] };
   async function kept(route) {
-    if (!found) return { saved: 4, already: 2, elsewhere: 0, dropped: 1, over: 0 };
+    if (!found) return { saved: 4, already: 2, shared: 0, dropped: 1, over: 0 };
     const person = Number(new URL(route.request().url()).pathname.split("/")[3]);
-    const out = { saved: 0, already: 0, elsewhere: 0, dropped: 0, over: 0 };
+    const out = { saved: 0, already: 0, shared: 0, dropped: 0, over: 0 };
     for (const link of found) {
       const r = await page.request.post("/api/links", { headers: { "X-FeedVault": "1" }, data: { ...link, person } });
       out[r.ok() ? "saved" : r.status() === 409 ? "already" : "dropped"] += 1;

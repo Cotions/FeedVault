@@ -386,7 +386,7 @@ export default function App() {
   // (Links, a person's) loads them again; the Unsorted badge is read again.
   const quickSaved = useCallback(link => {
     setQuickAdd(null);
-    const p = link.person;
+    const p = link.people?.[0];
     toast(p ? `Link saved to ${p.name}` : "Link saved to Unsorted", "ok",
       { to: p ? personPath(p.id) : UNSORTED_PATH, label: "Show" });
     if (/^\/(links|people\/)/.test(window.location.pathname)) setRefreshKey(k => k + 1);

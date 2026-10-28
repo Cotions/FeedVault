@@ -521,7 +521,7 @@ test("quick-add: Alt+L prefills the clipboard's address, Enter saves to a recent
     await expect(toast).toBeVisible();
     await expect(toast.getByRole("link", { name: "Show" })).toHaveAttribute("href", `/people/${pid}`);
     const saved = await linkByUrl(request, `https://${host}/from-clipboard`);
-    expect(saved.person).toEqual({ id: pid, name });
+    expect(saved.people).toEqual([{ id: pid, name }]);
     expect(saved.title).toBe("From the clipboard");
     // The Links page lists it without a reload.
     await expect(page.locator(".link-row", { hasText: "From the clipboard" })).toHaveCount(1);
@@ -561,7 +561,7 @@ test("quick-add: the nav's + Link saves a typed address to no one; no clipboard 
     const toast = page.locator(".toast", { hasText: "Link saved to Unsorted" });
     await expect(toast.getByRole("link", { name: "Show" })).toHaveAttribute("href", "/links?person=none");
     const saved = await linkByUrl(request, `https://${host}/typed`);
-    expect(saved.person).toBeNull();
+    expect(saved.people).toEqual([]);
     await idle(page);
   } finally {
     await cleanUp(request, host);
@@ -792,7 +792,7 @@ test("Unsorted: Assign… gives a row's link to a recent person by keyboard, wit
     const toast = page.locator(".toast", { hasText: `${host}/two: assigned to ${name}` });
     await expect(toast).toBeVisible();
     await expect(badge).toHaveText(String(before - 1));
-    expect((await linkByUrl(request, `https://${host}/two`)).person).toEqual({ id: pid, name });
+    expect((await linkByUrl(request, `https://${host}/two`)).people).toEqual([{ id: pid, name }]);
     // Focus went on to the next link's Assign…: Enter opens it, Escape closes it and gives focus back.
     const next = page.getByRole("button", { name: `Assign ${host}/one to a person` });
     await expect(next).toBeFocused();
@@ -806,7 +806,7 @@ test("Unsorted: Assign… gives a row's link to a recent person by keyboard, wit
     await toast.getByRole("button", { name: "Undo" }).click();
     await expect(rows).toHaveCount(2);
     await expect(badge).toHaveText(String(before));
-    expect((await linkByUrl(request, `https://${host}/two`)).person).toBeNull();
+    expect((await linkByUrl(request, `https://${host}/two`)).people).toEqual([]);
     await idle(page);
   } finally {
     await cleanUp(request, host, pid);
@@ -919,9 +919,9 @@ test("Links: a shift range holds after a row comes in; Undo gives each link back
     await request.post(`/api/links/${(await linkByUrl(request, url("a"))).id}`, { headers: H, data: { person: people.R } });
     await toast.getByRole("button", { name: "Undo" }).click();
     await expect(page.locator(".toast", { hasText: "1 link changed since: left as it is." })).toBeVisible();
-    expect((await linkByUrl(request, url("a"))).person?.id).toBe(people.R);
-    expect((await linkByUrl(request, url("b"))).person?.id).toBe(people.Q);
-    expect((await linkByUrl(request, url("c"))).person).toBeNull();
+    expect((await linkByUrl(request, url("a"))).people.map(p => p.id)).toEqual([people.R]);
+    expect((await linkByUrl(request, url("b"))).people.map(p => p.id)).toEqual([people.Q]);
+    expect((await linkByUrl(request, url("c"))).people).toEqual([]);
     await idle(page);
   } finally {
     await cleanUp(request, host, null);
@@ -984,7 +984,7 @@ test("/links/add: prefilled from the fragment; Enter saves only once a person is
     await expect(done.getByRole("link", { name })).toHaveAttribute("href", `/people/${pid}`);
     await expect(page.getByRole("link", { name: "All links" })).toHaveAttribute("href", "/links");
     const saved = await linkByUrl(request, url);
-    expect(saved.person).toEqual({ id: pid, name });
+    expect(saved.people).toEqual([{ id: pid, name }]);
     expect(saved.title).toBe("A page title");
 
     // Typed by hand: Enter saves at once, as in the dialog.
@@ -1021,7 +1021,7 @@ test("/links/add: a click on No person saves to no one; one saved already says w
     const done = page.getByRole("status");
     await expect(done).toHaveText("Saved to Unsorted.");
     await expect(done.getByRole("link", { name: "Unsorted" })).toHaveAttribute("href", "/links?person=none");
-    expect((await linkByUrl(request, `https://${host}/untied`)).person).toBeNull();
+    expect((await linkByUrl(request, `https://${host}/untied`)).people).toEqual([]);
 
     await request.post("/api/links", { headers: H, data: { url: `https://${host}/taken`, person: pid } });
     await openAdd(page, { url: `https://${host}/taken`, title: "Again" });
@@ -1134,7 +1134,7 @@ test("the bookmarklet opens /links/add in a popup that closes after the save; bl
     await expect(popup.getByRole("status")).toHaveText("Saved to Unsorted. Closing…");
     await closed;
     const saved = await linkByUrl(request, here);
-    expect(saved).toMatchObject({ title, notes: "typed in the first", person: null });
+    expect(saved).toMatchObject({ title, notes: "typed in the first", people: [] });
 
     // No window (a popup blocker): the same page, in this tab, ends on links.
     await request.delete(`/api/links/${saved.id}`, { headers: H });
@@ -1149,5 +1149,86 @@ test("the bookmarklet opens /links/add in a popup that closes after the save; bl
   } finally {
     const left = await linkByUrl(request, here);
     if (left) await request.delete(`/api/links/${left.id}`, { headers: H });
+  }
+});
+
+// #215: a band's account is the band's and each member's. Also link… adds a
+// person and keeps the others; the edit form takes one off and adds one; a
+// person's page shows the others, Remove takes it from them only.
+test("Links: a link shared by two people, on both, each one removable alone", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-shared-${stamp}.example`;
+  const url = `https://${host}/account`;
+  const [band, member] = [`E2E band ${stamp}`, `E2E member ${stamp}`];
+  const made = async name => (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  const [bid, mid] = [await made(band), await made(member)];
+  const people = async () => (await linkByUrl(request, url)).people.map(p => p.name);
+  try {
+    await request.post("/api/links", { headers: H, data: { url, title: "Shared account", person: bid } });
+    await page.goto(`/links?q=${host}`);
+    const row = page.locator(".link-list > li", { hasText: "Shared account" });
+    await expect(row.locator(".link-person")).toHaveText([band]);
+    await idle(page);
+
+    // Also link…: the member's too, the band's kept.
+    await row.getByRole("checkbox").click();
+    const bar = page.getByRole("toolbar", { name: "Selection" });
+    await bar.getByRole("button", { name: "Also link 1 to…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Also link 1 link to…" });
+    const picker = dialog.getByRole("combobox", { name: "Person" });
+    await picker.fill(member);
+    await picker.press("Enter");
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(".toast", { hasText: `1 link also linked to ${member}` })).toBeVisible();
+    await expect(row.locator(".link-person")).toHaveText([band, member]);
+    expect(await people()).toEqual([band, member]);
+    // The person filter finds it under either of them.
+    for (const pid of [bid, mid]) {
+      const { links } = await (await request.get(`/api/links?person=${pid}`, { headers: H })).json();
+      expect(links.map(l => l.url)).toEqual([url]);
+    }
+
+    // The edit form: a chip each; × takes the member off, the picker adds them back.
+    await row.getByRole("button", { name: "Edit Shared account" }).click();
+    const edit = page.locator(".link-row.is-editing");
+    await expect(edit.locator(".link-form-people .tag-chip-name")).toHaveText([band, member]);
+    await edit.getByRole("button", { name: `Remove ${member}` }).click();
+    await edit.getByRole("button", { name: "Save" }).click();
+    await expect(edit).toHaveCount(0);
+    expect(await people()).toEqual([band]);
+    await row.getByRole("button", { name: "Edit Shared account" }).click();
+    const add = edit.getByRole("combobox", { name: "Add a person" });
+    await add.fill(member);
+    await add.press("Enter");
+    await expect(edit.locator(".link-form-people .tag-chip-name")).toHaveText([band, member]);
+    await edit.getByRole("button", { name: "Save" }).click();
+    await expect(edit).toHaveCount(0);
+    expect(await people()).toEqual([band, member]);
+
+    // The member's page: the band beside it; Remove takes it from the member only, Undo gives it back.
+    await page.goto(`/people/${mid}`);
+    const theirs = page.locator(".person-links-section .link-row", { hasText: "Shared account" });
+    await expect(theirs.locator(".link-person")).toHaveText([band]);
+    await theirs.getByRole("button", { name: "Remove Shared account from them" }).click();
+    const toast = page.locator(".toast", { hasText: `Shared account: no longer ${member}'s` });
+    await expect(toast).toBeVisible();
+    await expect(theirs).toHaveCount(0);
+    expect(await people()).toEqual([band]);
+    await toast.getByRole("button", { name: "Undo" }).click();
+    await expect(theirs).toHaveCount(1);
+    expect(await people()).toEqual([band, member]);
+
+    // Delete on the band's page says the member loses it too.
+    await page.goto(`/people/${bid}`);
+    await page.locator(".person-links-section .link-row", { hasText: "Shared account" })
+      .getByRole("button", { name: "Delete Shared account" }).click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toContainText(`It is ${member}'s too`);
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+    await expect(confirm).toBeHidden();
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, bid);
+    await request.delete(`/api/people/${mid}`, { headers: H });
   }
 });

@@ -346,8 +346,8 @@ def seed_userdata(data, b):
     links = rows("links")
     for i in range(300):
         person = f"Large Person {i % PEOPLE:02d}" if i % 3 == 0 else None
-        links.append({"url": f"https://links-{i}.example/{rng.choice(WORDS)}", "title": f"Link {i}",
-                      "notes": "", "person": person, "position": i // PEOPLE if person else None,
+        links.append({"url": f"https://links-{i}.example/{rng.choice(WORDS)}", "title": f"Link {i}", "notes": "",
+                      "people": [{"name": person, "position": i // PEOPLE, "tied_at": at + i}] if person else [],
                       "created_at": at + i})
     write("links", links)
 

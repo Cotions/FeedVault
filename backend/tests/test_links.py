@@ -136,7 +136,9 @@ def test_site_and_kind(url, site, kind):
 
 def test_kind_is_never_stored(env):
     cols = [r[1] for r in db.connect().execute("PRAGMA table_info(links)")]
-    assert cols == ["id", "url", "title", "notes", "person_id", "position", "created_at", "tied_at"]
+    assert cols == ["id", "url", "title", "notes", "created_at"]
+    cols = [r[1] for r in db.connect().execute("PRAGMA table_info(link_people)")]
+    assert cols == ["link_id", "person_id", "position", "tied_at"]
 
 
 # ---------------------------------------------------------------------------
@@ -149,11 +151,12 @@ def test_create_edit_delete(client, no_network):
     link = r["link"]
     assert link["url"] == "https://www.patreon.com/alice/" and link["title"] == "Alice's Patreon"
     assert (link["site"], link["kind"], link["notes"]) == ("patreon.com", "social", "tiers")
-    assert link["person"] == {"id": pid, "name": "Alice"} and link["position"] == 1
+    assert link["people"] == [{"id": pid, "name": "Alice"}] and link["position"] is None
+    assert get(client, f"/api/people/{pid}")["links"][0]["position"] == 1
 
     r = post(client, f"/api/links/{link['id']}", {"title": "Patreon", "notes": "", "person": None})
-    assert (r["link"]["title"], r["link"]["notes"], r["link"]["person"], r["link"]["position"]) == \
-        ("Patreon", "", None, None)
+    assert (r["link"]["title"], r["link"]["notes"], r["link"]["people"], r["link"]["position"]) == \
+        ("Patreon", "", [], None)
     r = post(client, f"/api/links/{link['id']}", {"url": "https://alice.example/about"})
     assert (r["link"]["url"], r["link"]["kind"], r["link"]["title"]) == ("https://alice.example/about", "other", "Patreon")
 
@@ -169,12 +172,18 @@ def test_bad_bodies(client):
                  {"url": "https://x.com/a", "title": "t" * (links.MAX_TITLE + 1)},
                  {"url": "https://x.com/a", "notes": "n" * (links.MAX_NOTES + 1)},
                  {"url": "https://x.com/a", "person": "1"}, {"url": "https://x.com/a", "person": True},
-                 {"url": "https://x.com/a", "person": pid + 100}, {"url": "https://x.com/a", "person": 2**70}):
+                 {"url": "https://x.com/a", "person": pid + 100}, {"url": "https://x.com/a", "person": 2**70},
+                 {"url": "https://x.com/a", "people": pid}, {"url": "https://x.com/a", "people": [pid, "1"]},
+                 {"url": "https://x.com/a", "people": [pid, pid + 100]}, {"url": "https://x.com/a", "people": None},
+                 {"url": "https://x.com/a", "people": [pid], "person": pid},
+                 {"url": "https://x.com/a", "people": list(range(links.MAX_PEOPLE + 1))}):
         assert post(client, "/api/links", body, 400)["ok"] is False
     lid = add(client, "https://x.com/a")["link"]["id"]
     post(client, f"/api/links/{lid}", {}, 400)
     post(client, f"/api/links/{lid}", {"url": "data:text/html,x"}, 400)
     post(client, f"/api/links/{lid}", {"person": pid + 100}, 400)
+    post(client, f"/api/links/{lid}", {"people": [pid + 100]}, 400)
+    post(client, f"/api/links/{lid}", {"people": [pid], "person": None}, 400)
     assert get(client, "/api/links?kind=nope", 400)["ok"] is False
     get(client, "/api/links?q=" + "q" * (links.MAX_QUERY + 1), 400)
     assert urls(client) == ["https://x.com/a"]
@@ -185,7 +194,7 @@ def test_a_body_that_is_not_an_object_is_a_400(client, raw):
     pid = person(client, "Alice")
     lid = add(client, "https://x.com/a", person=pid)["link"]["id"]
     for url in ("/api/links", f"/api/links/{lid}", f"/api/people/{pid}/links/order", "/api/links/assign",
-                "/api/links/delete"):
+                "/api/links/delete", "/api/links/add-person", "/api/links/remove-person"):
         r = client.post(url, data=raw, headers={**H, "Content-Type": "application/json"})
         assert r.status_code == 400, (url, raw, r.status_code)
         body = r.get_json()
@@ -193,7 +202,7 @@ def test_a_body_that_is_not_an_object_is_a_400(client, raw):
         if raw != "null":                      # no body to speak of: the fields' own errors
             assert body["error"] == "the body must be a JSON object"
     [link] = get(client, "/api/links")["links"]
-    assert (link["url"], link["title"], link["person"]["id"]) == ("https://x.com/a", "", pid)
+    assert (link["url"], link["title"], link["people"][0]["id"]) == ("https://x.com/a", "", pid)
 
 
 def test_duplicate_url_is_a_409_with_the_existing_id(client):
@@ -201,7 +210,7 @@ def test_duplicate_url_is_a_409_with_the_existing_id(client):
     r = add(client, "HTTPS://LINKTR.EE/alice", 409)
     assert r == {"ok": False, "error": "that link is saved already", "id": first,
                  "link": get(client, "/api/links")["links"][0]}
-    assert r["link"]["id"] == first and r["link"]["person"] is None
+    assert r["link"]["id"] == first and r["link"]["people"] == []
     other = add(client, "https://linktr.ee/bob")["link"]["id"]
     assert post(client, f"/api/links/{other}", {"url": "https://linktr.ee/alice"}, 409)["id"] == first
     post(client, f"/api/links/{first}", {"url": "https://linktr.ee/alice/"})       # its own URL, changed
@@ -224,10 +233,10 @@ def test_duplicate_409_names_the_person_it_is_tied_to(client):
     first = add(client, "https://alice.example/shop", person=alice, title="Shop")["link"]
     r = add(client, "https://alice.example/shop", 409, person=None, title="again")
     assert r["link"] == first
-    assert r["link"]["person"] == {"id": alice, "name": "Alice"}
+    assert r["link"]["people"] == [{"id": alice, "name": "Alice"}]
     other = add(client, "https://bob.example")["link"]["id"]
     r = post(client, f"/api/links/{other}", {"url": "https://alice.example/shop"}, 409)
-    assert (r["id"], r["link"]["person"]["name"]) == (first["id"], "Alice")
+    assert (r["id"], r["link"]["people"][0]["name"]) == (first["id"], "Alice")
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +281,7 @@ def test_recent_people_by_when_a_link_was_given(client, clock):
     # Untied again: Cleo has no link left, so she is gone from the list.
     post(client, f"/api/links/{loose}", {"person": None})
     assert recent(client) == [("Alice", 1_000_030), ("Bob", 1_000_010)]
-    assert db.connect().execute("SELECT tied_at FROM links WHERE id = ?", (loose,)).fetchone()[0] is None
+    assert tied(loose) == (None, None, None)
 
     assert recent(client, "?limit=1") == [("Alice", 1_000_030)]
     # A limit out of range is kept in it, one that is not a number is the default.
@@ -295,8 +304,7 @@ def test_recent_people_forget_a_deleted_person(client, clock):
     lid = add(client, "https://bob.example", person=bob)["link"]["id"]
     delete(client, f"/api/people/{bob}")
     assert recent(client) == [("Alice", 1_000_000)]
-    assert tuple(db.connect().execute("SELECT person_id, tied_at FROM links WHERE id = ?", (lid,)).fetchone()) \
-        == (None, None)
+    assert tied(lid) == (None, None, None)
 
 
 def test_tied_at_survives_a_restore(env, client, clock):
@@ -311,6 +319,7 @@ def test_tied_at_survives_a_restore(env, client, clock):
         userdata.export(conn, name, data)
     with conn:
         conn.execute("DELETE FROM links")
+    assert conn.execute("SELECT COUNT(*) FROM link_people").fetchone()[0] == 0     # with their links
     assert userdata.load(conn, "links", data) == 2
     assert recent(client) == [("Alice", 1_000_100), ("Bob", 1_000_000)]
 
@@ -327,7 +336,7 @@ def test_restore_from_a_file_without_tied_at(env, client):
     conn = db.connect()
     assert userdata.load(conn, "links", data) == 3
     assert recent(client) == [("Bob", 70), ("Alice", 50)]
-    assert conn.execute("SELECT tied_at FROM links WHERE url = 'https://c.example'").fetchone()[0] is None
+    assert tied(find("https://c.example")) == (None, None, None)
 
 
 def test_migration_counts_a_tied_link_from_when_it_was_saved(tmp_path):
@@ -392,7 +401,7 @@ def test_reorder_numbers_equal_places_first(env, client):
     a, b, c = (add(client, f"https://{n}.example", person=alice)["link"]["id"] for n in "abc")
     conn = db.connect()
     with conn:
-        conn.execute("UPDATE links SET position = 1")                  # as an old or hand-edited file could leave
+        conn.execute("UPDATE link_people SET position = 1")            # as an old or hand-edited file could leave
     r = post(client, f"/api/people/{alice}/links/order", {"ids": [c, a]})
     assert [x["id"] for x in r["links"]] == [c, b, a]
     assert sorted(x["position"] for x in r["links"]) == [1, 2, 3]
@@ -403,7 +412,7 @@ def test_reorder_keeps_links_with_no_place_last(env, client):
     a, b, c, d = (add(client, f"https://{n}.example", person=alice)["link"]["id"] for n in "abcd")
     conn = db.connect()
     with conn:
-        conn.execute("UPDATE links SET position = NULL WHERE id IN (?, ?)", (c, d))   # as a hand-edited file could leave
+        conn.execute("UPDATE link_people SET position = NULL WHERE link_id IN (?, ?)", (c, d))   # as a hand-edited file could leave
     assert [x["id"] for x in get(client, f"/api/people/{alice}")["links"]] == [a, b, c, d]
     r = post(client, f"/api/people/{alice}/links/order", {"ids": [d, c]})             # "move d up"
     assert [x["id"] for x in r["links"]] == [a, b, d, c]
@@ -416,7 +425,7 @@ def test_a_link_given_to_another_person_goes_last(client):
     add(client, "https://b1.example", person=bob)
     lid = add(client, "https://a1.example", person=alice)["link"]["id"]
     r = post(client, f"/api/links/{lid}", {"person": bob})
-    assert r["link"]["person"]["id"] == bob and r["link"]["position"] == 2
+    assert r["link"]["people"] == [{"id": bob, "name": "Bob"}] and tied(lid)[:2] == (bob, 2)
 
 
 def test_deleting_a_person_keeps_their_links(client):
@@ -424,7 +433,7 @@ def test_deleting_a_person_keeps_their_links(client):
     lid = add(client, "https://linktr.ee/alice", person=alice)["link"]["id"]
     delete(client, f"/api/people/{alice}")
     [link] = get(client, "/api/links")["links"]
-    assert (link["id"], link["person"], link["position"]) == (lid, None, None)
+    assert (link["id"], link["people"], link["position"]) == (lid, [], None)
     assert urls(client, "?person=none") == ["https://linktr.ee/alice"]
 
 
@@ -447,7 +456,21 @@ def test_merging_people_moves_links_to_the_kept_one(client):
 # ---------------------------------------------------------------------------
 
 def tied(lid):
-    return tuple(db.connect().execute("SELECT person_id, position, tied_at FROM links WHERE id = ?", (lid,)).fetchone())
+    """(person id, position, tied_at) of a link of one person, or (None,) * 3 for a link of no one."""
+    rows = db.connect().execute("SELECT person_id, position, tied_at FROM link_people WHERE link_id = ?",
+                                (lid,)).fetchall()
+    assert len(rows) <= 1, rows
+    return tuple(rows[0]) if rows else (None, None, None)
+
+
+def ties(lid):
+    """{person id: (position, tied_at)} of a link."""
+    return {r[0]: (r[1], r[2]) for r in db.connect().execute(
+        "SELECT person_id, position, tied_at FROM link_people WHERE link_id = ?", (lid,))}
+
+
+def find(url):
+    return links.find(db.connect(), url)
 
 
 def test_assign_many_to_a_person(client, clock):
@@ -457,7 +480,7 @@ def test_assign_many_to_a_person(client, clock):
     clock[0] += 50
     r = post(client, "/api/links/assign", {"ids": [c, a, c], "person": alice})
     assert r["ok"] is True and r["moved"] == 2
-    assert [(x["id"], x["person"]["name"]) for x in r["links"]] == [(c, "Alice"), (a, "Alice")]
+    assert [(x["id"], [p["name"] for p in x["people"]]) for x in r["links"]] == [(c, ["Alice"]), (a, ["Alice"])]
     # Last in her order, in the order given, tied to her now: she is the most recent.
     assert [tied(i) for i in (own, c, a, b)] == [(alice, 1, 1_000_000), (alice, 2, 1_000_050),
                                                  (alice, 3, 1_000_050), (None, None, None)]
@@ -477,7 +500,7 @@ def test_assign_to_no_one_unties(client, clock):
     alice = person(client, "Alice")
     a, b = (add(client, f"https://{n}.example", person=alice)["link"]["id"] for n in "ab")
     r = post(client, "/api/links/assign", {"ids": [a, b], "person": None})
-    assert r["moved"] == 2 and all(x["person"] is None for x in r["links"])
+    assert r["moved"] == 2 and all(x["people"] == [] for x in r["links"])
     assert tied(a) == tied(b) == (None, None, None)
     assert recent(client) == []
     # Untied already: nothing moves, nothing to export.
@@ -505,7 +528,7 @@ def test_assign_fails_whole_in_its_transaction(client, monkeypatch):
         return real(conn, pid)
     monkeypatch.setattr(links, "_next_position", failing)
     with pytest.raises(sqlite3.OperationalError):
-        links.assign(db.connect(), [a, b], alice, 5)
+        links.assign(db.connect(), [a, b], [alice], 5)
     assert tied(a) == tied(b) == (None, None, None)
 
 
@@ -519,17 +542,20 @@ def test_assign_takes_the_write_lock_before_reading(client):
     other, mine = sqlite3.connect(path), sqlite3.connect(path, timeout=0)
     try:
         other.execute("BEGIN IMMEDIATE")
-        other.execute("INSERT INTO links(url, title, notes, person_id, position, created_at, tied_at) "
-                      "VALUES ('https://other.example', '', '', ?, 1, 1, 1)", (alice,))
+        lid = other.execute("INSERT INTO links(url, title, notes, created_at) "
+                            "VALUES ('https://other.example', '', '', 1)").lastrowid
+        other.execute("INSERT INTO link_people(link_id, person_id, position, tied_at) VALUES (?, ?, 1, 1)",
+                      (lid, alice))
         with pytest.raises(sqlite3.OperationalError, match="locked"):
-            links.assign(mine, [a, b], alice, 5)
+            links.assign(mine, [a, b], [alice], 5)
         assert not mine.in_transaction
         other.commit()
-        assert links.assign(mine, [a, b], alice, 5) == (2, [], [])
+        assert links.assign(mine, [a, b], [alice], 5) == (2, [], [])
     finally:
         other.close()
         mine.close()
-    places = [r[0] for r in db.connect().execute("SELECT position FROM links WHERE person_id = ? ORDER BY position", (alice,))]
+    places = [r[0] for r in db.connect().execute(
+        "SELECT position FROM link_people WHERE person_id = ? ORDER BY position", (alice,))]
     assert places == [1, 2, 3]
 
 
@@ -595,19 +621,46 @@ def test_keep_adds_only_what_a_person_does_not_have(client, clock):
     found = [("https://www.patreon.com/alice", "Theirs"), ("http://patreon.com/alice/", "Another spelling"),
              ("https://b.example", "x"), ("https://loose.example", "x"), ("https://new.example/1", "One"),
              ("https://new.example/2", ""), ("https://new.example/3", "Three")]
-    assert links.keep(conn, alice, found, 1_000_077, 2) == {"saved": 2, "already": 2, "elsewhere": 2, "over": 1}
+    assert links.keep(conn, alice, found, 1_000_077, 2) == {"saved": 2, "already": 2, "shared": 2, "over": 1}
     assert not conn.in_transaction
     got = get(client, f"/api/people/{alice}")["links"]
-    assert got[0] == mine                                  # its title, notes and place untouched
-    assert [(x["url"], x["title"], x["position"], x["created_at"]) for x in got[1:]] == [
-        ("https://new.example/1", "One", 2, 1_000_077), ("https://new.example/2", "", 3, 1_000_077)]
-    assert [x["title"] for x in get(client, f"/api/people/{bob}")["links"]] == ["Bob's"]
-    assert [x["title"] for x in get(client, "/api/links?person=none")["links"]] == ["Loose"]
+    assert got[0] == {**mine, "position": 1}               # its title, notes and place untouched
+    # Bob's link and the loose one are hers too now, their titles kept,
+    # then the new ones: each last in her order.
+    assert [(x["url"], x["title"], x["position"]) for x in got[1:]] == [
+        ("https://b.example", "Bob's", 2), ("https://loose.example", "Loose", 3),
+        ("https://new.example/1", "One", 4), ("https://new.example/2", "", 5)]
+    assert [x["created_at"] for x in got[3:]] == [1_000_077] * 2
+    # Bob keeps his, where it was.
+    assert [(x["title"], x["position"], [p["name"] for p in x["people"]])
+            for x in get(client, f"/api/people/{bob}")["links"]] == [("Bob's", 1, ["Alice", "Bob"])]
+    assert get(client, "/api/links?person=none")["links"] == []
     assert recent(client)[0] == ("Alice", 1_000_077)           # given to her then, as a link added by hand
     # Nothing new, and a person who is gone: nothing written.
-    assert links.keep(conn, alice, found[:2], 78, 2) == {"saved": 0, "already": 2, "elsewhere": 0, "over": 0}
+    assert links.keep(conn, alice, found[:4], 78, 2) == {"saved": 0, "already": 4, "shared": 0, "over": 0}
     assert links.keep(conn, 999, found, 78, 2) is None and not conn.in_transaction
     assert len(urls(client)) == 5
+
+
+def test_keep_ties_another_spelling_of_someone_elses_link(client, clock):
+    """A URL saved for Bob (or for no one) in another spelling (http, www.,
+    a last slash) is that link, now Alice's too: never a second link, its
+    URL and title untouched. With no person, it is there already."""
+    alice, bob = person(client, "Alice"), person(client, "Bob")
+    band = add(client, "https://www.band.example/", person=bob, title="The band")["link"]
+    loose = add(client, "https://loose.example/page", title="Loose")["link"]
+    conn = db.connect()
+    found = [("http://band.example", "Band"), ("https://www.loose.example/page/", "x")]
+    assert links.keep(conn, alice, found, 5, 10) == {"saved": 0, "already": 0, "shared": 2, "over": 0}
+    assert len(urls(client)) == 2
+    assert [(x["id"], x["url"], x["title"]) for x in get(client, f"/api/people/{alice}")["links"]] == [
+        (band["id"], "https://www.band.example", "The band"), (loose["id"], "https://loose.example/page", "Loose")]
+    assert [p["name"] for p in links.get(conn, band["id"])["people"]] == ["Alice", "Bob"]
+    # Again, and to no one: there already, nothing written.
+    assert links.keep(conn, alice, found, 6, 10) == {"saved": 0, "already": 2, "shared": 0, "over": 0}
+    assert links.keep(conn, None, [("http://band.example/", "")], 7, 10) == \
+        {"saved": 0, "already": 1, "shared": 0, "over": 0}
+    assert len(urls(client)) == 2
 
 
 def test_keep_saves_all_or_none(client):
@@ -660,6 +713,218 @@ def test_bulk_changes_mark_links_for_export(client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Several people (#215: a band's account is the band's and each member's)
+# ---------------------------------------------------------------------------
+
+def names_of(link):
+    return [p["name"] for p in link["people"]]
+
+
+def test_one_link_on_two_people_each_in_their_own_order(client, clock):
+    band, ana, bo = person(client, "The Band"), person(client, "Ana"), person(client, "Bo")
+    add(client, "https://ana.example", person=ana)
+    shared = add(client, "https://www.tiktok.com/@theband", people=[band, ana], title="TikTok")["link"]
+    assert names_of(shared) == ["Ana", "The Band"]                     # by name
+    assert ties(shared["id"]) == {band: (1, 1_000_000), ana: (2, 1_000_000)}
+    # It shows on both, each at their own place.
+    assert [(x["url"], x["position"]) for x in get(client, f"/api/people/{ana}")["links"]] == [
+        ("https://www.tiktok.com/@theband", 2), ("https://ana.example", 1)]
+    assert [(x["id"], x["position"]) for x in get(client, f"/api/people/{band}")["links"]] == [(shared["id"], 1)]
+    assert urls(client, f"?person={band}") == urls(client, f"?person={ana}")[:1] == ["https://www.tiktok.com/@theband"]
+    assert urls(client, "?person=none") == []
+    assert get(client, "/api/jobs")["unsorted_links"] == 0
+
+    # Also to Bo (add-person): Band and Ana keep it where it was.
+    clock[0] += 10
+    r = post(client, "/api/links/add-person", {"ids": [shared["id"]], "person": bo})
+    assert r["added"] == [shared["id"]] and names_of(r["links"][0]) == ["Ana", "Bo", "The Band"]
+    assert ties(shared["id"]) == {band: (1, 1_000_000), ana: (2, 1_000_000), bo: (1, 1_000_010)}
+    assert recent(client)[0] == ("Bo", 1_000_010)
+    # Again: theirs already, nothing added.
+    assert post(client, "/api/links/add-person", {"ids": [shared["id"]], "person": bo})["added"] == []
+
+    # A reorder of one person's links moves nothing of the others'.
+    other = add(client, "https://bo.example", person=bo)["link"]["id"]
+    post(client, f"/api/people/{bo}/links/order", {"ids": [other, shared["id"]]})
+    assert ties(shared["id"]) == {band: (1, 1_000_000), ana: (2, 1_000_000), bo: (2, 1_000_010)}
+
+    # Removing one person leaves the others.
+    r = post(client, "/api/links/remove-person", {"ids": [shared["id"], 999], "person": ana})
+    assert r["removed"] == [shared["id"]] and names_of(r["links"][0]) == ["Bo", "The Band"]
+    assert urls(client, f"?person={ana}") == ["https://ana.example"]
+    assert ties(shared["id"]) == {band: (1, 1_000_000), bo: (2, 1_000_010)}
+    assert post(client, "/api/links/remove-person", {"ids": [shared["id"]], "person": ana})["removed"] == []
+    # The last one taken: Unsorted.
+    post(client, "/api/links/remove-person", {"ids": [shared["id"]], "person": band})
+    post(client, "/api/links/remove-person", {"ids": [shared["id"]], "person": bo})
+    assert urls(client, "?person=none") == ["https://www.tiktok.com/@theband"]
+
+
+def test_people_in_an_edit_replace_them_keeping_each_ones_place(client, clock):
+    band, ana, bo = person(client, "The Band"), person(client, "Ana"), person(client, "Bo")
+    add(client, "https://ana.example", person=ana)
+    lid = add(client, "https://band.example", person=band)["link"]["id"]
+    clock[0] += 5
+    r = post(client, f"/api/links/{lid}", {"people": [ana, band, ana]})          # each once
+    assert names_of(r["link"]) == ["Ana", "The Band"]
+    assert ties(lid) == {band: (1, 1_000_000), ana: (2, 1_000_005)}             # the band's place kept
+    clock[0] += 5
+    r = post(client, f"/api/links/{lid}", {"people": [bo, ana]})
+    assert ties(lid) == {ana: (2, 1_000_005), bo: (1, 1_000_010)}
+    r = post(client, f"/api/links/{lid}", {"people": []})
+    assert r["link"]["people"] == [] and ties(lid) == {}
+    # person (one) is "move to": every other person goes.
+    post(client, f"/api/links/{lid}", {"people": [ana, bo]})
+    r = post(client, f"/api/links/{lid}", {"person": bo})
+    assert names_of(r["link"]) == ["Bo"] and list(ties(lid)) == [bo]
+
+
+def test_assign_replaces_every_person_and_its_undo_needs_them_alone(client, clock):
+    band, ana, bo = person(client, "The Band"), person(client, "Ana"), person(client, "Bo")
+    a = add(client, "https://a.example", people=[band, ana])["link"]["id"]
+    b = add(client, "https://b.example", person=band)["link"]["id"]
+    r = post(client, "/api/links/assign", {"ids": [a, b], "person": bo})
+    assert r["moved"] == 2 and [names_of(x) for x in r["links"]] == [["Bo"], ["Bo"]]
+    # A link that has Bo and someone else since is not Bo's alone: the Undo passes it over.
+    post(client, "/api/links/add-person", {"ids": [b], "person": ana})
+    r = post(client, "/api/links/assign", {"ids": [a], "people": [band, ana], "if_person": bo})
+    assert r["moved"] == 1 and names_of(r["links"][0]) == ["Ana", "The Band"]
+    r = post(client, "/api/links/assign", {"ids": [b], "person": band, "if_person": bo})
+    assert (r["moved"], r["skipped"]) == (0, [b]) and names_of(r["links"][0]) == ["Ana", "Bo"]
+    # people in assign: a list of ids, each a person's.
+    for body in ({"ids": [a], "people": [999]}, {"ids": [a], "people": "1"}, {"ids": [a], "people": [band], "person": ana}):
+        post(client, "/api/links/assign", body, 400)
+
+
+def test_add_and_remove_person_bodies(client):
+    ana = person(client, "Ana")
+    a = add(client, "https://a.example")["link"]["id"]
+    r = post(client, "/api/links/add-person", {"ids": [a, a + 5], "person": ana}, 404)
+    assert r == {"ok": False, "error": "no such link", "missing": [a + 5]}
+    assert tied(a) == (None, None, None)                                # all or none
+    for url in ("/api/links/add-person", "/api/links/remove-person"):
+        for body in ({"ids": [a]}, {"ids": [a], "person": None}, {"ids": [a], "person": "1"},
+                     {"ids": [a], "person": True}, {"ids": [a], "person": 999}, {"ids": [], "person": ana},
+                     {"person": ana}, {"ids": [a], "person": [ana]}):
+            assert post(client, url, body, 400)["ok"] is False
+    assert tied(a) == (None, None, None)
+
+
+def test_add_and_remove_person_mark_links_for_export(client, monkeypatch):
+    ana = person(client, "Ana")
+    a = add(client, "https://a.example")["link"]["id"]
+    seen = []
+    monkeypatch.setattr(userdata, "changed", seen.append)
+    post(client, "/api/links/add-person", {"ids": [a], "person": ana})
+    post(client, "/api/links/add-person", {"ids": [a], "person": ana})        # nothing added
+    post(client, "/api/links/remove-person", {"ids": [a], "person": ana})
+    post(client, "/api/links/remove-person", {"ids": [a], "person": ana})     # nothing removed
+    assert seen == ["links", "links"]
+
+
+def test_a_person_deleted_before_the_write_is_a_400_and_nothing_changes(client, monkeypatch):
+    """The routes check that a person exists, then write: a person deleted
+    in between (the check made to pass here) is a 400 "no such person",
+    never a 409 "saved already" or a 500, and nothing is written."""
+    import people
+    alice, gone = person(client, "Alice"), person(client, "Gone")
+    lid = add(client, "https://a.example", person=alice, title="A")["link"]["id"]
+    delete(client, f"/api/people/{gone}")
+    monkeypatch.setattr(people, "exists", lambda conn, pid: True)
+    for url, body in [("/api/links", {"url": "https://b.example", "person": gone}),
+                      ("/api/links", {"url": "https://b.example", "people": [alice, gone]}),
+                      (f"/api/links/{lid}", {"title": "changed", "people": [alice, gone]}),
+                      (f"/api/links/{lid}", {"person": gone}),
+                      ("/api/links/assign", {"ids": [lid], "person": gone}),
+                      ("/api/links/assign", {"ids": [lid], "people": [gone], "if_person": alice}),
+                      ("/api/links/add-person", {"ids": [lid], "person": gone})]:
+        assert "no such person" in post(client, url, body, 400)["error"], (url, body)
+    assert not db.connect().in_transaction
+    assert urls(client) == ["https://a.example"]
+    got = get(client, f"/api/links?person={alice}")["links"]
+    assert [(x["title"], [p["name"] for p in x["people"]], x["position"]) for x in got] == [("A", ["Alice"], 1)]
+
+
+def test_deleting_one_person_of_a_shared_link_leaves_it_the_others(client):
+    band, ana = person(client, "The Band"), person(client, "Ana")
+    shared = add(client, "https://band.example", people=[band, ana])["link"]["id"]
+    alone = add(client, "https://ana.example", person=ana)["link"]["id"]
+    delete(client, f"/api/people/{ana}")
+    assert names_of(get(client, f"/api/people/{band}")["links"][0]) == ["The Band"]
+    assert list(ties(shared)) == [band]
+    assert urls(client, "?person=none") == ["https://ana.example"] and ties(alone) == {}
+    # And a link deleted takes its ties with it.
+    delete(client, f"/api/links/{shared}")
+    assert db.connect().execute("SELECT COUNT(*) FROM link_people").fetchone()[0] == 0
+
+
+def test_merging_two_people_who_share_a_link(client):
+    """The kept person keeps the link where they had it, once; the other's
+    links that are not theirs yet come after their own."""
+    ana, alt, band = person(client, "Ana"), person(client, "Ana (alt)"), person(client, "The Band")
+    a1 = add(client, "https://a1.example", person=ana)["link"]["id"]
+    shared = add(client, "https://band.example", people=[ana, alt, band])["link"]["id"]
+    b1 = add(client, "https://b1.example", person=alt)["link"]["id"]
+    post(client, "/api/people/merge", {"ids": [ana, alt]})
+    got = get(client, f"/api/people/{ana}")["links"]
+    assert [(x["id"], x["position"]) for x in got] == [(a1, 1), (shared, 2), (b1, 3)]
+    assert names_of(got[1]) == ["Ana", "The Band"]
+    assert ties(shared)[band] == (1, ties(shared)[band][1])
+
+
+def test_userdata_round_trip_with_a_shared_link(env, client, clock):
+    data = str(env["tmp"] / "data")
+    band, ana = person(client, "The Band"), person(client, "Ana")
+    add(client, "https://ana.example", person=ana)
+    clock[0] += 3
+    lid = add(client, "https://band.example", people=[band, ana], notes="shared")["link"]["id"]
+    conn = db.connect()
+    for name in ("people", "links"):
+        userdata.export(conn, name, data)
+    with open(userdata.path(data, "links")) as f:
+        rows = {r["url"]: r for r in json.load(f)["rows"]}
+    assert rows["https://band.example"]["people"] == [
+        {"name": "Ana", "position": 2, "tied_at": 1_000_003}, {"name": "The Band", "position": 1, "tied_at": 1_000_003}]
+    before = (get(client, f"/api/people/{band}")["links"], get(client, f"/api/people/{ana}")["links"])
+    # A rebuilt index: the link, its id and both its people come back.
+    with conn:
+        conn.execute("DELETE FROM links")
+        conn.execute("DELETE FROM people")
+    assert userdata.load(conn, "people", data) == 2
+    assert userdata.load(conn, "links", data) == 2
+    assert (get(client, f"/api/people/{band}")["links"], get(client, f"/api/people/{ana}")["links"]) == before
+    assert ties(lid) == {band: (1, 1_000_003), ana: (2, 1_000_003)}
+
+
+def test_restore_puts_two_rows_of_one_url_together_with_both_people(env):
+    """An older or hand-edited file with two rows that clean to one URL:
+    the first is put back, with the people of both; the second's title and
+    notes are not."""
+    data = str(env["tmp"] / "data")
+    (env["tmp"] / "data" / "userdata").mkdir(parents=True, exist_ok=True)
+    with open(userdata.path(data, "links"), "w") as f:
+        json.dump({"version": 1, "rows": [
+            {"url": "https://band.example/?utm_source=x", "title": "Band", "person": "Ana", "position": 3,
+             "created_at": 5, "tied_at": 6},
+            {"url": "https://band.example", "title": "Other", "notes": "n", "person": "Bo", "position": 1,
+             "created_at": 7},
+            {"url": "https://c.example", "people": [{"name": "Ana", "position": "1"}, {"name": "Ana"}, {"name": ""},
+                                                   "Bo", {"position": 2}, {"name": "Cy", "tied_at": True}],
+             "created_at": 9},
+            {"url": "https://d.example", "people": "Ana"},
+        ]}, f)
+    conn = db.connect()
+    assert userdata.load(conn, "links", data) == 3
+    named = lambda lid: {conn.execute("SELECT name FROM people WHERE id = ?", (p,)).fetchone()[0]: v  # noqa: E731
+                         for p, v in ties(lid).items()}
+    band = find("https://band.example")
+    assert tuple(conn.execute("SELECT title, notes FROM links WHERE id = ?", (band,)).fetchone()) == ("Band", "")
+    assert named(band) == {"Ana": (3, 6), "Bo": (1, 7)}
+    assert named(find("https://c.example")) == {"Ana": (None, 9), "Cy": (None, 9)}
+    assert named(find("https://d.example")) == {}
+
+
+# ---------------------------------------------------------------------------
 # User data
 # ---------------------------------------------------------------------------
 
@@ -677,16 +942,19 @@ def test_userdata_round_trip_by_person_name(env, client):
     with open(userdata.path(data, "links")) as f:
         rows = json.load(f)["rows"]
     assert rows == [
-        {"url": "https://alice.example", "title": "", "notes": "", "person": "Alice", "position": 1,
-         "created_at": rows[0]["created_at"], "tied_at": rows[0]["created_at"], "id": 2},
-        {"url": "https://news.example/a", "title": "An article", "notes": "", "person": None, "position": None,
-         "created_at": rows[1]["created_at"], "tied_at": None, "id": 3},
-        {"url": "https://www.patreon.com/alice", "title": "Patreon", "notes": "tiers", "person": "Alice",
-         "position": 2, "created_at": rows[2]["created_at"], "tied_at": rows[2]["created_at"], "id": 1},
+        {"url": "https://alice.example", "title": "", "notes": "",
+         "people": [{"name": "Alice", "position": 1, "tied_at": rows[0]["created_at"]}],
+         "created_at": rows[0]["created_at"], "id": 2},
+        {"url": "https://news.example/a", "title": "An article", "notes": "", "people": [],
+         "created_at": rows[1]["created_at"], "id": 3},
+        {"url": "https://www.patreon.com/alice", "title": "Patreon", "notes": "tiers",
+         "people": [{"name": "Alice", "position": 2, "tied_at": rows[2]["created_at"]}],
+         "created_at": rows[2]["created_at"], "id": 1},
     ]
 
     # A rebuilt index: each link gets its id back, the person is found again by name.
     with conn:
+        conn.execute("DELETE FROM link_people")
         conn.execute("DELETE FROM links")
         conn.execute("DELETE FROM people")
         conn.execute("INSERT INTO people(name, created_at) VALUES ('Somebody else', 0)")
@@ -727,8 +995,11 @@ def test_restore_cleans_a_row_as_the_api_would(env):
         ]}, f)
     conn = db.connect()
     assert userdata.load(conn, "links", data) == 2
-    assert [tuple(r) for r in conn.execute("SELECT url, title, position FROM links ORDER BY url")] == [
-        ("https://alice.example", "", None), ("https://x.com/a", "An x", None)]
+    assert [tuple(r) for r in conn.execute("SELECT url, title FROM links ORDER BY url")] == [
+        ("https://alice.example", ""), ("https://x.com/a", "An x")]
+    assert tied(find("https://alice.example"))[:2] == (conn.execute(
+        "SELECT id FROM people WHERE name = 'Alice'").fetchone()[0], None)
+    assert tied(find("https://x.com/a")) == (None, None, None)
 
 
 def test_changes_mark_links_for_export(client, monkeypatch):

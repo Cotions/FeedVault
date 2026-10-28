@@ -662,13 +662,104 @@ def _migrate_29(conn):
     conn.execute("ALTER TABLE people ADD COLUMN rating INTEGER CHECK (rating BETWEEN 1 AND 10)")
 
 
+def _migrate_30(conn):
+    """A link may be tied to several people (a band's account is the band's
+    and each member's): ``link_people`` holds the ties, one row per link and
+    person, each with the link's place among that person's links and when
+    it was given to them. A link with no row is a link of no one (the Links
+    page's Unsorted). Every tie of links.person_id moves there with its
+    position and tied_at (one with none counts from when the link was
+    saved), and links loses those three columns (rebuilt: a column with a
+    foreign key cannot be dropped). Deleting a link or a person drops its
+    ties.
+
+    Then the links migration 28 kept apart only because they were two
+    people's (links.clean_url makes their URLs one) become one, by
+    _merge_links_30, and links.json is written again at the next start."""
+    conn.execute("ALTER TABLE links RENAME TO links_28")
+    conn.execute("DROP INDEX IF EXISTS links_person")
+    conn.execute("""
+        CREATE TABLE links (
+            id         INTEGER PRIMARY KEY,
+            url        TEXT NOT NULL UNIQUE,
+            title      TEXT NOT NULL DEFAULT '',
+            notes      TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        )""")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS link_people (
+            link_id   INTEGER NOT NULL REFERENCES links(id) ON DELETE CASCADE,
+            person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            position  INTEGER,
+            tied_at   INTEGER NOT NULL,
+            PRIMARY KEY (link_id, person_id)
+        ) WITHOUT ROWID""")
+    conn.execute("CREATE INDEX IF NOT EXISTS link_people_person ON link_people(person_id, position)")
+    conn.execute("INSERT INTO links(id, url, title, notes, created_at) "
+                 "SELECT id, url, title, notes, created_at FROM links_28")
+    conn.execute("INSERT INTO link_people(link_id, person_id, position, tied_at) "
+                 "SELECT id, person_id, position, COALESCE(tied_at, created_at) FROM links_28 "
+                 "WHERE person_id IN (SELECT id FROM people)")
+    conn.execute("DROP TABLE links_28")
+
+    groups = {}
+    for lid, url in conn.execute("SELECT id, url FROM links ORDER BY created_at, id").fetchall():
+        groups.setdefault(links.clean_url(url) or url, []).append((lid, url))
+    cleaned = merged = apart = 0
+    for clean, group in groups.items():
+        if len(group) < 2:
+            continue
+        (keep, keep_url), held = group[0], set()
+        for lid, url in group[1:]:
+            if _merge_links_30(conn, keep, lid):
+                merged += 1
+            else:
+                held.add(url)
+                apart += 1
+        if keep_url != clean and clean not in held:
+            conn.execute("UPDATE links SET url = ? WHERE id = ?", (clean, keep))
+            cleaned += 1
+    if cleaned or merged:
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('userdata_stale', 'links')")
+        print(f"[db] Links: {merged} merged into an older link with the same address, with their people, "
+              f"{cleaned} of them given the clean address, {apart} kept apart (notes too long joined)")
+
+
+def _merge_links_30(conn, keep, other):
+    """Migration 30: the link ``other`` into ``keep`` as _merge_links_28
+    does (the title kept, else other's; other's notes below its own when not
+    there already), then ``other`` deleted; whether it was. ``keep`` gets
+    each of other's people it does not have, with other's place among their
+    links and its tied_at: every person keeps the link where they had it.
+    A person both had keeps the tie given first (its place and tied_at).
+    Not merged: notes that would be longer than links.MAX_NOTES."""
+    k = conn.execute("SELECT title, notes FROM links WHERE id = ?", (keep,)).fetchone()
+    o = conn.execute("SELECT title, notes FROM links WHERE id = ?", (other,)).fetchone()
+    notes = k[1] if not o[1] or o[1] in k[1].split("\n\n") else f"{k[1]}\n\n{o[1]}" if k[1] else o[1]
+    if len(notes) > links.MAX_NOTES:
+        return False
+    # A person both had (K and O theirs, then D too): the tie given first,
+    # with its place, so neither link's earlier tie is lost.
+    for pid, position, tied_at in conn.execute(
+            "SELECT o.person_id, o.position, o.tied_at FROM link_people o JOIN link_people k "
+            "ON k.link_id = ? AND k.person_id = o.person_id WHERE o.link_id = ? AND o.tied_at < k.tied_at",
+            (keep, other)).fetchall():
+        conn.execute("UPDATE link_people SET position = ?, tied_at = ? WHERE link_id = ? AND person_id = ?",
+                     (position, tied_at, keep, pid))
+    conn.execute("UPDATE OR IGNORE link_people SET link_id = ? WHERE link_id = ?", (keep, other))
+    conn.execute("DELETE FROM link_people WHERE link_id = ?", (other,))   # the ties keep had already
+    conn.execute("DELETE FROM links WHERE id = ?", (other,))
+    conn.execute("UPDATE links SET title = ?, notes = ? WHERE id = ?", (k[0] or o[0], notes, keep))
+    return True
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
               _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
-              _migrate_26, _migrate_27, _migrate_28, _migrate_29]
+              _migrate_26, _migrate_27, _migrate_28, _migrate_29, _migrate_30]
 
 BACKUPS_KEPT = 3
 

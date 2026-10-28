@@ -732,7 +732,7 @@ def test_import_end_to_end(bio, client, monkeypatch):
     # and javascript: ones are refused, and the site's own Report page and
     # "instagram.com/notalink" are not links to keep.
     assert "other" not in r
-    assert r["links"] == {"saved": 14, "already": 1,"elsewhere": 0, "over": 0, "dropped": 2}
+    assert r["links"] == {"saved": 14, "already": 1,"shared": 0, "over": 0, "dropped": 2}
     assert saved(client, bio["id"]) == [
         ("https://linktr.ee/alice", ""), ("https://instagram.com/alice.example", "Instagram"),
         ("https://x.com/example_user1/status/123", "a post"), ("https://twitter.com/example_user1", "X"),
@@ -770,7 +770,7 @@ def test_an_empty_page(bio, client, monkeypatch):
     monkeypatch.setattr(biofetch, "FETCHER", bio_net("").fetcher())
     assert bio_import(client, bio["id"]) == {
         "ok": True, "url": "https://linktr.ee/alice", "accounts": [],
-        "links": {"saved": 1, "already": 0, "elsewhere": 0, "over": 0, "dropped": 0}}
+        "links": {"saved": 1, "already": 0, "shared": 0, "over": 0, "dropped": 0}}
     assert saved(client, bio["id"]) == [("https://linktr.ee/alice", "")]      # the page itself is kept
 
 
@@ -819,7 +819,8 @@ def test_the_page_is_never_logged(bio, client, monkeypatch, capsys):
     bio_import(client, bio["id"])
     out = capsys.readouterr()
     assert "SECRET-PAGE-TEXT" not in out.out + out.err
-    assert "https://linktr.ee/alice: 1 accounts, 2 links saved, 0 saved already, 0 dropped, 0 over the limit" in out.out
+    assert ("https://linktr.ee/alice: 1 accounts, 2 links saved, 0 saved already and now theirs too, 0 theirs already, "
+            "0 dropped, 0 over the limit") in out.out
 
 
 def test_busy_is_a_429(bio, client, monkeypatch):
@@ -1172,7 +1173,7 @@ def test_a_linkme_import_end_to_end(bio, client, monkeypatch):
     r = bio_import(client, bio["id"], url="https://link.me/alice")
     assert {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]} == {
         ("twitch", "alice_live"): "new", ("instagram", "alice.example"): "linked"}
-    assert r["links"] == {"saved": 3, "already": 0, "elsewhere": 0, "over": 0, "dropped": 0}
+    assert r["links"] == {"saved": 3, "already": 0, "shared": 0, "over": 0, "dropped": 0}
     assert saved(client, bio["id"]) == LINKME_KEPT
     assert net.connects == [PUBLIC] and net.lookups == ["link.me"]
 
@@ -1282,7 +1283,7 @@ HOSTILE = """<a href="https://ok.example/1"><script>alert(1)</script><style>a{}<
 def test_a_hostile_page_saves_only_clean_links(bio, client, monkeypatch):
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(HOSTILE).fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 12, "already": 0, "elsewhere": 0, "over": 0, "dropped": 4}
+    assert r["links"] == {"saved": 12, "already": 0, "shared": 0, "over": 0, "dropped": 4}
     assert saved(client, bio["id"]) == [
         ("https://linktr.ee/alice", ""), ("https://ok.example/1", "Click [2J me"),
         ("https://ok.example/2", "<script>alert(2)</script>"), ("https://ok.example/3", "y" * 300),
@@ -1290,7 +1291,7 @@ def test_a_hostile_page_saves_only_clean_links(bio, client, monkeypatch):
         ("https://ok.example/never-closed", "open"), ("https://ok.example/6", ""), ("https://ok.example/7", ""),
         ("https://ok.example/8", ""), ("https://ok.example/9", ""), ("https://ok.example/10", "T [1m")]
     for x in person_links(client, bio["id"]):
-        assert x["url"].startswith("https://") and x["notes"] == "" and x["person"]["id"] == bio["id"]
+        assert x["url"].startswith("https://") and x["notes"] == "" and x["people"] == [{"id": bio["id"], "name": "Alice"}]
         assert all(c.isprintable() for c in x["url"] + x["title"])
 
 
@@ -1302,14 +1303,14 @@ def test_the_first_import_saves_the_page_and_its_links(bio, client, monkeypatch)
     net = bio_net(LINKTREE_PAGE)
     monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 9, "already": 0, "elsewhere": 0, "over": 0, "dropped": 1}
+    assert r["links"] == {"saved": 9, "already": 0, "shared": 0, "over": 0, "dropped": 1}
     assert saved(client, bio["id"]) == LINKTREE_KEPT
     # Links like any other: theirs, in the order of the page, social or not by their host.
     got = person_links(client, bio["id"])
     assert [x["position"] for x in got] == list(range(1, 10))
     assert {x["url"]: x["kind"] for x in got}["https://alice-shop.example/store?ref=linktree"] == "other"
     assert {x["url"]: x["kind"] for x in got}["https://www.patreon.com/alice"] == "social"
-    assert all(x["person"] == {"id": bio["id"], "name": "Alice"} and x["notes"] == "" for x in got)
+    assert all(x["people"] == [{"id": bio["id"], "name": "Alice"}] and x["notes"] == "" for x in got)
     # The accounts are suggested as before, none added.
     assert {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]} == {
         ("instagram", "alice.example"): "linked", ("tiktok", "new.one"): "new", ("twitter", "Example_User1"): "indexed"}
@@ -1335,7 +1336,7 @@ def test_importing_again_saves_only_what_is_new(bio, client, monkeypatch):
     page = linktree_page(changed, SOCIALS[:2] + [("YOUTUBE", "https://www.youtube.com/@alicevids")])
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(page).fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 2, "already": 8, "elsewhere": 0, "over": 0, "dropped": 0}
+    assert r["links"] == {"saved": 2, "already": 8, "shared": 0, "over": 0, "dropped": 0}
     after = person_links(client, bio["id"])
     assert after[:9] == before                 # ids, titles, notes, order: as they were
     assert [(x["url"], x["title"], x["position"]) for x in after[9:]] == [
@@ -1353,21 +1354,34 @@ def test_importing_again_saves_only_what_is_new(bio, client, monkeypatch):
     assert person_links(client, bio["id"]) == after
     # And an import that finds nothing new changes nothing.
     monkeypatch.setattr(biofetch, "FETCHER", bio_net("").fetcher())
-    assert bio_import(client, bio["id"])["links"] == {"saved": 0, "already": 1, "elsewhere": 0, "over": 0, "dropped": 0}
+    assert bio_import(client, bio["id"])["links"] == {"saved": 0, "already": 1, "shared": 0, "over": 0, "dropped": 0}
     assert person_links(client, bio["id"]) == after
 
 
-def test_a_link_saved_for_someone_else_stays_theirs(bio, client, monkeypatch):
+def test_a_link_saved_for_someone_else_becomes_theirs_too(bio, client, monkeypatch):
+    """A shared account (a band's, on each member's page): the link saved
+    for Bob becomes this person's too, last in their order, and stays
+    Bob's, where it was, its title and notes as they were. One of no one's
+    leaves Unsorted the same way."""
     from test_people import get, post
     [bob] = [p for p in get(client, "/api/people") if p["name"] == "Bob"]
-    theirs = post(client, "/api/links", {"url": "https://www.patreon.com/alice", "title": "Bob's", "person": bob["id"]})["link"]
+    theirs = post(client, "/api/links", {"url": "https://www.patreon.com/alice", "title": "Bob's", "notes": "his",
+                                         "person": bob["id"]})["link"]
     loose = post(client, "/api/links", {"url": "https://discord.gg/AbCdEf", "notes": "to sort"})["link"]
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(LINKTREE_PAGE).fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 7, "already": 0, "elsewhere": 2, "over": 0, "dropped": 1}
-    assert "https://www.patreon.com/alice" not in dict(saved(client, bio["id"]))
-    assert person_links(client, bob["id"]) == [theirs]
-    assert get(client, "/api/links?person=none")["links"] == [loose]
+    assert r["links"] == {"saved": 7, "already": 0, "shared": 2, "over": 0, "dropped": 1}
+    mine = {x["url"]: x for x in person_links(client, bio["id"])}
+    both = [{"id": bio["id"], "name": "Alice"}, {"id": bob["id"], "name": "Bob"}]           # by name
+    assert {k: mine["https://www.patreon.com/alice"][k] for k in ("id", "title", "notes", "people")} == \
+        {"id": theirs["id"], "title": "Bob's", "notes": "his", "people": both}
+    assert mine["https://discord.gg/AbCdEf"]["notes"] == "to sort"
+    assert person_links(client, bob["id"]) == [{**theirs, "people": both, "position": 1}]
+    assert get(client, "/api/links?person=none")["links"] == []
+    assert loose["id"] in {x["id"] for x in person_links(client, bio["id"])}
+    # Again: theirs already, nothing changes.
+    assert bio_import(client, bio["id"])["links"]["shared"] == 0
+    assert person_links(client, bob["id"]) == [{**theirs, "people": both, "position": 1}]
 
 
 def test_an_import_saves_at_most_max_saved_links(bio, client, monkeypatch):
@@ -1375,12 +1389,12 @@ def test_an_import_saves_at_most_max_saved_links(bio, client, monkeypatch):
     page = "".join(f'<a href="https://shop.example/item/{i}">Item {i}</a>' for i in range(12))
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(page).fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 5, "already": 0, "elsewhere": 0, "over": 8, "dropped": 0}
+    assert r["links"] == {"saved": 5, "already": 0, "shared": 0, "over": 8, "dropped": 0}
     assert saved(client, bio["id"]) == [("https://linktr.ee/alice", "")] + [
         (f"https://shop.example/item/{i}", f"Item {i}") for i in range(4)]
     # The next import goes on from there: what is saved does not count against the limit.
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 5, "already": 5, "elsewhere": 0, "over": 3, "dropped": 0}
+    assert r["links"] == {"saved": 5, "already": 5, "shared": 0, "over": 3, "dropped": 0}
     assert [u for u, _ in saved(client, bio["id"])][5:] == [f"https://shop.example/item/{i}" for i in range(4, 9)]
 
 
@@ -1395,7 +1409,7 @@ def test_the_limits_of_what_one_import_reads_and_saves(bio, client, monkeypatch)
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(
         "".join(f'<a href="https://shop.example/item/{i}">Item {i}</a>' for i in range(3000))).fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 200, "already": 0, "elsewhere": 0, "over": 800, "dropped": 0}
+    assert r["links"] == {"saved": 200, "already": 0, "shared": 0, "over": 800, "dropped": 0}
     assert len(person_links(client, bio["id"])) == 200
 
 
@@ -1434,9 +1448,9 @@ def test_saved_links_are_mirrored_like_any_other(bio, env, client, monkeypatch):
     userdata.export(db.connect(), "links", data)
     with open(userdata.path(data, "links")) as f:
         rows = json.load(f)["rows"]
-    assert sorted((r["position"], r["url"], r["title"], r["person"], r["notes"]) for r in rows) == [
-        (n, url, title, "Alice", "") for n, (url, title) in enumerate(LINKTREE_KEPT, 1)]
-    assert all(r["tied_at"] == r["created_at"] and r["id"] for r in rows)
+    assert sorted((r["people"][0]["position"], r["url"], r["title"], [p["name"] for p in r["people"]], r["notes"])
+                  for r in rows) == [(n, url, title, ["Alice"], "") for n, (url, title) in enumerate(LINKTREE_KEPT, 1)]
+    assert all(r["people"][0]["tied_at"] == r["created_at"] and r["id"] for r in rows)
     # And they come back from the file as the API saved them.
     import links
     assert [links.restore_row(r) for r in rows] == rows
@@ -1711,7 +1725,7 @@ def test_a_mydeck_import_end_to_end(bio, client, monkeypatch):
     assert r["url"] == f"https://{DECK}/"
     assert {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]} == {
         ("instagram", "carol.example"): "new", ("reddit", "Carol_Example-"): "new"}
-    assert r["links"] == {"saved": 3, "already": 0, "elsewhere": 0, "over": 0, "dropped": 0}
+    assert r["links"] == {"saved": 3, "already": 0, "shared": 0, "over": 0, "dropped": 0}
     assert saved(client, bio["id"]) == MYDECK_KEPT
     assert set(net.lookups) == {DECK} and len(net.socks) == 3
 
