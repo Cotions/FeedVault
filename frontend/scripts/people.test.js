@@ -92,7 +92,7 @@ test("what the filters offer: counted, most used first, and how many have none",
   assert.deepEqual(c.genders, [{ value: "Female", count: 2 }, { value: "Agender", count: 1 }]);
   assert.deepEqual(c.countries, [{ value: "FR", count: 2 }]);
   assert.deepEqual(c.labels, [{ value: "Travel", count: 2 }, { value: "food", count: 1 }]);
-  assert.deepEqual(c.none, { gender: 1, country: 2, label: 2 });
+  assert.deepEqual(c.none, { gender: 1, country: 2, label: 2, rating: 4 });
 });
 
 test("the text filter sees the gender, the country's name and the labels", () => {

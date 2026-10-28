@@ -105,11 +105,11 @@ register("collection_posts", "collection_posts", ("collection", "post_id", "posi
 # Their gender and country with them, cleaned as the API would (a file
 # edited by hand keeps the person, not a country that is not one), and their
 # picture by the name of its files (avatars.py: in <data_dir>/avatars/,
-# which a rebuild leaves where it is).
-register("people", "people", ("name", "notes", "created_at", "gender", "country", "avatar"), "name",
-         insert=("INSERT OR IGNORE INTO people(id, name, notes, created_at, gender, country, avatar) "
+# which a rebuild leaves where it is), and their rating (null: not rated).
+register("people", "people", ("name", "notes", "created_at", "gender", "country", "avatar", "rating"), "name",
+         insert=("INSERT OR IGNORE INTO people(id, name, notes, created_at, gender, country, avatar, rating) "
                  "VALUES (:id, :name, COALESCE(:notes, ''), COALESCE(:created_at, 0), :gender, :country, "
-                 ":avatar)",),
+                 ":avatar, :rating)",),
          clean=people.restore_row, ids=True)
 # A person's labels by person name (after people), apart from post tags.
 register("person_labels", "person_labels", ("person", "label", "at"), ("person", "label"),

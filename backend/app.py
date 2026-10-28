@@ -1220,6 +1220,10 @@ def update_person(pid):
     gender = None if body.get("gender") is None else people.clean_gender(body["gender"])
     country = None if body.get("country") is None else people.clean_country(body["country"])
     labels = None if body.get("labels") is None else people.clean_labels(body["labels"])
+    # Sent as null, the rating is cleared; not sent, it stays.
+    rating = people.KEEP
+    if "rating" in body:
+        rating = None if body["rating"] is None else people.clean_rating(body["rating"])
     if body.get("name") is not None and name is None:
         return jsonify({"ok": False, "error": _BAD_PERSON_NAME}), 400
     if notes is not None and (not isinstance(notes, str) or len(notes) > people.MAX_NOTES):
@@ -1233,14 +1237,18 @@ def update_person(pid):
     if body.get("labels") is not None and labels is None:
         return jsonify({"ok": False, "error": f"labels must be a list of at most {people.MAX_LABELS} names of "
                                               f"1 to {organize.MAX_NAME} characters, no quotes"}), 400
-    if name is None and notes is None and gender is None and country is None and labels is None:
-        return jsonify({"ok": False, "error": "send name, notes, gender, country or labels"}), 400
+    if body.get("rating") is not None and rating is None:
+        return jsonify({"ok": False, "error": f"rating must be a whole number from 1 to {people.MAX_RATING} "
+                                              "(half stars: 7 is three and a half), or null for none"}), 400
+    if name is None and notes is None and gender is None and country is None and labels is None \
+            and rating is people.KEEP:
+        return jsonify({"ok": False, "error": "send name, notes, gender, country, labels or rating"}), 400
     try:
-        p = people.update(conn, pid, name, notes, gender, country, labels, int(time.time()))
+        p = people.update(conn, pid, name, notes, gender, country, labels, int(time.time()), rating=rating)
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     _people_changed(names=name is not None)
-    if notes is not None or gender is not None or country is not None:
+    if notes is not None or gender is not None or country is not None or rating is not people.KEEP:
         userdata.changed("people")
     if labels is not None:
         userdata.changed("person_labels")
@@ -2212,6 +2220,8 @@ def _public_config(cfg):
             # are never downloaded unless one says otherwise, and those to pick from.
             "profile_only_platforms": sources.profile_only_platforms(cfg),
             "platforms": sources.known_platforms(db.connect(), cfg),
+            # Creators' card borders by rating (config.rating_colors).
+            "rating_colors": config.rating_colors(cfg),
             # yt-dlp's metadata mode none embeds with it (sync.yt_dlp_mode).
             "ffmpeg": thumbs.have_ffmpeg(),
             # Settings → Download defaults: one block per tool and platform.
@@ -2307,6 +2317,14 @@ def _set_config(body):
             if r is not None and not sources.profile_only(r, cfg) and sources.profile_only(r, listed):
                 return jsonify({"ok": False, "error": f"a {r['platform']} source's sync is queued or running; "
                                                       "wait for it to end, or stop it"}), 409
+    if "rating_colors" in body:
+        # null: back to the defaults (the key leaves config.json).
+        if body["rating_colors"] is not None:
+            changes["rating_colors"], error = config.clean_rating_colors(body["rating_colors"])
+            if error:
+                return jsonify({"ok": False, "error": error})
+        else:
+            changes["rating_colors"] = None
     if "source_defaults" in body:
         defaults, error = sources.clean_defaults(body["source_defaults"], cfg.get("source_defaults"))
         error = error or _defaults_refused(body["source_defaults"], defaults, cfg)
@@ -2338,6 +2356,8 @@ def _set_config(body):
         cfg["instaloader"] = insta
     before = dict(cfg)
     cfg.update(changes)
+    if "rating_colors" in changes and changes["rating_colors"] is None:
+        del cfg["rating_colors"]
     if tools is not None or roots is not None or insta is not None or changes:
         # The old switch (slim_metadata) is instaloader's metadata mode now.
         if "slim_metadata" in cfg:

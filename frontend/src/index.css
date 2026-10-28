@@ -1909,6 +1909,13 @@ input[type="text"].page-filter { flex: 0 1 220px; font-family: var(--body); padd
   background: var(--surface-2);
   box-shadow: var(--lift);
 }
+/* A rated person's card: the border of their rating's band (Settings →
+   Appearance → Rating colors, lib/rating.js), set by the card as
+   --rating-color; the top band's twice as thick, inside the border so
+   nothing moves. Unrated, and below the first band: the plain border. */
+.creator-card.is-rated, .creator-card.is-rated:hover { border-color: var(--rating-color); }
+.creator-card.is-rated.is-top-band { box-shadow: inset 0 0 0 1px var(--rating-color); }
+.creator-card.is-rated.is-top-band:hover { box-shadow: inset 0 0 0 1px var(--rating-color), var(--lift); }
 .creator-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .creator-name { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .creator-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3420,6 +3427,9 @@ main[tabindex]:focus-visible { outline: none; box-shadow: none; }
 .creators-people-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 4px 0 10px; }
 .creators-people-head .creators-section { margin: 0; flex: 1; }
 .links-tabs.creators-view { margin-bottom: 0; }
+/* Sort, beside the view: its name to the left, on the line. */
+.filter.creators-sort { flex-direction: row; align-items: center; gap: 8px; }
+.filter.creators-sort .sort-select { min-width: 0; height: 30px; }
 .creator-grid + .creators-section { margin-top: 22px; }
 /* The header's search on Creators: Creators, Accounts, Links, one under
    the other. */
@@ -3620,7 +3630,7 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
    on a phone). Labels are blue, apart from the posts' green tags. */
 .person-about-form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px 24px; align-items: start; }
 .about-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.about-labels, .person-about-form > .person-notes-actions { grid-column: 1 / -1; }
+.about-rating, .about-labels, .person-about-form > .person-notes-actions { grid-column: 1 / -1; }
 .person-about-form > .person-notes-actions { margin-top: 0; }
 .about-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted); }
 .about-gender { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -3639,6 +3649,20 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
    to fit (the line's title names them all). */
 .person-flag { margin-right: 6px; }
 .person-labels { display: flex; gap: 4px; min-width: 0; overflow: hidden; }
+/* Stars (components/Rating.jsx): an outline, and the filled star over it
+   cut to its share. Gold in every theme: the stars say the rating, the
+   card's border color only repeats it. */
+.stars, .rating-input { display: inline-flex; align-items: center; gap: 1px; flex: none; line-height: 0; }
+.star { position: relative; display: inline-block; flex: none; }
+.star svg { display: block; }
+.star-empty path { fill: none; stroke: var(--edge); stroke-width: 1.6; stroke-linejoin: round; }
+.star-fill { position: absolute; inset: 0 auto 0 0; overflow: hidden; }
+.star-fill path { fill: #e8b931; stroke: #e8b931; stroke-width: 1.6; stroke-linejoin: round; }
+.rating-input { gap: 2px; padding: 2px; border-radius: 6px; cursor: pointer; width: max-content; }
+.rating-input:focus-visible { outline: none; box-shadow: var(--ring); }
+.rating-input.is-busy { cursor: progress; opacity: 0.7; }
+.about-rating-line { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.about-rating-line .creator-sub { white-space: normal; }
 .card-label {
   flex: 0 1 auto; min-width: 0; max-width: 7.5em;            /* a long one is cut before a short one is */
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -4061,6 +4085,24 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .link-label-text { flex: 1; min-width: 0; max-width: 280px; }
 .link-label-hint { font-size: 12px; overflow-wrap: anywhere; }
 .link-label-hint.is-err { color: #ffb3b5; }
+/* Settings → Rating colors: a band's color, where it starts, a sample card
+   with its border, Remove. The sample shrinks first on a phone. */
+.rating-band { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.rating-band-color {
+  flex: none; width: 40px; height: 32px; padding: 2px; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--edge); border-radius: 8px;
+}
+.rating-band-color:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.rating-band-min { display: flex; align-items: center; gap: 6px; flex: none; font-size: 12px; color: var(--muted); }
+.rating-band-min .sort-select { min-width: 0; height: 32px; }
+.rating-sample {
+  flex: 0 1 240px; min-width: 0; display: flex; align-items: center; gap: 10px;
+  padding: 7px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+}
+.rating-sample.is-rated { border-color: var(--rating-color); }
+.rating-sample.is-rated.is-top-band { box-shadow: inset 0 0 0 1px var(--rating-color); }
+.rating-sample.is-off { border-color: var(--border); box-shadow: none; }
+.rating-actions { flex-wrap: wrap; margin-top: 0; }
 
 /* ── Notifications (the sidebar's bell) ─────────────────── */
 .side-bell { position: relative; }

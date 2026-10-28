@@ -226,8 +226,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "source_defaults": [block, …], "profile_only_platforms": ["spotify"], "platforms": ["instagram", "spotify", "tiktok", …] }` (see [Download defaults](#download-defaults); `platforms`: those Settings → Profile only offers, see [Profile only](#profile-only)) |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)), `{ "profile_only_platforms": ["spotify", …] }` (see [Profile only](#profile-only)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "rating_colors": { "enabled": true, "bands": [{ "min": 1, "color": "#d9534f" }, …] }, "source_defaults": [block, …], "profile_only_platforms": ["spotify"], "platforms": ["instagram", "spotify", "tiktok", …] }` (see [Download defaults](#download-defaults) and [Rating colors](#rating-colors); `platforms`: those Settings → Profile only offers, see [Profile only](#profile-only)) |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "rating_colors": {…} }` (see [Rating colors](#rating-colors), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)), `{ "profile_only_platforms": ["spotify", …] }` (see [Profile only](#profile-only)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/profiles` | `{ "active": "default", "profiles": [profile, …] }`, see [Profiles](#profiles) |
 | POST | `/api/profiles` | body `{ "name", "data_directory", "media_roots": [...] }` → `{ "ok": true, "profile": profile, "active", "profiles" }`: a new profile, not switched to; see [Profiles](#profiles) |
 | POST | `/api/profiles/<id>` | body `{ "name" }` → `{ "ok": true, "active", "profiles" }`: renames it |
@@ -1351,7 +1351,7 @@ A **person**:
 ```json
 { "id": 3, "name": "Some Body", "notes": "", "created_at": 1727500000,
   "gender": "Female", "country": "FR", "labels": ["cosplay", "Travel"],
-  "avatar": "3f9a1c0b7d2e4f6a8b1c",
+  "avatar": "3f9a1c0b7d2e4f6a8b1c", "rating": 7,
   "accounts": [account, …], "platforms": ["instagram", "twitter"],
   "count": 900, "bytes": 2347483648, "newest": 1727481600, "no_sync": false }
 ```
@@ -1369,6 +1369,12 @@ A **person**:
   [tags](#tags): post tags and the Tags page never see them.
 - `avatar`: the name of the person's picture, or `null`; see
   [Profile pictures](#profile-pictures).
+- `rating`: a whole number from 1 to 10, the half stars of five (`7` is
+  ★★★½☆, "3.5 of 5"), or `null` for not rated (everyone, when the column
+  came: migration 29). A column of `people`, exported with the person in
+  `people.json`; a file without it, or with a value the API would refuse,
+  restores the person unrated. On Creators it colors the card's border
+  (see [Rating colors](#rating-colors)), and the cards sort and filter by it.
 - `accounts`: most posts first. An account linked but not in the index
   (before the first scan of a rebuilt index, or every post trashed) is listed
   with `count` 0 and `handle` `null`.
@@ -1383,7 +1389,7 @@ A **person**:
 | POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }], "not_synced": 0, "profile_only": 0 }`: a sync of each of the person's sources, as Sync all does for every source (`not_synced`: those left out, set to [Don't sync](#dont-sync); `profile_only`: those left out, [profile only](#profile-only)); 404 for an unknown id |
 | GET | `/api/people/attributes` | `{ "labels": [{ "name", "count" }], "genders": [{ "name", "count" }], "presets": ["Female", "Male", "Transgender"], "countries": ["AD", …] }`: the labels and genders people have, most used first (what the person page suggests and the Creators filters offer), and every country code a person can have |
 | GET | `/api/people/<id>` | person, with its `links` (see [Links](#links)), or 404 |
-| POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"] }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date) → `{ "ok": true, "person": {…} }` |
+| POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"], "rating": 7 }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date; `"rating": null` clears the rating, and anything but a whole number from 1 to 10 or `null` (`0`, `11`, `3.5`, `"7"`, `true`) is a 400) → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, tied to no one |
 | POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted; at most 500 each) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
 | POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }], "confirm": true }` → `{ "ok": true, "person": {…} }`, see below; 409 `{ "ok": false, "confirm": true, "sources": 2, "error" }` when one of them is set to [Don't sync](#dont-sync) and sources that sync now would stop, until sent with `"confirm": true` |
@@ -1408,13 +1414,47 @@ A **person**:
 - Merge keeps the first id: its name (or `name`, when given), and the
   others' notes appended to its own. Its labels are those of all of them;
   its gender, country and picture are the first person's (in `ids` order)
-  that has one (the others' pictures are deleted). Every account of the others, and
+  that has one (the others' pictures are deleted). Its `rating` is the
+  highest of theirs, whichever person has it (a merge never lowers a
+  rating; unrated when none of them is rated). Every account of the others, and
   `accounts`, move to it, and so do the others' [links](#links), after its
   own; the others are gone. `ids` must all exist (404
   otherwise); with one id, `accounts` must not be empty.
 - A bad name, a name taken by another person, bad notes, a gender over 40
-  characters, a country that is not a code, bad labels or a malformed
-  account list is a 400 `{ "ok": false, "error": "…" }`; an unknown id a 404.
+  characters, a country that is not a code, bad labels, a bad rating or a
+  malformed account list is a 400 `{ "ok": false, "error": "…" }`; an unknown id a 404.
+
+### Rating colors
+
+Settings → Appearance → **Rating colors**: the border a rated person's
+card takes on Creators, one color per band of ratings, chosen per
+installation. `GET /api/config` has
+
+```json
+"rating_colors": { "enabled": true, "bands": [
+  { "min": 1, "color": "#d9534f" }, { "min": 4, "color": "#f0ad4e" }, { "min": 6, "color": "#e6c84a" },
+  { "min": 8, "color": "#5cb85c" }, { "min": 10, "color": "#d4af37" }] }
+```
+
+(the defaults, when none is set); `POST /api/config` with `{
+"rating_colors": {…} }` replaces them, and `{ "rating_colors": null }`
+goes back to the defaults (the key leaves `config.json`). Kept in
+`config.json`, shared by every [profile](#profiles).
+
+- `min` is on the rating's 1 to 10 scale (`4` is two stars). A rating takes
+  the band with the highest `min` at or below it (5 with bands at 4 and 6:
+  the band of 4). The first band may start above 1: a rating below it
+  keeps the plain border, as a person not rated always does. `enabled:
+  false` keeps the plain border for everyone.
+- 1 to 10 bands, each `{ "min", "color" }` and nothing else, `min` a whole
+  number from 1 to 10, each above the one before, `color` `#rrggbb`
+  (stored lowercase). Anything else is `{ "ok": false, "error" }` and
+  nothing is saved; a hand-edited `config.json` the rules refuse reads as
+  the defaults.
+- The dashboard sets the color as `--rating-color` on the card (class
+  `is-rated`; the top band's also `is-top-band`, a border twice as thick).
+  The card shows the rating's stars too, so the color is never the only
+  cue.
 
 ### Profile pictures
 

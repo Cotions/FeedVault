@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { getAuthors, getPeople, getSuggestions, getNew, markSeen, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
+import { getAuthors, getConfig, getPeople, getSuggestions, getNew, markSeen, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
@@ -34,6 +34,8 @@ import { useUnsaved } from "../lib/unsaved";
 import { useWindow } from "../lib/windowing";
 import { Gap } from "../components/WinGap";
 import CreatorSearch from "../components/CreatorSearch";
+import { Stars } from "../components/Rating";
+import { byRating, ratingFilter, ratingStyle, starsShort } from "../lib/rating";
 
 const SUGGESTIONS_SHOWN = 4;
 
@@ -44,6 +46,12 @@ const VIEW_KEY = "feedvault.creators.view";
 const VIEWS = [["portraits", "Portraits"], ["compact", "Compact"]];
 function storedView() {
   try { return localStorage.getItem(VIEW_KEY) === "compact" ? "compact" : "portraits"; } catch { return "portraits"; }
+}
+/* The people's order, kept in this browser too: by name (the default), or
+   by rating, the highest first and the unrated last. */
+const SORT_KEY = "feedvault.creators.sort";
+function storedSort() {
+  try { return localStorage.getItem(SORT_KEY) === "rating" ? "rating" : "name"; } catch { return "name"; }
 }
 // A card's height before any is measured (lib/windowing), by view.
 const ESTIMATE = { portraits: 400, compact: 66 };
@@ -177,8 +185,10 @@ function CardAccounts({ accounts }) {
 }
 
 function PersonCard({ person: p, index, settled, portrait, selectMode, selected, onToggle, sync, onSync, fresh, onSeen, muted, onMuted,
-  onNoSync, flash }) {
+  onNoSync, flash, colors }) {
   const where = countryName(p.country);
+  // Their rating's color on the border (Settings → Appearance); the stars say it too.
+  const rated = ratingStyle(p.rating, colors);
   const mute = useMute({ muted: !!muted, whom: { person: p.id }, name: p.name, onDone: onMuted });
   const noSync = useNoSync({ on: !!p.no_sync, whom: { person: p.id }, name: p.name, onDone: onNoSync });
   const badges = <><NewBadge count={fresh?.count} /><WarnBadge sync={sync} /></>;
@@ -196,6 +206,7 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
           {p.country && <span className="person-flag" role="img" aria-label={where} title={where}>{countryFlag(p.country)}</span>}
           {p.name}
         </span>
+        <Stars rating={p.rating} />
         <CardAccounts accounts={p.accounts} />
         <CardLabels labels={p.labels} />
         <StateChips name={p.name} muted={!!muted} noSync={notSynced(p)}
@@ -236,9 +247,10 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
   );
   return (
     <div
-      className={`creator-card person-card${portrait ? " is-portrait" : ""}${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
+      className={`creator-card person-card${portrait ? " is-portrait" : ""}${rated.className}${selected ? " is-selected" : ""}${flash ? " is-flash" : ""}`}
       data-index={index}
-      style={settled ? undefined : { animationDelay: `${Math.min(index, 30) * 25}ms` }}
+      data-rating={p.rating ?? undefined}
+      style={settled && !rated.style ? undefined : { ...rated.style, ...(settled ? null : { animationDelay: `${Math.min(index, 30) * 25}ms` }) }}
     >
       {selectMode ? (
         <button type="button" className="creator-main" aria-pressed={selected} onClick={e => onToggle(e.shiftKey)}>
@@ -406,6 +418,10 @@ function AttributeFilters({ people, accounts, value, onChange }) {
     { key: "country", label: "Country", any: "Any country", none: "Not set", list: c.countries,
       text: v => `${countryFlag(v)} ${countryName(v)}` },
     { key: "label", label: "Label", any: "Any label", none: "No label", list: c.labels, text: v => v },
+    // Rated at least n stars (half steps), offered from the highest anyone has down.
+    { key: "rating", label: "Rating", any: "Any rating", none: "Not rated",
+      list: c.ratedAtLeast.map((count, i) => ({ value: String(i + 1), count })).filter(o => o.count).reverse(),
+      text: v => `${starsShort(Number(v))}★ or more` },
   ].filter(f => f.list.length || value[f.key] != null);
   const syncShown = off > 0 || value.sync != null;
   if (!fields.length && !syncShown) return null;
@@ -491,7 +507,7 @@ export default function Creators() {
   // person's label links here with ?label=), kept in it as they change.
   const [attrs, setAttrs] = useState(() => ({
     gender: params.get("gender"), country: params.get("country"), label: params.get("label"),
-    sync: syncFilter(params.get("sync")),
+    rating: ratingFilter(params.get("rating")), sync: syncFilter(params.get("sync")),
   }));
   const attrsOn = filtersOn(attrs);
   const filtering = !!filter || attrsOn;
@@ -524,9 +540,18 @@ export default function Creators() {
 
   const data = authorsApi.data;
   const peopleAll = useMemo(() => peopleApi.data || [], [peopleApi.data]);
-  const people = useMemo(
-    () => peopleAll.filter(p => (!filter || matches(personText(p), filter)) && attributesMatch(p, attrs)),
-    [peopleAll, filter, attrs]);
+  const [sort, setSort] = useState(storedSort);
+  function changeSort(v) {
+    setSort(v);
+    try { localStorage.setItem(SORT_KEY, v); } catch { /* private mode */ }
+  }
+  const people = useMemo(() => {
+    const list = peopleAll.filter(p => (!filter || matches(personText(p), filter)) && attributesMatch(p, attrs));
+    return sort === "rating" ? [...list].sort(byRating) : list;
+  }, [peopleAll, filter, attrs, sort]);
+  // The rating colors of this install, for the cards' borders.
+  const { data: config } = useApi(getConfig, refreshKey);
+  const colors = config?.rating_colors;
   // An account linked to no one has no gender, country or label: none
   // passes those filters. The sync one, by its own switch.
   const unlinked = useMemo(() => {
@@ -869,6 +894,13 @@ export default function Creators() {
               <>
                 <div className="creators-people-head">
                   <h3 className="card-title creators-section">People <span className="page-count">{fmtInt(people.length)}</span></h3>
+                  <label className="filter creators-sort">
+                    <span>Sort</span>
+                    <select className="sort-select" aria-label="Sort people" value={sort} onChange={e => changeSort(e.target.value)}>
+                      <option value="name">Name</option>
+                      <option value="rating">Rating</option>
+                    </select>
+                  </label>
                   <div className="links-tabs creators-view" role="group" aria-label="Show people as">
                     {VIEWS.map(([v, label]) => (
                       <button key={v} type="button" className={`links-tab${view === v ? " is-on" : ""}`} aria-pressed={view === v}
@@ -898,6 +930,7 @@ export default function Creators() {
                       onMuted={onMuted}
                       onNoSync={onNoSync}
                       flash={flashKey === `person:${p.id}`}
+                      colors={colors}
                     />
                   ); }, (height, key) => <Gap key={key} height={height} />)}
                 </div>
