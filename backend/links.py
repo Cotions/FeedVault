@@ -11,7 +11,7 @@ or anything else ("other") is read from its host on every read, never stored.
 """
 import ipaddress
 import re
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 MAX_URL = 2048
 MAX_TITLE = 300
@@ -31,6 +31,27 @@ SOCIAL_HOSTS = frozenset({
     "beacons.ai", "vk.com", "weibo.com",
 })
 
+# Query parameters that only say where a link was shared from or clicked,
+# dropped from every URL as it is cleaned (clean_url): any name starting
+# with utm_, these anywhere, and on a site (as site() gives it) the ones it
+# adds when a link is copied, which mean something real elsewhere (a "t"
+# is a time on YouTube, kept there). Names are matched decoded, any case.
+TRACKING = frozenset({
+    "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "igsh", "igshid", "_hsenc", "_hsmi",
+    "ref_src", "ref_url",
+})
+TRACKING_ON = {
+    "tiktok.com": frozenset({"_r", "_t", "is_from_webapp", "sender_device", "is_copy_url", "lang"}),
+    "instagram.com": frozenset({"hl", "img_index"}),
+    "x.com": frozenset({"s", "t"}),
+    "twitter.com": frozenset({"s", "t"}),
+    "youtube.com": frozenset({"si", "feature", "pp"}),
+    "youtu.be": frozenset({"si", "feature", "pp"}),
+    "spotify.com": frozenset({"si", "nd"}),
+    "facebook.com": frozenset({"mibextid", "rdid", "share_url"}),
+    "fb.com": frozenset({"mibextid", "rdid", "share_url"}),
+}
+
 # Second-level labels under a country code that are not a site of their own
 # (bbc.co.uk is "bbc.co.uk", not "co.uk").
 _SECOND_LEVEL = {"co", "com", "net", "org", "gov", "ac", "edu", "ne", "or"}
@@ -48,7 +69,8 @@ def clean_url(value):
     (``https://Example.com/`` is ``https://example.com``). Refused: any other
     scheme (javascript:, data:, file:), a user name or password in it, a
     backslash, whitespace or a control character inside, no host, more than
-    MAX_URL characters."""
+    MAX_URL characters. Tracking parameters are dropped from the query
+    (strip_tracking), and a query left empty with them."""
     if not isinstance(value, str):
         return None
     url = value.strip()
@@ -75,8 +97,26 @@ def clean_url(value):
     elif not _HOST_RE.match(host):
         return None
     netloc = host if port is None or port == _DEFAULT_PORT[scheme] else f"{host}:{port}"
-    path = "" if parts.path == "/" and not parts.query and not parts.fragment else parts.path
-    return urlunsplit((scheme, netloc, path, parts.query, parts.fragment))
+    query = strip_tracking(parts.query, _site_of(host))
+    path = "" if parts.path == "/" and not query and not parts.fragment else parts.path
+    return urlunsplit((scheme, netloc, path, query, parts.fragment))
+
+
+def strip_tracking(query, site_):
+    """``query`` (a URL's, without its ?) without its tracking parameters
+    (TRACKING, utm_*, and TRACKING_ON for ``site_``); the others are kept as
+    they were written, in their order. Unchanged when it has none."""
+    if not query:
+        return query
+    on = TRACKING_ON.get(site_, frozenset())
+    kept = []
+    for pair in query.split("&"):
+        name = unquote_plus(pair.split("=", 1)[0]).lower()
+        if not (name.startswith("utm_") or name in TRACKING or name in on):
+            kept.append(pair)
+    if len(kept) == query.count("&") + 1:
+        return query
+    return "&".join(p for p in kept if p)
 
 
 def site(url):
@@ -84,7 +124,10 @@ def site(url):
     drops www., m. and the like): "patreon.com" for https://www.patreon.com/x,
     "substack.com" for https://someone.substack.com, "bbc.co.uk" for
     https://www.bbc.co.uk/news. An IP address stays whole."""
-    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    return _site_of((urlsplit(url).hostname or "").lower().rstrip("."))
+
+
+def _site_of(host):
     try:
         ipaddress.ip_address(host)
         return host

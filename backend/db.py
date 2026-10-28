@@ -15,6 +15,7 @@ import threading
 import time
 
 import config
+import links
 import thumbs
 
 # Version 1: the schema as first released. Its CREATE statements are kept as
@@ -597,13 +598,70 @@ def _migrate_27(conn):
         ) WITHOUT ROWID""")
 
 
+def _migrate_28(conn):
+    """Saved links lose their tracking parameters (links.clean_url: utm_*,
+    TikTok's _r and _t, igsh, si…), as a link saved from now on does. Links
+    whose URLs become one (a URL is saved once) are merged into the oldest
+    by _merge_links_28; one it cannot take (another person's, or notes too
+    long joined) is kept apart, so no link loses its notes, title or
+    person. Then links.json is written again at the next start
+    (userdata.restore_all, by the mark in meta), so a rebuilt index does
+    not bring back what went.
+    The cleaning is links.clean_url's, whatever it is when this runs: a
+    later change to what it drops needs a migration of its own for the
+    links saved by then."""
+    groups = {}
+    for lid, url in conn.execute("SELECT id, url FROM links ORDER BY created_at, id").fetchall():
+        groups.setdefault(links.clean_url(url) or url, []).append((lid, url))
+    cleaned = merged = apart = 0
+    for clean, group in groups.items():
+        (keep, keep_url), held = group[0], set()
+        for lid, url in group[1:]:
+            if _merge_links_28(conn, keep, lid):
+                merged += 1
+            else:
+                held.add(url)
+                apart += 1
+        if keep_url != clean and clean not in held:
+            conn.execute("UPDATE links SET url = ? WHERE id = ?", (clean, keep))
+            cleaned += 1
+    if cleaned or merged:
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('userdata_stale', 'links')")
+        print(f"[db] Links: tracking parameters dropped from {cleaned}, {merged} merged into an older link "
+              f"with the same address, {apart} kept apart (another person's, or notes too long joined)")
+
+
+def _merge_links_28(conn, keep, other):
+    """Migration 28: the link ``other`` into ``keep``, then ``other``
+    deleted; whether it was. ``keep`` keeps its title, or takes other's when
+    it has none; other's notes go below its own when they are not there
+    already; it takes other's person (its place and tied_at too) when it has
+    none. Not merged: two links of two people (the links table at version
+    28 has one person per link), or notes that would be longer than
+    links.MAX_NOTES (a restore would skip the row). The one place two
+    links become one: a link tied to several people would union them here."""
+    k = conn.execute("SELECT title, notes, person_id FROM links WHERE id = ?", (keep,)).fetchone()
+    o = conn.execute("SELECT title, notes, person_id, position, tied_at FROM links WHERE id = ?", (other,)).fetchone()
+    if k[2] is not None and o[2] is not None and k[2] != o[2]:
+        return False
+    notes = k[1] if not o[1] or o[1] in k[1].split("\n\n") else f"{k[1]}\n\n{o[1]}" if k[1] else o[1]
+    if len(notes) > links.MAX_NOTES:
+        return False
+    conn.execute("DELETE FROM links WHERE id = ?", (other,))
+    conn.execute("UPDATE links SET title = ?, notes = ? WHERE id = ?", (k[0] or o[0], notes, keep))
+    if k[2] is None and o[2] is not None:
+        conn.execute("UPDATE links SET person_id = ?, position = ?, tied_at = ? WHERE id = ?",
+                     (o[2], o[3], o[4], keep))
+    return True
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
               _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
-              _migrate_26, _migrate_27]
+              _migrate_26, _migrate_27, _migrate_28]
 
 BACKUPS_KEPT = 3
 

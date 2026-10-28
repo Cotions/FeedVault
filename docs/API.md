@@ -1556,8 +1556,9 @@ import); `backend/biofetch.py`.
   from the page. At most 100 accounts, from at most 1000 distinct links.
 - **The page's links are saved** to the person's [Links](#links): first the
   page's own address (`url`, after redirects), then every link the page
-  shows a visitor, profiles and others alike, in the page's order. `links`
-  counts them:
+  shows a visitor, profiles and others alike, in the page's order, each
+  cleaned as `POST /api/links` stores it (tracking parameters such as
+  `?igsh=…&utm_source=qr` dropped). `links` counts them:
   - `saved`: new links of theirs, last in their order, `notes` empty.
   - `already`: links they have already, by URL as `POST /api/links` stores
     it, or in another spelling of it (`http`/`https`, with or without
@@ -1761,6 +1762,27 @@ A **link**:
   the scheme and host lowercased, a default port dropped, and so is the
   `/` of a bare host (`HTTPS://Example.com/` is `https://example.com`).
   Anything else is a 400.
+  Tracking parameters are dropped from the query, the others kept as
+  written and in their order (a query left empty loses its `?`; the
+  fragment is kept): `utm_*`, `fbclid`, `gclid`, `dclid`, `msclkid`,
+  `mc_cid`, `mc_eid`, `igsh`, `igshid`, `_hsenc`, `_hsmi`, `ref_src` and
+  `ref_url` on any site, and on these sites (as `site` gives them) the ones
+  they add to a shared link, which mean something real elsewhere:
+  `tiktok.com` `_r`, `_t`, `is_from_webapp`, `sender_device`,
+  `is_copy_url`, `lang`; `instagram.com` `hl`, `img_index`; `x.com` and
+  `twitter.com` `s`, `t`; `youtube.com` and `youtu.be` `si`, `feature`,
+  `pp` (`v`, `list` and `t` are kept); `spotify.com` `si`, `nd`;
+  `facebook.com` and `fb.com` `mibextid`, `rdid`, `share_url` (the lists
+  are `links.TRACKING` and `links.TRACKING_ON`). Names are compared
+  decoded, in any case. So
+  `https://www.tiktok.com/@someone?_r=1&_t=ZT-94e14uZEVsz` is saved as
+  `https://www.tiktok.com/@someone`, and is a 409 once that is saved.
+  Links saved before this were cleaned once, by a migration, on
+  upgrade; two that became one URL were merged into the older (its title,
+  else the other's; the other's notes below its own when different; the
+  other's person when it had none), except two tied to different people,
+  or whose notes joined would pass 5000 characters: those were left apart.
+  `links.json` is written again at the next start after such a merge.
 - `site`: the host without `www.`, `m.` or `mobile.`, cut to its registrable
   part (`someone.substack.com` is `substack.com`, `www.bbc.co.uk` is
   `bbc.co.uk`). `kind`: `social` when `site` is a social or creator
