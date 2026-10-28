@@ -585,7 +585,7 @@ def test_a_persons_profiles_leave_their_links(tmp_path, monkeypatch, capsys):
     conn = sqlite3.connect(path)
     assert ties(conn) == [("https://alice.example", "Alice", 3, 4), ("https://m.tiktok.com/@alice/", "Bob", 2, 6),
                           ("https://tiktok.com/@alice", "Bob", 1, 3)]
-    assert conn.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 5               # none deleted
+    assert conn.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 4               # hers alone deleted
     assert conn.execute("SELECT value FROM meta WHERE key = 'userdata_stale'").fetchone() == ("links",)
     # Again: nothing left to take.
     capsys.readouterr()

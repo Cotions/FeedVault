@@ -1020,12 +1020,12 @@ def _people_changed(names=False):
 def _untie_own_links(conn, pid, cfg=None):
     """A profile that became an account or a source of the person is no
     longer also in their Links (#217): each such link is untied from them
-    only (links.remove_person: their other people keep it). Nothing comes
-    back when the account or source goes."""
+    only (links.drop_profiles: their other people keep it, one left with no
+    one is deleted). Nothing comes back when the account or source goes."""
     if pid is None:
         return
     ids = biofetch.own_links(conn, pid, sources.routes(cfg or config.load()))
-    if ids and links.remove_person(conn, ids, pid)[0]:
+    if ids and links.drop_profiles(conn, ids, pid)[0]:
         userdata.changed("links")
 
 

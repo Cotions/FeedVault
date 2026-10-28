@@ -758,7 +758,7 @@ def _migrate_31(conn):
     also in their Links (#217): each person's links that are one of their
     profiles (biofetch.own_links, by platform and handle through the
     routing table in use) are untied from them only; their other people
-    keep them, and one left with no one goes to Unsorted. Then links.json
+    keep them, and one left with no one is deleted. Then links.json
     is written again at the next start. The matching is biofetch's,
     whatever it is when this runs."""
     import biofetch                            # here: it imports db
@@ -768,7 +768,7 @@ def _migrate_31(conn):
     for (pid,) in conn.execute("SELECT id FROM people ORDER BY id").fetchall():
         ids = biofetch.own_links(conn, pid, table)
         for lid in ids:
-            links._untie(conn, lid, pid)
+            links._drop(conn, lid, pid)
         untied += len(ids)
         persons += bool(ids)
     if untied:

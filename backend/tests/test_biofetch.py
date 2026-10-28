@@ -1404,7 +1404,7 @@ def test_a_profile_added_as_a_source_leaves_their_links(bio, client, monkeypatch
     """A source added by hand (the Sources page) for a profile in the
     person's Links, in any spelling (tracking, www., m., a last slash, its
     case): those links are untied from them only (#217). Bob keeps the one
-    he shares, Unsorted keeps its own, a post and another site stay hers."""
+    he shares, one hers alone is deleted, Unsorted keeps its own, a post and another site stay hers."""
     import userdata
     from test_people import get, post
     [bob] = [p for p in get(client, "/api/people") if p["name"] == "Bob"]
@@ -1420,9 +1420,9 @@ def test_a_profile_added_as_a_source_leaves_their_links(bio, client, monkeypatch
     assert [u for u, _ in saved(client, bio["id"])] == ["https://www.tiktok.com/@new.one/video/1",
                                                        "https://shop.example/new.one"]
     assert [x["url"] for x in person_links(client, bob["id"])] == ["https://m.tiktok.com/@New.One/"]
-    # Hers alone, it is no one's now (Unsorted), as removing her from it is.
+    # Hers alone, it is deleted, not sent to Unsorted; Unsorted keeps its own.
     assert sorted(x["url"] for x in get(client, "/api/links?person=none")["links"]) == [
-        "https://tiktok.com/@new.one", "https://www.tiktok.com/@new.one"]
+        "https://tiktok.com/@new.one"]
 
 
 def test_an_account_added_leaves_their_links_only_theirs(bio, client, monkeypatch):

@@ -1406,7 +1406,7 @@ A **person**:
   `m.`, a query such as `?igsh=…`, a last slash, its case): any name the
   account had, or the source's handle, as `sources.profile_key` reads it.
   Only this person is untied from the link (its other people keep it; a
-  link left with no one goes to Unsorted); a post of the profile or another
+  link left with no one is deleted); a post of the profile or another
   site's link stays. Removing the account or the source later brings
   nothing back. Migration 31 did the same once for every person.
 - `profiles` (at most 20): profile links, or Instagram names, each made a
