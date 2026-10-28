@@ -247,6 +247,41 @@ test("Review: re-review goes through a creator's kept posts too and leaves them 
   }
 });
 
+// #220: a kept post is seen. K on a new post takes it off the sidebar's
+// New count at once; Z (the keep undone) puts it back. On the demo's real
+// new posts; the Undo clears the decision, and so does the finally.
+test("Review: K on a new post drops the New count, Z puts it back", async ({ page, request }) => {
+  const newCount = async () => (await (await request.get("/api/jobs", { headers: H })).json()).new;
+  const n = await newCount();
+  expect(n, "the demo has new posts").toBeGreaterThan(0);
+  await page.goto("/review?new=1");
+  const open = page.locator(".review-open");
+  await expect(open).toHaveAttribute("href", /^\/p\//);
+  const href = await open.getAttribute("href");
+  const [, platform, postId] = href.split("/").map(decodeURIComponent).slice(1);
+  const id = `${platform}:${postId}`;
+  const sidebar = page.locator("#main-nav .side-new");
+  const session = page.locator(".review-session");
+  try {
+    await expect(sidebar).toHaveText(`${n} new`);
+    await idle(page);
+    await page.keyboard.press("k");
+    await expect(session).toHaveText("1 kept · 0 trashed");
+    if (n > 1) await expect(sidebar).toHaveText(`${n - 1} new`, { timeout: 3_000 });
+    else await expect(sidebar).toHaveCount(0, { timeout: 3_000 });
+    expect(await newCount()).toBe(n - 1);
+
+    await page.keyboard.press("z");
+    await expect(session).toHaveText("0 kept · 0 trashed");
+    await expect(open).toHaveAttribute("href", href);
+    await expect(sidebar).toHaveText(`${n} new`, { timeout: 3_000 });
+    expect(await newCount()).toBe(n);
+    await idle(page);
+  } finally {
+    await request.post("/api/review", { headers: H, data: { posts: [id], decision: null } });
+  }
+});
+
 // #159's touch sizes are for a touch screen: with a mouse at 1440x900 the
 // header, the Post page's carousel and Review's buttons keep their sizes,
 // the sidebar shows, a Fullscreen button too, and the stage is as tall.

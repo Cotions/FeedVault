@@ -42,6 +42,10 @@ import Video from "../components/Video";
    post kept before the session says so ("Kept"); K on it moves on and
    leaves it as it is, and so does undoing that K.
 
+   A keep is a post seen: it stops counting as new (db.NEW, #220), and a
+   new-only re-review drops it from its list like a first review does.
+   Undoing the keep makes it new again.
+
    Undo (Z) goes back one decision at a time, this session only (the Trash
    page has the rest). The line beside the title says what it undoes next,
    its toast what it did, and the post it brings back is marked ("Restored",
@@ -151,8 +155,10 @@ function ReviewSession({ scope, scopeControls, againTo }) {
     return n;
   }, [queue, status, pos]);
   const undecidedHeld = useMemo(() => queue.filter(p => !status[p.id]).length, [queue, status]);
+  // A keep is a post seen (#220): it leaves the new-only list even on a
+  // re-review, which then reads like a first one.
   const place = useMemo(() => listPlace(queue, status, {
-    again: scope.again,
+    again: scope.again && !scope.new,
     outOfScope: p => !!tagsOf[p.id] && !tagsMatch(tagsOf[p.id], scope.tag, scope.untagged),
   }), [queue, status, tagsOf, scope]);
   // A re-review's total counts the posts kept this session: taken off it
@@ -236,6 +242,7 @@ function ReviewSession({ scope, scopeControls, againTo }) {
     if (!already) {
       const r = await setDecision([cur.id], "keep");
       if (!r?.ok) { toast(r?.error || "Could not mark as kept.", "err"); return; }
+      started();   // a kept post is seen: the New count (jobs poll) follows now
     }
     setUndo(u => [...u, { type: "keep", post: cur, index: pos, already }]);
     setSession(s => ({ ...s, kept: s.kept + 1 }));
@@ -287,6 +294,7 @@ function ReviewSession({ scope, scopeControls, againTo }) {
       if (!e.already) {
         const d = await setDecision([id], null);
         if (!d?.ok) { toast(d?.error || "Undo failed.", "err"); return; }
+        started();   // new again: the New count follows now
       }
       setSession(s => ({ ...s, kept: s.kept - 1 }));
       dispatch({ type: "undecide", id, index: e.index });

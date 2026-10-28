@@ -449,6 +449,66 @@ def test_mark_all_seen_drops_the_marks_it_passes(env, client):
     assert db.connect().execute("SELECT COUNT(*) FROM seen_marks").fetchone()[0] == 0
 
 
+def keep(client, ids, decision="keep"):
+    r = client.post("/api/review", headers=H, json={"posts": ids, "decision": decision}).get_json()
+    assert r["ok"], r
+
+
+def test_a_kept_post_is_no_longer_new(env, client):
+    """#220: Review's Keep (any decision) is seeing the post. Clearing the
+    decision (Review's Undo) makes it new again."""
+    pid, _ = _two_creators(env, client)
+    carol, dana = "instagram:NEWCAROL0001", "instagram:NEWDANA00001"
+    assert new_count(client)["count"] == 4
+    keep(client, [carol, dana])
+    r = new_count(client)
+    assert r["count"] == 2
+    assert [(p["id"], p["count"]) for p in r["by_person"]] == [(pid, 1)]
+    assert [(a["id"], a["count"]) for a in r["by_account"]] == [("777", 1), ("888", 1)]
+    assert client.get("/api/jobs", headers=H).get_json()["new"] == 2
+    assert carol not in ids(client, new="1") and dana not in ids(client, new="1")
+    assert carol not in ids(client, new="1", person=str(pid))
+    assert dana not in ids(client, q="is:new", author="888")
+    assert client.get("/api/posts/summary", headers=H, query_string={"new": "1"}).get_json()["posts"] == 2
+    # The global and per-account marks are left as they were.
+    conn = db.connect()
+    assert conn.execute("SELECT COUNT(*) FROM seen_marks").fetchone()[0] == 0
+    # Undone: new again, everywhere.
+    keep(client, [carol, dana], None)
+    assert new_count(client)["count"] == 4
+    assert client.get("/api/jobs", headers=H).get_json()["new"] == 4
+    assert {carol, dana} <= set(ids(client, new="1"))
+    assert [(p["id"], p["count"]) for p in new_count(client)["by_person"]] == [(pid, 2)]
+
+
+def test_a_kept_post_stays_seen_after_a_rebuild(env, client):
+    """The decision is user data (decisions.json): a rebuilt index gets it
+    back, and the post stays not new."""
+    _, mark_at = _two_creators(env, client)
+    kept = "instagram:NEWDANA00001"
+    keep(client, [kept])
+    conn = db.connect()
+    data_dir = config.load()["data_directory"]
+    for name in ("seen_at", "decisions"):
+        userdata.export(conn, name, data_dir)
+    path = config.db_path(config.load())
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(path + suffix):
+            os.remove(path + suffix)
+    db.init(path)
+    conn = db.connect()
+    userdata.restore_all(conn, data_dir)
+    news.ensure(conn)
+    assert seen(conn) == mark_at
+    scanner.scan(env["roots"])                 # builds the index: nothing new
+    # Indexed after the mark: new, but for the one kept.
+    with conn:
+        conn.execute("UPDATE posts SET first_seen = ? WHERE id LIKE 'instagram:NEW%'", (mark_at + 1,))
+    assert conn.execute("SELECT decision FROM decisions WHERE post_id = ?", (kept,)).fetchone()[0] == "keep"
+    assert ids(client, new="1") == ["instagram:NEWCAROL0001", "instagram:NEWDANA00002"]
+    assert new_count(client)["count"] == 2
+
+
 def mute(client, body, status=200):
     r = client.post("/api/new/mute", headers=H, json=body)
     assert r.status_code == status, r.get_json()
