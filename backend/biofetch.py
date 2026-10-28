@@ -847,6 +847,66 @@ def suggest(conn, pid, found_links, table, roots, profile_only=()):
 
 
 # ---------------------------------------------------------------------------
+# A person's profiles: an account or a source, never also in their Links (#217)
+# ---------------------------------------------------------------------------
+
+def link_profile(url, table):
+    """The profile a link is, as sources.profile_key names a source's
+    ((platform, lowercase handle): www., m., a query or a last slash do not
+    count), any site's; else None."""
+    found = profile(url, table, any_host=True)
+    return sources.profile_key(found[0], found[3], found[4]) if found else None
+
+
+def own_profiles(conn, pid):
+    """{(platform, lowercase handle)} of a person's profiles: every name
+    their accounts had (the id, the posts' handles, instaloader's id files,
+    renames) and each source added to them or of one of their accounts.
+    Plain SQL, nothing cached: migration 31 runs it too."""
+    mine = f"WITH mine(platform, author_id) AS ({db.PERSON_ACCOUNTS})"
+    args = (pid,) * 3
+    out = set()
+    for platform, name in conn.execute(f"""{mine}
+            SELECT platform, author_id FROM mine
+            UNION SELECT p.platform, p.author_handle FROM posts p JOIN mine m
+              ON m.platform = p.platform AND m.author_id = p.author_id
+            UNION SELECT f.platform, f.handle FROM account_files f JOIN mine m
+              ON m.platform = f.platform AND m.author_id = f.author_id
+            UNION SELECT r.platform, r.old FROM handle_renames r JOIN mine m
+              ON m.platform = r.platform AND m.author_id = r.author_id
+            UNION SELECT r.platform, r.new FROM handle_renames r JOIN mine m
+              ON m.platform = r.platform AND m.author_id = r.author_id""", args):
+        if name:
+            out.add((platform, name.lower().lstrip("@")))
+    for platform, tool, target in conn.execute(f"""{mine}
+            SELECT s.platform, s.tool, s.target FROM sources s WHERE s.person_id = ?
+              OR EXISTS (SELECT 1 FROM mine m WHERE m.platform = s.platform AND m.author_id = s.author_id)""",
+                                               (*args, pid)):
+        out.add(sources.profile_key(platform, tool, target))
+    return out
+
+
+def own_links(conn, pid, table):
+    """The ids of a person's links that are one of their profiles
+    (own_profiles, link_profile): theirs as an account or a source already."""
+    own = own_profiles(conn, pid)
+    if not own:
+        return []
+    return [lid for lid, url in conn.execute(
+        "SELECT l.id, l.url FROM links l JOIN link_people lp ON lp.link_id = l.id WHERE lp.person_id = ? "
+        "ORDER BY lp.position, l.id", (pid,)) if link_profile(url, table) in own]
+
+
+def not_own(conn, pid, found, table):
+    """(``found`` without the links that are one of the person's profiles,
+    how many were): what an import saves to their Links (#217). ``pid``
+    None: all of it."""
+    own = own_profiles(conn, pid) if pid is not None else set()
+    kept = [(url, title) for url, title in found if not own or link_profile(url, table) not in own]
+    return kept, len(found) - len(kept)
+
+
+# ---------------------------------------------------------------------------
 # What the page shows a visitor: kept in the person's Links (links.py)
 # ---------------------------------------------------------------------------
 
