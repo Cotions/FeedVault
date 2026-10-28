@@ -14,6 +14,7 @@ or anything else ("other") is read from its host on every read, never stored.
 """
 import ipaddress
 import re
+from contextlib import contextmanager
 from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 MAX_URL = 2048
@@ -301,6 +302,32 @@ def people_of(conn, lid):
 # Changes (each returns what the API answers; the caller notes userdata)
 # ---------------------------------------------------------------------------
 
+class NoSuchPerson(LookupError):
+    """A person given is gone: deleted between the request's check and the
+    write (the routes answer 400, not a 409 or a 500)."""
+
+
+@contextmanager
+def _write(conn):
+    """One transaction, the write lock taken first (BEGIN IMMEDIATE): what
+    is read inside is what is written over."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:                # some errors already rolled back
+            conn.execute("ROLLBACK")
+        raise
+
+
+def _people_exist(conn, pids):
+    """Inside the write: NoSuchPerson unless each of ``pids`` is a person."""
+    for pid in pids:
+        if conn.execute("SELECT 1 FROM people WHERE id = ?", (pid,)).fetchone() is None:
+            raise NoSuchPerson(pid)
+
+
 def _next_position(conn, pid):
     return conn.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM link_people WHERE person_id = ?",
                         (pid,)).fetchone()[0]
@@ -325,8 +352,10 @@ def _untie(conn, lid, pid):
 
 def create(conn, url, title, notes, pids, now):
     """A new link (``url`` cleaned and not saved yet), last in the order of
-    each of ``pids`` (people's ids; none: a link of no one)."""
-    with conn:
+    each of ``pids`` (people's ids; none: a link of no one). NoSuchPerson
+    when one is gone, and nothing is saved."""
+    with _write(conn):
+        _people_exist(conn, pids)
         lid = conn.execute("INSERT INTO links(url, title, notes, created_at) VALUES (?, ?, ?, ?)",
                            (url, title, notes, now)).lastrowid
         for pid in dict.fromkeys(pids):
@@ -351,10 +380,13 @@ def keep(conn, pid, found, now, limit):
     person's too (last in their order, tied to them now) and stays the
     others': it is never moved, retitled or removed (the link-in-bio
     import, biofetch.py, run again on a page that changed; a band's
-    account on each member's page). Another spelling of a link they have
-    (spelling) is theirs already too. At most ``limit`` are saved. ``pid``
-    None saves them to no one (the Links page's Unsorted), with no place,
-    as create does; a URL saved already is then left as it is.
+    account on each member's page). A URL is saved already in any of its
+    spellings (spelling: http or https, www., a last slash): another
+    spelling of a link they have is theirs already, of someone else's link
+    is that link, theirs too, never a second link. At most ``limit`` are
+    saved. ``pid`` None saves them to no one (the Links page's Unsorted),
+    with no place, as create does; a URL saved already is then left as it
+    is.
 
     {"saved", "already" (this person's; with no person, any link saved
     already), "shared" (saved already, not theirs: now theirs too), "over"
@@ -368,14 +400,19 @@ def keep(conn, pid, found, now, limit):
         mine = f"SELECT l.url FROM links l WHERE {_NO_ONE}" if pid is None else \
             "SELECT l.url FROM links l JOIN link_people lp ON lp.link_id = l.id WHERE lp.person_id = ?"
         have = {spelling(u) for (u,) in conn.execute(mine, () if pid is None else (pid,))}
+        # Every saved link by spelling, the oldest of two spellings first.
+        saved = {}
+        for lid, u in conn.execute("SELECT id, url FROM links ORDER BY id DESC"):
+            saved[spelling(u)] = lid
         for url, title in found:
-            lid = find(conn, url)
-            if lid is not None and pid is not None and spelling(url) not in have:
+            s = spelling(url)
+            lid = find(conn, url) or saved.get(s)
+            if s in have or (lid is not None and pid is None):
+                out["already"] += 1
+            elif lid is not None:
                 _tie(conn, lid, pid, now)
                 out["shared"] += 1
-                have.add(spelling(url))
-            elif lid is not None or spelling(url) in have:
-                out["already"] += 1
+                have.add(s)
             elif out["saved"] >= limit:
                 out["over"] += 1
             else:
@@ -384,7 +421,8 @@ def keep(conn, pid, found, now, limit):
                 if pid is not None:
                     _tie(conn, lid, pid, now)
                 out["saved"] += 1
-                have.add(spelling(url))
+                saved[s] = lid
+                have.add(s)
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -417,8 +455,11 @@ def _give(conn, lid, pids, now):
 
 
 def update(conn, lid, url=None, title=None, notes=None, pids=_UNSET, now=None):
-    """Change what is given; new people (a list of ids) as _give."""
-    with conn:
+    """Change what is given; new people (a list of ids) as _give.
+    NoSuchPerson when one is gone, and nothing is changed."""
+    with _write(conn):
+        if pids is not _UNSET:
+            _people_exist(conn, pids)
         for column, value in (("url", url), ("title", title), ("notes", notes)):
             if value is not None:
                 conn.execute(f"UPDATE links SET {column} = ? WHERE id = ?", (value, lid))
@@ -436,18 +477,20 @@ def missing(conn, ids):
     return [i for i in ids if i not in have]
 
 
-def _batch(conn, ids, each, all_or_none=True):
+def _batch(conn, ids, each, all_or_none=True, people=()):
     """``each(lid)`` for these links (each id once, in the order given) in
     one transaction. The write lock is taken first (BEGIN IMMEDIATE), so
     what is read (which links exist, the next places) is what is written
     over: no other write comes in between. With ``all_or_none``, an id no
     link has changes nothing; else ids no link has are passed over.
+    ``people`` given to them: NoSuchPerson when one is gone, nothing changed.
 
     (the ids ``each`` said yes to, or None when nothing changed for an id
     no link has; the ids no link has)."""
     ids = list(dict.fromkeys(ids))
     conn.execute("BEGIN IMMEDIATE")
     try:
+        _people_exist(conn, people)
         gone = missing(conn, ids)
         if gone and all_or_none:
             conn.execute("ROLLBACK")
@@ -483,7 +526,7 @@ def assign(conn, ids, pids, now, only_from=_UNSET):
             passed.add(lid)
             return False
         return _give(conn, lid, pids, now)
-    done, gone = _batch(conn, ids, each, all_or_none=only_from is _UNSET)
+    done, gone = _batch(conn, ids, each, all_or_none=only_from is _UNSET, people=pids)
     if done is None:
         return 0, gone, []
     skipped = [i for i in dict.fromkeys(ids) if i in passed or i in gone] if only_from is not _UNSET else []
@@ -494,7 +537,7 @@ def add_person(conn, ids, pid, now):
     """Also give these links to ``pid``, each last in their order, in the
     order of ``ids``; their other people keep them. All or none, as
     assign (_batch). (the ids that were not theirs yet, or None; missing)."""
-    return _batch(conn, ids, lambda lid: _tie(conn, lid, pid, now))
+    return _batch(conn, ids, lambda lid: _tie(conn, lid, pid, now), people=[pid])
 
 
 def remove_person(conn, ids, pid):

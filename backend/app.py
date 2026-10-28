@@ -1551,6 +1551,10 @@ def _link_people(body):
     return pids, None
 
 
+# A person in the body deleted between its check and the write (links.NoSuchPerson).
+_GONE_PERSON = {"ok": False, "error": "no such person: deleted meanwhile"}
+
+
 def _link_text(body):
     """(title, notes, error), each None when absent from the body."""
     title = None if "title" not in body else links.clean_title(body["title"])
@@ -1619,6 +1623,8 @@ def create_link():
         return _taken(taken)
     try:
         link = links.create(conn, url, title or "", notes or "", [] if pids is links.UNSET else pids, _link_now())
+    except links.NoSuchPerson:
+        return jsonify(_GONE_PERSON), 400
     except sqlite3.IntegrityError:             # saved by another request in between
         return _taken(links.find(conn, url))
     userdata.changed("links")
@@ -1646,6 +1652,8 @@ def update_link(lid):
     kw = {"pids": pids, "now": _link_now()} if pids is not links.UNSET else {}
     try:
         link = links.update(conn, lid, url=url, title=title, notes=notes, **kw)
+    except links.NoSuchPerson:
+        return jsonify(_GONE_PERSON), 400
     except sqlite3.IntegrityError:
         return _taken(links.find(conn, url))
     userdata.changed("links")
@@ -1689,7 +1697,10 @@ def assign_links():
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
-    moved, gone, skipped = links.assign(conn, ids, pids, _link_now(), only_from=only)
+    try:
+        moved, gone, skipped = links.assign(conn, ids, pids, _link_now(), only_from=only)
+    except links.NoSuchPerson:
+        return jsonify(_GONE_PERSON), 400
     if gone and only is links.UNSET:
         return jsonify({"ok": False, "error": "no such link", "missing": gone}), 404
     if moved:
@@ -1733,7 +1744,10 @@ def add_link_person():
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
-    added, gone = links.add_person(conn, ids, pid, _link_now())
+    try:
+        added, gone = links.add_person(conn, ids, pid, _link_now())
+    except links.NoSuchPerson:
+        return jsonify(_GONE_PERSON), 400
     if added is None:
         return jsonify({"ok": False, "error": "no such link", "missing": gone}), 404
     if added:

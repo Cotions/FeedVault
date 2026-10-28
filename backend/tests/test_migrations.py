@@ -509,6 +509,26 @@ def test_a_person_both_links_had_keeps_the_kept_links_tie(tmp_path, monkeypatch)
     assert ties(conn) == [("https://a.example", "Alice", 5, 1), ("https://a.example", "Bob", 1, 3)]
 
 
+def test_two_links_of_one_person_merged_keep_the_tie_given_first(tmp_path, monkeypatch):
+    """Migration 30, three links of one URL: K Alice's, O and D Bob's (28
+    kept O and D apart from K). O comes into K with Bob's tie; D's Bob tie
+    then meets it: the one given first (D's, moved to Bob before O was)
+    is kept, with its place; nothing of it is lost."""
+    path = links_at_27(tmp_path, monkeypatch, [
+        ("https://band.example", "K", "", 1, 1, 1, 1),
+        ("https://band.example/?utm_source=a", "", "", 2, 5, 2, 9),
+        ("https://band.example/?fbclid=b", "", "", 2, 2, 3, 3),
+    ])
+    migrate_to(path, monkeypatch, 28)
+    conn = sqlite3.connect(path)
+    assert len(all_links(conn)) == 3                                    # all kept apart by 28
+    conn.close()
+    db.migrate(path)
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT url, title FROM links").fetchall() == [("https://band.example", "K")]
+    assert ties(conn) == [("https://band.example", "Alice", 1, 1), ("https://band.example", "Bob", 2, 3)]
+
+
 def test_links_json_from_before_30_restores_into_the_new_tables(tmp_path, monkeypatch):
     """A links.json written before migration 30 (person, position, tied_at
     per link) is read into link_people; the next write has the new shape."""

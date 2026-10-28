@@ -731,14 +731,23 @@ def _merge_links_30(conn, keep, other):
     there already), then ``other`` deleted; whether it was. ``keep`` gets
     each of other's people it does not have, with other's place among their
     links and its tied_at: every person keeps the link where they had it.
+    A person both had keeps the tie given first (its place and tied_at).
     Not merged: notes that would be longer than links.MAX_NOTES."""
     k = conn.execute("SELECT title, notes FROM links WHERE id = ?", (keep,)).fetchone()
     o = conn.execute("SELECT title, notes FROM links WHERE id = ?", (other,)).fetchone()
     notes = k[1] if not o[1] or o[1] in k[1].split("\n\n") else f"{k[1]}\n\n{o[1]}" if k[1] else o[1]
     if len(notes) > links.MAX_NOTES:
         return False
+    # A person both had (K and O theirs, then D too): the tie given first,
+    # with its place, so neither link's earlier tie is lost.
+    for pid, position, tied_at in conn.execute(
+            "SELECT o.person_id, o.position, o.tied_at FROM link_people o JOIN link_people k "
+            "ON k.link_id = ? AND k.person_id = o.person_id WHERE o.link_id = ? AND o.tied_at < k.tied_at",
+            (keep, other)).fetchall():
+        conn.execute("UPDATE link_people SET position = ?, tied_at = ? WHERE link_id = ? AND person_id = ?",
+                     (position, tied_at, keep, pid))
     conn.execute("UPDATE OR IGNORE link_people SET link_id = ? WHERE link_id = ?", (keep, other))
-    conn.execute("DELETE FROM link_people WHERE link_id = ?", (other,))   # a person both had: keep's tie
+    conn.execute("DELETE FROM link_people WHERE link_id = ?", (other,))   # the ties keep had already
     conn.execute("DELETE FROM links WHERE id = ?", (other,))
     conn.execute("UPDATE links SET title = ?, notes = ? WHERE id = ?", (k[0] or o[0], notes, keep))
     return True

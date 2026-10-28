@@ -642,6 +642,27 @@ def test_keep_adds_only_what_a_person_does_not_have(client, clock):
     assert len(urls(client)) == 5
 
 
+def test_keep_ties_another_spelling_of_someone_elses_link(client, clock):
+    """A URL saved for Bob (or for no one) in another spelling (http, www.,
+    a last slash) is that link, now Alice's too: never a second link, its
+    URL and title untouched. With no person, it is there already."""
+    alice, bob = person(client, "Alice"), person(client, "Bob")
+    band = add(client, "https://www.band.example/", person=bob, title="The band")["link"]
+    loose = add(client, "https://loose.example/page", title="Loose")["link"]
+    conn = db.connect()
+    found = [("http://band.example", "Band"), ("https://www.loose.example/page/", "x")]
+    assert links.keep(conn, alice, found, 5, 10) == {"saved": 0, "already": 0, "shared": 2, "over": 0}
+    assert len(urls(client)) == 2
+    assert [(x["id"], x["url"], x["title"]) for x in get(client, f"/api/people/{alice}")["links"]] == [
+        (band["id"], "https://www.band.example", "The band"), (loose["id"], "https://loose.example/page", "Loose")]
+    assert [p["name"] for p in links.get(conn, band["id"])["people"]] == ["Alice", "Bob"]
+    # Again, and to no one: there already, nothing written.
+    assert links.keep(conn, alice, found, 6, 10) == {"saved": 0, "already": 2, "shared": 0, "over": 0}
+    assert links.keep(conn, None, [("http://band.example/", "")], 7, 10) == \
+        {"saved": 0, "already": 1, "shared": 0, "over": 0}
+    assert len(urls(client)) == 2
+
+
 def test_keep_saves_all_or_none(client):
     alice = person(client, "Alice")
     conn = db.connect()
@@ -799,6 +820,29 @@ def test_add_and_remove_person_mark_links_for_export(client, monkeypatch):
     post(client, "/api/links/remove-person", {"ids": [a], "person": ana})
     post(client, "/api/links/remove-person", {"ids": [a], "person": ana})     # nothing removed
     assert seen == ["links", "links"]
+
+
+def test_a_person_deleted_before_the_write_is_a_400_and_nothing_changes(client, monkeypatch):
+    """The routes check that a person exists, then write: a person deleted
+    in between (the check made to pass here) is a 400 "no such person",
+    never a 409 "saved already" or a 500, and nothing is written."""
+    import people
+    alice, gone = person(client, "Alice"), person(client, "Gone")
+    lid = add(client, "https://a.example", person=alice, title="A")["link"]["id"]
+    delete(client, f"/api/people/{gone}")
+    monkeypatch.setattr(people, "exists", lambda conn, pid: True)
+    for url, body in [("/api/links", {"url": "https://b.example", "person": gone}),
+                      ("/api/links", {"url": "https://b.example", "people": [alice, gone]}),
+                      (f"/api/links/{lid}", {"title": "changed", "people": [alice, gone]}),
+                      (f"/api/links/{lid}", {"person": gone}),
+                      ("/api/links/assign", {"ids": [lid], "person": gone}),
+                      ("/api/links/assign", {"ids": [lid], "people": [gone], "if_person": alice}),
+                      ("/api/links/add-person", {"ids": [lid], "person": gone})]:
+        assert "no such person" in post(client, url, body, 400)["error"], (url, body)
+    assert not db.connect().in_transaction
+    assert urls(client) == ["https://a.example"]
+    got = get(client, f"/api/links?person={alice}")["links"]
+    assert [(x["title"], [p["name"] for p in x["people"]], x["position"]) for x in got] == [("A", ["Alice"], 1)]
 
 
 def test_deleting_one_person_of_a_shared_link_leaves_it_the_others(client):

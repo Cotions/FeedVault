@@ -1615,7 +1615,8 @@ import); `backend/biofetch.py`.
     are: the title, notes and place the user gave them are never written
     over.
   - `shared`: URLs saved already for another person or for no one (a URL
-    is saved once): they become this person's too, last in their order, and
+    is saved once; in another spelling, as for `already`, it is that saved
+    link, never a second one): they become this person's too, last in their order, and
     stay the others' (a band's account on each member's page). The link is
     never moved from anyone, retitled or edited.
   - `dropped`: links refused, see below.
@@ -1939,7 +1940,9 @@ A **link**:
   one has already stays at its place among theirs.
 - A bad body is a 400 `{ "ok": false, "error": "…" }`, a JSON body that is
   not an object too (see the top of this file); an unknown link
-  or person id in the path a 404, an unknown `person` in a body a 400.
+  or person id in the path a 404, an unknown `person` in a body a 400 (so
+  is a person deleted while the request is answered: `no such person:
+  deleted meanwhile`, and nothing is written).
 
 ### Link labels
 
