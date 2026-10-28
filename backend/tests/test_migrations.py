@@ -556,3 +556,40 @@ def test_links_json_from_before_30_restores_into_the_new_tables(tmp_path, monkey
          "created_at": 5, "id": 3},
         {"url": "https://b.example", "title": "", "notes": "n", "people": [], "created_at": 6, "id": 4},
     ]
+
+
+def test_a_persons_profiles_leave_their_links(tmp_path, monkeypatch, capsys):
+    """Migration 31: each person's links that are one of their accounts or
+    sources (by platform and handle, whatever the spelling) are untied from
+    them only; another person's tie to the same link, another person's link
+    to the same profile, a link of no one and another site stay (#217)."""
+    path = links_at_27(tmp_path, monkeypatch, [
+        ("https://www.instagram.com/Alice.IG/?igsh=x", "", "", 1, 1, 1, 1),    # her account
+        ("https://m.tiktok.com/@alice/", "", "", 1, 2, 2, 2),                  # her source, and Bob's link too
+        ("https://tiktok.com/@alice?lang=en", "", "", 2, 1, 3, 3),             # Bob's only (28 cleans it)
+        ("https://alice.example", "", "", 1, 3, 4, 4),
+        ("https://instagram.com/alice.ig", "", "", None, None, 5, None),       # no one's
+    ])
+    migrate_to(path, monkeypatch, 30)
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.execute("DELETE FROM meta WHERE key = 'userdata_stale'")
+    conn.execute("INSERT INTO link_people(link_id, person_id, position, tied_at) VALUES (2, 2, 2, 6)")
+    conn.execute("INSERT INTO person_accounts(person_id, platform, author_id, at) VALUES (1, 'instagram', 'alice.ig', 1)")
+    conn.execute("INSERT INTO sources(person_id, platform, tool, target, folder, created_at) "
+                 "VALUES (1, 'tiktok', 'yt-dlp', 'https://tiktok.com/@Alice', '', 1)")
+    conn.close()
+    capsys.readouterr()
+    db.migrate(path)
+    assert ("[db] Links: 2 taken out of the Links of 1 people, as they are their accounts or sources already"
+            in capsys.readouterr().out)
+    conn = sqlite3.connect(path)
+    assert ties(conn) == [("https://alice.example", "Alice", 3, 4), ("https://m.tiktok.com/@alice/", "Bob", 2, 6),
+                          ("https://tiktok.com/@alice", "Bob", 1, 3)]
+    assert conn.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 4               # hers alone deleted
+    assert conn.execute("SELECT value FROM meta WHERE key = 'userdata_stale'").fetchone() == ("links",)
+    # Again: nothing left to take.
+    capsys.readouterr()
+    conn.execute("BEGIN")
+    db._migrate_31(conn)
+    conn.execute("COMMIT")
+    assert "[db] Links:" not in capsys.readouterr().out

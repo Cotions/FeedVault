@@ -547,6 +547,24 @@ def remove_person(conn, ids, pid):
     return _batch(conn, ids, lambda lid: _untie(conn, lid, pid), all_or_none=False)
 
 
+def _drop(conn, lid, pid):
+    """Inside a transaction: the link no longer ``pid``'s, and deleted when
+    it is left with no one (a profile that became their account or source,
+    #217: it does not go to Unsorted). Whether it was theirs."""
+    if not _untie(conn, lid, pid):
+        return False
+    conn.execute(f"DELETE FROM links WHERE id = ? AND NOT EXISTS "
+                 f"(SELECT 1 FROM link_people x WHERE x.link_id = links.id)", (lid,))
+    return True
+
+
+def drop_profiles(conn, ids, pid):
+    """Take these links from ``pid`` (_batch) as _drop does: their other
+    people keep them, one left with no one is deleted. (the ids that were
+    theirs, missing)."""
+    return _batch(conn, ids, lambda lid: _drop(conn, lid, pid), all_or_none=False)
+
+
 def delete(conn, lid):
     with conn:
         conn.execute("DELETE FROM link_people WHERE link_id = ?", (lid,))

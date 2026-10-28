@@ -1017,6 +1017,18 @@ def _people_changed(names=False):
     userdata.changed("person_accounts")
 
 
+def _untie_own_links(conn, pid, cfg=None):
+    """A profile that became an account or a source of the person is no
+    longer also in their Links (#217): each such link is untied from them
+    only (links.drop_profiles: their other people keep it, one left with no
+    one is deleted). Nothing comes back when the account or source goes."""
+    if pid is None:
+        return
+    ids = biofetch.own_links(conn, pid, sources.routes(cfg or config.load()))
+    if ids and links.drop_profiles(conn, ids, pid)[0]:
+        userdata.changed("links")
+
+
 @app.get("/api/people")
 def list_people():
     return jsonify(people.people(db.connect()))
@@ -1165,6 +1177,7 @@ def merge_people():
     if unsynced:                               # and one's set to Don't sync stay so: nothing starts syncing
         nosync.set_on(conn, True, person=p["id"])
         p = people.person(conn, p["id"])
+    _untie_own_links(conn, p["id"])            # the others' accounts and sources are its own now
     _people_changed(names=True)
     userdata.changed("sources")                # the others' sources moved to the first
     return jsonify({"ok": True, "person": p})
@@ -1392,6 +1405,8 @@ def person_accounts(pid):
     if r["removed"] and leaving:
         nosync.carry(conn, leaving)
     _note_carried(conn, carried)
+    if r["added"]:
+        _untie_own_links(conn, pid)
     if r["added"] or r["removed"]:
         _people_changed()
     return jsonify({"ok": True, **r})
@@ -1407,9 +1422,10 @@ def bio_import(pid):
     visitor saved to the person's Links (links.keep: only the ones they do
     not have yet; one saved before for someone else becomes theirs too,
     nothing saved before is changed or removed, so importing again picks up
-    what is new). No account or source is added: the
+    what is new). A link to one of their accounts or sources is not saved
+    (counted as already theirs, #217). No account or source is added: the
     dashboard adds each one the user picks through /api/people/<id>/accounts
-    or /api/sources. No link is fetched (a mydeck.bio-style redirect link
+    or /api/sources, which takes its link out of their Links. No link is fetched (a mydeck.bio-style redirect link
     on the page's own host is only asked where it goes: biofetch's
     REDIRECT_LINKS). Never from another site
     (_origin_guard)."""
@@ -1435,9 +1451,11 @@ def bio_import(pid):
     accounts = biofetch.suggest(conn, pid, biofetch.page_links(read), table, cfg["media_roots"],
                                 sources.profile_only_platforms(cfg))
     found, dropped = biofetch.shown_links(read, page.url, table)
+    found, own = biofetch.not_own(conn, pid, found, table)
     kept = links.keep(conn, pid, found, _link_now(), biofetch.MAX_SAVED)
     if kept is None:                           # deleted while the page was fetched
         return jsonify({"ok": False, "error": "no such person"}), 404
+    kept["already"] += own                     # theirs as an account or a source (#217)
     if kept["saved"] or kept["shared"]:
         userdata.changed("links")
     kept["dropped"] = dropped
@@ -1479,7 +1497,8 @@ def import_links():
     userscript, on a page of biofetch.SITES): its address and those links
     saved to a person's Links, or to no one's, as the link-in-bio import
     does (links.keep: only the new ones, and the person given to those saved
-    already; nothing saved before is changed or removed). Nothing is fetched: what is kept is what was sent, through
+    already; nothing saved before is changed or removed; none that is one of
+    the person's accounts or sources, #217). Nothing is fetched: what is kept is what was sent, through
     biofetch's filters. Under the same switch as the import (bio_import).
     The userscript's, so another site reaches it (FOREIGN_ALLOWED)."""
     body = request.get_json(silent=True)
@@ -1490,22 +1509,26 @@ def import_links():
     pid, error = _link_person(body)
     if error:
         return jsonify({"ok": False, "error": error}), 400
-    if not biofetch.enabled(config.load()):
+    cfg = config.load()
+    if not biofetch.enabled(cfg):
         return jsonify({"ok": False, "error": BIO_OFF}), 403
     try:
         found, dropped = biofetch.sent_links(body["page_url"], sent)
     except biofetch.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    kept = links.keep(db.connect(), pid, found, _link_now(), biofetch.MAX_SAVED)
+    conn, page_url = db.connect(), found[0][0]
+    found, own = biofetch.not_own(conn, pid, found, sources.routes(cfg))
+    kept = links.keep(conn, pid, found, _link_now(), biofetch.MAX_SAVED)
     if kept is None:                           # deleted in between
         return jsonify({"ok": False, "error": "person must be the id of a person, or null"}), 400
+    kept["already"] += own                     # theirs as an account or a source (#217)
     if kept["saved"] or kept["shared"]:
         userdata.changed("links")
     kept["dropped"] = dropped
-    print(f"[links] import from the browser of {found[0][0]}: {kept['saved']} links saved, "
+    print(f"[links] import from the browser of {page_url}: {kept['saved']} links saved, "
           f"{kept['shared']} saved already and now theirs too, {kept['already']} there already, {dropped} dropped, "
           f"{kept['over']} over the limit")
-    return jsonify({"ok": True, "url": found[0][0], "person": pid, "links": kept})
+    return jsonify({"ok": True, "url": page_url, "person": pid, "links": kept})
 
 
 # ---------------------------------------------------------------------------
@@ -2007,6 +2030,8 @@ def create_source():
         return jsonify({"ok": False, "error": str(e), "no_sync": True}), 409
     except sources.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+    owner = sources._owner(conn, sources.row(conn, sid), db.accounts(conn))[1]
+    _untie_own_links(conn, owner and owner["id"], cfg)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
 
@@ -2154,6 +2179,7 @@ def _set_source_person(conn, sid, pid):
     if removed and nosync.is_on(conn, person=removed[0]):
         nosync.carry(conn, [removed[1]])
     _note_carried(conn, carried)
+    _untie_own_links(conn, pid)
     if removed or (pid is not None and people.account_set(conn, pid) != before):
         _people_changed()
     userdata.changed("sources")

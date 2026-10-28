@@ -730,12 +730,12 @@ def test_import_end_to_end(bio, client, monkeypatch):
     # The page and every link it shows are in Alice's Links, anchors first,
     # a link once whatever its spelling (www., a last slash); the mailto:
     # and javascript: ones are refused, and the site's own Report page and
-    # "instagram.com/notalink" are not links to keep.
+    # "instagram.com/notalink" are not links to keep. Her own Instagram is
+    # her account already: not saved, counted as hers already (#217).
     assert "other" not in r
-    assert r["links"] == {"saved": 14, "already": 1,"shared": 0, "over": 0, "dropped": 2}
+    assert r["links"] == {"saved": 13, "already": 2, "shared": 0, "over": 0, "dropped": 2}
     assert saved(client, bio["id"]) == [
-        ("https://linktr.ee/alice", ""), ("https://instagram.com/alice.example", "Instagram"),
-        ("https://x.com/example_user1/status/123", "a post"), ("https://twitter.com/example_user1", "X"),
+        ("https://linktr.ee/alice", ""), ("https://x.com/example_user1/status/123", "a post"), ("https://twitter.com/example_user1", "X"),
         ("https://www.instagram.com/p/C8xYz/", "a post"), ("https://x.com/intent/follow?screen_name=alice", "follow"),
         ("https://tiktok.com/new.one", "no @"), ("https://bsky.app/profile/alice.bsky.social", ""),
         ("https://www.youtube.com/channel/UC1234567890abcdefghij/", "channel"),
@@ -752,9 +752,22 @@ def test_import_end_to_end(bio, client, monkeypatch):
     # The user adds two, through the usual calls; the next import says so.
     post(client, f"/api/people/{bio['id']}/accounts", {"add": [{"platform": "twitter", "id": "641286"}]})
     post(client, "/api/sources", {"target": got["tiktok", "new.one"]["url"], "person": bio["id"]})
+    # Their links left her Links, in every spelling (x.com and twitter.com,
+    # www.); a post of the account, or tiktok.com/<name> with no @, is not
+    # the profile and stays (#217).
+    assert saved(client, bio["id"]) == [
+        ("https://linktr.ee/alice", ""), ("https://x.com/example_user1/status/123", "a post"),
+        ("https://www.instagram.com/p/C8xYz/", "a post"), ("https://x.com/intent/follow?screen_name=alice", "follow"),
+        ("https://tiktok.com/new.one", "no @"), ("https://bsky.app/profile/alice.bsky.social", ""),
+        ("https://www.youtube.com/channel/UC1234567890abcdefghij/", "channel"),
+        ("https://shop.example/alice", "My shop"), ("https://www.youtube.com/@alicevids/videos", "Videos"),
+        ("https://www.youtube.com/watch?v=abc", "Latest")]
     r = bio_import(client, bio["id"])
     status = {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]}
     assert status["twitter", "example_user1"] == status["tiktok", "new.one"] == "linked"
+    # Imported again: not saved again, counted as hers already.
+    assert r["links"] == {"saved": 0, "already": 15, "shared": 0, "over": 0, "dropped": 2}
+    assert len(saved(client, bio["id"])) == 10
 
 
 def test_an_account_of_someone_else(bio, client, monkeypatch):
@@ -1058,6 +1071,8 @@ LINKTREE_KEPT = [
     ("https://www.youtube.com/watch?v=abc123", "Latest video"), ("https://x.com/Example_User1", "X / Twitter"),
     ("https://alice.example/press-kit.pdf", "Press kit"),
 ]
+# What an import saves to Alice of it: not her own Instagram, her account already (#217).
+LINKTREE_SAVED = [x for x in LINKTREE_KEPT if "instagram.com/alice.example" not in x[0]]
 
 # A site that draws its links as anchors (hand-written, as lnk.bio and the
 # like serve them): the buttons, between the site's own pages, its CDN's
@@ -1147,6 +1162,7 @@ LINKME_KEPT = [
     ("https://link.me/alice", ""), ("https://twitch.tv/alice_live", "twitch"),
     ("https://www.instagram.com/alice.example", "instagram"),
 ]
+LINKME_SAVED = LINKME_KEPT[:2]                 # her own Instagram is her account already (#217)
 
 
 def test_a_linkme_page_keeps_its_links_only():
@@ -1173,8 +1189,8 @@ def test_a_linkme_import_end_to_end(bio, client, monkeypatch):
     r = bio_import(client, bio["id"], url="https://link.me/alice")
     assert {(a["platform"], a["handle"]): a["status"] for a in r["accounts"]} == {
         ("twitch", "alice_live"): "new", ("instagram", "alice.example"): "linked"}
-    assert r["links"] == {"saved": 3, "already": 0, "shared": 0, "over": 0, "dropped": 0}
-    assert saved(client, bio["id"]) == LINKME_KEPT
+    assert r["links"] == {"saved": 2, "already": 1, "shared": 0, "over": 0, "dropped": 0}
+    assert saved(client, bio["id"]) == LINKME_SAVED
     assert net.connects == [PUBLIC] and net.lookups == ["link.me"]
 
 
@@ -1303,11 +1319,11 @@ def test_the_first_import_saves_the_page_and_its_links(bio, client, monkeypatch)
     net = bio_net(LINKTREE_PAGE)
     monkeypatch.setattr(biofetch, "FETCHER", net.fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 9, "already": 0, "shared": 0, "over": 0, "dropped": 1}
-    assert saved(client, bio["id"]) == LINKTREE_KEPT
+    assert r["links"] == {"saved": 8, "already": 1, "shared": 0, "over": 0, "dropped": 1}
+    assert saved(client, bio["id"]) == LINKTREE_SAVED
     # Links like any other: theirs, in the order of the page, social or not by their host.
     got = person_links(client, bio["id"])
-    assert [x["position"] for x in got] == list(range(1, 10))
+    assert [x["position"] for x in got] == list(range(1, 9))
     assert {x["url"]: x["kind"] for x in got}["https://alice-shop.example/store?ref=linktree"] == "other"
     assert {x["url"]: x["kind"] for x in got}["https://www.patreon.com/alice"] == "social"
     assert all(x["people"] == [{"id": bio["id"], "name": "Alice"}] and x["notes"] == "" for x in got)
@@ -1338,9 +1354,9 @@ def test_importing_again_saves_only_what_is_new(bio, client, monkeypatch):
     r = bio_import(client, bio["id"])
     assert r["links"] == {"saved": 2, "already": 8, "shared": 0, "over": 0, "dropped": 0}
     after = person_links(client, bio["id"])
-    assert after[:9] == before                 # ids, titles, notes, order: as they were
-    assert [(x["url"], x["title"], x["position"]) for x in after[9:]] == [
-        ("https://www.youtube.com/@alicevids", "", 10), ("https://alice.bandcamp.example/album/two", "New album", 11)]
+    assert after[:8] == before                 # ids, titles, notes, order: as they were
+    assert [(x["url"], x["title"], x["position"]) for x in after[8:]] == [
+        ("https://www.youtube.com/@alicevids", "", 9), ("https://alice.bandcamp.example/album/two", "New album", 10)]
     kept = {x["url"]: x for x in after}
     assert kept["https://www.patreon.com/alice"]["title"] == "Patreon (tiers from 3 €)"
     assert kept["https://www.patreon.com/alice"]["notes"] == "joined in May"
@@ -1370,7 +1386,7 @@ def test_a_link_saved_for_someone_else_becomes_theirs_too(bio, client, monkeypat
     loose = post(client, "/api/links", {"url": "https://discord.gg/AbCdEf", "notes": "to sort"})["link"]
     monkeypatch.setattr(biofetch, "FETCHER", bio_net(LINKTREE_PAGE).fetcher())
     r = bio_import(client, bio["id"])
-    assert r["links"] == {"saved": 7, "already": 0, "shared": 2, "over": 0, "dropped": 1}
+    assert r["links"] == {"saved": 6, "already": 1, "shared": 2, "over": 0, "dropped": 1}
     mine = {x["url"]: x for x in person_links(client, bio["id"])}
     both = [{"id": bio["id"], "name": "Alice"}, {"id": bob["id"], "name": "Bob"}]           # by name
     assert {k: mine["https://www.patreon.com/alice"][k] for k in ("id", "title", "notes", "people")} == \
@@ -1382,6 +1398,47 @@ def test_a_link_saved_for_someone_else_becomes_theirs_too(bio, client, monkeypat
     # Again: theirs already, nothing changes.
     assert bio_import(client, bio["id"])["links"]["shared"] == 0
     assert person_links(client, bob["id"]) == [{**theirs, "people": both, "position": 1}]
+
+
+def test_a_profile_added_as_a_source_leaves_their_links(bio, client, monkeypatch):
+    """A source added by hand (the Sources page) for a profile in the
+    person's Links, in any spelling (tracking, www., m., a last slash, its
+    case): those links are untied from them only (#217). Bob keeps the one
+    he shares, one hers alone is deleted, Unsorted keeps its own, a post and another site stay hers."""
+    import userdata
+    from test_people import get, post
+    [bob] = [p for p in get(client, "/api/people") if p["name"] == "Bob"]
+    for url, people_ in [("https://www.tiktok.com/@new.one?_t=ZT-1", [bio["id"]]),
+                         ("https://m.tiktok.com/@New.One/", [bio["id"], bob["id"]]),
+                         ("https://www.tiktok.com/@new.one/video/1", [bio["id"]]),
+                         ("https://shop.example/new.one", [bio["id"]]), ("https://tiktok.com/@new.one", [])]:
+        post(client, "/api/links", {"url": url, "people": people_})
+    seen = []
+    monkeypatch.setattr(userdata, "changed", seen.append)
+    post(client, "/api/sources", {"target": "https://tiktok.com/@new.one?lang=en", "person": bio["id"]})
+    assert "links" in seen
+    assert [u for u, _ in saved(client, bio["id"])] == ["https://www.tiktok.com/@new.one/video/1",
+                                                       "https://shop.example/new.one"]
+    assert [x["url"] for x in person_links(client, bob["id"])] == ["https://m.tiktok.com/@New.One/"]
+    # Hers alone, it is deleted, not sent to Unsorted; Unsorted keeps its own.
+    assert sorted(x["url"] for x in get(client, "/api/links?person=none")["links"]) == [
+        "https://tiktok.com/@new.one"]
+
+
+def test_an_account_added_leaves_their_links_only_theirs(bio, client, monkeypatch):
+    """An account added to the person (the import dialog, the person page):
+    their links to it go; the same profile in Bob's Links stays."""
+    from test_people import get, post
+    [bob] = [p for p in get(client, "/api/people") if p["name"] == "Bob"]
+    post(client, "/api/links", {"url": "https://x.com/example_user1", "people": [bio["id"]]})
+    post(client, "/api/links", {"url": "https://twitter.com/Example_User1/", "people": [bob["id"]]})
+    post(client, "/api/links", {"url": "https://example.com/blog", "people": [bio["id"]]})
+    post(client, f"/api/people/{bio['id']}/accounts", {"add": [{"platform": "twitter", "id": "641286"}]})
+    assert [u for u, _ in saved(client, bio["id"])] == ["https://example.com/blog"]
+    assert [x["url"] for x in person_links(client, bob["id"])] == ["https://twitter.com/Example_User1/"]
+    # Removing the account brings nothing back.
+    post(client, f"/api/people/{bio['id']}/accounts", {"remove": [{"platform": "twitter", "id": "641286"}]})
+    assert [u for u, _ in saved(client, bio["id"])] == ["https://example.com/blog"]
 
 
 def test_an_import_saves_at_most_max_saved_links(bio, client, monkeypatch):
@@ -1449,7 +1506,7 @@ def test_saved_links_are_mirrored_like_any_other(bio, env, client, monkeypatch):
     with open(userdata.path(data, "links")) as f:
         rows = json.load(f)["rows"]
     assert sorted((r["people"][0]["position"], r["url"], r["title"], [p["name"] for p in r["people"]], r["notes"])
-                  for r in rows) == [(n, url, title, ["Alice"], "") for n, (url, title) in enumerate(LINKTREE_KEPT, 1)]
+                  for r in rows) == [(n, url, title, ["Alice"], "") for n, (url, title) in enumerate(LINKTREE_SAVED, 1)]
     assert all(r["people"][0]["tied_at"] == r["created_at"] and r["id"] for r in rows)
     # And they come back from the file as the API saved them.
     import links

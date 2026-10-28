@@ -107,6 +107,20 @@ def test_insert_only(on):
     assert len(on.get(f"/api/people/{alice}", headers=H).get_json()["links"]) == 4
 
 
+def test_a_profile_of_theirs_is_not_saved(on):
+    """A link that is one of the person's sources already is not saved to
+    their Links, counted as theirs already (#217); to no one, it is."""
+    alice = person(on, "Alice")
+    r = on.post("/api/sources", json={"tool": "none", "target": "https://twitter.com/Somebody", "person": alice},
+                headers=H)
+    assert r.status_code == 200, r.get_json()
+    r = send(on, {"page_url": PAGE, "links": SENT[:3], "person": alice})
+    assert r["links"] == {"saved": 3, "already": 1, "shared": 0, "over": 0, "dropped": 0}
+    assert "https://x.com/somebody" not in [u for u, _ in saved(on, f"person={alice}")]
+    assert send(on, {"page_url": PAGE, "links": SENT[:3]})["links"]["saved"] == 1
+    assert saved(on, "person=none") == [("https://x.com/somebody", "My X")]
+
+
 def test_the_cap(on, monkeypatch):
     alice = person(on, "Alice")
     many = [{"url": f"https://shop.example/{n}", "title": str(n)} for n in range(biofetch.MAX_LINKS)]

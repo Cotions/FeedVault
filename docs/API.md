@@ -1398,6 +1398,17 @@ A **person**:
   add, merge) takes it from any other. An account that is not in the index
   (no post, no alias) is a 400.
 - `added` and `removed` count the links that changed.
+- **One place per profile** (#217): an account added to a person (add or
+  merge), or a source added to them (`POST /api/sources` with `person`
+  or an account of theirs, `POST /api/sources/<id>` with `person`), takes
+  their [Links](#links) to that profile out of their Links. "That profile"
+  is the same platform and handle, whatever the link's spelling (`www.`,
+  `m.`, a query such as `?igsh=…`, a last slash, its case): any name the
+  account had, or the source's handle, as `sources.profile_key` reads it.
+  Only this person is untied from the link (its other people keep it; a
+  link left with no one is deleted); a post of the profile or another
+  site's link stays. Removing the account or the source later brings
+  nothing back. Migration 31 did the same once for every person.
 - `profiles` (at most 20): profile links, or Instagram names, each made a
   [source](#sources) of the new person, as `POST /api/sources` with
   `person` would, with default options. Nothing is downloaded until a sync,
@@ -1613,7 +1624,9 @@ import); `backend/biofetch.py`.
     it, or in another spelling of it (`http`/`https`, with or without
     `www.`, with or without a last slash). They are left exactly as they
     are: the title, notes and place the user gave them are never written
-    over.
+    over. Also counted here, and not saved: a link to one of the person's
+    accounts or sources (by platform and handle, as in [People](#people):
+    one place per profile).
   - `shared`: URLs saved already for another person or for no one (a URL
     is saved once; in another spelling, as for `already`, it is that saved
     link, never a second one): they become this person's too, last in their order, and
@@ -1623,9 +1636,11 @@ import); `backend/biofetch.py`.
   - `over`: new links past the 200 one import saves; importing again
     saves the next ones (what is saved already does not count).
 
-  **Nothing is ever removed or replaced**: a link the page no longer shows
-  stays saved, which is the point, and importing again only adds what is
-  new. Nothing is saved when the import fails (any `ok: false` answer).
+  **Nothing is ever removed or replaced** by an import: a link the page no
+  longer shows stays saved, which is the point, and importing again only
+  adds what is new. A profile the user then adds as an account or a source
+  leaves their Links (one place per profile, see [People](#people)); a
+  suggestion not picked stays there. Nothing is saved when the import fails (any `ok: false` answer).
   The saved links are user data like any other link
   (`userdata/links.json`), and none is ever fetched: saving is text.
 - **What counts as a link the page shows**: the `href` of an `<a>` or
@@ -1774,7 +1789,8 @@ rules](#security-rules)).
   silently; a port, an IP address or a private name `dropped`), titles
   cleaned the same way, and **insert-only** the same way: `already` links
   are left exactly as they are, `shared` ones only gain this person,
-  nothing is removed, at most 200 are saved (`over`). With no person,
+  nothing is removed, at most 200 are saved (`over`); a link to one of
+  the person's accounts or sources is not saved, counted in `already`. With no person,
   `already` counts every link saved already (of no one or of anyone), and
   `shared` is 0.
 - 403 when the switch is off (`link-in-bio import is off: turn it on in

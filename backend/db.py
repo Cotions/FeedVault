@@ -753,13 +753,37 @@ def _merge_links_30(conn, keep, other):
     return True
 
 
+def _migrate_31(conn):
+    """A profile that is an account or a source of a person is no longer
+    also in their Links (#217): each person's links that are one of their
+    profiles (biofetch.own_links, by platform and handle through the
+    routing table in use) are untied from them only; their other people
+    keep them, and one left with no one is deleted. Then links.json
+    is written again at the next start. The matching is biofetch's,
+    whatever it is when this runs."""
+    import biofetch                            # here: it imports db
+    import sources
+    table = sources.routes(config.load())
+    untied, persons = 0, 0
+    for (pid,) in conn.execute("SELECT id FROM people ORDER BY id").fetchall():
+        ids = biofetch.own_links(conn, pid, table)
+        for lid in ids:
+            links._drop(conn, lid, pid)
+        untied += len(ids)
+        persons += bool(ids)
+    if untied:
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('userdata_stale', 'links')")
+        print(f"[db] Links: {untied} taken out of the Links of {persons} people, as they are their accounts "
+              "or sources already")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
               _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
-              _migrate_26, _migrate_27, _migrate_28, _migrate_29, _migrate_30]
+              _migrate_26, _migrate_27, _migrate_28, _migrate_29, _migrate_30, _migrate_31]
 
 BACKUPS_KEPT = 3
 
