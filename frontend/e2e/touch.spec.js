@@ -8,14 +8,19 @@ const H = { "X-FeedVault": "1" };
 
 // A one-finger drag from (x, y) by (dx, dy), as the touch screen sends it
 // (Chromium's DevTools protocol: touch events, pointer events from them).
+// Each event carries its own time, 20ms apart: lib/swipe.js drops a swipe
+// slower than its MAX_MS, and on a loaded runner the round trips alone
+// took longer than that (#172).
 async function swipe(page, x, y, dx, dy, steps = 8) {
   const cdp = await page.context().newCDPSession(page);
   const at = (px, py) => [{ x: Math.round(px), y: Math.round(py), id: 1 }];
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: at(x, y) });
+  const t0 = Date.now() / 1000;
+  const send = (i, type, touchPoints) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints, timestamp: t0 + i * 0.02 });
+  await send(0, "touchStart", at(x, y));
   for (let i = 1; i <= steps; i++) {
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: at(x + dx * i / steps, y + dy * i / steps) });
+    await send(i, "touchMove", at(x + dx * i / steps, y + dy * i / steps));
   }
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await send(steps + 1, "touchEnd", []);
   await cdp.detach();
 }
 
