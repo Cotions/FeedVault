@@ -1173,13 +1173,15 @@ PERSON_ACCOUNTS = """
 # is after the global one, except a muted account's, which a "Mark all
 # seen" leaves (news.py): it then stands instead of the global one. The
 # first test is a range on posts_first_seen, so only posts after the lowest
-# mark are looked at.
+# mark are looked at. A post with a review decision (Keep) has been seen,
+# whatever the marks say (#220); clearing the decision makes it new again.
 NEW = ("p.first_seen > COALESCE((SELECT MIN(at) FROM (SELECT at FROM seen_at WHERE id = 1 "
        "UNION ALL SELECT at FROM seen_marks WHERE at < (SELECT at FROM seen_at WHERE id = 1))), "
        "9223372036854775807) "
        "AND p.first_seen > COALESCE((SELECT s.at FROM seen_marks s "
        "WHERE s.platform = p.platform AND s.author_id = p.author_id), "
-       "(SELECT at FROM seen_at WHERE id = 1), 9223372036854775807)")
+       "(SELECT at FROM seen_at WHERE id = 1), 9223372036854775807) "
+       "AND NOT EXISTS (SELECT 1 FROM decisions sd WHERE sd.post_id = p.id)")
 
 
 def _flagged(people_table, accounts_table):

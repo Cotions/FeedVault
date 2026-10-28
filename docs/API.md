@@ -375,6 +375,13 @@ new.
   time of the upgrade, and a new one with nothing to restore at its first
   start, so an existing archive is never all new.
 - Strictly after: a post indexed in the same second as the mark is not new.
+- **Reviewed.** A post with a review decision (a Keep, from Review or the
+  Feed, see [Review](#review-keep-or-trash)) is not new, whatever the marks say: reviewing
+  it was seeing it. It leaves every count here, `new` in `GET /api/jobs`
+  and `new=1` / `is:new`. The decision is user data (`decisions.json`), so
+  a rebuilt index keeps it; clearing it (`/api/review` with `decision:
+  null`, Review's Undo) makes the post new again if the marks still do. The
+  marks themselves do not move.
 - **Per person.** "Mark seen" on a person, or on an account linked to
   nobody (it counts as its own), gives each of its accounts a mark of its
   own (folder-name aliases included): a post is new when it came after the
@@ -827,7 +834,8 @@ Undo in the review screen: after a trash, call `/api/trash/restore` with that
 post id; after a keep, call `/api/review` with `decision: null`. A re-review
 (`/review?again=1`) lists the scope's posts with no `review` filter, kept ones
 too; a keep on a post that was already kept sends nothing, so its undo has
-nothing to clear either.
+nothing to clear either. A kept post is no longer [new](#new-posts): a
+new-only review (`/review?new=1`, re-review too) loses it from its list.
 
 `/api/posts` query parameters, all optional:
 

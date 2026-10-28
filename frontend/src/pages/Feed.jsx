@@ -176,8 +176,9 @@ export default function Feed() {
       const r = await setDecision(ids, "keep");
       if (!r?.ok) { toast(r?.error || "Could not mark as kept.", "err"); return; }
       const done = new Set(r.posts || ids);
-      // Under the Unreviewed filter a kept post no longer belongs in the list.
-      const leaves = review === "unreviewed";
+      // Under the Unreviewed filter a kept post no longer belongs in the list,
+      // nor under New: a kept post is seen (#220).
+      const leaves = review === "unreviewed" || newOnly;
       setResult(prev => ({
         ...prev,
         posts: leaves
@@ -187,6 +188,7 @@ export default function Feed() {
       }));
       sel.clear();
       setSummaryTick(t => t + 1);
+      started();   // the New count (jobs poll) follows now
       toast(`${done.size} post${done.size === 1 ? "" : "s"} marked as kept.`);
     } catch (e) {
       toast(e.message, "err");

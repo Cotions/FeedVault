@@ -19,6 +19,11 @@ still shows them. "Mark all seen" does not cover what it did not show: a
 muted account keeps a mark of its own at the global mark it passes, and
 that mark stands instead of the global one (db.NEW) until the account's
 own "Mark seen". Unmuted, those posts count again.
+
+A post with a review decision (Review's or the Feed's Keep, table decisions)
+is not new either, whatever the marks say: reviewing it was seeing it. The
+decision is user data (decisions.json), so that survives a rebuild; clearing
+it (Review's Undo) makes the post new again if the marks still do (#220).
 """
 import time
 
