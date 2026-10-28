@@ -2,13 +2,13 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
-  acceptRename, createPerson, createSource, cancelJob, dismissRename, getPeople, getScripts, resolveSource, setSourcePerson,
-  updateSource,
+  acceptRename, createPerson, createSource, cancelJob, dismissRename, getPeople, getScripts, giveSourceTool, resolveSource,
+  setSourcePerson, updateSource,
 } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
-import { ERRORS, SETUP_ERRORS, sourceName } from "../lib/sources";
+import { DOWNLOADS, ERRORS, SETUP_ERRORS, downloadWanted, sourceName } from "../lib/sources";
 import { healthBadge, lastGood, loginText } from "../lib/health";
 import { fmtAgo, fmtFullDate, fmtIn, fmtInt, platformLabel, safeUrl } from "../lib/fmt";
 import {
@@ -185,13 +185,29 @@ export function NotSyncedChip({ title = "Set to Don't sync: kept, never synced. 
   );
 }
 
+/* "Profile only" (#218): shown as theirs, never downloaded: its Download
+   option says never, its platform is in Settings → Profile only, or no
+   downloader takes its site (tool "none"). ``source``: says which. */
+export function ProfileOnlyChip({ source: s = null, title = null }) {
+  const why = title || (s?.tool === "none" ? "No downloader takes this site: shown as theirs, never synced"
+    : s?.options?.download === "off" ? "Download: never (its Options): shown as theirs, never synced"
+      : "Its platform is profile only (Settings → Sync → Profile only): shown as theirs, never synced");
+  return (
+    <span className="chip nosync-chip profile-only-chip" title={why}>
+      <Icon name="eye" size={11} />Profile only
+    </span>
+  );
+}
+
 /* One source: its profile, what it downloads, tool, folder, schedule, last
    sync and Sync; its profile on the site, Options, its creator (link,
    move, unlink) and Remove in its ⋯ menu. ``onSaved``: after its options
    changed; ``onLinked``: after its person did (the people's cards move
    too), else onSaved. One set to Don't sync is marked so and keeps its
    creator and Remove only: no Options, no Sync, no schedule line (its
-   schedule waits for the switch to go off). */
+   schedule waits for the switch to go off). One that is profile only
+   (#218) is marked so, dimmed, with no Sync and no sync state; its Options
+   say whether it downloads. */
 export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked = onSaved, flash = false }) {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
@@ -199,6 +215,8 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
   const url = safeUrl(s.url);
   const summary = optionsSummary(s);
   const off = !!s.no_sync;
+  const only = !!s.profile_only;
+  const quiet = off || only;                   // never synced: no sync state, no Sync
   const along = s.account ? "; its account goes with it" : "";
 
   async function unlink() {
@@ -213,7 +231,8 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
   }
 
   return (
-    <li className={`source-row${flash ? " is-flash" : ""}${off ? " is-nosync" : ""}`} data-source-id={s.id}>
+    <li className={`source-row${flash ? " is-flash" : ""}${off ? " is-nosync" : ""}${only ? " is-profile-only" : ""}`}
+        data-source-id={s.id}>
       <PlatformIcon platform={s.platform} />
       <span className="source-id">
         <span className="creator-name" title={sourceName(s)}>
@@ -222,22 +241,26 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
         </span>
         <span className="source-summary-line">
           {off && <NotSyncedChip />}
-          {summary && <span className="source-summary" title={`What it downloads: ${summary}`}>{summary}</span>}
-          <InheritBadge source={s} />
+          {only && <ProfileOnlyChip source={s} />}
+          {!only && summary && <span className="source-summary" title={`What it downloads: ${summary}`}>{summary}</span>}
+          {!only && <InheritBadge source={s} />}
         </span>
-        {!off && <ScriptWarning source={s} />}
-        {!off && <ScheduleLine source={s} />}
-        {!off && <SourceHealth source={s} job={job} onSaved={onSaved} />}
-        <code className="source-folder" title={s.folder}>{s.folder}</code>
+        {s.needs_tool && (
+          <span className="source-note dim">No downloader yet: pick its folder in Options to download it.</span>
+        )}
+        {!quiet && <ScriptWarning source={s} />}
+        {!quiet && <ScheduleLine source={s} />}
+        {!quiet && <SourceHealth source={s} job={job} onSaved={onSaved} />}
+        {s.folder && <code className="source-folder" title={s.folder}>{s.folder}</code>}
       </span>
-      <ToolBadge tool={s.tool} />
-      {!off && <SourceStatus source={s} job={job} />}
+      {s.tool !== "none" && <ToolBadge tool={s.tool} />}
+      {!quiet && <SourceStatus source={s} job={job} />}
       {job && <Link to="/jobs" className="btn-ghost">Log</Link>}
-      {!off && <SyncButton source={s} job={job} onSync={onSync} />}
+      {!quiet && <SyncButton source={s} job={job} onSync={onSync} />}
       <ActionMenu label={`More for ${sourceName(s)}`} items={[
         url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(s.platform)} (opens the site)` },
         !off && { label: "Options", icon: "settings", disabled: !!job, onSelect: () => setEditing(true),
-                  title: job ? "Its sync is queued or running" : "What this source downloads" },
+                  title: job ? "Its sync is queued or running" : only ? "Whether this profile is downloaded" : "What this source downloads" },
         { label: s.person ? "Move to creator…" : "Link to creator…", icon: "users", onSelect: () => setLinking(true),
           title: s.person ? `Show it with someone other than ${s.person.name}${along}` : `Show it with a person, one there is or a new one${along}` },
         s.person && { label: "Unlink from creator", icon: "close", onSelect: unlink,
@@ -542,11 +565,54 @@ export function ScriptWarning({ source: s, name = null }) {
   );
 }
 
-/* Edit what a source downloads. ``s.session``: the session its sync
-   would use, for the login hint. Last N stays open until a first sync
-   with it has worked. */
+/* Whether a source downloads (#218, docs/API.md "Profile only"): as its
+   platform says (Settings → Profile only), always, or never. ``platformOnly``:
+   its platform is listed there. */
+function DownloadPicker({ value, onChange, platform, platformOnly }) {
+  const id = useId();
+  const follow = platformOnly ? "profile only now (Settings → Sync → Profile only)" : "downloads now";
+  return (
+    <fieldset className="source-opt">
+      <legend>Download this profile</legend>
+      {DOWNLOADS.map(([v, label, effect]) => (
+        <label key={v} className="source-opt-line">
+          <input type="radio" name={`${id}-download`} checked={value === v} onChange={() => onChange(v)} />
+          <b>{label}</b>
+          <span className="dim">{v === "platform" ? `${platformLabel(platform)}: ${follow}` : effect}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+/* The folder a profile with no downloader (tool "none") downloads into
+   once Download is on: the tool and default folder the routing table
+   gives its link (GET /api/sources/resolve), or why none takes it. */
+function useToolFor(s, wanted) {
+  const [answer, setAnswer] = useState(null);
+  useEffect(() => {
+    if (!wanted || s.tool !== "none") return undefined;
+    const ctl = new AbortController();
+    resolveSource(s.url, { signal: ctl.signal })
+      .then(setAnswer)
+      .catch(err => { if (err.name !== "AbortError") setAnswer({ ok: false, error: err.message }); });
+    return () => ctl.abort();
+  }, [s.tool, s.url, wanted]);
+  return wanted && s.tool === "none" ? answer : null;
+}
+
+/* Edit what a source downloads, and whether it does (Download). A profile
+   with no downloader (tool "none") has Download only: on, it asks for the
+   folder, and the routing table gives the tool. ``s.session``: the session
+   its sync would use, for the login hint. Last N stays open until a first
+   sync with it has worked. */
 export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   const toast = useToast();
+  const none = s.tool === "none";
+  const [download, setDownload] = useState(s.options.download || "platform");
+  const wanted = downloadWanted(download, s.platform_profile_only);
+  const given = useToolFor(s, none && wanted);
+  const [folder, setFolder] = useState("");
   const [initial] = useState(() => formOf(s.options, s.choices));
   const [form, setForm] = useState(initial);
   // What it inherits, and what it sets itself: only a field changed here
@@ -577,8 +643,11 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
   // every other form does since #125/#132 (#149). Compared as they would
   // be saved, so ticking a box off and on again is no change.
   const [asking, setAsking] = useState(false);
-  const changes = changesOf(form, initial, setBefore, resets, s.choices, firstSync);
-  const changed = !!changes;
+  const changes = none ? null : changesOf(form, initial, setBefore, resets, s.choices, firstSync);
+  const downloadChanged = download !== (s.options.download || "platform");
+  const changed = !!changes || downloadChanged || (none && !!folder.trim());
+  const tooled = none && wanted;               // given a tool and a folder on Save
+  const blocked = tooled && !given?.ok;
   const cancel = () => (changed ? setAsking(true) : onClose());
   // A link in it ("See Scripts", "Settings → Sync"), Back or Forward ask
   // the same before the app leaves the page with them (#153).
@@ -588,9 +657,12 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
     setBusy(true);
     setError(null);
     try {
-      const r = changes ? await updateSource(s.id, changes.options, changes.reset, true) : { ok: true, source: s };
+      const options = { ...(changes?.options || {}), ...(downloadChanged || tooled ? { download } : {}) };
+      const r = tooled ? await giveSourceTool(s.id, options, folder.trim() || null)
+        : changes || downloadChanged ? await updateSource(s.id, options, changes?.reset, true) : { ok: true, source: s };
       if (!r?.ok) { setError(r?.error || "Could not save."); return; }
-      toast(`${sourceName(s)}: options saved.`);
+      toast(tooled ? `${sourceName(s)} now downloads with ${r.source.tool}. Sync it to get its posts.`
+        : `${sourceName(s)}: options saved.`);
       onSaved?.(r.source);
       onClose();
     } catch (err) {
@@ -604,16 +676,37 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
     <>
       <ConfirmDialog
         open
-        title={`What ${sourceName(s)} downloads`}
+        title={none ? `Download ${sourceName(s)}?` : `What ${sourceName(s)} downloads`}
         confirmLabel="Save"
         busy={busy}
-        error={error || problem}
-        confirmDisabled={!!problem || needsLogin(form, s.choices, s.session).length > 0}
+        error={error || (none ? null : problem)}
+        confirmDisabled={none ? blocked : !!problem || needsLogin(form, s.choices, s.session).length > 0}
         onConfirm={save}
         onCancel={cancel}
         initialFocus={focus}
       >
         <div ref={focus} tabIndex={-1}>
+          <DownloadPicker value={download} onChange={setDownload} platform={s.platform} platformOnly={!!s.platform_profile_only} />
+          {tooled && (
+            <fieldset className="source-opt source-give-tool">
+              <legend>Folder</legend>
+              {!given ? <span className="dim">Looking up its downloader…</span>
+                : !given.ok ? (
+                  <div className="msg err source-msg" role="alert">
+                    {given.error}{" "}
+                    <Link to="/settings#downloads" className="text-link">Open Link routing</Link>
+                  </div>
+                ) : (
+                  <label className="source-opt-line">
+                    <ToolBadge tool={given.tool} />
+                    <input type="text" className="page-filter source-give-folder" aria-label="Folder it downloads into"
+                           placeholder={given.folder} value={folder} maxLength={4096} onChange={e => setFolder(e.target.value)} />
+                    <span className="dim">empty: {given.folder}</span>
+                  </label>
+                )}
+            </fieldset>
+          )}
+          {!none && <>
           <div className="source-inherits" role="status">
             <span className="dim">
               {own.length ? `${own.length} choice${own.length === 1 ? "" : "s"} set here; the rest follow`
@@ -628,6 +721,7 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
           <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
                          onChange={change} firstSync={firstSync} defaults={defaults} metadata={s.metadata}
                          own={isOwn} onReset={resetOne} />
+          </>}
         </div>
       </ConfirmDialog>
       <DiscardDialog open={asking || unsaved.asking}
@@ -761,7 +855,8 @@ export function RemoveSourceDialog({ source, onRemove, onClose }) {
       onConfirm={run}
       onCancel={onClose}
     >
-      FeedVault stops syncing it. Its folder, files and posts stay as they are.
+      {source?.profile_only ? "It is no longer shown as theirs." : "FeedVault stops syncing it."}{" "}
+      {source?.folder ? "Its folder, files and posts stay as they are." : "Nothing on disk is touched."}
     </ConfirmDialog>
   );
 }
@@ -792,22 +887,29 @@ function useResolved(text) {
 
 /* Paste a profile link (the tool comes from Settings → Link routing), or an
    Instagram name. Before saving it shows the tool, platform and folder,
-   and what the source can download. onDirty(bool) hears whether something
-   is typed and not added yet (false again when the form goes). */
+   and what the source can download. "Profile only" (#218) adds it as
+   theirs, never downloaded: ticked to start with on a platform Settings
+   lists as profile only, and the only way for a site no downloader takes
+   (tool "none", "Add profile"). onDirty(bool) hears whether something is
+   typed and not added yet (false again when the form goes). */
 export function AddSource({ person = null, onAdded, onDirty }) {
   const toast = useToast();
   const [target, setTarget] = useState("");
   const [forms,  setForms]  = useState({});      // the options picked, by tool and platform
+  const [only,   setOnly]   = useState(null);    // Profile only, as ticked (null: as its platform says)
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState(null);
   const text = target.trim();
   const resolved = useResolved(text);
+  // No downloader takes the link's site: it can be added as a profile only.
+  const profile = resolved?.ok === false ? resolved.profile || null : null;
   const kind = resolved?.ok ? `${resolved.tool}:${resolved.platform}:${resolved.choices.content.join(",")}` : null;
+  const profileOnly = !!profile || (!!resolved?.ok && (only ?? !!resolved.profile_only));
   // A new source starts from its platform's download defaults; what stays
   // equal to them is not stored, so it follows them later.
-  // Its account is set to Don't sync: no Add, nothing to choose.
-  const off = !!resolved?.ok && !!resolved.no_sync;
-  const form = kind && !off && (forms[kind] || formOf(resolved.defaults, resolved.choices));
+  // Its account is set to Don't sync: no Add, nothing to choose (a profile only can be).
+  const off = !!resolved?.ok && !!resolved.no_sync && !profileOnly;
+  const form = kind && !off && !profileOnly && (forms[kind] || formOf(resolved.defaults, resolved.choices));
   const problem = form && formError(form, resolved.choices);
   const login = form ? needsLogin(form, resolved.choices, resolved.session) : [];
 
@@ -818,18 +920,24 @@ export function AddSource({ person = null, onAdded, onDirty }) {
 
   async function add(e) {
     e.preventDefault();
-    if (!form) return;
+    if (!form && !profileOnly) return;
     setBusy(true);
     setError(null);
     try {
-      const body = { target: text, options: optionsOf(form, resolved.choices) };
+      // Profile only: download off, or (its platform listed) left to follow it.
+      const body = { target: text };
+      if (profile) body.tool = "none";
+      else if (profileOnly) { if (!resolved.profile_only) body.options = { download: "off" }; }
+      else body.options = { ...optionsOf(form, resolved.choices), ...(resolved.profile_only ? { download: "on" } : {}) };
       if (isHandle(text)) body.tool = "instaloader";
       if (person != null) body.person = person;
       const r = await createSource(body);
       if (!r?.ok) { setError(r?.error || "Could not add the source."); return; }
-      toast(`${sourceName(r.source)} added. Sync it to download its posts.`);
+      toast(r.source.profile_only ? `${sourceName(r.source)} added as a profile only: shown as theirs, never downloaded.`
+        : `${sourceName(r.source)} added. Sync it to download its posts.`);
       setTarget("");
       setForms({});
+      setOnly(null);
       onAdded?.(r.source);
     } catch (err) {
       setError(err.message);
@@ -847,21 +955,35 @@ export function AddSource({ person = null, onAdded, onDirty }) {
         aria-label="Profile link, or an Instagram name"
         maxLength={500}
         value={target}
-        onChange={e => { setTarget(e.target.value); setError(null); }}
+        onChange={e => { setTarget(e.target.value); setError(null); setOnly(null); }}
       />
       <button type="submit" className="btn-secondary"
-              disabled={busy || !form || off || resolved.source != null || !!problem || login.length > 0}>
-        <Icon name="plus" size={13} />Add source
+              disabled={busy || (profileOnly ? !profile && resolved?.source != null
+                : !form || off || resolved.source != null || !!problem || login.length > 0)}>
+        <Icon name="plus" size={13} />{profileOnly ? "Add profile" : "Add source"}
       </button>
       {resolved?.ok && (
         <div className="source-resolved" role="status">
-          <ToolBadge tool={resolved.tool} />
+          {!profileOnly && <ToolBadge tool={resolved.tool} />}
           <PlatformIcon platform={resolved.platform} />
           <span className="source-resolved-target">{resolved.target.replace(/^https:\/\//, "")}</span>
-          <span className="dim">into</span>
-          <code className="source-folder" title={resolved.folder}>{resolved.folder}</code>
+          {!profileOnly && <><span className="dim">into</span>
+            <code className="source-folder" title={resolved.folder}>{resolved.folder}</code></>}
           {resolved.source != null && <span className="is-err">already a source</span>}
           {off && <NotSyncedChip title="Its account is set to Don't sync: FeedVault does not download from it" />}
+          <label className="source-only-toggle"
+                 title={resolved.profile_only ? `${platformLabel(resolved.platform)} is profile only in Settings → Sync → Profile only; untick to download this one`
+                   : "Shown as theirs, never downloaded; its Options can turn downloading on later"}>
+            <input type="checkbox" checked={profileOnly} onChange={e => setOnly(e.target.checked)} />
+            Profile only
+          </label>
+        </div>
+      )}
+      {profile && (
+        <div className="source-resolved" role="status">
+          <PlatformIcon platform={profile.platform} />
+          <span className="source-resolved-target">{profile.target.replace(/^https:\/\//, "")}</span>
+          <ProfileOnlyChip title="No downloader takes this site (Settings → Link routing): it can be shown as theirs, never downloaded" />
         </div>
       )}
       {off && (
@@ -874,7 +996,7 @@ export function AddSource({ person = null, onAdded, onDirty }) {
                        session={resolved.session} form={form} metadata={resolved.metadata}
                        onChange={f => { setForms(fs => ({ ...fs, [kind]: f })); setError(null); }} />
       )}
-      {(error || problem || resolved?.ok === false) && (
+      {(error || problem || (resolved?.ok === false && !profile)) && (
         <div className="msg err source-msg" role="alert">{error || problem || resolved.error}</div>
       )}
     </form>

@@ -226,8 +226,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "source_defaults": [block, …] }` (see [Download defaults](#download-defaults)) |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "source_defaults": [block, …], "profile_only_platforms": ["spotify"], "platforms": ["instagram", "spotify", "tiktok", …] }` (see [Download defaults](#download-defaults); `platforms`: those Settings → Profile only offers, see [Profile only](#profile-only)) |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)), `{ "profile_only_platforms": ["spotify", …] }` (see [Profile only](#profile-only)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/profiles` | `{ "active": "default", "profiles": [profile, …] }`, see [Profiles](#profiles) |
 | POST | `/api/profiles` | body `{ "name", "data_directory", "media_roots": [...] }` → `{ "ok": true, "profile": profile, "active", "profiles" }`: a new profile, not switched to; see [Profiles](#profiles) |
 | POST | `/api/profiles/<id>` | body `{ "name" }` → `{ "ok": true, "active", "profiles" }`: renames it |
@@ -267,7 +267,7 @@ Exactly one is active, and every other route of this file reads and writes
 the active one. The rest of the config is shared by all profiles: tool
 paths, the instaloader, gallery-dl and yt-dlp settings, link routing,
 `check_updates`, `desktop_notifications`, `bio_import`, the download defaults
-(`source_defaults`) and `schedules_paused` (one switch for all: only the active profile's schedules
+(`source_defaults`), `profile_only_platforms` and `schedules_paused` (one switch for all: only the active profile's schedules
 run anyway). So is the scripts folder.
 
 `config.json` keeps them as `"profiles": [{ "id", "name", "data_directory",
@@ -1380,7 +1380,7 @@ A **person**:
 |---|---|---|
 | GET | `/api/people` | `[person, …]`, by name |
 | POST | `/api/people` | body `{ "name": "…", "accounts": [{ "platform": "instagram", "id": "123456" }], "profiles": ["https://x.com/somebody"] }` (`accounts` and `profiles` may be omitted; at most 500 accounts and 20 profiles; `profiles` with no media root set is a 400) → `{ "ok": true, "person": {…}, "sources": [source, …] }` |
-| POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }], "not_synced": 0 }`: a sync of each of the person's sources, as Sync all does for every source (`not_synced`: those left out, set to [Don't sync](#dont-sync)); 404 for an unknown id |
+| POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }], "not_synced": 0, "profile_only": 0 }`: a sync of each of the person's sources, as Sync all does for every source (`not_synced`: those left out, set to [Don't sync](#dont-sync); `profile_only`: those left out, [profile only](#profile-only)); 404 for an unknown id |
 | GET | `/api/people/attributes` | `{ "labels": [{ "name", "count" }], "genders": [{ "name", "count" }], "presets": ["Female", "Male", "Transgender"], "countries": ["AD", …] }`: the labels and genders people have, most used first (what the person page suggests and the Creators filters offer), and every country code a person can have |
 | GET | `/api/people/<id>` | person, with its `links` (see [Links](#links)), or 404 |
 | POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"] }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date) → `{ "ok": true, "person": {…} }` |
@@ -1528,7 +1528,8 @@ import); `backend/biofetch.py`.
 ```json
 { "platform": "twitter", "handle": "somebody", "url": "https://x.com/somebody", "tool": "gallery-dl",
   "status": "indexed", "profile_url": "https://x.com/somebody", "account": { "platform": "twitter", "id": "641286", "handle": "somebody",
-  "name": "Some Body", "count": 12, "url": "https://x.com/somebody" }, "person": null, "source": null }
+  "name": "Some Body", "count": 12, "url": "https://x.com/somebody" }, "person": null, "source": null,
+  "profile_only": false }
 ```
 
 - **No account or source is added.** Each account found is a suggestion; the dashboard
@@ -1540,11 +1541,19 @@ import); `backend/biofetch.py`.
   `other` (linked to `person`, someone else), `indexed` (an account in the
   index linked to nobody), `source` (a source linked to nobody yet: link it
   from its account or the Sources page), `new` (nothing of it here).
+- `profile_only`: added as is, it would be a [profile only](#profile-only)
+  source: its platform is in `profile_only_platforms`, or (`tool`
+  `"none"`) no downloader takes its host, for a platform listed there
+  only. The dashboard adds it as such ("Add profile"), each suggestion
+  with its own Profile only switch: `options.download` `"off"` or `"on"`
+  when it says otherwise than its platform, `tool` `"none"` for no
+  downloader.
   `account` is the indexed account whose handle (any it had), alias or id
   is the link's, when exactly one is; `source` the id of a source already
   there for it.
 - What counts as an account: a link that `POST /api/sources` would take
-  (its host in the [routing table](#link-routing)) and that names a profile:
+  (its host in the [routing table](#link-routing), or on a profile-only
+  platform any host, as `tool` `"none"`) and that names a profile:
   the profile's own page or one of its tabs (`youtube.com/@name/videos`),
   never a post, a video, a search, an intent link or a site's home page;
   TikTok only as `tiktok.com/@name`. Two links to one profile count once.
@@ -1944,9 +1953,13 @@ repairs a source left without its account by an older version.
   "session": { "mode": "login", "user": "me", "session_file": true },
   "schedule": { "every": "daily", "next_at": 1727510800, "paused": false, "skipped": null, "stopped": null,
                 "failures": 1 },
-  "script_warning": null, "no_sync": false }
+  "script_warning": null, "no_sync": false, "profile_only": false, "needs_tool": false,
+  "platform_profile_only": false }
 ```
 
+- `tool`: `instaloader`, `gallery-dl`, `yt-dlp`, or `none`: a
+  [profile only](#profile-only) source of a site no downloader takes
+  (`folder` `""`).
 - `target`: instaloader: the profile name, lowercase; gallery-dl and yt-dlp:
   the profile link, normalized (see [Link routing](#link-routing)). `url`:
   its address on the site (the link itself for a link).
@@ -1962,11 +1975,19 @@ repairs a source left without its account by an older version.
   else the one with its link's handle), the person it shows under, or the
   person it was added to is set to [Don't sync](#dont-sync): the source is
   kept but never synced.
+- `profile_only`: it is shown as theirs and never downloaded, see
+  [Profile only](#profile-only); `platform_profile_only`: its platform is
+  listed there (what `download` `"platform"` means for it); `needs_tool`:
+  a source with tool `none` whose `download` says to download, which needs
+  a tool and a folder first.
 - `options`: what its syncs use, option by option: the source's own value
   when it sets one (`overrides` names those), else its platform's
   [download default](#download-defaults), else the default below.
   `defaults`: what it would have without any of its own (the form shows
   them as "Default: …"). A source stores only its `overrides`.
+  - `download`: `"platform"` (default): as its platform says (listed in
+    `profile_only_platforms` or not); `"on"`: always downloaded; `"off"`:
+    never, [profile only](#profile-only). Not a download default.
   - `full_history`: `false` (default): the first sync starts after the
     newest post FeedVault already has for the account, see below. `true`:
     the next sync walks the whole profile and downloads every post not in
@@ -2133,16 +2154,16 @@ repairs a source left without its account by an older version.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
-| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "no_sync": false, "choices": {…}, "defaults": {…}, "metadata": {…}, "session": { "mode": "none" } }` (`source`: the id of the source already there for it; `no_sync`: that source, or the account the profile's folder or handle belongs to, is set to [Don't sync](#dont-sync), so it can be neither added nor synced; `choices`: as a source's; `defaults`: the options a new source starts from, its platform's [download defaults](#download-defaults); `metadata`: as a source's; `session`: the one a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted. With `&tool=instaloader`, `url` is a profile name or `@name` instead |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` (an option left out, or sent as its platform's default, is not stored: it follows the default); 409 `{ "ok": false, "error", "no_sync": true }` when its account (given, or found from its folder or handle) or its person is set to [Don't sync](#dont-sync), from the dashboard and another site alike; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or an `options.session` other than `{ "mode": "none" }` (a [browser profile](#browser-profiles) included), set from another site (see [Security rules](#security-rules)) |
+| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "no_sync": false, "choices": {…}, "defaults": {…}, "metadata": {…}, "session": { "mode": "none" }, "profile_only": false }` (`source`: the id of the source already there for it; `profile_only`: its platform is [profile only](#profile-only); `no_sync`: that source, or the account the profile's folder or handle belongs to, is set to [Don't sync](#dont-sync), so it can be neither added nor synced; `choices`: as a source's; `defaults`: the options a new source starts from, its platform's [download defaults](#download-defaults); `metadata`: as a source's; `session`: the one a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted, with `"profile": { "tool": "none", "platform", "target" }` when only its host is not in the routing table (it can be added as a profile only). With `&tool=instaloader`, `url` is a profile name or `@name` instead; with `&tool=none`, any site's profile link, answered with `folder` `null` |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` (an option left out, or sent as its platform's default, is not stored: it follows the default; `"tool": "none"`: a [profile only](#profile-only) source of any site's profile link, no folder, `download` stored `"off"` unless its platform is listed; 400 with a `folder`, and 400 `{ "needs_tool": true }` for `download` `"on"`); 409 `no_sync` is not answered for a source that does not download; 409 `{ "ok": false, "error", "no_sync": true }` when its account (given, or found from its folder or handle) or its person is set to [Don't sync](#dont-sync), from the dashboard and another site alike; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or an `options.session` other than `{ "mode": "none" }` (a [browser profile](#browser-profiles) included), set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…}, "reset": true \| ["media", …] }` (an option sent with another value than it has now becomes its own, even one equal to its default; one sent as it is now, or not sent, stays as it was, set or inherited; `reset`: those options, or all with `true`, follow the defaults again, before `options` applies), and/or `"person": id \| null`: the person it is added to, or none. A source shows with its account's person first, so one tied to an account takes it along: linked to that person (taken from anyone else), or with `null` unlinked from the person it showed with (an account unlinked from someone set to [Don't sync](#dont-sync) keeps the switch); `person` alone is taken while its sync runs, and with `options` it is written only when they are → `{ "ok": true, "source": {…} }`; 400 (`person` not an id, or no such person); 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent or reset; 403 from another site (see [Security rules](#security-rules)) |
+| POST | `/api/sources/<id>` | body `{ "options": {…}, "reset": true \| ["media", …] }` (an option sent with another value than it has now becomes its own, even one equal to its default; one sent as it is now, or not sent, stays as it was, set or inherited; `reset`: those options, or all with `true`, follow the defaults again, before `options` applies; never `download`, which `true` leaves as it is and a list may not name), and/or `"person": id \| null`: the person it is added to, or none. A source shows with its account's person first, so one tied to an account takes it along: linked to that person (taken from anyone else), or with `null` unlinked from the person it showed with (an account unlinked from someone set to [Don't sync](#dont-sync) keeps the switch); `person` alone is taken while its sync runs, and with `options` it is written only when they are. A source with tool `none` given `"folder": "/abs" | null` with `options.download` that downloads gets the tool the routing table gives its link (its handle for instaloader) and that folder (`null`: the default one), checked as `POST /api/sources` checks them (400 when its host is still not routed); `download` `"on"` without a `folder` is 400 `{ "needs_tool": true }` → `{ "ok": true, "source": {…} }`; 400 (`person` not an id, or no such person); 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent or reset; 403 from another site (see [Security rules](#security-rules)) |
 | POST | `/api/source-defaults/apply` | body `{ "tool": "gallery-dl", "platform": "twitter", "option": "media" }` → `{ "ok": true, "applied": 3, "skipped": 1 }`: every source of that tool and platform that sets that option itself stops doing so and follows the [download default](#download-defaults); those syncing now are skipped (but for `schedule`). 400 for another option than the defaults'; 403 from another site |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
 | POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site |
 | DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site |
-| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }` (already `failed`, with the reason, for a script that cannot run, see [Scripts](#scripts) "On a source"); 409 when its sync is already queued or running; 409 `{ "ok": false, "error", "no_sync": true }` when it is set to [Don't sync](#dont-sync); 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script or would sync with a login and the request comes from another site; 404 for an unknown id |
-| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }], "not_synced": 2 }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, those set to [Don't sync](#dont-sync) left out (counted in `not_synced`), and those that cannot be synced (folder no longer inside a media root) listed in `errors`; 403 from another site |
+| POST | `/api/sources/<id>/sync` | → `{ "ok": true, "job": {…} }` (already `failed`, with the reason, for a script that cannot run, see [Scripts](#scripts) "On a source"); 409 when its sync is already queued or running; 409 `{ "ok": false, "error", "no_sync": true }` when it is set to [Don't sync](#dont-sync); 409 `{ "ok": false, "error", "profile_only": true }` when it is [profile only](#profile-only); 400 when it cannot be synced (its folder is no longer inside a media root); 403 when the source runs a script or would sync with a login and the request comes from another site; 404 for an unknown id |
+| POST | `/api/sources/sync-all` | → `{ "ok": true, "jobs": [job, …], "skipped": 1, "errors": [{ "source": 5, "error": "…" }], "not_synced": 2, "profile_only": 1 }`: a sync per source, by target, queued one after another; sources already queued or running are skipped, those set to [Don't sync](#dont-sync) left out (counted in `not_synced`), those [profile only](#profile-only) too (counted in `profile_only`), and those that cannot be synced (folder no longer inside a media root) listed in `errors`; 403 from another site |
 | GET | `/api/no-sync` | `{ "people": [3], "accounts": [{ "platform": "instagram", "id": "123456" }] }`: who [Don't sync](#dont-sync) is on for, as set; 403 from another site |
 | POST | `/api/no-sync` | body `{ "person": 3, "no_sync": true }` or `{ "account": { "platform", "id" }, "no_sync": false }`, and `"confirm": true` once asked → `{ "ok": true, "no_sync": { "people": [3], "accounts": [] } }`. Turning it on for one whose sources would stop syncing is 409 `{ "ok": false, "confirm": true, "sources": 2, "error" }` until sent again with `"confirm": true`; 409 while one of those sources' sync is queued or running; 400 for an unknown person, an account not indexed, or a malformed body; 403 from another site. See [Don't sync](#dont-sync) |
 
@@ -2781,6 +2802,44 @@ User data: `no_sync_people` (exported by person name, as `muted_people`;
 deleting the person drops it) and `no_sync_accounts` (by platform and
 account id, stored as the id it stands for), written to
 `userdata/no_sync_people.json` and `userdata/no_sync_accounts.json`.
+
+### Profile only
+
+Some profiles are to be shown as someone's and never downloaded: a
+platform FeedVault has no use downloading, or a site no downloader takes
+(Spotify, Twitch…). A source is **profile only** when:
+
+- its `download` option is `"off"`; or
+- it is `"platform"` (the default) and its platform is in
+  `profile_only_platforms` (Settings → Sync → Profile only: a switch per
+  platform in `platforms`, those routed or of a source, and a field for
+  another; `POST /api/config` `{ "profile_only_platforms": [...] }`, at
+  most as many as routes, lowercase platform names; 409 while a source it
+  would make profile only has a sync queued or running); or
+- its tool is `none`: added with `"tool": "none"`, from any site's profile
+  link (its platform from the host: `open.spotify.com` is `spotify`), with
+  folder `""`. `UNIQUE (tool, target)` still holds, and a profile (its
+  platform and handle, so `x.com/name` and `twitter.com/name` are one) is
+  the same source whatever its tool: adding `instagram.com/name` with tool
+  `none` when `@name` is an instaloader source (or the other way round)
+  is refused: there is already a source for it.
+
+`download` `"on"` downloads it even on a listed platform. A profile-only
+source is a normal row of `sources` (user data, exported with the others),
+shown with the person's accounts, but is never synced: the scheduler skips
+it (no `next_at`), Sync all and a person's Sync leave it out (counted in
+`profile_only`), `POST /api/sources/<id>/sync` answers 409 with
+`"profile_only": true`, and no sync job for it can be started any other
+way (`POST /api/jobs` with a sync kind, a script attached to it: 400). No
+folder is created and no job started. A reset of its options leaves
+`download` as it is. Given a tool, it keeps the options it set itself (a
+schedule…) that the new tool can have. Its folder is never adopted from,
+and source suggestions ignore it.
+
+Turning download back on (`"on"`, or its platform taken off the list) for
+one with tool `none` needs a tool and a folder: `POST /api/sources/<id>`
+with `"folder"` (see [Sources](#sources)); until then `needs_tool` is
+`true` and it is still never synced.
 
 ### Schedules
 

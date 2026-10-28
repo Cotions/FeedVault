@@ -49,8 +49,9 @@ rename is accepted (last_result.resumed). Rate limited is not stopped: the back-
 above applies.
 
 Never queued: a source whose account or person is set to Don't sync
-(nosync.py). It keeps its schedule, which applies again once the switch is
-off; status shows no next time meanwhile.
+(nosync.py), or one that is profile only (sources.profile_only, #218). It
+keeps its schedule, which applies again once the switch is off or it
+downloads again; status shows no next time meanwhile.
 
 A sync refused (jobs.BadRequest: its folder is no longer inside a media
 root…) is noted too and held for one interval. Notes and holds live in
@@ -120,7 +121,7 @@ def status(s, cfg=None):
     why = health.paused(s["last_result"])
     stopped = f"paused: {why}" if why and every in INTERVALS else None
     next_at = None
-    if every in INTERVALS and not stopped and not s.get("no_sync"):
+    if every in INTERVALS and not stopped and not s.get("no_sync") and not s.get("profile_only"):
         next_at = max(due_at(every, s["last_sync_at"], s["last_result"]), held)
     synced = s["last_sync_at"] if isinstance(s["last_sync_at"], int) else None
     shown = note is not None and every in INTERVALS and (synced is None or synced < note[1])
@@ -196,9 +197,10 @@ def tick(now=None):
         held, last = dict(_held), dict(_last)
     due = []
     for r in rows:
-        every = sources.stored_options(r, cfg)["schedule"]
+        options = sources.stored_options(r, cfg)
+        every = options["schedule"]
         if every not in INTERVALS or r["id"] in busy or health.paused(sources.last_result(r)) \
-                or sources.not_synced(conn, r, accounts, flags, owners):
+                or sources.profile_only(r, cfg, options) or sources.not_synced(conn, r, accounts, flags, owners):
             continue
         at = max(due_at(every, r["last_sync_at"], sources.last_result(r)), held.get(r["id"], 0))
         if at <= now:
@@ -216,7 +218,7 @@ def tick(now=None):
             break                              # FeedVault is stopping: its jobs too
         try:
             job = sync.sync(sid, scheduled=True)
-        except (sync.Busy, sync.NotSynced):     # set to Don't sync since the list was read
+        except (sync.Busy, sync.NotSynced, sync.ProfileOnly):     # changed since the list was read
             continue
         except jobs.BadRequest as e:
             _note(sid, f"skipped: {e}", now)

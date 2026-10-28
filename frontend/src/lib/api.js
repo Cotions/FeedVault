@@ -400,10 +400,10 @@ export function getSources() { return get("/api/sources"); }
 // { ok, tool, platform, target, folder, source, choices, session }
 // or { ok: false, error } (a link that is not accepted, see docs/API.md "Link routing").
 export function resolveSource(url, opts, tool) { return get(`/api/sources/resolve${qs({ url, tool })}`, opts); }
-// { tool?, target (a profile link, or an Instagram name with tool "instaloader"), folder?, person?,
-//   account?, options? } → { ok, source }
+// { tool?, target (a profile link, or an Instagram name with tool "instaloader"; any site's profile
+//   link with tool "none": a profile only, no folder), folder?, person?, account?, options? } → { ok, source }
 export function createSource(body) { return post("/api/sources", body); }
-// options: { full_history?, session?, content?, media?, since?, first_posts?, script?, metadata?, schedule? }
+// options: { download?, full_history?, session?, content?, media?, since?, first_posts?, script?, metadata?, schedule? }
 // (one changed is set on the source; one sent as it is stays as it was), reset?: [option keys] or true
 // (those follow its platform's download defaults again). ``pin``: every option sent is set as sent
 // (the Options dialog sends only the fields the user changed) → { ok, source }
@@ -413,6 +413,13 @@ export function updateSource(id, options, reset, pin = false) {
 // The person a source is added to (an id), or null for none; one tied to an account takes it along
 // (docs/API.md "Sources") → { ok, source }
 export function setSourcePerson(id, person) { return post(`/api/sources/${seg(id)}`, { person }); }
+// A profile with no downloader (tool "none") made a source that downloads: the tool the routing table
+// picks, ``folder`` (null: the default one), options with download on (docs/API.md "Profile only")
+export function giveSourceTool(id, options, folder) {
+  return post(`/api/sources/${seg(id)}`, { options, folder: folder || null });
+}
+// Settings → Profile only: the platforms never downloaded unless a source says otherwise
+export function saveProfileOnlyPlatforms(platforms) { return post("/api/config", { profile_only_platforms: platforms }); }
 // One platform's download defaults ({ option: value }; {} for none) → { ok, config } or { ok: false, error }
 export function saveSourceDefaults(tool, platform, defaults) {
   return post("/api/config", { source_defaults: { [tool]: { [platform]: defaults } } });
