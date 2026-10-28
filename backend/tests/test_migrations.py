@@ -278,7 +278,7 @@ def test_no_sync_tables_added_and_safe_to_run_again(tmp_path, monkeypatch):
     conn.close()
     monkeypatch.undo()
     db.migrate(path)
-    assert version(path) == (27, 27) and len(db.MIGRATIONS) == 27
+    assert version(path) == (len(db.MIGRATIONS),) * 2 and len(db.MIGRATIONS) >= 27
     assert {"no_sync_people", "no_sync_accounts"} <= tables(path)
     conn = sqlite3.connect(path, isolation_level=None)
     assert conn.execute("SELECT COUNT(*) FROM no_sync_people").fetchone()[0] == 0
@@ -292,4 +292,114 @@ def test_no_sync_tables_added_and_safe_to_run_again(tmp_path, monkeypatch):
     assert conn.execute("SELECT target FROM sources").fetchall() == [("carol",)]
     conn.close()
     db.migrate(path)                                   # at the latest version: a no-op
-    assert version(path) == (27, 27)
+    assert version(path)[0] == len(db.MIGRATIONS)
+
+
+def links_at_27(tmp_path, monkeypatch, rows):
+    """A database at version 27 with people Alice (1) and Bob (2) and these
+    links: (url, title, notes, person_id, position, created_at, tied_at)."""
+    path = str(tmp_path / "feedvault.db")
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:27])
+    db.migrate(path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO people(id, name, created_at) VALUES (1, 'Alice', 1), (2, 'Bob', 1)")
+    conn.executemany("INSERT INTO links(url, title, notes, person_id, position, created_at, tied_at) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+    monkeypatch.undo()
+    return path
+
+
+def all_links(conn):
+    return conn.execute("SELECT url, title, notes, person_id, position, created_at, tied_at FROM links "
+                        "ORDER BY created_at").fetchall()
+
+
+def test_links_lose_their_tracking_and_merge(tmp_path, monkeypatch, capsys):
+    """Migration 28: every saved URL cleaned as one saved now is; links that
+    become one are merged into the oldest, no notes, title or person lost."""
+    long_a, long_b = "a" * 3000, "b" * 3000
+    path = links_at_27(tmp_path, monkeypatch, [
+        # Three spellings of one TikTok profile: into the first, each note once.
+        ("https://www.tiktok.com/@smeepies?_r=1&_t=ZT-94e14uZEVsz", "TikTok", "first", 1, 1, 10, 10),
+        ("https://www.tiktok.com/@smeepies?_t=Other", "", "second", None, None, 20, None),
+        ("https://www.tiktok.com/@smeepies", "Smeepies", "first", 1, 2, 30, 30),
+        # The oldest is no one's: it takes the other's person, place, title and notes.
+        ("https://example.com/shop?utm_source=x", "", "", None, None, 5, None),
+        ("https://example.com/shop", "Shop", "Bob's", 2, 1, 40, 50),
+        # Two people's: left as they were, the clean URL with the one that had it.
+        ("https://bob.example/?utm_source=a", "", "Alice's", 1, 3, 1, 1),
+        ("https://bob.example", "", "Bob's", 2, 2, 2, 2),
+        # Notes too long once joined: kept apart (the oldest cleaned, the
+        # other a spelling with a last slash, so the URLs differ still).
+        ("https://notes.example/?fbclid=1", "", long_a, None, None, 60, None),
+        ("https://notes.example/", "", long_b, None, None, 61, None),
+        # Not tracking: untouched. Alone with tracking: cleaned.
+        ("https://example.com/v?t=42", "", "", None, None, 70, None),
+        ("https://youtu.be/abc?si=x", "", "kept", 2, 3, 80, 80),
+    ])
+    capsys.readouterr()
+    db.migrate(path)
+    assert ("[db] Links: tracking parameters dropped from 4, 3 merged into an older link with the same "
+            "address, 2 kept apart (another person's, or notes too long joined)") in capsys.readouterr().out
+    conn = sqlite3.connect(path, isolation_level=None)
+    assert all_links(conn) == [
+        ("https://bob.example/?utm_source=a", "", "Alice's", 1, 3, 1, 1),
+        ("https://bob.example", "", "Bob's", 2, 2, 2, 2),
+        ("https://example.com/shop", "Shop", "Bob's", 2, 1, 5, 50),
+        ("https://www.tiktok.com/@smeepies", "TikTok", "first\n\nsecond", 1, 1, 10, 10),
+        ("https://notes.example", "", long_a, None, None, 60, None),
+        ("https://notes.example/", "", long_b, None, None, 61, None),
+        ("https://example.com/v?t=42", "", "", None, None, 70, None),
+        ("https://youtu.be/abc", "", "kept", 2, 3, 80, 80),
+    ]
+    assert conn.execute("SELECT value FROM meta WHERE key = 'userdata_stale'").fetchone() == ("links",)
+    # Again (and with every migration after it): nothing changes.
+    before = all_links(conn)
+    conn.execute("BEGIN")
+    db._migrate_28(conn)
+    conn.execute("COMMIT")
+    assert all_links(conn) == before
+    conn.close()
+    db.migrate(path)
+    assert version(path)[0] == len(db.MIGRATIONS)
+    assert all_links(sqlite3.connect(path)) == before
+
+
+def test_links_without_tracking_are_left_alone(tmp_path, monkeypatch, capsys):
+    """Migration 28 on links with nothing to drop: no change, no mark, no line."""
+    rows = [("https://linktr.ee/alice", "Linktree", "n", 1, 1, 1, 1),
+            ("https://example.com/?q=1", "", "", None, None, 2, None)]
+    path = links_at_27(tmp_path, monkeypatch, rows)
+    capsys.readouterr()
+    db.migrate(path)
+    assert "[db] Links:" not in capsys.readouterr().out
+    conn = sqlite3.connect(path)
+    assert all_links(conn) == rows
+    assert conn.execute("SELECT 1 FROM meta WHERE key = 'userdata_stale'").fetchone() is None
+
+
+def test_links_json_written_again_after_the_merge(tmp_path, monkeypatch):
+    """After migration 28 merged links, the next start writes links.json
+    again (it still lists the rows merged away, which a rebuilt index would
+    read back), once."""
+    import json
+    import userdata
+    path = links_at_27(tmp_path, monkeypatch, [
+        ("https://a.example/?utm_source=x", "", "one", None, None, 1, None),
+        ("https://a.example", "", "two", None, None, 2, None),
+    ])
+    data = tmp_path / "data"
+    (data / "userdata").mkdir(parents=True)
+    old = data / "userdata" / "links.json"
+    old.write_text(json.dumps({"version": 1, "rows": [{"url": "https://a.example/?utm_source=x", "notes": "one"},
+                                                      {"url": "https://a.example", "notes": "two"}]}))
+    db.migrate(path)
+    conn = sqlite3.connect(path)
+    userdata.restore_all(conn, str(data))
+    assert [(r["url"], r["notes"]) for r in json.loads(old.read_text())["rows"]] == [("https://a.example", "one\n\ntwo")]
+    assert conn.execute("SELECT 1 FROM meta WHERE key = 'userdata_stale'").fetchone() is None
+    old.write_text(json.dumps({"version": 1, "rows": []}))
+    userdata.restore_all(conn, str(data))                  # the mark is gone: the file is left as it is
+    assert json.loads(old.read_text())["rows"] == []

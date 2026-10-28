@@ -739,7 +739,7 @@ def test_import_end_to_end(bio, client, monkeypatch):
         ("https://www.instagram.com/p/C8xYz/", "a post"), ("https://x.com/intent/follow?screen_name=alice", "follow"),
         ("https://tiktok.com/new.one", "no @"), ("https://bsky.app/profile/alice.bsky.social", ""),
         ("https://www.youtube.com/channel/UC1234567890abcdefghij/", "channel"),
-        ("https://www.tiktok.com/@new.one?lang=en", ""), ("https://shop.example/alice", "My shop"),
+        ("https://www.tiktok.com/@new.one", ""), ("https://shop.example/alice", "My shop"),
         ("https://x.com/Example_User1", "X"), ("https://www.youtube.com/@alicevids/videos", "Videos"),
         ("https://www.youtube.com/watch?v=abc", "Latest")]
     assert net.connects == [PUBLIC]
@@ -1088,7 +1088,7 @@ LNK_BIO_PAGE = """<!DOCTYPE html><html lang="en"><head><title>Alice | Lnk.Bio</t
 </body></html>"""
 LNK_BIO_KEPT = [
     ("https://lnk.bio/alice", ""), ("https://www.instagram.com/alice.example/", "Instagram"),
-    ("https://ko-fi.com/alice", "Buy me a coffee"), ("https://alice.example/blog?utm_source=lnkbio", "My blog"),
+    ("https://ko-fi.com/alice", "Buy me a coffee"), ("https://alice.example/blog", "My blog"),
     ("https://alice-store.example/prints", "Prints"), ("https://discord.gg/AbCdEf", "Discord server"),
     ("https://alice.example/map", "Where I show"), ("https://www.twitch.tv/alice_live", ""),
     ("https://ko-fi.com/alice/", ""),          # another spelling of a link kept: links.keep passes it over
@@ -1141,9 +1141,10 @@ LINKME_PAGE = """<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/>
 <script class="$tsr">$R[0]={manifest:{css:["/build/index-AbCd.css"]},links:[{url:"https://twitch.tv/alice_live"},
 {url:"https://evil.example/from-the-script"}]}</script>
 <script type="module" async="" src="/build/entry-AbCd.js"></script></body></html>"""
+# The Instagram button's ?igsh=…&utm_source=qr is dropped (links.clean_url).
 LINKME_KEPT = [
     ("https://link.me/alice", ""), ("https://twitch.tv/alice_live", "twitch"),
-    ("https://www.instagram.com/alice.example?igsh=AbCd%3D%3D&utm_source=qr", "instagram"),
+    ("https://www.instagram.com/alice.example", "instagram"),
 ]
 
 
@@ -1154,6 +1155,13 @@ def test_a_linkme_page_keeps_its_links_only():
     table = {**ROUTES, "twitch.tv": "yt-dlp"}
     assert {(p[0], p[1]) for p in filter(None, (biofetch.profile(x, table) for x in biofetch.page_links(LINKME_PAGE)))} \
         == {("twitch", "alice_live"), ("instagram", "alice.example")}
+
+
+def test_the_page_imported_is_saved_without_its_tracking():
+    """The page's own address is cleaned as every link is: the one pasted
+    from a share sheet (?utm_source=ig_share…) is saved bare."""
+    found, _ = biofetch.shown_links(LINKME_PAGE, "https://link.me/alice?utm_source=ig&igsh=AbCd&fbclid=x", ROUTES)
+    assert found == LINKME_KEPT
 
 
 def test_a_linkme_import_end_to_end(bio, client, monkeypatch):

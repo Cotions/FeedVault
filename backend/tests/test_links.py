@@ -73,6 +73,35 @@ def test_clean_url_normalizes(raw, clean):
     assert links.clean_url(raw) == clean
 
 
+@pytest.mark.parametrize("raw, clean", [
+    ("https://www.tiktok.com/@smeepies?_r=1&_t=ZT-94e14uZEVsz", "https://www.tiktok.com/@smeepies"),
+    ("https://vm.tiktok.com/@a/video/1?is_from_webapp=1&sender_device=pc&is_copy_url=1&lang=en&q=x",
+     "https://vm.tiktok.com/@a/video/1?q=x"),
+    ("https://www.instagram.com/alice.example?igsh=AbCd%3D%3D&utm_source=qr", "https://www.instagram.com/alice.example"),
+    ("https://www.instagram.com/p/C8xYz/?img_index=2&hl=fr", "https://www.instagram.com/p/C8xYz/"),
+    ("https://www.instagram.com/alice/?igshid=x", "https://www.instagram.com/alice/"),
+    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=AbC&t=42", "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42"),
+    ("https://youtube.com/playlist?list=PL1&feature=shared&pp=ygU", "https://youtube.com/playlist?list=PL1"),
+    ("https://youtu.be/dQw4w9WgXcQ?si=AbC", "https://youtu.be/dQw4w9WgXcQ"),
+    ("https://x.com/someone/status/1?s=20&t=AbC", "https://x.com/someone/status/1"),
+    ("https://twitter.com/someone?ref_src=twsrc%5Egoogle", "https://twitter.com/someone"),
+    ("https://open.spotify.com/artist/1?si=AbC&nd=1", "https://open.spotify.com/artist/1"),
+    ("https://m.facebook.com/someone?mibextid=ZbWKwL&rdid=x&share_url=y", "https://m.facebook.com/someone"),
+    ("https://example.com/a?utm_source=x&id=7&UTM_Medium=y&fbclid=z#top", "https://example.com/a?id=7#top"),
+    ("https://example.com/?gclid=1&dclid=2&msclkid=3&mc_cid=4&mc_eid=5&_hsenc=6&_hsmi=7&ref_url=8",
+     "https://example.com"),                                                # the bare host's slash goes too
+    ("https://example.com/?utm_source=x#top", "https://example.com/#top"),
+    ("https://example.com/a?b=2&utm_campaign=x&a=1", "https://example.com/a?b=2&a=1"),   # order kept
+    ("https://example.com/a?q=%20x+y&utm_term=z", "https://example.com/a?q=%20x+y"),     # written as it was
+    ("https://example.com/a?a=1&&b=2", "https://example.com/a?a=1&&b=2"),   # nothing to drop: untouched
+    # What a site adds is dropped on that site only: a t, si or lang elsewhere means something.
+    ("https://example.com/video?t=42&si=1&lang=en&s=2&hl=fr", "https://example.com/video?t=42&si=1&lang=en&s=2&hl=fr"),
+    ("https://www.youtube.com/watch?v=abc&t=42&lang=en", "https://www.youtube.com/watch?v=abc&t=42&lang=en"),
+])
+def test_clean_url_drops_tracking_parameters(raw, clean):
+    assert links.clean_url(raw) == clean
+
+
 @pytest.mark.parametrize("raw", [
     None, 3, "", "   ", "example.com", "//example.com", "javascript:alert(1)", "JaVaScRiPt:alert(1)",
     "javascript://example.com/%0Aalert(1)", "data:text/html,<script>alert(1)</script>", "file:///etc/passwd",
@@ -177,6 +206,17 @@ def test_duplicate_url_is_a_409_with_the_existing_id(client):
     assert post(client, f"/api/links/{other}", {"url": "https://linktr.ee/alice"}, 409)["id"] == first
     post(client, f"/api/links/{first}", {"url": "https://linktr.ee/alice/"})       # its own URL, changed
     post(client, f"/api/links/{first}", {"url": "https://linktr.ee/alice/"})       # unchanged: fine
+
+
+def test_a_link_saved_again_with_tracking_is_the_same_link(client):
+    """Add, the quick add and an edit all clean through clean_url: the
+    address shared with ?_r=…&_t=… is the link saved already."""
+    lid = add(client, "https://www.tiktok.com/@smeepies?_r=1&_t=ZT-94e14uZEVsz")["link"]["id"]
+    assert urls(client) == ["https://www.tiktok.com/@smeepies"]
+    assert add(client, "https://www.tiktok.com/@smeepies?_t=other", 409)["id"] == lid
+    other = add(client, "https://example.com/a")["link"]["id"]
+    assert post(client, f"/api/links/{other}", {"url": "https://example.com/b?utm_source=x"})["link"]["url"] \
+        == "https://example.com/b"
 
 
 def test_duplicate_409_names_the_person_it_is_tied_to(client):

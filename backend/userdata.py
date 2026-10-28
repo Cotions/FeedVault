@@ -264,14 +264,18 @@ def _source(t, data_dir):
 
 def restore_all(conn, data_dir):
     """Startup: import every empty table, and write the file for any table
-    that has rows but no file yet (first run after an upgrade)."""
+    that has rows but no file yet (first run after an upgrade), or whose
+    rows a migration changed (meta ``userdata_stale``: the names, comma
+    separated; db._migrate_28 merging links)."""
+    row = conn.execute("SELECT value FROM meta WHERE key = 'userdata_stale'").fetchone()
+    stale = set(row[0].split(",")) if row else set()
     for name, t in REGISTRY.items():
         src, _ = _source(t, data_dir)
         try:
             n = load(conn, name, data_dir)
             if n:
                 print(f"[userdata] Restored {n} {name} rows from {src}")
-            if not os.path.exists(path(data_dir, name)) \
+            if (name in stale or not os.path.exists(path(data_dir, name))) \
                     and conn.execute(f"SELECT 1 FROM {t.table} LIMIT 1").fetchone():
                 export(conn, name, data_dir)
         except Exception as e:  # a bad file must never stop startup
@@ -283,6 +287,9 @@ def restore_all(conn, data_dir):
                 aside = f"{src}.corrupt-{int(time.time())}"
                 os.replace(src, aside)
                 print(f"[userdata] Moved the unreadable file to {aside}")
+    if row:
+        with conn:
+            conn.execute("DELETE FROM meta WHERE key = 'userdata_stale'")
 
 
 # ---------------------------------------------------------------------------
