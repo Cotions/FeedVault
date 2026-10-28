@@ -311,3 +311,77 @@ def test_bio_suggestions_on_profile_only_platforms(env, client):
     got = biofetch.suggest(conn, pid, LINKS, table, env["roots"], ["spotify", "twitch", "twitter"])
     assert [a["status"] for a in got] == ["linked", "linked", "linked", "new"]
     assert tree(env["media"]) == []
+
+
+# ---------------------------------------------------------------------------
+# Review of #224
+# ---------------------------------------------------------------------------
+
+def test_a_reset_keeps_a_source_profile_only(env, client, submitted, schedule):
+    """Download is never reset: Reset all (true) leaves "off" as it is, and
+    naming it is refused, so a source set never to download stays so."""
+    s = add(client, "https://x.com/someone", options={"download": "off", "media": "images"})["source"]
+    got = post(client, f"/api/sources/{s['id']}", {"reset": True})["source"]
+    assert (got["profile_only"], got["options"]["download"], got["overrides"]) == (True, "off", ["download"])
+    r = post(client, f"/api/sources/{s['id']}", {"reset": ["download"]}, 400)
+    assert "reset must be" in r["error"] and "download" not in r["error"].split(":", 1)[1]
+    assert get(client, f"/api/sources/{s['id']}")["profile_only"] is True
+    post(client, f"/api/sources/{s['id']}/sync", status=409)
+    assert schedule() == [] and submitted == [] and tree(env["media"]) == []
+
+
+def test_giving_a_tool_keeps_what_the_profile_set(env, client):
+    """The options a tool-none source set itself (a schedule) stay set once
+    it is given a downloader, besides those sent."""
+    s = add(client, "https://x.com/someone", tool="none")["source"]
+    s = post(client, f"/api/sources/{s['id']}", {"options": {"schedule": "weekly"}})["source"]
+    assert s["options"]["schedule"] == "weekly" and "schedule" in s["overrides"]
+    got = post(client, f"/api/sources/{s['id']}", {"options": {"download": "on", "media": "images"},
+                                                   "folder": None})["source"]
+    assert got["tool"] == "gallery-dl"
+    assert (got["options"]["schedule"], got["options"]["media"], got["options"]["download"]) == (
+        "weekly", "images", "on")
+    assert {"schedule", "media", "download"} <= set(got["overrides"])
+
+
+def test_listing_a_platform_waits_for_its_syncs(env, client, monkeypatch):
+    """A platform made profile only while one of its sources syncs: 409, as
+    a source's own download or Don't sync; nothing is saved. Another
+    platform's sync does not hold it up, nor one profile only already."""
+    x = add(client, "https://x.com/someone")["source"]
+    tt = add(client, "https://www.tiktok.com/@someone")["source"]
+    running = {x["id"]: {"id": 9, "state": "running", "waits_until": None}}
+    monkeypatch.setattr(sync, "active", lambda: running)
+    r = post(client, "/api/config", {"profile_only_platforms": ["twitter"]}, 409)
+    assert "queued or running" in r["error"]
+    assert get(client, "/api/config")["profile_only_platforms"] == []
+    assert get(client, f"/api/sources/{x['id']}")["profile_only"] is False
+    assert post(client, "/api/config", {"profile_only_platforms": ["tiktok"]})["ok"] is True
+    assert get(client, f"/api/sources/{tt['id']}")["profile_only"] is True
+    post(client, "/api/config", {"profile_only_platforms": []})
+    monkeypatch.setattr(sync, "active", lambda: {})
+    post(client, f"/api/sources/{x['id']}", {"options": {"download": "off"}})
+    monkeypatch.setattr(sync, "active", lambda: running)
+    assert post(client, "/api/config", {"profile_only_platforms": ["twitter"]})["ok"] is True
+
+
+def test_one_profile_whatever_its_host(env, client):
+    """x.com and twitter.com links to one profile are one source, a
+    tool-none one and a downloading one alike, in any case."""
+    s = add(client, "https://twitter.com/Someone", tool="none")["source"]
+    assert "already" in add(client, "https://x.com/someone", 400)["error"]
+    assert "already" in add(client, "https://x.com/SOMEONE", 400, tool="none")["error"]
+    assert get(client, "/api/sources/resolve?url=https://x.com/someone")["source"] == s["id"]
+    other = add(client, "https://x.com/someone_else")["source"]
+    assert "already" in add(client, "https://twitter.com/someone_else", 400, tool="none")["error"]
+    assert other["id"] != s["id"]
+
+
+def test_no_folder_is_no_account(env, client):
+    """A profile-only source's folder "" is no folder: it takes no account
+    from the posts ("/" would be every post's)."""
+    write_post(env["media"] / "carol.cooks", "CAROLPOST001", TS, owner("carol.cooks", 777))
+    scanner.scan(env["roots"])
+    conn = db.connect()
+    assert sources._folder_account(conn, "instagram", "", env["roots"]) is None
+    assert sources._folder_account(conn, "instagram", str(env["media"] / "carol.cooks"), env["roots"]) is not None

@@ -1242,7 +1242,7 @@ def create_profile(conn, target, person_id, account, options, now, table=None):
     if parsed is None or parsed[0] != target:
         raise Refused("the target is not a profile link")
     platform = platform_of(parsed[1])
-    if existing(conn, NONE, target) is not None:
+    if existing(conn, NONE, target, platform=platform) is not None:
         raise Refused(f"there is already a source for {target}")
     if account is not None:
         key = people.canonical(conn, *account)
@@ -1324,7 +1324,7 @@ def _checked_folder(conn, roots, tool, target, folder, account, table, exclude=N
     if platform_folder(real, roots, table):
         raise Refused(f"{real} is a platform's folder, where each account has a folder of its own: "
                       f"pick the account's, such as {default}")
-    there = existing(conn, tool, target, real)
+    there = existing(conn, tool, target, real, platform)
     if there is not None and there != exclude:
         raise Refused(f"there is already a {tool} source for {target} or its folder")
     if account is not None:
@@ -1380,32 +1380,44 @@ def resolved_not_synced(conn, tool, platform, target, folder, roots):
     return key is not None and key in nosync.flags(conn)[0]
 
 
-def existing(conn, tool, target, folder=None):
+def existing(conn, tool, target, folder=None, platform=None):
     """The id of the source of ``tool`` that is already there for a target:
     the same one in any case (X, TikTok and YouTube names are not
     case-sensitive), or one that downloads into the same folder (x.com and
     twitter.com links to one profile). Else, as a profile-only source with
     no tool (NONE) is the same profile whatever the tool: a NONE source of
-    that profile, or for NONE, one of any tool. Else None."""
+    that profile (same platform and handle, so x.com and twitter.com links
+    count as one), or for NONE, one of any tool. ``platform``: the
+    target's, when the caller has it. Else None."""
     row = conn.execute("SELECT id FROM sources WHERE tool = ? AND (lower(target) = lower(?) "
                        "OR (folder = ? AND folder != '')) ORDER BY lower(target) = lower(?) DESC, id LIMIT 1",
                        (tool, target, folder, target)).fetchone()
     if row:
         return row[0]
-    key = profile_key(tool, target)
-    for sid, t, other in conn.execute("SELECT id, tool, target FROM sources WHERE tool != ? "
-                                      "AND (tool = ? OR ? = ?) ORDER BY id", (tool, NONE, tool, NONE)):
-        if profile_key(t, other) == key:
+    key = profile_key(platform or target_platform(tool, target), tool, target)
+    for sid, p, t, other in conn.execute("SELECT id, platform, tool, target FROM sources WHERE tool = ? OR ? = ? "
+                                         "ORDER BY id", (NONE, tool, NONE)):
+        if profile_key(p, t, other) == key:
             return sid
     return None
 
 
-def profile_key(tool, target):
-    """A source's profile as one text whatever its tool: its link, lowercase
-    (instaloader's profile name as its link)."""
+def target_platform(tool, target):
+    """The platform of a target with no row yet: instagram for an
+    instaloader name, else its link's host (platform_of over site_of, as a
+    NONE source's)."""
     if tool == "instaloader":
-        return f"https://instagram.com/{target}".lower()
-    return target.lower()
+        return PLATFORM["instaloader"]
+    host = (urlsplit(target).hostname or "").lower().removeprefix("www.")
+    return platform_of(host) if host in HOST_PLATFORMS else platform_of(site_of(host))
+
+
+def profile_key(platform, tool, target):
+    """A source's profile whatever its tool or its link's host: (platform,
+    its handle, lowercase), so x.com/name and twitter.com/name are one;
+    a link with no handle, by the link itself."""
+    handle = target if tool == "instaloader" else profile_handle(target)
+    return (platform, (handle or target).lower())
 
 
 def _handle_account(conn, platform, handle, accounts=None):
@@ -1427,6 +1439,8 @@ def _folder_account(conn, platform, folder, roots, accounts=None):
     posts carry it, canonical (the numeric id once metadata names it), else
     the account with the most posts in it. ``accounts``: db.accounts, when
     the caller has it."""
+    if not folder:                             # a profile only source's "": "/" would take every post
+        return None
     accounts = accounts if accounts is not None else db.accounts(conn)
     if _top(os.path.join(folder, "x"), roots) == folder:
         key = people.canonical(conn, platform, os.path.basename(folder).lower())

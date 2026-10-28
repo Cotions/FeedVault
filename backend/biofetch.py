@@ -822,7 +822,7 @@ def suggest(conn, pid, found_links, table, roots, profile_only=()):
         keys = by_name.get((platform, handle.lower()), set())
         account = accounts[next(iter(keys))] if len(keys) == 1 else None
         folder = sources.default_folder(tool, platform, target, roots) if roots else None
-        sid = sources.existing(conn, tool, target, folder)
+        sid = sources.existing(conn, tool, target, folder, platform)
         source_owner = sources._owner(conn, sources.row(conn, sid), accounts)[1] if sid is not None else None
         owner = (account or {}).get("person") or source_owner
         if owner and owner["id"] == pid:

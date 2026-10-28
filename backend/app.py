@@ -1053,7 +1053,7 @@ def _profiles(value, conn, cfg):
             continue                           # two links to one profile
         seen.add((r["tool"], r["target"]))
         folder = sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]
-        if sources.existing(conn, r["tool"], r["target"], folder) is not None:
+        if sources.existing(conn, r["tool"], r["target"], folder, r["platform"]) is not None:
             raise sources.Refused(f"{text[:200]}: there is already a source for it; link its account instead")
         out.append(r)
     return out, table
@@ -1789,7 +1789,7 @@ def resolve_source():
     folder = (sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]) if r["folder"] else None
     # What a new source would start from: its platform's download defaults.
     defaults = sources.inherited(sources.new_row(r["tool"], r["platform"], r["target"]), cfg)
-    sid = sources.existing(conn, r["tool"], r["target"], folder)
+    sid = sources.existing(conn, r["tool"], r["target"], folder, r["platform"])
     # Its account (or the source there already) is set to Don't sync: no Add, no Sync.
     off = sources.not_synced(conn, sources.row(conn, sid)) if sid is not None \
         else sources.resolved_not_synced(conn, r["tool"], r["platform"], r["target"], folder, cfg["media_roots"])
@@ -1931,10 +1931,14 @@ def update_source(sid):
     reset = body.get("reset")
     if body.get("pin") not in (None, True, False):
         return jsonify({"ok": False, "error": "pin must be true or false"}), 400
+    # Download (#218) is never reset: it has no default to follow (its
+    # "platform" is a choice of its own), and a reset must not make a source
+    # the user set to never download syncable again.
+    resettable = [k for k in sources.OPTION_KEYS if k != "download"]
     if reset is True:
-        reset = list(sources.OPTION_KEYS)
-    if reset is not None and (not isinstance(reset, list) or any(k not in sources.OPTION_KEYS for k in reset)):
-        return jsonify({"ok": False, "error": f"reset must be true or a list of: {', '.join(sources.OPTION_KEYS)}"}), 400
+        reset = list(resettable)
+    if reset is not None and (not isinstance(reset, list) or any(k not in resettable for k in reset)):
+        return jsonify({"ok": False, "error": f"reset must be true or a list of: {', '.join(resettable)}"}), 400
     # "person": the person it is added to (an id), or null for none; alone,
     # or with options (written once they are).
     person = body.get("person")
@@ -2016,6 +2020,11 @@ def _give_tool(conn, s, sent, folder):
     if refused:
         return jsonify({"ok": False, "error": refused[0]}), refused[1]
     base = sources.inherited(sources.new_row(r["tool"], r["platform"], r["target"]), cfg)
+    # What it sets itself (a schedule…) stays set, each checked again for
+    # the new tool; one it cannot have there goes back to what it inherits.
+    for key in s["overrides"]:
+        base = sources.clean_options({key: s["options"][key]}, base, tool=r["tool"], platform=r["platform"],
+                                     target=r["target"], stories_daily=False) or base
     options, error = sources.parse_options({"download": s["options"]["download"], **sent}, base=base,
                                            tool=r["tool"], platform=r["platform"], target=r["target"])
     if not error and not sources.wants_download(r["platform"], options, cfg):
@@ -2288,6 +2297,16 @@ def _set_config(body):
         changes["profile_only_platforms"], error = sources.clean_platforms(body["profile_only_platforms"])
         if error:
             return jsonify({"ok": False, "error": error})
+        # A source it would make profile only while its sync is queued or
+        # running: refused, as update_source and /api/no-sync refuse, so no
+        # job downloads from a profile set never to be downloaded.
+        listed = {**cfg, "profile_only_platforms": changes["profile_only_platforms"]}
+        conn = db.connect()
+        for sid in _sources_active():
+            r = sources.row(conn, sid)
+            if r is not None and not sources.profile_only(r, cfg) and sources.profile_only(r, listed):
+                return jsonify({"ok": False, "error": f"a {r['platform']} source's sync is queued or running; "
+                                                      "wait for it to end, or stop it"}), 409
     if "source_defaults" in body:
         defaults, error = sources.clean_defaults(body["source_defaults"], cfg.get("source_defaults"))
         error = error or _defaults_refused(body["source_defaults"], defaults, cfg)
