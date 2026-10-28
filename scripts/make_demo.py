@@ -334,7 +334,7 @@ def seed_links(data):
         ("https://quiet-kiln.example", "", ""),
     ]
     with open(out, "w") as f:
-        json.dump({"version": 1, "rows": [{"url": u, "title": t, "notes": n, "person": None, "position": None,
+        json.dump({"version": 1, "rows": [{"url": u, "title": t, "notes": n, "people": [],
                                            "created_at": 1_700_000_000 + i} for i, (u, t, n) in enumerate(rows)]}, f)
 
 

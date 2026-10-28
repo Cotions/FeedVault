@@ -316,6 +316,13 @@ def all_links(conn):
                         "ORDER BY created_at").fetchall()
 
 
+def migrate_to(path, monkeypatch, version):
+    """db.migrate, up to ``version`` only."""
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:version])
+    db.migrate(path)
+    monkeypatch.undo()
+
+
 def test_links_lose_their_tracking_and_merge(tmp_path, monkeypatch, capsys):
     """Migration 28: every saved URL cleaned as one saved now is; links that
     become one are merged into the oldest, no notes, title or person lost."""
@@ -340,7 +347,7 @@ def test_links_lose_their_tracking_and_merge(tmp_path, monkeypatch, capsys):
         ("https://youtu.be/abc?si=x", "", "kept", 2, 3, 80, 80),
     ])
     capsys.readouterr()
-    db.migrate(path)
+    migrate_to(path, monkeypatch, 28)
     assert ("[db] Links: tracking parameters dropped from 4, 3 merged into an older link with the same "
             "address, 2 kept apart (another person's, or notes too long joined)") in capsys.readouterr().out
     conn = sqlite3.connect(path, isolation_level=None)
@@ -355,16 +362,14 @@ def test_links_lose_their_tracking_and_merge(tmp_path, monkeypatch, capsys):
         ("https://youtu.be/abc", "", "kept", 2, 3, 80, 80),
     ]
     assert conn.execute("SELECT value FROM meta WHERE key = 'userdata_stale'").fetchone() == ("links",)
-    # Again (and with every migration after it): nothing changes.
+    # Again: nothing changes. (Migration 30 then merges the two people's
+    # links: test_links_kept_apart_for_two_people_become_one.)
     before = all_links(conn)
     conn.execute("BEGIN")
     db._migrate_28(conn)
     conn.execute("COMMIT")
     assert all_links(conn) == before
     conn.close()
-    db.migrate(path)
-    assert version(path)[0] == len(db.MIGRATIONS)
-    assert all_links(sqlite3.connect(path)) == before
 
 
 def test_links_without_tracking_are_left_alone(tmp_path, monkeypatch, capsys):
@@ -373,7 +378,7 @@ def test_links_without_tracking_are_left_alone(tmp_path, monkeypatch, capsys):
             ("https://example.com/?q=1", "", "", None, None, 2, None)]
     path = links_at_27(tmp_path, monkeypatch, rows)
     capsys.readouterr()
-    db.migrate(path)
+    migrate_to(path, monkeypatch, 28)
     assert "[db] Links:" not in capsys.readouterr().out
     conn = sqlite3.connect(path)
     assert all_links(conn) == rows
@@ -403,3 +408,131 @@ def test_links_json_written_again_after_the_merge(tmp_path, monkeypatch):
     old.write_text(json.dumps({"version": 1, "rows": []}))
     userdata.restore_all(conn, str(data))                  # the mark is gone: the file is left as it is
     assert json.loads(old.read_text())["rows"] == []
+
+
+def ties(conn):
+    """(url, person name, position, tied_at) of every tie (link_people), by URL and name."""
+    return conn.execute("SELECT l.url, p.name, lp.position, lp.tied_at FROM link_people lp "
+                        "JOIN links l ON l.id = lp.link_id JOIN people p ON p.id = lp.person_id "
+                        "ORDER BY l.url, p.name").fetchall()
+
+
+def test_links_get_their_people_table(tmp_path, monkeypatch, capsys):
+    """Migration 30: every tie of links.person_id moves to link_people with
+    its place and tied_at (none: from when the link was saved); links
+    loses the three columns; a link of no one has no tie."""
+    path = links_at_27(tmp_path, monkeypatch, [
+        ("https://linktr.ee/alice", "Linktree", "n", 1, 2, 10, 15),
+        ("https://alice.example", "", "", 1, 1, 11, None),            # tied before tied_at was kept
+        ("https://bob.example", "Bob", "", 2, 1, 12, 12),
+        ("https://loose.example", "", "to sort", None, None, 13, None),
+    ])
+    capsys.readouterr()
+    db.migrate(path)
+    assert "[db] Links:" not in capsys.readouterr().out          # nothing merged: no line, no mark
+    assert version(path)[0] == len(db.MIGRATIONS) >= 30
+    conn = sqlite3.connect(path)
+    assert [r[1] for r in conn.execute("PRAGMA table_info(links)")] == ["id", "url", "title", "notes", "created_at"]
+    assert conn.execute("SELECT id, url, title, notes, created_at FROM links ORDER BY id").fetchall() == [
+        (1, "https://linktr.ee/alice", "Linktree", "n", 10), (2, "https://alice.example", "", "", 11),
+        (3, "https://bob.example", "Bob", "", 12), (4, "https://loose.example", "", "to sort", 13)]
+    assert ties(conn) == [("https://alice.example", "Alice", 1, 11), ("https://bob.example", "Bob", 1, 12),
+                          ("https://linktr.ee/alice", "Alice", 2, 15)]
+    assert conn.execute("SELECT 1 FROM meta WHERE key = 'userdata_stale'").fetchone() is None
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name IN ('links_28', 'links_person')").fetchone() is None
+    # A link or a person deleted takes its ties with it; a URL is still saved once.
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("DELETE FROM people WHERE id = 2")
+    conn.execute("DELETE FROM links WHERE id = 1")
+    assert ties(conn) == [("https://alice.example", "Alice", 1, 11)]
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO links(url, created_at) VALUES ('https://alice.example', 1)")
+
+
+def test_links_kept_apart_for_two_people_become_one(tmp_path, monkeypatch, capsys):
+    """Migration 30: the links 28 kept apart because they were two people's
+    (one URL once cleaned) are merged into the oldest, with both people,
+    each keeping their own place and tied_at; title kept (else the
+    other's), notes joined as 28 joins them, the clean URL given to the
+    link kept. Notes too long joined: kept apart still."""
+    long_a, long_b = "a" * 3000, "b" * 3000
+    path = links_at_27(tmp_path, monkeypatch, [
+        ("https://bob.example/?utm_source=a", "", "Alice's", 1, 3, 1, 1),
+        ("https://bob.example", "Bob's site", "Bob's", 2, 2, 2, 4),
+        ("https://www.tiktok.com/@band?_t=x", "Band", "same", 1, 1, 5, 5),
+        ("https://www.tiktok.com/@band", "", "same", 2, 1, 6, 6),
+        ("https://notes.example/?fbclid=1", "", long_a, 1, 2, 60, 60),
+        ("https://notes.example", "", long_b, 2, 3, 61, 61),
+        ("https://alone.example", "", "", 1, 4, 70, 70),
+    ])
+    migrate_to(path, monkeypatch, 28)
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.execute("DELETE FROM meta WHERE key = 'userdata_stale'")       # 28's, read already
+    assert len(all_links(conn)) == 7                                    # all kept apart by 28
+    conn.close()
+    capsys.readouterr()
+    db.migrate(path)
+    assert ("[db] Links: 2 merged into an older link with the same address, with their people, 2 of them given "
+            "the clean address, 1 kept apart (notes too long joined)") in capsys.readouterr().out
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT url, title, notes, created_at FROM links ORDER BY created_at").fetchall() == [
+        ("https://bob.example", "Bob's site", "Alice's\n\nBob's", 1),
+        ("https://www.tiktok.com/@band", "Band", "same", 5),
+        ("https://notes.example/?fbclid=1", "", long_a, 60),
+        ("https://notes.example", "", long_b, 61),
+        ("https://alone.example", "", "", 70),
+    ]
+    assert ties(conn) == [
+        ("https://alone.example", "Alice", 4, 70),
+        ("https://bob.example", "Alice", 3, 1), ("https://bob.example", "Bob", 2, 4),
+        ("https://notes.example", "Bob", 3, 61), ("https://notes.example/?fbclid=1", "Alice", 2, 60),
+        ("https://www.tiktok.com/@band", "Alice", 1, 5), ("https://www.tiktok.com/@band", "Bob", 1, 6),
+    ]
+    assert conn.execute("SELECT value FROM meta WHERE key = 'userdata_stale'").fetchone() == ("links",)
+
+
+def test_a_person_both_links_had_keeps_the_kept_links_tie(tmp_path, monkeypatch):
+    """_merge_links_30 on two links of one person (28 kept them apart for
+    their notes, which a hand-edited file could then shorten): the person
+    keeps the place and tied_at of the link kept, once."""
+    path = links_at_27(tmp_path, monkeypatch, [])
+    migrate_to(path, monkeypatch, 30)
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.execute("INSERT INTO links(id, url, title, notes, created_at) VALUES (1, 'https://a.example', '', 'x', 1), "
+                 "(2, 'https://a.example/?utm_source=x', 'A', 'y', 2)")
+    conn.execute("INSERT INTO link_people(link_id, person_id, position, tied_at) VALUES (1, 1, 5, 1), (2, 1, 7, 2), "
+                 "(2, 2, 1, 3)")
+    conn.execute("BEGIN")
+    assert db._merge_links_30(conn, 1, 2) is True
+    conn.execute("COMMIT")
+    assert conn.execute("SELECT id, url, title, notes FROM links").fetchall() == [(1, "https://a.example", "A", "x\n\ny")]
+    assert ties(conn) == [("https://a.example", "Alice", 5, 1), ("https://a.example", "Bob", 1, 3)]
+
+
+def test_links_json_from_before_30_restores_into_the_new_tables(tmp_path, monkeypatch):
+    """A links.json written before migration 30 (person, position, tied_at
+    per link) is read into link_people; the next write has the new shape."""
+    import json
+    import userdata
+    path = str(tmp_path / "feedvault.db")
+    db.migrate(path)
+    data = tmp_path / "data"
+    (data / "userdata").mkdir(parents=True)
+    old = data / "userdata" / "links.json"
+    old.write_text(json.dumps({"version": 1, "rows": [
+        {"url": "https://a.example", "title": "A", "notes": "", "person": "Alice", "position": 2,
+         "created_at": 5, "tied_at": 7, "id": 3},
+        {"url": "https://b.example", "title": "", "notes": "n", "person": None, "position": None,
+         "created_at": 6, "tied_at": None, "id": 4},
+    ]}))
+    conn = sqlite3.connect(path)
+    userdata.restore_all(conn, str(data))
+    assert conn.execute("SELECT id, url, title, notes, created_at FROM links ORDER BY id").fetchall() == [
+        (3, "https://a.example", "A", "", 5), (4, "https://b.example", "", "n", 6)]
+    assert ties(conn) == [("https://a.example", "Alice", 2, 7)]
+    userdata.export(conn, "links", str(data))
+    assert json.loads(old.read_text())["rows"] == [
+        {"url": "https://a.example", "title": "A", "notes": "", "people": [{"name": "Alice", "position": 2, "tied_at": 7}],
+         "created_at": 5, "id": 3},
+        {"url": "https://b.example", "title": "", "notes": "n", "people": [], "created_at": 6, "id": 4},
+    ]

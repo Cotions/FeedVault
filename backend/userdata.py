@@ -48,9 +48,11 @@ class Table:
     legacy_rows: str = "rows"   # the list's key in that older file
     # For rows that point at another user table by id: the export query (its
     # columns are ``columns``, ids replaced by names) and the statements that
-    # put one row back, with :column parameters.
-    select: str = None
-    insert: tuple = ()
+    # put one row back, with :column parameters. Or, for a row that is more
+    # than a table row (a link and its people), functions: select(conn) the
+    # rows, insert(conn, row) one row, in load's transaction.
+    select: object = None
+    insert: object = ()
     # A row as read from the file, cleaned, or None to skip it.
     clean: object = None
     # Whether the table's id is kept in the file (its last column, "id"), and
@@ -65,7 +67,8 @@ def register(name, table, columns, key, legacy=None, legacy_rows="rows", select=
              ids=False):
     key = (key,) if isinstance(key, str) else tuple(key)
     columns = tuple(columns) + (("id",) if ids else ())
-    REGISTRY[name] = Table(name, table, columns, key, legacy, legacy_rows, select, tuple(insert), clean, ids)
+    REGISTRY[name] = Table(name, table, columns, key, legacy, legacy_rows, select,
+                           insert if callable(insert) else tuple(insert), clean, ids)
 
 
 register("decisions", "decisions", ("post_id", "decision", "at"), "post_id",
@@ -140,22 +143,15 @@ register("sources", "sources", ("tool", "target", "platform", "author_id", "pers
                  ":folder, COALESCE(:options, '{}'), COALESCE(:created_at, 0), :last_sync_at, :last_result "
                  "WHERE :platform IS NOT NULL AND :folder IS NOT NULL",))
 
-# Links (links.py) by URL, their person by name (after people; one missing
-# from people.json is created again). Each row is cleaned as the API would
-# (links.restore_row): the file may have been edited by hand, and a link is
-# rendered as a link. A URL the API would refuse is not put back.
-register("links", "links", ("url", "title", "notes", "person", "position", "created_at", "tied_at"), "url",
-         select="SELECT l.url, l.title, l.notes, p.name, l.position, l.created_at, l.tied_at, l.id FROM links l "
-                "LEFT JOIN people p ON p.id = l.person_id ORDER BY l.url",
-         insert=("INSERT OR IGNORE INTO people(name, created_at) SELECT :person, COALESCE(:created_at, 0) "
-                 "WHERE :person IS NOT NULL",
-                 "INSERT OR IGNORE INTO links(id, url, title, notes, person_id, position, created_at, tied_at) "
-                 "SELECT :id, :url, COALESCE(:title, ''), COALESCE(:notes, ''), p.id, "
-                 "CASE WHEN p.id IS NULL THEN NULL ELSE :position END, COALESCE(:created_at, 0), "
-                 "CASE WHEN p.id IS NULL THEN NULL ELSE COALESCE(:tied_at, :created_at, 0) END "
-                 "FROM (SELECT 1) LEFT JOIN people p ON p.name = :person "
-                 "WHERE :url LIKE 'http://%' OR :url LIKE 'https://%'"),
-         clean=links.restore_row, ids=True)
+# Links (links.py) by URL, each with its people ([{name, position,
+# tied_at}]: a link may be several people's) by name (after people; one
+# missing from people.json is created again). Each row is cleaned as the API
+# would (links.restore_row): the file may have been edited by hand, and a
+# link is rendered as a link. A URL the API would refuse is not put back. A
+# file from before a link had several people (``person``, ``position``,
+# ``tied_at``) is read as one person.
+register("links", "links", ("url", "title", "notes", "people", "created_at"), "url",
+         select=links.export_rows, insert=links.restore, clean=links.restore_row, ids=True)
 
 # New handles the user accepted for a source's account (sources.rename).
 register("handle_renames", "handle_renames", ("platform", "author_id", "old", "new", "at"),
@@ -188,8 +184,8 @@ def export(conn, name, data_dir):
     """Write one table to its JSON file (atomically, 0600: config.write_private).
     Returns the row count."""
     t = REGISTRY[name]
-    rows = conn.execute(t.select or f"SELECT {', '.join(t.columns)} FROM {t.table} "
-                                    f"ORDER BY {', '.join(t.key)}").fetchall()
+    rows = t.select(conn) if callable(t.select) else conn.execute(
+        t.select or f"SELECT {', '.join(t.columns)} FROM {t.table} ORDER BY {', '.join(t.key)}").fetchall()
     out = path(data_dir, name)
     config.make_private_dir(os.path.dirname(out))
     config.write_private(out, lambda f: json.dump(
@@ -219,6 +215,10 @@ def load(conn, name, data_dir):
     if t.ids:
         rows = _with_ids(rows)
     with conn:
+        if callable(t.insert):
+            for r in rows:
+                t.insert(conn, {c: r.get(c) for c in t.columns})
+            return conn.execute(f"SELECT COUNT(*) FROM {t.table}").fetchone()[0]
         if t.insert:
             for r in rows:
                 for stmt in t.insert:
@@ -266,7 +266,7 @@ def restore_all(conn, data_dir):
     """Startup: import every empty table, and write the file for any table
     that has rows but no file yet (first run after an upgrade), or whose
     rows a migration changed (meta ``userdata_stale``: the names, comma
-    separated; db._migrate_28 merging links)."""
+    separated; db._migrate_28 and _migrate_30 merging links)."""
     row = conn.execute("SELECT value FROM meta WHERE key = 'userdata_stale'").fetchone()
     stale = set(row[0].split(",")) if row else set()
     for name, t in REGISTRY.items():

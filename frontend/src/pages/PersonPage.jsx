@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { getAuthors, getConfig, getPeopleAttributes, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
-  createLink, updateLink, deleteLink, orderPersonLinks, setSourcePerson, getPostsSummary } from "../lib/api";
+  createLink, updateLink, deleteLink, addLinkPerson, removeLinkPerson, orderPersonLinks, setSourcePerson, getPostsSummary } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
@@ -26,7 +26,7 @@ import PersonAbout from "../components/PersonAbout";
 import PersonAvatar from "../components/PersonAvatar";
 import AvatarDialog from "../components/AvatarDialog";
 import { LinkForm, LinkRow } from "../components/Links";
-import { copyUrls } from "../lib/links";
+import { copyUrls, linkLabel, namesText } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
 import { accountMatches, linkMatches, sourceMatches, useSearchName } from "../lib/search";
 
@@ -113,7 +113,9 @@ function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync, pr
 
 /* A person's saved links: socials first, then the others, each group in
    the person's order (up and down move a link within its group). Add one
-   with the person preset; edit and delete in place. onDirty(bool): whether
+   with the person preset; edit and delete in place. A link they share
+   with others (a band's account, #215) shows the others; Remove takes it
+   from this person only, Delete from everyone. onDirty(bool): whether
    the link being edited has unsaved changes; onAddDirty(bool): whether the
    new link's form has something typed. */
 function PersonLinks({ person: p, query = "", onChanged, onDirty, onAddDirty }) {
@@ -130,6 +132,7 @@ function PersonLinks({ person: p, query = "", onChanged, onDirty, onAddDirty }) 
   const links = searching ? all.filter(l => linkMatches(l, query)) : all;
   const groups = [["Socials", links.filter(l => l.kind === "social")], ["Other", links.filter(l => l.kind !== "social")]];
   useEffect(() => { onDirty(edit.dirty); }, [edit.dirty, onDirty]);
+  const sharedWith = (removing?.people || []).filter(o => o.id !== p.id);
 
   async function call(fn, failed) {
     setBusy(true);
@@ -161,6 +164,18 @@ function PersonLinks({ person: p, query = "", onChanged, onDirty, onAddDirty }) 
     setRemoving(null);
   }
 
+  // Not theirs any more; the link stays its other people's. Undo gives it
+  // back to them (at the end of their links).
+  async function untie(l) {
+    const problem = await call(() => removeLinkPerson([l.id], p.id), "Could not remove it.");
+    if (problem) { toast(problem, "err"); return; }
+    const undo = async () => {
+      const back = await call(() => addLinkPerson([l.id], p.id), "Could not undo.");
+      if (back) toast(back, "err");
+    };
+    toast(`${linkLabel(l)}: no longer ${p.name}'s`, "ok", { label: "Undo", onClick: undo });
+  }
+
   return (
     <section className="person-section person-links-section" hidden={searching && !links.length}>
       <div className="person-section-head">
@@ -188,7 +203,7 @@ function PersonLinks({ person: p, query = "", onChanged, onDirty, onAddDirty }) 
                           }} />
               </li>
             ) : (
-              <LinkRow key={l.id} link={l} showPerson={false} busy={busy}
+              <LinkRow key={l.id} link={l} here={p.id} busy={busy} onRemove={untie}
                        onUp={!searching && { ok: i > 0, run: () => move(group, i, -1) }}
                        onDown={!searching && { ok: i < group.length - 1, run: () => move(group, i, 1) }}
                        onEdit={x => edit.open(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
@@ -216,6 +231,9 @@ function PersonLinks({ person: p, query = "", onChanged, onDirty, onAddDirty }) 
         onCancel={() => setRemoving(null)}
       >
         <p className="link-confirm">{removing?.title || removing?.label ? <>{removing.title || removing.label}<br /></> : null}<code>{removing?.url}</code></p>
+        {sharedWith.length > 0 && (
+          <p>It is {namesText(sharedWith.map(o => o.name))}&apos;s too: they lose it as well. Remove takes it from {p.name} only.</p>
+        )}
       </ConfirmDialog>
       <DiscardDialog open={edit.asking} onDiscard={edit.discard} onKeep={edit.keep}>
         <p>The changes to the link you are editing are not saved.</p>

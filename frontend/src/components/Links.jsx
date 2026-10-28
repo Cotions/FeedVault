@@ -4,16 +4,18 @@ import { Link } from "react-router-dom";
 import { getRecentLinkPeople } from "../lib/api";
 import { plural, safeUrl } from "../lib/fmt";
 import { personPath } from "../lib/people";
-import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, linkLabel, linkName, withScheme } from "../lib/links";
+import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, linkLabel, linkName, namesText, withScheme } from "../lib/links";
 import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 import Icon from "./Icon";
 import CreatorPicker from "./CreatorPicker";
 import DiscardDialog from "./DiscardDialog";
 import PersonPicker from "./PersonPicker";
 
-/* A link's fields: URL, title, notes, and its person when ``people`` is
-   given (the person page presets its own and leaves the picker out).
-   onSubmit({ url, title, notes, person? }) resolves to an error message, or
+/* A link's fields: URL, title, notes, and its people when ``people`` is
+   given (the person page presets its own and leaves the picker out): a
+   chip for each, × takes one off, the picker adds another (a band's
+   account is the band's and each member's, #215).
+   onSubmit({ url, title, notes, people? }) resolves to an error message, or
    null when it went through (a new link's form then empties; the caller
    closes an edit). onDirty(bool) hears whether the fields differ from the
    link's (false again when the form goes).
@@ -30,7 +32,8 @@ export function LinkForm({
   const [url,    setUrl]    = useState(link?.url || "");
   const [title,  setTitle]  = useState(link?.title || "");
   const [notes,  setNotes]  = useState(link?.notes || "");
-  const [person, setPerson] = useState(link?.person?.id ?? null);
+  const had = (link?.people || []).map(p => p.id);
+  const [chosen, setChosen] = useState(had);         // the people's ids, in the order picked
   const [error,  setError]  = useState(null);
   const [open,   setOpen]   = useState(!folded);
   const [asking, setAsking] = useState(false);        // Cancel with something typed: discard it?
@@ -38,7 +41,7 @@ export function LinkForm({
   const openRef = useRef(null);
   const focusTo = useRef(null);                       // after the next render: "url" or "open"
   const dirty = url !== (link?.url || "") || title !== (link?.title || "") || notes !== (link?.notes || "")
-    || (!!people && person !== (link?.person?.id ?? null));
+    || (!!people && (chosen.length !== had.length || chosen.some(id => !had.includes(id))));
 
   useEffect(() => {
     onDirty?.(dirty);
@@ -53,7 +56,7 @@ export function LinkForm({
   });
 
   function fold() {
-    setUrl(""); setTitle(""); setNotes(""); setPerson(null); setError(null);
+    setUrl(""); setTitle(""); setNotes(""); setChosen([]); setError(null);
     focusTo.current = "open";
     setOpen(false);
   }
@@ -71,10 +74,10 @@ export function LinkForm({
     // "example.org/x" goes as https://example.org/x, and the field shows what went.
     const sent = withScheme(url);
     if (sent !== url) setUrl(sent);
-    const body = { url: sent, title, notes, ...(people ? { person } : {}) };
+    const body = { url: sent, title, notes, ...(people ? { people: chosen } : {}) };
     const problem = await onSubmit(body);
     if (problem) { setError(problem); return; }
-    if (!link) { setUrl(""); setTitle(""); setNotes(""); setPerson(null); }
+    if (!link) { setUrl(""); setTitle(""); setNotes(""); setChosen([]); }
     if (folded) focusTo.current = "url";              // the next one
   }
 
@@ -104,15 +107,31 @@ export function LinkForm({
       </label>
       {people && (
         <div className="filter link-form-person">
-          <span>Person</span>
+          <span>{chosen.length > 1 ? "People" : "Person"}</span>
+          {chosen.length > 0 && (
+            <ul className="tag-chips link-form-people" aria-label="Its people">
+              {chosen.map(id => {
+                const name = people.find(p => p.id === id)?.name ?? `person ${id}`;
+                return (
+                  <li key={id} className="tag-chip label-chip">
+                    <span className="tag-chip-name" title={name}>{name}</span>
+                    <button type="button" className="tag-chip-x" onClick={() => setChosen(c => c.filter(x => x !== id))}
+                            title={`Not ${name}'s`} aria-label={`Remove ${name}`}>
+                      <Icon name="close" size={10} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           <CreatorPicker
-            people={people}
+            people={people.filter(p => !chosen.includes(p.id))}
             accounts={[]}
-            value={person != null ? { person } : null}
-            label="Person"
-            allLabel="No one"
+            value={null}
+            label={chosen.length ? "Add a person" : "Person"}
+            allLabel={chosen.length ? "Add another…" : "No one"}
             placeholder="Search people…"
-            onChange={v => setPerson(v?.person ? v.person.id : null)}
+            onChange={v => { if (v?.person) setChosen(c => [...c, v.person.id]); }}
           />
         </div>
       )}
@@ -141,15 +160,21 @@ export function LinkForm({
 
 /* One link: its title (else its site's label, else its address) opening
    the site in a new tab, the address under it when the label is not it, the
-   site and kind, its person (``showPerson``), notes, and the row's actions.
+   site and kind, its people (``showPerson``; on a person's page ``here``,
+   their id, leaves them out: the others it is shared with), notes, and the
+   row's actions; ``onRemove`` (a person's page, a shared link) takes it
+   from them only.
    Only an http(s) address is ever a link (safeUrl); anything else is text.
    On the Links page: ``select`` ({ checked, onClick(event) }) puts a
    checkbox first (shift-click for a range), ``onAssign`` an "Assign…" on a
    link of no one, and ``children`` (the open assign picker) go under it.
    Without onEdit and onDelete (a search's results) it is read only. */
 export function LinkRow({
-  link: l, showPerson = true, busy = false, onEdit, onDelete, onUp, onDown, flash = false, index, select, onAssign, children,
+  link: l, showPerson = true, here = null, busy = false, onEdit, onDelete, onRemove, onUp, onDown, flash = false, index, select,
+  onAssign, children,
 }) {
+  const people = l.people || [];
+  const others = people.filter(p => p.id !== here);
   const href = safeUrl(l.url);
   const shown = linkLabel(l);
   // The buttons' names: the title or the address, one per link (two links of
@@ -182,13 +207,18 @@ export function LinkRow({
         </span>
         {l.notes && <span className="link-notes" title={l.notes}>{l.notes}</span>}
       </span>
-      {showPerson && l.person && (
-        <Link to={personPath(l.person.id)} className="chip person-chip link-person" title={`Person: ${l.person.name}`}>
-          <Icon name="users" size={11} /><span className="chip-text">{l.person.name}</span>
-        </Link>
+      {showPerson && others.length > 0 && (
+        <span className="link-people" aria-label={here != null ? "Also theirs" : "Its people"}>
+          {others.map(p => (
+            <Link key={p.id} to={personPath(p.id)} className="chip person-chip link-person"
+                  title={here != null ? `Also ${p.name}'s` : `Person: ${p.name}`}>
+              <Icon name="users" size={11} /><span className="chip-text">{p.name}</span>
+            </Link>
+          ))}
+        </span>
       )}
       <span className="link-row-actions">
-        {onAssign && !l.person && (
+        {onAssign && people.length === 0 && (
           <button type="button" className="btn-secondary link-assign" disabled={busy} aria-expanded={!!children}
                   onClick={() => onAssign(l)} aria-label={`Assign ${label} to a person`} title="Give it to a person">
             <Icon name="users" size={13} />Assign…
@@ -207,6 +237,12 @@ export function LinkRow({
           </button>
         )}
         {onEdit && <button type="button" className="btn-ghost" disabled={busy} onClick={() => onEdit(l)} aria-label={`Edit ${label}`}>Edit</button>}
+        {onRemove && others.length > 0 && (
+          <button type="button" className="btn-ghost" disabled={busy} onClick={() => onRemove(l)} aria-label={`Remove ${label} from them`}
+                  title={`Not theirs any more: it stays ${namesText(others.map(p => p.name))}'s`}>
+            Remove
+          </button>
+        )}
         {onDelete && <button type="button" className="btn-ghost" disabled={busy} onClick={() => onDelete(l)} aria-label={`Delete ${label}`}>Delete</button>}
       </span>
       {children}
@@ -241,12 +277,13 @@ export function AssignPicker({ people, label, onPick, onCancel, busy = false }) 
   );
 }
 
-/* AssignPicker in a dialog, for the selection's "Assign N to…": Escape or
-   a click beside it closes it, Tab stays inside, focus goes back where it
-   was.
+/* AssignPicker in a dialog, for the selection's "Assign N to…" (and,
+   ``also``, its "Also link N to…": the person is added, the others kept):
+   Escape or a click beside it closes it, Tab stays inside, focus goes back
+   where it was.
 
-   Props: count, people, onPick(person), onClose, busy, error */
-export function AssignDialog({ count, people, onPick, onClose, busy = false, error = null }) {
+   Props: count, people, onPick(person), onClose, busy, error, also */
+export function AssignDialog({ count, people, onPick, onClose, busy = false, error = null, also = false }) {
   const boxRef = useRef(null);
   const titleId = useId();
   useEffect(() => {
@@ -271,7 +308,7 @@ export function AssignDialog({ count, people, onPick, onClose, busy = false, err
          }}
          onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div ref={boxRef} className="modal assign-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-        <h2 id={titleId} className="modal-title"><Icon name="users" size={16} />Assign {what} to…</h2>
+        <h2 id={titleId} className="modal-title"><Icon name="users" size={16} />{also ? `Also link ${what} to…` : `Assign ${what} to…`}</h2>
         <AssignPicker people={people} label="Person" onPick={onPick} onCancel={onClose} busy={busy} />
         {error && <div className="msg err" role="alert">{error}</div>}
       </div>

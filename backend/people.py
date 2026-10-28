@@ -491,11 +491,11 @@ def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=N
 
 def delete(conn, pid):
     """Drop a person and its links. Posts are never touched, nor their saved
-    web links (links.py), which stay, tied to no one. Returns the accounts
-    unlinked."""
+    web links (links.py), which stay: their other people's, or tied to no
+    one. Returns the accounts unlinked."""
     with conn:
         n = conn.execute("DELETE FROM person_accounts WHERE person_id = ?", (pid,)).rowcount
-        conn.execute("UPDATE links SET person_id = NULL, position = NULL, tied_at = NULL WHERE person_id = ?", (pid,))
+        conn.execute("DELETE FROM link_people WHERE person_id = ?", (pid,))
         conn.execute("DELETE FROM people WHERE id = ?", (pid,))
     return n
 

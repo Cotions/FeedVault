@@ -302,7 +302,7 @@ test("a profile page asks FeedVault about the profile, nothing else", () => {
 test("never a script route, nor the old panel and its combined Add & sync", () => {
   assert.doesNotMatch(SOURCE, /\/api\/scripts|script-sync|\/api\/jobs"/);
   assert.doesNotMatch(SOURCE, /fv-panel|fv-grip|Add & sync|addAndSync/);
-  assert.match(SOURCE, /^\/\/ @version\s+0\.7\.1$/m);
+  assert.match(SOURCE, /^\/\/ @version\s+0\.7\.2$/m);
 });
 
 // ---------------------------------------------------------------------------
@@ -1216,8 +1216,8 @@ test("Save links: a person picked, the page's links sent, what was saved said", 
   click(t.page, "Saving links…");                                      // under way: nothing more
   assert.equal(t.imports().length, 1);
   await answer(t.imports()[0], 200, { ok: true, url: "https://linktr.ee/somebody", person: 3,
-                                      links: { saved: 4, already: 1, elsewhere: 1, over: 0, dropped: 0 } });
-  assert.match(noteText(t.page), /4 saved, 2 already there/);
+                                      links: { saved: 4, already: 1, shared: 1, over: 0, dropped: 0 } });
+  assert.match(noteText(t.page), /4 saved, 1 already there, 1 now theirs too/);
   assert.equal(noteLink(t.page).getAttribute("href"), "http://localhost:3380/people/3");
   assert.deepEqual(status(t.page), ["ok", "FeedVault: this page's links are in FeedVault"]);
   assert.equal(opened(t.page), true);
@@ -1227,7 +1227,7 @@ test("Save links to no one", async () => {
   const t = await picker();
   click(t.page, "Save links");
   assert.equal(JSON.parse(t.imports()[0].data).person, null);
-  await answer(t.imports()[0], 200, { ok: true, person: null, links: { saved: 6, already: 0, elsewhere: 0, over: 2, dropped: 1 } });
+  await answer(t.imports()[0], 200, { ok: true, person: null, links: { saved: 6, already: 0, shared: 0, over: 2, dropped: 1 } });
   assert.match(noteText(t.page), /6 saved, 0 already there, 2 over the limit, 1 refused/);
   assert.equal(noteLink(t.page).getAttribute("href"), "http://localhost:3380/links");
 });
@@ -1282,9 +1282,9 @@ test("the menu command adds the page's address and title, to no one; the toast s
     assert.deepEqual(JSON.parse(sent[0].data), { url: href, title: page.document.title });
     assert.ok(page.document.title);
     assert.equal(sent[0].headers["X-FeedVault"], "1");
-    await answer(sent[0], 409, { ok: false, error: "that link is saved already", link: { person: { id: 3, name: "Some Body" } } });
+    await answer(sent[0], 409, { ok: false, error: "that link is saved already", link: { people: [{ id: 3, name: "Some Body" }, { id: 4, name: "Their Band" }] } });
     const toast = page.document.querySelector(".fv-toast");
-    assert.match(toast.textContent, /Already in FeedVault Links, with Some Body/);
+    assert.match(toast.textContent, /Already in FeedVault Links, with Some Body, Their Band/);
     // The bubble bottom right: the toast top right.
     assert.deepEqual([toast.style.top, toast.style.right, toast.style.bottom, toast.style.left],
                      ["18px", "18px", undefined, undefined]);

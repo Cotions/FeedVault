@@ -3681,6 +3681,8 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .link-form .link-input-text { font-family: var(--body); }
 .link-form .picker, .link-form .picker-input { width: 100%; min-width: 0; max-width: none; height: 34px; }
 .link-form-notes { grid-column: 1 / -2; }
+.link-form-people { margin-bottom: 6px; }
+.link-form-people .tag-chip { max-width: 100%; }
 /* As tall as its text (an edit opens with the whole note in view), up to
    about twelve lines; then it scrolls. Where field-sizing is unknown, the
    field stays one line and can be dragged taller. */
@@ -3888,6 +3890,12 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .link-notes {
   font-size: 12px; color: var(--text-dim); white-space: pre-line; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden;
+}
+/* Its people (#215: a band's account, the band's and each member's): they
+   wrap, right-aligned, in a column of their own beside the text. */
+.link-people {
+  display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px;
+  flex-shrink: 1; min-width: 0; max-width: 260px;
 }
 .link-person { flex-shrink: 1; min-width: 0; max-width: 220px; gap: 4px; }
 .link-person svg { flex-shrink: 0; }

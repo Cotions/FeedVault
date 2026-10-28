@@ -131,7 +131,9 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
       </div>
       {taken && (
         <div className="msg err quick-add-taken" role="alert">
-          Already saved{taken.person ? <>, tied to <Link to={personPath(taken.person.id)} onClick={onLeave}>{taken.person.name}</Link></>
+          Already saved{taken.people?.length ? <>, tied to {taken.people.map((p, i) => (
+            <span key={p.id}>{i > 0 && (i === taken.people.length - 1 ? " and " : ", ")}<Link to={personPath(p.id)} onClick={onLeave}>{p.name}</Link></span>
+          ))}</>
             : <>, in <Link to={UNSORTED_PATH} onClick={onLeave}>Unsorted</Link></>}.
         </div>
       )}

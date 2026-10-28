@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { getLinks, getPeople, createLink, updateLink, deleteLink, assignLinks, deleteLinks } from "../lib/api";
+import { getLinks, getPeople, createLink, updateLink, deleteLink, assignLinks, addLinkPerson, removeLinkPerson, deleteLinks } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
@@ -17,15 +17,16 @@ import SelectionBar from "../components/SelectionBar";
 import Icon from "../components/Icon";
 import Bookmarklet from "../components/Bookmarklet";
 import { AssignDialog, AssignPicker, LinkForm, LinkRow } from "../components/Links";
-import { KIND_LABEL, copyUrls, linkLabel, linkName } from "../lib/links";
+import { KIND_LABEL, copyUrls, linkLabel, linkName, peopleKey } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
 import { useHeaderSearch } from "../lib/search";
 import { useWindow } from "../lib/windowing";
 import { Gap } from "../components/WinGap";
 
 /* Every saved link: a creator's Linktree, Patreon or site, an interview, an
-   article, tied to a person or to no one. Add at the top; filter by kind
-   (social or other, read from the address), site and person, or search the
+   article, tied to people (a band's account: the band's and each member's)
+   or to no one. Add at the top; filter by kind (social or other, read from
+   the address), site and person (any of a link's people), or search the
    address, title and notes (the header's search box, lib/search.js).
    Nothing is fetched: a link is its text, opened
    in a new tab when followed. The filters live in the address (?kind=,
@@ -35,7 +36,8 @@ import { Gap } from "../components/WinGap";
    one: each row's Assign… opens the person picker in place, and a pick
    sends the link to that person (it leaves the queue, with an Undo). Any
    row can be checked (shift-click: a range) for the selection bar: assign
-   them all, copy their addresses, or delete them. */
+   them all (to one person, in place of any other), also link them to one
+   (their people kept), copy their addresses, or delete them. */
 export default function Links() {
   const { refreshKey } = useScan();
   const { unsortedLinks, refresh } = useJobs();
@@ -53,7 +55,7 @@ export default function Links() {
   const [busy,     setBusy]     = useState(false);
   const [dlgError, setDlgError] = useState(null);
   const [assigning, setAssigning] = useState(null);   // the id of the link whose picker is open
-  const [bulk,      setBulk]      = useState(null);   // "assign" or "delete": the selection's dialog
+  const [bulk,      setBulk]      = useState(null);   // "assign", "also" or "delete": the selection's dialog
   const edit = useOneEdit();                          // the link being edited, and whether it has changes
   const [adding, setAdding] = useState(false);        // the new link's form has something typed
   // A filter change may hide the link being edited, so with unsaved edits it
@@ -124,7 +126,7 @@ export default function Links() {
   useEffect(() => {
     const f = refocus.current, list = listRef.current;
     if (!f) return;
-    if (f.unsorted ? links.some(l => l.id === f.id) : links.find(l => l.id === f.id)?.person == null) return;
+    if (f.unsorted ? links.some(l => l.id === f.id) : !links.find(l => l.id === f.id)?.people?.length) return;
     refocus.current = null;
     const at = sel => list?.querySelector(sel);
     restoreFocus(f.unsorted
@@ -199,15 +201,18 @@ export default function Links() {
     }
   }
 
-  // The toast's Undo: each link back to the person it had before (or to no
-  // one), but only if it is still with ``now``, the one just given; a link
-  // moved or deleted since stays as it is.
+  // The toast's Undo: each link back to the people it had before (or to no
+  // one), but only if it is still ``now``'s alone, the one just given; a
+  // link changed or deleted since stays as it is. ``before``: [[id, people]].
   async function undoAssign(before, now) {
     const groups = new Map();
-    for (const [id, prev] of before) groups.set(prev, [...(groups.get(prev) || []), id]);
+    for (const [id, prev] of before) {
+      const key = peopleKey(prev);
+      groups.set(key, { people: prev.map(p => p.id), ids: [...(groups.get(key)?.ids || []), id] });
+    }
     let skipped = 0;
     try {
-      for (const [prev, ids] of groups) {
+      for (const { people: prev, ids } of groups.values()) {
         const r = await assignLinks(ids, prev, now);
         if (!r?.ok) { toast(r?.error || "Could not undo.", "err"); break; }
         skipped += r.skipped.length;
@@ -230,7 +235,7 @@ export default function Links() {
       setAssigning(null);
       if (unsortedView) setGone(g => new Set(g).add(l.id));
       sel.drop([l.id]);
-      toast(`${linkLabel(l)}: assigned to ${p.name}`, "ok", { label: "Undo", onClick: () => undoAssign([[l.id, null]], p.id) });
+      toast(`${linkLabel(l)}: assigned to ${p.name}`, "ok", { label: "Undo", onClick: () => undoAssign([[l.id, []]], p.id) });
       changed();
     } catch (err) {
       toast(err.message, "err");
@@ -256,10 +261,46 @@ export default function Links() {
       setBulk(null);
       sel.exit();
       if (unsortedView) setGone(g => new Set([...g, ...ids]));
-      // Undo gives each back to whom it had (no one or someone else).
-      const before = chosen.filter(l => l.person?.id !== p.id).map(l => [l.id, l.person?.id ?? null]);
+      // Undo gives each back to whom it had (no one, or other people).
+      const before = chosen.filter(l => peopleKey(l.people) !== String(p.id)).map(l => [l.id, l.people || []]);
       toast(`${plural(ids.length, "link")} assigned to ${p.name}`, "ok",
         before.length ? { label: "Undo", onClick: () => undoAssign(before, p.id) } : { to: personPath(p.id), label: "Show" });
+      changed();
+    } catch (err) {
+      setDlgError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // The selection, also linked to ``p`` (all or none): their people keep
+  // them. Undo takes them back from ``p``, only those that were not theirs.
+  async function alsoSelected(p) {
+    if (busy) return;
+    const ids = sel.selectedItems.map(l => l.id);
+    setBusy(true);
+    setDlgError(null);
+    try {
+      const r = await addLinkPerson(ids, p.id);
+      if (!r?.ok) {
+        if (r?.missing) { setDlgError("Some of these links were deleted meanwhile: the list is read again. Nothing was linked."); reload(); }
+        else setDlgError(r?.error || "Could not link them.");
+        return;
+      }
+      setBulk(null);
+      sel.exit();
+      if (unsortedView) setGone(g => new Set([...g, ...r.added]));
+      const undo = async () => {
+        try {
+          const back = await removeLinkPerson(r.added, p.id);
+          if (!back?.ok) toast(back?.error || "Could not undo.", "err");
+        } catch (err) {
+          toast(err.message, "err");
+        }
+        changed();
+      };
+      toast(r.added.length ? `${plural(r.added.length, "link")} also linked to ${p.name}` : `Already ${p.name}'s`, "ok",
+        r.added.length ? { label: "Undo", onClick: undo } : { to: personPath(p.id), label: "Show" });
       changed();
     } catch (err) {
       setDlgError(err.message);
@@ -398,8 +439,13 @@ export default function Links() {
             <button type="button" className="btn-secondary" disabled={busy} onClick={() => copyUrls(sel.selectedItems, toast)}>
               <Icon name="copy" size={14} />Copy URLs
             </button>
-            <button type="button" className="btn-secondary" disabled={busy} onClick={() => { setDlgError(null); setBulk("assign"); }}>
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => { setDlgError(null); setBulk("assign"); }}
+                    title="To one person, in place of any other">
               <Icon name="users" size={14} />Assign {fmtInt(count)} to…
+            </button>
+            <button type="button" className="btn-secondary" disabled={busy} onClick={() => { setDlgError(null); setBulk("also"); }}
+                    title="To one more person: a shared account, theirs and their other people's">
+              <Icon name="plus" size={14} />Also link {fmtInt(count)} to…
             </button>
             <button type="button" className="btn-danger" disabled={busy} onClick={() => { setDlgError(null); setBulk("delete"); }}>
               <Icon name="trash" size={14} />Delete {fmtInt(count)}…
@@ -407,9 +453,9 @@ export default function Links() {
           </SelectionBar>
         )}
 
-        {bulk === "assign" && (
-          <AssignDialog count={count} people={people} busy={busy} error={dlgError}
-                        onPick={assignSelected} onClose={() => { if (!busy) setBulk(null); }} />
+        {(bulk === "assign" || bulk === "also") && (
+          <AssignDialog count={count} people={people} busy={busy} error={dlgError} also={bulk === "also"}
+                        onPick={bulk === "also" ? alsoSelected : assignSelected} onClose={() => { if (!busy) setBulk(null); }} />
         )}
         <ConfirmDialog
           open={bulk === "delete"}

@@ -82,7 +82,7 @@ export default function LinksAdd() {
     setStart(s => ({ url: "", title: "", refused: null, n: s.n + 1 }));
   }
 
-  const p = saved?.person;
+  const p = saved?.people?.[0];
   return (
     <div className="links-add-page">
       <div className="links-add-box">

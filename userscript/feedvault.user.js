@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FeedVault
 // @namespace    https://github.com/Cotions/feedvault
-// @version      0.7.1
+// @version      0.7.2
 // @description  Marks Instagram, X and TikTok posts you already have in FeedVault, saves the ones you don't, and keeps link-in-bio pages' links in its Links
 // @author       Cotions
 // @match        https://www.instagram.com/*
@@ -1213,7 +1213,10 @@ function bioPicker(page, s) {
 
 function bioDone(s) {
   const r = s.result;
-  const parts = [`${r.saved} saved`, `${r.already + r.elsewhere} already there`];
+  // shared: saved already for someone else, now this person's too (#215);
+  // an older FeedVault counted those as elsewhere.
+  const parts = [`${r.saved} saved`, `${r.already + (r.elsewhere || 0)} already there`];
+  if (r.shared) parts.push(`${r.shared} now theirs too`);
   if (r.over) parts.push(`${r.over} over the limit`);
   if (r.dropped) parts.push(`${r.dropped} refused`);
   const n = note(parts.join(", "));
@@ -1335,7 +1338,8 @@ async function addPage() {
   const b = r.body || {};
   const to = () => link(`${API_BASE}/links`, "Links in FeedVault");
   if (r.status === 409) {
-    const who = b.link?.person?.name;
+    const people = b.link?.people || (b.link?.person ? [b.link.person] : []);   // an older FeedVault: person
+    const who = people.map((p) => p.name).join(", ");
     const text = who ? `Already in FeedVault Links, with ${who}` : "Already in FeedVault Links";
     setPageAdd(href, { state: "already", message: text });
     toast(text, to());

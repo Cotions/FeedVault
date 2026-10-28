@@ -330,30 +330,39 @@ export function removeAvatar(id) { return del(`/api/people/${seg(id)}/avatar`); 
 export function getSuggestions() { return get("/api/people/suggestions"); }
 // Fetches that one link-in-bio page (when Settings allows it), lists the accounts it links to (adding none)
 // and saves the page's address and the links it shows to the person's Links, those they do not have yet
+// (one saved for someone else becomes theirs too: shared)
 // → { ok, url, accounts: [{ platform, handle, url, profile_url, status, account, person, source }],
-//     links: { saved, already, elsewhere, dropped, over } }
+//     links: { saved, already, shared, dropped, over } }
 export function bioImport(id, url) { return post(`/api/people/${seg(id)}/bio-import`, { url }); }
 export function dismissSuggestion(id) { return post("/api/people/suggestions/dismiss", { id }); }
 
-/* ── Links (any web address, optionally a person's; never fetched) ── */
+/* ── Links (any web address, any number of people's; never fetched) ── */
 
 // { links: [link], sites: [{ site, count }] }. params: person (an id, or
 // "none"), kind ("social" | "other"), site, q.
 export function getLinks(params = {}, opts) { return get(`/api/links${qs(params)}`, opts); }
-// body { url, title, notes, person } → { ok, link }; a saved URL is { ok: false, error, id, link } (409),
-// ``link`` the saved one, with its person.
+// body { url, title, notes, person } (or people: [ids]) → { ok, link }; a saved URL is
+// { ok: false, error, id, link } (409), ``link`` the saved one, with its people.
 export function createLink(body) { return post("/api/links", body); }
 // The people most recently given a link, latest first → { people: [{ id, name, at }] }.
 export function getRecentLinkPeople(limit = 10) { return get(`/api/people/recent-links${qs({ limit })}`); }
+// changes: any of url, title, notes, person (one id or null: replaces every person) or people ([ids]).
 export function updateLink(id, changes) { return post(`/api/links/${id}`, changes); }
 export function deleteLink(id) { return del(`/api/links/${id}`); }
-// Many links to one person (null: no one), all or none → { ok, moved, links };
-// an id no link has is { ok: false, error, missing } (404).
+// Many links to one person (null: no one) or, `person` a list of ids, to
+// those people: every other person of theirs goes. All or none → { ok,
+// moved, links }; an id no link has is { ok: false, error, missing } (404).
 // `ifPerson` (an id or null; for Undo): only the links that are that person's
-// now move, the others come back in `skipped`.
+// alone now move, the others come back in `skipped`.
 export function assignLinks(ids, person, ifPerson) {
-  return post("/api/links/assign", ifPerson === undefined ? { ids, person } : { ids, person, if_person: ifPerson });
+  const to = Array.isArray(person) ? { ids, people: person } : { ids, person };
+  return post("/api/links/assign", ifPerson === undefined ? to : { ...to, if_person: ifPerson });
 }
+// Also to this person, their other people kept; all or none → { ok, added, links },
+// `added` the ids that were not theirs yet. An id no link has: { ok: false, error, missing } (404).
+export function addLinkPerson(ids, person) { return post("/api/links/add-person", { ids, person }); }
+// Taken from this person, their other people kept → { ok, removed, links }; ids no link has are passed over.
+export function removeLinkPerson(ids, person) { return post("/api/links/remove-person", { ids, person }); }
 // → { ok, deleted }; ids no link has are passed over.
 export function deleteLinks(ids) { return post("/api/links/delete", { ids }); }
 // The ids take the places they held among the person's links → { ok, links }.

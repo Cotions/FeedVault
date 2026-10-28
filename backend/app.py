@@ -1405,8 +1405,9 @@ def bio_import(pid):
     """A person's link-in-bio page (biofetch.py): the one page fetched, the
     accounts it lists suggested, and its address and the links it shows a
     visitor saved to the person's Links (links.keep: only the ones they do
-    not have yet; nothing saved before is changed or removed, so importing
-    again picks up what is new). No account or source is added: the
+    not have yet; one saved before for someone else becomes theirs too,
+    nothing saved before is changed or removed, so importing again picks up
+    what is new). No account or source is added: the
     dashboard adds each one the user picks through /api/people/<id>/accounts
     or /api/sources. No link is fetched (a mydeck.bio-style redirect link
     on the page's own host is only asked where it goes: biofetch's
@@ -1437,12 +1438,13 @@ def bio_import(pid):
     kept = links.keep(conn, pid, found, _link_now(), biofetch.MAX_SAVED)
     if kept is None:                           # deleted while the page was fetched
         return jsonify({"ok": False, "error": "no such person"}), 404
-    if kept["saved"]:
+    if kept["saved"] or kept["shared"]:
         userdata.changed("links")
     kept["dropped"] = dropped
     # Counts only: nothing the page says is logged.
     print(f"[people] link-in-bio import of {page.url}: {len(accounts)} accounts, {kept['saved']} links saved, "
-          f"{kept['already'] + kept['elsewhere']} saved already, {dropped} dropped, {kept['over']} over the limit")
+          f"{kept['shared']} saved already and now theirs too, {kept['already']} theirs already, {dropped} dropped, "
+          f"{kept['over']} over the limit")
     return jsonify({"ok": True, "url": page.url, "accounts": accounts, "links": kept})
 
 
@@ -1476,8 +1478,8 @@ def import_links():
     """A link-in-bio page's links as the browser shows them (the
     userscript, on a page of biofetch.SITES): its address and those links
     saved to a person's Links, or to no one's, as the link-in-bio import
-    does (links.keep: only the new ones; nothing saved before is changed or
-    removed). Nothing is fetched: what is kept is what was sent, through
+    does (links.keep: only the new ones, and the person given to those saved
+    already; nothing saved before is changed or removed). Nothing is fetched: what is kept is what was sent, through
     biofetch's filters. Under the same switch as the import (bio_import).
     The userscript's, so another site reaches it (FOREIGN_ALLOWED)."""
     body = request.get_json(silent=True)
@@ -1497,16 +1499,17 @@ def import_links():
     kept = links.keep(db.connect(), pid, found, _link_now(), biofetch.MAX_SAVED)
     if kept is None:                           # deleted in between
         return jsonify({"ok": False, "error": "person must be the id of a person, or null"}), 400
-    if kept["saved"]:
+    if kept["saved"] or kept["shared"]:
         userdata.changed("links")
     kept["dropped"] = dropped
     print(f"[links] import from the browser of {found[0][0]}: {kept['saved']} links saved, "
-          f"{kept['already'] + kept['elsewhere']} saved already, {dropped} dropped, {kept['over']} over the limit")
+          f"{kept['shared']} saved already and now theirs too, {kept['already']} there already, {dropped} dropped, "
+          f"{kept['over']} over the limit")
     return jsonify({"ok": True, "url": found[0][0], "person": pid, "links": kept})
 
 
 # ---------------------------------------------------------------------------
-# Links (links.py: any web address, tied to a person or to no one; never fetched)
+# Links (links.py: any web address, tied to people or to no one; never fetched)
 # ---------------------------------------------------------------------------
 
 _BAD_URL = f"url must be an http or https address of at most {links.MAX_URL} characters, with no user name in it"
@@ -1521,6 +1524,31 @@ def _link_person(body):
     if not isinstance(pid, int) or isinstance(pid, bool) or not people.exists(db.connect(), pid):
         return None, "person must be the id of a person, or null"
     return pid, None
+
+
+_BAD_PEOPLE = f"people must be a list of at most {links.MAX_PEOPLE} people's ids"
+
+
+def _link_people(body):
+    """(people's ids, error): the body's ``people`` (a list of people's
+    ids, each once; [] for no one), else its ``person`` (one id, or null
+    for no one) as a list; links.UNSET when it has neither. Both is an
+    error."""
+    if "people" in body and "person" in body:
+        return links.UNSET, "send person or people, not both"
+    if "person" in body:
+        pid, error = _link_person(body)
+        return ([] if pid is None else [pid]), error
+    if "people" not in body:
+        return links.UNSET, None
+    pids = body["people"]
+    if not _ids(pids) or len(pids) > links.MAX_PEOPLE:
+        return links.UNSET, _BAD_PEOPLE
+    pids = list(dict.fromkeys(pids))
+    conn = db.connect()
+    if not all(people.exists(conn, pid) for pid in pids):
+        return links.UNSET, "people must be people's ids: one is not"
+    return pids, None
 
 
 def _link_text(body):
@@ -1551,7 +1579,7 @@ def _labelled(items, cfg=None):
 
 def _taken(lid):
     """The 409 for a URL saved already: the link that has it, with its
-    person, so the page can say whose it is."""
+    people, so the page can say whose it is."""
     return jsonify({"ok": False, "error": "that link is saved already", "id": lid,
                     "link": None if lid is None else _labelled(links.get(db.connect(), lid))}), 409
 
@@ -1582,7 +1610,7 @@ def create_link():
     if url is None:
         return jsonify({"ok": False, "error": _BAD_URL}), 400
     title, notes, error = _link_text(body)
-    pid, error = (None, error) if error else _link_person(body)
+    pids, error = (None, error) if error else _link_people(body)
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
@@ -1590,7 +1618,7 @@ def create_link():
     if taken is not None:
         return _taken(taken)
     try:
-        link = links.create(conn, url, title or "", notes or "", pid, _link_now())
+        link = links.create(conn, url, title or "", notes or "", [] if pids is links.UNSET else pids, _link_now())
     except sqlite3.IntegrityError:             # saved by another request in between
         return _taken(links.find(conn, url))
     userdata.changed("links")
@@ -1607,15 +1635,15 @@ def update_link(lid):
     if "url" in body and url is None:
         return jsonify({"ok": False, "error": _BAD_URL}), 400
     title, notes, error = _link_text(body)
-    pid, error = (None, error) if error else _link_person(body)
+    pids, error = (None, error) if error else _link_people(body)
     if error:
         return jsonify({"ok": False, "error": error}), 400
-    if not {"url", "title", "notes", "person"} & set(body):
-        return jsonify({"ok": False, "error": "send url, title, notes or person"}), 400
+    if not {"url", "title", "notes", "person", "people"} & set(body):
+        return jsonify({"ok": False, "error": "send url, title, notes, person or people"}), 400
     other = links.find(conn, url) if url is not None else None
     if other is not None and other != lid:
         return _taken(other)
-    kw = {"pid": pid, "now": _link_now()} if "person" in body else {}
+    kw = {"pids": pids, "now": _link_now()} if pids is not links.UNSET else {}
     try:
         link = links.update(conn, lid, url=url, title=title, notes=notes, **kw)
     except sqlite3.IntegrityError:
@@ -1643,15 +1671,17 @@ def _link_ids(body):
 
 @app.post("/api/links/assign")
 def assign_links():
-    """Many links to one person (``person`` null: to no one), in one
-    transaction (links.assign). All or none: an id no link has is a 404 and
-    nothing moves. With ``if_person`` (an id or null: an Undo), only the
-    links that are that person's now move, the others are passed over."""
+    """Many links to one person (``person`` null: to no one), or to several
+    (``people``), in one transaction (links.assign): their people become
+    those, replacing any other. All or none: an id no link has is a 404
+    and nothing moves. With ``if_person`` (an id or null: an Undo), only
+    the links that are that person's alone now move, the others are passed
+    over."""
     body = _body()
     ids, error = _link_ids(body)
-    if not error and "person" not in body:
+    if not error and "person" not in body and "people" not in body:
         error = "send person: the id of a person, or null"
-    pid, error = (None, error) if error else _link_person(body)
+    pids, error = (None, error) if error else _link_people(body)
     only = body.get("if_person", links.UNSET)
     if not error and only is not links.UNSET and only is not None and not (
             isinstance(only, int) and not isinstance(only, bool) and 0 <= only < 2**53):
@@ -1659,7 +1689,7 @@ def assign_links():
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
-    moved, gone, skipped = links.assign(conn, ids, pid, _link_now(), only_from=only)
+    moved, gone, skipped = links.assign(conn, ids, pids, _link_now(), only_from=only)
     if gone and only is links.UNSET:
         return jsonify({"ok": False, "error": "no such link", "missing": gone}), 404
     if moved:
@@ -1679,6 +1709,54 @@ def delete_links():
     if deleted:
         userdata.changed("links")
     return jsonify({"ok": True, "deleted": deleted})
+
+
+def _one_person_links(body):
+    """(ids, person id, error) of an add-person or remove-person body:
+    ``ids`` as _link_ids, ``person`` a person's id."""
+    ids, error = _link_ids(body)
+    pid = body.get("person")
+    if not error and (pid is None or not isinstance(pid, int) or isinstance(pid, bool)
+                      or not people.exists(db.connect(), pid)):
+        error = "person must be the id of a person"
+    return ids, pid, error
+
+
+@app.post("/api/links/add-person")
+def add_link_person():
+    """Also give links to a person (links.add_person): each goes last in
+    their order, and stays its other people's. All or none: an id no link
+    has is a 404 and nothing changes. ``added``: the ids that were not
+    theirs yet (an Undo takes those back, /api/links/remove-person)."""
+    body = _body()
+    ids, pid, error = _one_person_links(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    added, gone = links.add_person(conn, ids, pid, _link_now())
+    if added is None:
+        return jsonify({"ok": False, "error": "no such link", "missing": gone}), 404
+    if added:
+        userdata.changed("links")
+    out = [x for x in (links.get(conn, i) for i in dict.fromkeys(ids)) if x is not None]
+    return jsonify({"ok": True, "added": added, "links": _labelled(out)})
+
+
+@app.post("/api/links/remove-person")
+def remove_link_person():
+    """Take links from a person (links.remove_person): their other people
+    keep them; one left with no one goes to Unsorted. Ids no link has are
+    passed over. ``removed``: the ids that were theirs."""
+    body = _body()
+    ids, pid, error = _one_person_links(body)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    removed, _ = links.remove_person(conn, ids, pid)
+    if removed:
+        userdata.changed("links")
+    out = [x for x in (links.get(conn, i) for i in dict.fromkeys(ids)) if x is not None]
+    return jsonify({"ok": True, "removed": removed, "links": _labelled(out)})
 
 
 @app.get("/api/people/recent-links")

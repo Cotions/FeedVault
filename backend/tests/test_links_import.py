@@ -68,7 +68,7 @@ def test_the_links_shown_are_saved_to_the_person(on):
     alice = person(on, "Alice")
     r = send(on, {"page_url": PAGE, "links": SENT, "person": alice})
     assert r == {"ok": True, "url": PAGE, "person": alice,
-                 "links": {"saved": 6, "already": 0, "elsewhere": 0, "over": 0, "dropped": 2}}
+                 "links": {"saved": 6, "already": 0, "shared": 0, "over": 0, "dropped": 2}}
     got = on.get(f"/api/people/{alice}", headers=H).get_json()["links"]
     assert [(x["url"], x["title"]) for x in sorted(got, key=lambda x: x["position"])] == [
         (PAGE, ""), ("https://www.instagram.com/somebody/", "Instagram"), ("https://x.com/somebody", "My X"),
@@ -85,7 +85,7 @@ def test_to_no_one(on):
     assert all(x["position"] is None for x in on.get("/api/links?person=none", headers=H).get_json()["links"])
     # Again, with null: nothing new.
     assert send(on, {"page_url": PAGE, "links": SENT[:2], "person": None})["links"] == {
-        "saved": 0, "already": 3, "elsewhere": 0, "over": 0, "dropped": 0}
+        "saved": 0, "already": 3, "shared": 0, "over": 0, "dropped": 0}
 
 
 def test_insert_only(on):
@@ -95,13 +95,16 @@ def test_insert_only(on):
     on.post("/api/links", json={"url": "https://shop.example/somebody?ref=linktree", "title": "Bob's", "person": bob},
             headers=H)
     r = send(on, {"page_url": PAGE, "links": SENT[:3], "person": alice})
-    assert r["links"] == {"saved": 2, "already": 1, "elsewhere": 1, "over": 0, "dropped": 0}
+    assert r["links"] == {"saved": 2, "already": 1, "shared": 1, "over": 0, "dropped": 0}
     got = {x["url"]: x for x in on.get(f"/api/people/{alice}", headers=H).get_json()["links"]}
-    assert got["https://x.com/somebody"] == mine                      # not retitled, not moved
+    assert got["https://x.com/somebody"] == {**mine, "position": 1}   # not retitled, not moved
+    # Bob's shop is hers too now (a shared account), still his, its title his.
+    shop = got["https://shop.example/somebody?ref=linktree"]
+    assert (shop["title"], [p["name"] for p in shop["people"]]) == ("Bob's", ["Alice", "Bob"])
     assert [x["title"] for x in on.get(f"/api/people/{bob}", headers=H).get_json()["links"]] == ["Bob's"]
     # Sent again with fewer links: nothing is removed.
     send(on, {"page_url": PAGE, "links": [], "person": alice})
-    assert len(on.get(f"/api/people/{alice}", headers=H).get_json()["links"]) == 3
+    assert len(on.get(f"/api/people/{alice}", headers=H).get_json()["links"]) == 4
 
 
 def test_the_cap(on, monkeypatch):
@@ -190,7 +193,7 @@ def test_the_people_picker_gives_ids_and_names_only(on):
 def test_add_this_page_from_another_site(on):
     alice = person(on, "Alice")
     r = on.post("/api/links", json={"url": "https://x.com/somebody/status/1", "title": "A post"}, headers=IG)
-    assert r.status_code == 200 and r.get_json()["link"]["person"] is None
+    assert r.status_code == 200 and r.get_json()["link"]["people"] == []
     r = on.post("/api/links", json={"url": "https://x.com/somebody/status/1", "title": "A post"}, headers=IG)
     assert r.status_code == 409
     # Only a URL and a title: never a person or notes.
@@ -202,10 +205,12 @@ def test_add_this_page_from_another_site(on):
     assert on.post("/api/links", json={"url": "https://b.example", "person": alice}, headers=H).status_code == 200
 
 
-def test_keep_to_no_one_counts_another_persons_link_elsewhere(env, client):
+def test_keep_to_no_one_leaves_a_saved_link_as_it_is(env, client):
     alice = person(client, "Alice")
     client.post("/api/links", json={"url": "https://a.example", "person": alice}, headers=H)
     client.post("/api/links", json={"url": "https://b.example"}, headers=H)
     import db
     found = [("https://a.example", "x"), ("https://www.b.example/", "y"), ("https://c.example", "z")]
-    assert links.keep(db.connect(), None, found, 5, 10) == {"saved": 1, "already": 1, "elsewhere": 1, "over": 0}
+    assert links.keep(db.connect(), None, found, 5, 10) == {"saved": 1, "already": 2, "shared": 0, "over": 0}
+    assert [p["name"] for p in links.get(db.connect(), links.find(db.connect(), "https://a.example"))["people"]] \
+        == ["Alice"]

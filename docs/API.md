@@ -1390,7 +1390,7 @@ A **person**:
 | GET | `/api/people/attributes` | `{ "labels": [{ "name", "count" }], "genders": [{ "name", "count" }], "presets": ["Female", "Male", "Transgender"], "countries": ["AD", …] }`: the labels and genders people have, most used first (what the person page suggests and the Creators filters offer), and every country code a person can have |
 | GET | `/api/people/<id>` | person, with its `links` (see [Links](#links)), or 404 |
 | POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"], "rating": 7 }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date; `"rating": null` clears the rating, and anything but a whole number from 1 to 10 or `null` (`0`, `11`, `3.5`, `"7"`, `true`) is a 400) → `{ "ok": true, "person": {…} }` |
-| DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, tied to no one |
+| DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, their other people's, or tied to no one when they had no other |
 | POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted; at most 500 each) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
 | POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }], "confirm": true }` → `{ "ok": true, "person": {…} }`, see below; 409 `{ "ok": false, "confirm": true, "sources": 2, "error" }` when one of them is set to [Don't sync](#dont-sync) and sources that sync now would stop, until sent with `"confirm": true` |
 
@@ -1563,7 +1563,7 @@ import); `backend/biofetch.py`.
 
 | Method | Path | Returns |
 |---|---|---|
-| POST | `/api/people/<id>/bio-import` | body `{ "url": "https://linktr.ee/somebody" }` → `{ "ok": true, "url": "https://linktr.ee/somebody", "accounts": [found, …], "links": { "saved": 7, "already": 2, "elsewhere": 0, "dropped": 1, "over": 0 } }` |
+| POST | `/api/people/<id>/bio-import` | body `{ "url": "https://linktr.ee/somebody" }` → `{ "ok": true, "url": "https://linktr.ee/somebody", "accounts": [found, …], "links": { "saved": 7, "already": 2, "shared": 0, "dropped": 1, "over": 0 } }` |
 
 ```json
 { "platform": "twitter", "handle": "somebody", "url": "https://x.com/somebody", "tool": "gallery-dl",
@@ -1614,8 +1614,10 @@ import); `backend/biofetch.py`.
     `www.`, with or without a last slash). They are left exactly as they
     are: the title, notes and place the user gave them are never written
     over.
-  - `elsewhere`: URLs saved for another person or for no one (a URL is
-    saved once): left where they are, never moved.
+  - `shared`: URLs saved already for another person or for no one (a URL
+    is saved once): they become this person's too, last in their order, and
+    stay the others' (a band's account on each member's page). The link is
+    never moved from anyone, retitled or edited.
   - `dropped`: links refused, see below.
   - `over`: new links past the 200 one import saves; importing again
     saves the next ones (what is saved already does not count).
@@ -1751,7 +1753,7 @@ rules](#security-rules)).
 
 | Method | Path | Returns |
 |---|---|---|
-| POST | `/api/links/import` | body `{ "page_url": "https://linktr.ee/somebody", "links": [{ "url": "https://x.com/somebody", "title": "X" }, …], "person": 3 }` → `{ "ok": true, "url": "https://linktr.ee/somebody", "person": 3, "links": { "saved": 7, "already": 2, "elsewhere": 0, "dropped": 1, "over": 0 } }` |
+| POST | `/api/links/import` | body `{ "page_url": "https://linktr.ee/somebody", "links": [{ "url": "https://x.com/somebody", "title": "X" }, …], "person": 3 }` → `{ "ok": true, "url": "https://linktr.ee/somebody", "person": 3, "links": { "saved": 7, "already": 2, "shared": 0, "dropped": 1, "over": 0 } }` |
 | GET | `/api/links/people` | `{ "people": [{ "id": 3, "name": "Some Body" }, …], "recent": [3, …] }`: every person's id and name, by name, and the ids of the ten most recently given a link, latest first (the userscript's picker) |
 
 - `page_url`: what the bio-import fetch accepts as the pasted link (https,
@@ -1763,16 +1765,17 @@ rules](#security-rules)).
   `http://` or `https://`, `title` text of at most 2000. Any other key,
   type, scheme or size, or a missing `page_url` or `links`, is a 400 and
   nothing is saved.
-- `person`: a person's id, or `null` / left out for no one (their
-  `position` is `null`, as for any link of no one). An unknown id is a 400.
+- `person`: a person's id, or `null` / left out for no one. An unknown
+  id is a 400.
 - What is kept is what the fetched import would keep from the same links:
   each once (its first label that is not empty), through the same filters
   (the bio site's own pages, a page's parts and trackers left out
   silently; a port, an IP address or a private name `dropped`), titles
-  cleaned the same way, and **insert-only** the same way: `already` and
-  `elsewhere` links are left exactly as they are, nothing is removed, at
-  most 200 are saved (`over`). With no person, `already` counts the links
-  of no one, `elsewhere` a person's.
+  cleaned the same way, and **insert-only** the same way: `already` links
+  are left exactly as they are, `shared` ones only gain this person,
+  nothing is removed, at most 200 are saved (`over`). With no person,
+  `already` counts every link saved already (of no one or of anyone), and
+  `shared` is 0.
 - 403 when the switch is off (`link-in-bio import is off: turn it on in
   Settings → Downloads`). No account or source is suggested or added: the
   links are bookmarks. The server log has the page's URL and the counts.
@@ -1781,13 +1784,19 @@ rules](#security-rules)).
 
 Web addresses worth keeping that are not an account FeedVault downloads: a
 creator's Linktree, Patreon, personal site or Discord invite, an interview,
-an article. A link may be tied to one person, or to no one.
+an article. A link may be tied to people, often one, several when it is
+theirs together (a band's account is the band's and each member's), or to
+no one.
 
 Links are user data: table `links`, never touched by a rescan, and written to
-`<data_directory>/userdata/links.json` (by URL, the person by name, as
-`person_accounts`) 2 s after the last change, so a rebuilt index gets them
-back; a person named there and missing from `people.json` is created again,
-and a row whose URL is not `http://` or `https://` is skipped.
+`<data_directory>/userdata/links.json` (by URL, its people by name, as
+`person_accounts`: `"people": [{ "name", "position", "tied_at" }]`) 2 s
+after the last change, so a rebuilt index gets them back; a person named
+there and missing from `people.json` is created again, and a row whose URL
+is not `http://` or `https://` is skipped. A file from before several
+people (a row with `"person": "<name>"` or `null`, `position`, `tied_at`)
+is still read; two rows whose URL is one once cleaned become one link with
+both rows' people.
 
 FeedVault never fetches a saved link: no title, preview or icon is looked
 up, and nothing leaves the machine. (The [link-in-bio
@@ -1801,7 +1810,8 @@ A **link**:
 
 ```json
 { "id": 12, "url": "https://www.patreon.com/somebody", "title": "Patreon", "notes": "",
-  "site": "patreon.com", "kind": "social", "label": "Patreon", "person": { "id": 3, "name": "Some Body" },
+  "site": "patreon.com", "kind": "social", "label": "Patreon",
+  "people": [{ "id": 3, "name": "Some Body" }, { "id": 5, "name": "The Band" }],
   "position": 2, "created_at": 1727500000 }
 ```
 
@@ -1831,6 +1841,10 @@ A **link**:
   else the other's; the other's notes below its own when different; the
   other's person when it had none), except two tied to different people,
   or whose notes joined would pass 5000 characters: those were left apart.
+  When links got several people (database version 30), the ones left apart
+  for being two people's were merged the same way, the older kept with the
+  people of both (each keeps their place and the time it was given to
+  them), the notes joined as above (still left apart past 5000 characters).
   `links.json` is written again at the next start after such a merge.
 - `site`: the host without `www.`, `m.` or `mobile.`, cut to its registrable
   part (`someone.substack.com` is `substack.com`, `www.bbc.co.uk` is
@@ -1845,23 +1859,27 @@ A **link**:
   (see [Link labels](#link-labels)), or `null` (the dashboard then shows
   the address). Read on every request, never stored: every answer with a
   link has it.
-- `person`: `{ id, name }` or `null`. `position`: the link's place among its
-  person's links, `null` for a link of no one.
+- `people`: `[{ id, name }, …]`, by name; `[]` for a link of no one.
+  Each person has the link at their own place among their links.
+  `position`: that place for the person a list is for (`?person=`, a
+  person's page), else `null`.
 
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/links?person=&kind=&site=&q=` | `{ "links": [link, …], "sites": [{ "site": "patreon.com", "count": 4 }, …] }`, see below |
-| POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` (all but `url` may be omitted; `person` `null` for no one; from another site, the userscript's "Add this page", `url` and `title` only, else a 403) → `{ "ok": true, "link": {…} }` |
-| POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person` (`null` unties it; none is a 400) → `{ "ok": true, "link": {…} }` |
+| POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` or `"people": [3, 5]` in place of `person` (all but `url` may be omitted; `person` `null` or `people` `[]` for no one; from another site, the userscript's "Add this page", `url` and `title` only, else a 403) → `{ "ok": true, "link": {…} }` |
+| POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person`, `people` (`person`: that one person in place of any other, `null` unties it from everyone; `people`: exactly those, `[]` for no one; none is a 400) → `{ "ok": true, "link": {…} }` |
 | DELETE | `/api/links/<id>` | → `{ "ok": true }` |
-| POST | `/api/links/assign` | body `{ "ids": [12, 9], "person": 3 }` (1 to 5000 ids; `person` `null` unties them; optional `if_person`) → `{ "ok": true, "moved": 2, "skipped": [], "links": [link, …] }`, see below |
+| POST | `/api/links/assign` | body `{ "ids": [12, 9], "person": 3 }` or `"people": [3, 5]` (1 to 5000 ids; `person` `null` or `people` `[]` unties them; optional `if_person`) → `{ "ok": true, "moved": 2, "skipped": [], "links": [link, …] }`, see below |
+| POST | `/api/links/add-person` | body `{ "ids": [12, 9], "person": 5 }` (1 to 5000 ids) → `{ "ok": true, "added": [12], "links": [link, …] }`, see below |
+| POST | `/api/links/remove-person` | body `{ "ids": [12, 9], "person": 5 }` (1 to 5000 ids) → `{ "ok": true, "removed": [12], "links": [link, …] }`, see below |
 | POST | `/api/links/delete` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "deleted": 2 }`; ids no link has are passed over |
 | POST | `/api/people/<id>/links/order` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "links": [link, …] }`, the person's links in their new order |
 | GET | `/api/people/recent-links?limit=10` | `{ "people": [{ "id": 3, "name": "Some Body", "at": 1727500000 }, …] }`: the people most recently given a link, latest first, see below |
 
 - `GET /api/links`: newest first; with `person`, in that person's order.
-  `person` is a person id (one that is not an id matches nothing) or `none`
-  for links of no one; `kind` is `social` or `other` (anything else is a
+  `person` is a person id (one that is not an id matches nothing; a link
+  matches when it is one of its people) or `none` for links of no one; `kind` is `social` or `other` (anything else is a
   400); `site` matches `site` exactly; `q` (at most 200 characters) matches
   any part of the URL, title or notes, without regard to (ASCII) case, and
   a link with no title whose site's rule label (see [Link labels](#link-labels))
@@ -1870,38 +1888,55 @@ A **link**:
   picker, most links first.
 - A URL saved already (once cleaned) is a 409
   `{ "ok": false, "error": "that link is saved already", "id": 12, "link": {…} }`
-  with the saved link's id and the link itself (its `person` says whose it
-  is, `null` for no one), on create and on edit.
+  with the saved link's id and the link itself (its `people` say whose it
+  is, `[]` for no one), on create and on edit.
 - `/api/people/recent-links` (the quick-add's picker): each person who has a
   link, by `at`, when a link was last given to them: created with them, or
   moved to them from no one or from someone else (an edit that keeps the
-  person does not count). A person with no link left is not listed.
+  person does not count; nor does another person given the same link). A
+  person with no link left is not listed.
   `limit` is 10 by default, kept between 1 and 50. The tie time is kept per
-  link (`tied_at`, in `links.json` too; a link restored from an older file
-  counts from `created_at`).
+  link and person (`tied_at`, in `links.json` too; a link restored from an
+  older file counts from `created_at`).
 - `/api/links/assign` (the Links page's Unsorted queue and its selection)
-  gives every link listed to one person, or to no one, in one transaction:
-  each as `POST /api/links/<id>` with `person` would (last in the person's
-  order, in the order of `ids`; `tied_at` now, so the person comes first in
-  `recent-links`). A link that is theirs already does not move and is not
-  counted in `moved`; `links` are the links listed that still exist, as they
-  are now. `person` must be in the body. An id no link has is a 404
-  `{ "ok": false, "error": "no such link", "missing": [7] }`, and nothing
-  moves. With `"if_person": 3` (or `null`; the page's Undo), only the links
-  that are that person's right now move; the others, and ids no link has,
-  are passed over and listed in `skipped` (no 404). Without it `skipped` is
-  `[]`. The batch holds the database's write lock from the check to the end.
+  gives every link listed to one person (or to the people of `people`), or
+  to no one, in one transaction, in place of any other: each as
+  `POST /api/links/<id>` with `person` or `people` would (a new person gets
+  it last in their order, in the order of `ids`, `tied_at` now, so they
+  come first in `recent-links`; a person it keeps keeps its place). A link
+  whose people are those already does not move and is not counted in
+  `moved`; `links` are the links listed that still exist, as they are now.
+  `person` or `people` must be in the body, not both. An id no link has is
+  a 404 `{ "ok": false, "error": "no such link", "missing": [7] }`, and
+  nothing moves. With `"if_person": 3` (or `null`; the page's Undo), only
+  the links that are that person's alone right now (`null`: no one's) move;
+  the others, and ids no link has, are passed over and listed in `skipped`
+  (no 404). Without it `skipped` is `[]`. The batch holds the database's
+  write lock from the check to the end.
+- `/api/links/add-person` (the Links page's "Also link N to…") gives every
+  link listed to one more person, in one transaction: last in their order,
+  in the order of `ids`, `tied_at` now; their other people keep them.
+  `added` are the ids that were not theirs yet (a link theirs already is
+  left as it is). An id no link has is a 404 as for `assign`, and nothing
+  changes. `/api/links/remove-person` (a person page's Remove, the Undo of
+  Also link) takes them from that person only: their other people keep
+  them, and a link left with no one goes to Unsorted. `removed` are the ids
+  that were theirs; ids no link has are passed over. `person` must be a
+  person's id (`null` is a 400) for both.
 - The links tied to no one (`?person=none`, the Links page's **Unsorted**)
   are counted in `unsorted_links` of `GET /api/jobs`, for the sidebar's badge.
 - A person's links (`GET /api/people/<id>`, `/links/order`) come socials
   first, then the others, each in the person's order. A new link, or one
-  given to another person, goes last in its person's order; one untied
-  from its person loses its place.
+  given to another person, goes last in that person's order; one taken
+  from a person loses its place among theirs (its other people's places
+  do not change).
 - `/links/order` puts the ids given in the places they held between them,
   in the order given; the person's other links do not move, and ids not
   among their links are ignored (as `/api/collections/<id>/order`).
-- Deleting a person keeps their links, tied to no one. Merging people moves
-  the others' links to the one kept, after its own.
+- Deleting a person keeps their links: a link shared with others stays
+  theirs, one that was only this person's is tied to no one. Merging people
+  moves the others' links to the one kept, after its own; a link the kept
+  one has already stays at its place among theirs.
 - A bad body is a 400 `{ "ok": false, "error": "…" }`, a JSON body that is
   not an object too (see the top of this file); an unknown link
   or person id in the path a 404, an unknown `person` in a body a 400.

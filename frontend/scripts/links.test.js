@@ -2,8 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  MAX_TITLE, droppedUrl, externalUrl, importedParts, linkLabel, linkName, linkSite, mayCarryUrl, sharedTitle, urlLines, urlProblem,
-  withScheme,
+  MAX_TITLE, droppedUrl, externalUrl, importedParts, linkLabel, linkName, linkSite, mayCarryUrl, namesText, peopleKey, sharedTitle,
+  urlLines, urlProblem, withScheme,
 } from "../src/lib/links.js";
 import { NO_PERSON, personOptions } from "../src/lib/people.js";
 
@@ -114,15 +114,26 @@ test("why an outside address is not one: said in a few words", () => {
 });
 
 test("what a link-in-bio import kept, in words", () => {
-  assert.deepEqual(importedParts({ saved: 4, already: 0, elsewhere: 0, dropped: 0, over: 0 }), ["4 links saved to their Links"]);
-  assert.deepEqual(importedParts({ saved: 1, already: 12, elsewhere: 1, dropped: 2, over: 3 }), [
-    "1 link saved to their Links", "12 links already there", "1 link saved for someone else or no one, left there",
+  assert.deepEqual(importedParts({ saved: 4, already: 0, shared: 0, dropped: 0, over: 0 }), ["4 links saved to their Links"]);
+  assert.deepEqual(importedParts({ saved: 1, already: 12, shared: 1, dropped: 2, over: 3 }), [
+    "1 link saved to their Links", "12 links already there", "1 link saved before for someone else or no one, now theirs too",
     "2 links dropped (not a web address Links keeps)", "3 links over what one import saves: import again for the rest"]);
   assert.deepEqual(importedParts({ saved: 0, already: 9 }), ["No new link to save", "9 links already there"]);
   // An answer that is not the shape expected says nothing it does not know.
   for (const odd of [undefined, null, {}, { saved: "<b>7</b>", already: -1, dropped: 1.5, over: null }]) {
     assert.deepEqual(importedParts(odd), ["No new link to save"]);
   }
+});
+
+test("a shared link's people in words, and as one key per set of them (#215)", () => {
+  assert.equal(namesText([]), "");
+  assert.equal(namesText(["Ana"]), "Ana");
+  assert.equal(namesText(["Ana", "Bo"]), "Ana and Bo");
+  assert.equal(namesText(["Ana", "Bo", "The Band"]), "Ana, Bo and The Band");
+  assert.equal(peopleKey([{ id: 12, name: "B" }, { id: 3, name: "A" }]), "3,12");
+  assert.equal(peopleKey([{ id: 3 }, { id: 12 }]), peopleKey([{ id: 12 }, { id: 3 }]));
+  assert.equal(peopleKey([]), "");
+  assert.equal(peopleKey(undefined), "");
 });
 
 test("a link is shown by its title, else its site's label, else its address", () => {

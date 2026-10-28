@@ -20,6 +20,16 @@ export const bareUrl = url => url.replace(/^https?:\/\//, "");
 // else its address, which tells two links of one site apart (they share its label).
 export const linkName = l => l.title || bareUrl(l.url);
 
+// People's names in a sentence: "Ana", "Ana and Bo", "Ana, Bo and The Band".
+export function namesText(names) {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/* The people a link's Undo gives it back to, as the server's `people`
+   ([{ id, name }]) → their ids, by id: one key for links that had the
+   same people, so one call takes each group back. */
+export const peopleKey = people => (people || []).map(p => p.id).sort((a, b) => a - b).join(",");
+
 // Settings → Link labels: the server's caps (linklabels.py).
 export const MAX_LINK_LABEL = 80;
 export const MAX_LINK_LABELS = 500;
@@ -144,7 +154,7 @@ export function sharedTitle(text) {
 }
 
 /* What a link-in-bio import kept in a person's Links, in words (the
-   endpoint's `links`: { saved, already, elsewhere, dropped, over }), one
+   endpoint's `links`: { saved, already, shared, dropped, over }), one
    part per count that is not zero. Only numbers are read: not a word of
    it comes from the page. */
 export function importedParts(links) {
@@ -152,7 +162,7 @@ export function importedParts(links) {
   return [
     n("saved") ? `${plural(n("saved"), "link")} saved to their Links` : "No new link to save",
     n("already") && `${plural(n("already"), "link")} already there`,
-    n("elsewhere") && `${plural(n("elsewhere"), "link")} saved for someone else or no one, left there`,
+    n("shared") && `${plural(n("shared"), "link")} saved before for someone else or no one, now theirs too`,
     n("dropped") && `${plural(n("dropped"), "link")} dropped (not a web address Links keeps)`,
     n("over") && `${plural(n("over"), "link")} over what one import saves: import again for the rest`,
   ].filter(Boolean);
