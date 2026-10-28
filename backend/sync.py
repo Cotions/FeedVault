@@ -332,13 +332,18 @@ def config_flags(tool, cfg=None):
 
 
 def session_of(tool, options, cfg=None):
-    """The session a sync of a source uses: its own, else the tool's setting."""
+    """The session a sync of a source uses: its own, else the tool's
+    setting; none for a profile with no tool (sources.NONE)."""
+    if tool not in sources.TOOLS:
+        return options["session"] or {"mode": "none"}
     return options["session"] or (settings(cfg) if tool == "instaloader" else tool_settings(tool, cfg))["session"]
 
 
 def metadata_of(tool, options, cfg=None):
     """The metadata mode a sync of a source uses: its own, else the tool's
     setting (a mode the tool does not have counts as full)."""
+    if tool not in sources.TOOLS:
+        return "full"
     mode = options.get("metadata") or (settings(cfg) if tool == "instaloader" else tool_settings(tool, cfg))["metadata"]
     return mode if mode in sources.METADATA.get(tool, ()) else "full"
 
@@ -514,12 +519,15 @@ def _source_id(params):
 
 def synced_source(params):
     """The source row a sync job is for. Raises jobs.BadRequest when there
-    is none, or when it is set to Don't sync (nosync.py): every sync kind
-    builds through here, so no route (POST /api/jobs included) queues one."""
+    is none, when it is set to Don't sync (nosync.py), or when it is profile
+    only (sources.profile_only, #218): every sync kind builds through here,
+    so no route (POST /api/jobs included) queues one."""
     conn = db.connect()
     src = sources.row(conn, _source_id(params))
     if src is None:
         raise jobs.BadRequest("no such source")
+    if sources.profile_only(src):
+        raise jobs.BadRequest(sources.profile_only_error(conn, src))
     if sources.not_synced(conn, src):
         raise jobs.BadRequest(sources.not_synced_error(conn, src))
     return src
@@ -1777,6 +1785,10 @@ class NotSynced(Exception):
     """The source's account or person is set to Don't sync (nosync.py)."""
 
 
+class ProfileOnly(Exception):
+    """The source is profile only (sources.profile_only): never synced."""
+
+
 def _job(src, scheduled=False, scripts_ok=True):
     """(kind, params) of a source's sync: its script's (scripts.py) when it
     has one, else its tool's. Raises Refused for a script when not
@@ -1805,8 +1817,8 @@ def submit(kind, params):
 
 def sync(sid, scheduled=False, scripts_ok=True):
     """Queue one source's sync: the job's public dict. Raises Busy, Refused
-    (see _job), or jobs.BadRequest when the source cannot be synced.
-    ``scheduled``: the scheduler's (notify.py)."""
+    (see _job), NotSynced, ProfileOnly, or jobs.BadRequest when the source
+    cannot be synced. ``scheduled``: the scheduler's (notify.py)."""
     import scripts                             # it imports this module
     with _submitting, scripts.read_once():     # its script read once, for its params and its build
         if sid in active():
@@ -1815,6 +1827,8 @@ def sync(sid, scheduled=False, scripts_ok=True):
         src = sources.row(conn, sid)
         if src is None:
             raise jobs.BadRequest("no such source")
+        if sources.profile_only(src):
+            raise ProfileOnly(sources.profile_only_error(conn, src))
         if sources.not_synced(conn, src):
             raise NotSynced(sources.not_synced_error(conn, src))
         return jobs.submit(*_job(src, scheduled, scripts_ok))
@@ -1826,19 +1840,23 @@ def sync_all(only=None, scripts_ok=True):
     after another, the pause between each. Returns (jobs, skipped, errors:
     [{source, error}] for those refused; a source with a script, when not
     ``scripts_ok``; not_synced: how many were left out as set to Don't
-    sync, nosync.py). The jobs queued become the batch (see batch), or join
-    it while it still runs."""
+    sync, nosync.py; profile_only: how many were left out as profile only,
+    sources.profile_only). The jobs queued become the batch (see batch), or
+    join it while it still runs."""
     global _batch
     import scripts                             # it imports this module
-    queued, skipped, errors, not_synced = [], 0, [], 0
+    queued, skipped, errors, not_synced, profile_only = [], 0, [], 0, 0
     # The scripts folder read once for every source that has a script.
     with _submitting, scripts.read_once():
         busy = active()
         conn = db.connect()
-        accounts, flags, cache = db.accounts(conn), nosync.flags(conn), {}
+        accounts, flags, cache, cfg = db.accounts(conn), nosync.flags(conn), {}, config.load()
         for src in conn.execute("SELECT * FROM sources ORDER BY target, id").fetchall():
             sid = src["id"]
             if only is not None and sid not in only:
+                continue
+            if sources.profile_only(src, cfg):
+                profile_only += 1
                 continue
             if sources.not_synced(conn, src, accounts, flags, cache):
                 not_synced += 1
@@ -1863,7 +1881,7 @@ def sync_all(only=None, scripts_ok=True):
                     done = jobs.get(j["id"])
                     if done and done["state"] in jobs.STATES[2:]:
                         _batch["ended"][j["id"]] = _ending(done)
-    return queued, skipped, errors, not_synced
+    return queued, skipped, errors, not_synced, profile_only
 
 
 # The last "Sync all", in memory only: a restart, which also ends every job

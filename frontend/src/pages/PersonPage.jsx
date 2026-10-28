@@ -19,7 +19,7 @@ import ActionMenu from "../components/ActionMenu";
 import StateChips from "../components/StateChips";
 import { useNoSync } from "../components/NoSync";
 import { useMute } from "../lib/useMute";
-import { AddSource, RemoveSourceDialog, SourceRow } from "../components/Sources";
+import { AddSource, ProfileOnlyChip, RemoveSourceDialog, SourceOptionsDialog, SourceRow } from "../components/Sources";
 import { sourceName, useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
 import PersonAbout from "../components/PersonAbout";
@@ -30,11 +30,38 @@ import { copyUrls } from "../lib/links";
 import { useOneEdit, useUnsaved } from "../lib/unsaved";
 import { accountMatches, linkMatches, sourceMatches, useSearchName } from "../lib/search";
 
+/* A profile only source of theirs (#218) with no account of its own yet
+   (none indexed, or a site no downloader takes): shown with the accounts,
+   its platform, handle and profile link, marked "Profile only". Its ⋯ menu
+   opens the profile, says whether it downloads (Options), or removes it. */
+function ProfileRow({ source: s, onSaved, onRemove }) {
+  const [editing, setEditing] = useState(false);
+  const url = safeUrl(s.url);
+  const name = sourceName(s);
+  return (
+    <li className="person-account" data-source-id={s.id}>
+      <PlatformIcon platform={s.platform} />
+      <span className="person-account-id">
+        <span className="creator-name" title={name}>{name}</span>
+        <span className="state-line"><ProfileOnlyChip source={s} /></span>
+        <span className="creator-sub">{platformLabel(s.platform)} · profile only: shown as theirs, never downloaded</span>
+      </span>
+      <ActionMenu label={`More for ${name}`} items={[
+        url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(s.platform)} (opens the site)` },
+        { label: "Download options…", icon: "settings", onSelect: () => setEditing(true), title: "Whether this profile is downloaded" },
+        "separator",
+        { label: "Remove", icon: "trash", danger: true, onSelect: () => onRemove(s), title: "No longer shown as theirs" },
+      ]} />
+      {editing && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
+    </li>
+  );
+}
+
 /* One account of theirs: its profile on the site, its posts, Don't sync
    and Unlink in its ⋯ menu. personOff: the person's name when they are set
    to Don't sync, so this account is not synced whatever its own switch
    says (turned off on the person, not here). */
-function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync }) {
+function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync, profile = null }) {
   const url = safeUrl(a.url);
   const former = (a.handles || []).filter(h => h.handle !== a.handle);
   const names = (a.names || []).map(n => n.name).filter(n => n !== a.name);
@@ -50,6 +77,7 @@ function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync }) 
           {named && <span className="creator-sub"> · {a.name}</span>}
         </span>
         <StateChips name={handle} noSync={!!a.no_sync} />
+        {profile && <span className="state-line"><ProfileOnlyChip source={profile} /></span>}
         <span className="creator-sub">
           {platformLabel(a.platform)} · id {a.id}
           {names.length > 0 && ` · also named ${names.join(", ")}`}
@@ -393,7 +421,15 @@ export default function PersonPage() {
     );
   }
 
-  const mine = (sources.data?.sources || []).filter(s => s.person?.id === p.id);
+  // Profile only (#218): shown with the accounts, on the account it is of
+  // or on a row of its own, never in Sources (nothing to sync).
+  const theirs = (sources.data?.sources || []).filter(s => s.person?.id === p.id);
+  const mine = theirs.filter(s => !s.profile_only);
+  const profiles = theirs.filter(s => s.profile_only);
+  const profileOf = new Map(profiles.filter(s => s.account).map(s => [accountKey(s.account), s]));
+  const known = new Set(p.accounts.map(accountKey));
+  const ownRows = profiles.filter(s => !s.account || !known.has(accountKey(s.account)));
+  const profilesShown = searching ? ownRows.filter(s => sourceMatches(s, q)) : ownRows;
   const loose = (sources.data?.sources || []).filter(s => !s.person && !s.account);
   // Suggestions that would add accounts to this person.
   const suggested = (suggestApi.data?.suggestions || []).filter(s => s.person?.id === p.id);
@@ -406,7 +442,7 @@ export default function PersonPage() {
   const sourcesShown = searching ? mine.filter(s => sourceMatches(s, q)) : mine;
   const linksFound = searching ? (p.links || []).filter(l => linkMatches(l, q)).length : 0;
   const postsFound = searching && postsApi.data?.q === q.trim() ? postsApi.data.posts : null;
-  const nothing = searching && !accounts.length && !sourcesShown.length && !linksFound && postsFound === 0;
+  const nothing = searching && !accounts.length && !profilesShown.length && !sourcesShown.length && !linksFound && postsFound === 0;
 
   return (
     <>
@@ -518,9 +554,11 @@ export default function PersonPage() {
           </div>
         </div>
 
-        <section className="person-section" hidden={searching && !accounts.length}>
-          <h3 className="card-title">Accounts <span className="page-count">{searching ? `${accounts.length} of ${p.accounts.length}` : p.accounts.length}</span></h3>
-          {p.accounts.length === 0 ? (
+        <section className="person-section" hidden={searching && !accounts.length && !profilesShown.length}>
+          <h3 className="card-title">Accounts <span className="page-count">
+            {searching ? `${accounts.length + profilesShown.length} of ${p.accounts.length + ownRows.length}` : p.accounts.length + ownRows.length}
+          </span></h3>
+          {p.accounts.length + ownRows.length === 0 ? (
             <div className="empty">No account linked yet. Add one below.</div>
           ) : (
             <ul className="person-accounts">
@@ -532,8 +570,10 @@ export default function PersonPage() {
                   personOff={p.no_sync ? p.name : null}
                   onNoSync={onNoSync}
                   onUnlink={a => change({ remove: [accountRef(a)] }, `@${a.handle || a.id} unlinked.`)}
+                  profile={profileOf.get(accountKey(a)) || null}
                 />
               ))}
+              {profilesShown.map(s => <ProfileRow key={`source:${s.id}`} source={s} onSaved={sources.reload} onRemove={setRemoving} />)}
             </ul>
           )}
           <div hidden={searching}>

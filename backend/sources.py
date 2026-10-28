@@ -16,6 +16,15 @@ A source is added by pasting a profile link: the link's host picks the tool
 from the routing table in the config (``routes``, editable in Settings), and
 the target is the link, normalized (instaloader's is the profile name).
 
+A source can also be profile only (#218): the account is theirs and shown
+with them, never downloaded. Its ``download`` option says so ("off"), or
+follows the platform ("platform", the default) when Settings lists the
+platform in ``profile_only_platforms``; "on" downloads whatever the platform
+says. One for a site no downloader takes (Spotify, Twitch) has the tool
+``none`` and no folder (""): it is profile only whatever it says, until it
+is given a tool and a folder (give_tool). A profile-only source never
+syncs: no job, no folder made (see profile_only).
+
 Nothing here runs a tool: sync.py builds the job from a stored source.
 """
 import json
@@ -32,6 +41,8 @@ import nosync
 import people
 
 TOOLS = ("instaloader", "gallery-dl", "yt-dlp")
+# The tool of a profile-only source no downloader takes: no folder, no sync.
+NONE = "none"
 PLATFORM = {"instaloader": "instagram"}
 # The routing table's defaults: host -> tool. A host also covers its
 # subdomains (www.x.com, m.youtube.com), never a longer name (x.com.evil.example).
@@ -75,6 +86,10 @@ class NotSynced(Refused):
 
 NOT_SYNCED = ("{who} is set to Don't sync: FeedVault does not download from it. "
               "Turn Don't sync off on its card or page first")
+PROFILE_ONLY = ("{who} is profile only: FeedVault shows it, never downloads from it. "
+                "Set its Download to always in its Options first")
+NEEDS_TOOL = ("{who} has no downloader: pick a tool and a folder for it first "
+              "(its host must be in Settings → Link routing)")
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +107,7 @@ URL_MAX = 500
 _QUERY_PAGES = {"watch", "playlist", "results", "search", "hashtag", "explore"}
 _PAGE_WORDS = {"user", "users", "u", "profile", "channel", "c", "en", "ja", "media", "videos", "shorts",
                "streams", "tweets", "with_replies", "likes", "submitted", "posts", "artworks", "illustrations",
-               "featured", "playlists", "member", "creator"}
+               "featured", "playlists", "member", "creator", "artist"}
 
 
 def clean_routes(value):
@@ -132,11 +147,13 @@ def route(host, table):
     return best
 
 
-def parse_url(text, table):
+def parse_url(text, table, any_host=False):
     """(normalized link, table host, tool) for a pasted profile link, else
     (None, error). The link becomes ``https://<host><path>``: lowercase
     host without ``www.``, ``m.`` or ``mobile.``, no login part, port, query or fragment, no
-    trailing slash. Its host must be in the routing table."""
+    trailing slash. Its host must be in the routing table; with
+    ``any_host`` (a profile-only source) any site's is taken, one not in the
+    table as (its site, NONE)."""
     if not isinstance(text, str):
         return None, "paste a profile link"
     text = text.strip()
@@ -164,6 +181,8 @@ def parse_url(text, table):
     if not _HOST_RE.fullmatch(host):
         return None, "not a link to a website"
     found = route(host, table)
+    if found is None and any_host:
+        found = (site_of(host), NONE)
     if found is None:
         return None, f"{host} is not in the routing table (Settings → Link routing)"
     path = re.sub(r"/{2,}", "/", u.path).rstrip("/")
@@ -178,6 +197,18 @@ def parse_url(text, table):
 
 def platform_of(table_host):
     return HOST_PLATFORMS.get(table_host) or table_host.split(".")[0]
+
+
+# Names a country's registry puts sites under (bbc.co.uk): the site is one label more.
+_SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu", "ne", "or"}
+
+
+def site_of(host):
+    """The site a host not in the routing table is part of, which names its
+    platform (platform_of): ``open.spotify.com`` is spotify.com."""
+    parts = host.split(".")
+    n = 3 if len(parts) > 2 and parts[-2] in _SECOND_LEVEL and len(parts[-1]) == 2 else 2
+    return ".".join(parts[-n:])
 
 
 def profile_handle(url):
@@ -197,18 +228,21 @@ def folder_name(url):
     return name[:80] or "profile"
 
 
-def resolve(text, table, roots):
+def resolve(text, table, roots, tool=None):
     """What adding a source for a pasted link would make: {tool, platform,
     target, folder}, or raises Refused. An Instagram link with instaloader
     gives the profile name as target; any other tool, the normalized link.
     The folder is ``<first media root>/<platform>/<name>``: the target for
-    instaloader, the link's profile name for the others."""
-    parsed, error = parse_url(text, table)
+    instaloader, the link's profile name for the others. ``tool`` NONE: a
+    profile-only source of any site, the link as target and no folder."""
+    parsed, error = parse_url(text, table, any_host=tool == NONE)
     if parsed is None:
         raise Refused(error)
-    url, host, tool = parsed
+    url, host, tool = parsed[0], parsed[1], NONE if tool == NONE else parsed[2]
     platform = platform_of(host)
     target = url
+    if tool == NONE:
+        return {"tool": tool, "platform": platform, "target": target, "folder": None}
     if tool == "instaloader":
         target = parse_target("instaloader", url)
         if target is None:
@@ -227,7 +261,10 @@ def resolve_name(text, roots):
 def default_folder(tool, platform, target, roots):
     """Where a new source's posts go unless another folder is picked:
     ``<first media root>/<platform>/<name>``, the name being instaloader's
-    target as it is (a profile name), else the link's (folder_name)."""
+    target as it is (a profile name), else the link's (folder_name). None
+    for NONE, which downloads nothing."""
+    if tool == NONE:
+        return None
     if tool == "instaloader":
         return os.path.join(roots[0], platform, target)
     return os.path.join(roots[0], platform, folder_name(target))
@@ -262,7 +299,7 @@ def check_target(tool, target, table):
     the routing table), else None. sync.py checks again before each run."""
     if tool == "instaloader":
         return target if parse_target("instaloader", target) == target else None
-    parsed, _ = parse_url(target, table)
+    parsed, _ = parse_url(target, table, any_host=tool == NONE)
     return target if parsed is not None and parsed[0] == target else None
 
 
@@ -345,20 +382,24 @@ SCHEDULES = ("off", "hourly", "daily", "weekly")
 # full (the tool's own), slim (instaloader's, slimmed after the run:
 # slim.py), none (nothing beside the media; yt-dlp embeds it in the file).
 METADATA = {"instaloader": ("full", "slim", "none"), "gallery-dl": ("full", "none"), "yt-dlp": ("full", "none")}
+# Whether a source downloads at all (#218): as its platform says
+# (Settings → Profile only), always, or never (profile only).
+DOWNLOAD = ("platform", "on", "off")
 # Last: stored_options applies the keys in this order, and a stored
 # schedule wins over the one content's stories would pick.
-OPTION_KEYS = ("full_history", "session", "content", "media", "since", "first_posts", "script", "metadata",
-               "schedule")
+OPTION_KEYS = ("download", "full_history", "session", "content", "media", "since", "first_posts", "script",
+               "metadata", "schedule")
 # What a platform's download defaults (Settings → Download defaults) can
-# set: every option but full history, which is a one-off.
-DEFAULT_KEYS = OPTION_KEYS[1:]
+# set: every option but full history, which is a one-off, and download,
+# which Settings → Profile only sets per platform.
+DEFAULT_KEYS = OPTION_KEYS[2:]
 # A script's id (scripts.py): a file's name without its suffix, or a built-in's.
 SCRIPT_ID_RE = re.compile(r"(?:builtin:)?[a-z0-9_-]{1,64}")
 LOGIN_REFUSED = ("{kinds} need a logged-in session: choose one for this source, or set one in "
                  "Settings → Sync")
 # Every option as a source has it when neither it nor its platform's
 # defaults say otherwise.
-BUILTIN = {"full_history": False, "session": None, "content": None, "media": "all", "since": None,
+BUILTIN = {"download": "platform", "full_history": False, "session": None, "content": None, "media": "all", "since": None,
            "first_posts": None, "script": None, "metadata": None, "schedule": "off"}
 
 
@@ -398,6 +439,9 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
     do (see choices; ``defaults``: what a platform's defaults can). The
     options:
 
+    - download: platform (as Settings → Profile only says for its
+      platform), on or off (profile only: never synced); never on for a
+      NONE source, which has no tool to download with (give_tool);
     - full_history: bool, the next sync walks everything instead of
       starting after what is already there;
     - session: null (the tool's setting), else see clean_session (no login
@@ -425,6 +469,12 @@ def parse_options(value, base=None, tool="instaloader", platform="instagram", ta
     if unknown:
         return None, f"unknown option {sorted(unknown)[0]!r}: options are {', '.join(OPTION_KEYS)}"
     can = choices(tool, platform, target, defaults)
+    if "download" in value:
+        if value["download"] not in DOWNLOAD:
+            return None, f"download must be one of: {', '.join(DOWNLOAD)}"
+        if value["download"] == "on" and tool == NONE:
+            return None, "this profile has no downloader: send a tool and a folder with download on"
+        out["download"] = value["download"]
     if "full_history" in value:
         if not isinstance(value["full_history"], bool):
             return None, "full_history must be true or false"
@@ -691,6 +741,80 @@ def login_refused(options, platform, session):
     return LOGIN_REFUSED.format(kinds=", ".join(need).capitalize())
 
 
+# ---------------------------------------------------------------------------
+# Profile only (#218): shown as theirs, never downloaded
+# ---------------------------------------------------------------------------
+#
+# config ``profile_only_platforms``: [platform, ...], set in Settings →
+# Profile only. A source's ``download`` option "platform" follows it.
+
+PLATFORMS_MAX = ROUTES_MAX
+
+
+def clean_platforms(value):
+    """The profile-only platforms from POST /api/config, or (None, error):
+    a list of platform names (as sources have them: lowercase), sorted,
+    each once."""
+    if not isinstance(value, list) or len(value) > PLATFORMS_MAX:
+        return None, f"profile_only_platforms must be a list of at most {PLATFORMS_MAX} platforms"
+    out = set()
+    for p in value:
+        if not isinstance(p, str) or not _PLATFORM_RE.fullmatch(p.strip().lower()):
+            return None, f"not a platform: {str(p)[:64]}"
+        out.add(p.strip().lower())
+    return sorted(out), None
+
+
+def profile_only_platforms(cfg=None):
+    """The platforms whose sources are profile only unless they say
+    otherwise: the config's, each checked again (config.json can be edited
+    by hand)."""
+    value = (cfg if cfg is not None else config.load()).get("profile_only_platforms")
+    if not isinstance(value, list):
+        return []
+    return sorted({p for p in value if isinstance(p, str) and _PLATFORM_RE.fullmatch(p)})
+
+
+def known_platforms(conn, cfg):
+    """The platforms Settings → Profile only offers: those the routing
+    table routes to, those of a source, those listed already."""
+    found = {platform_of(h) for h in routes(cfg)} | {PLATFORM["instaloader"]}
+    found |= {r[0] for r in conn.execute("SELECT DISTINCT platform FROM sources")}
+    return sorted(found | set(profile_only_platforms(cfg)))
+
+
+def wants_download(platform, options, cfg=None):
+    """Whether a source with ``options`` on ``platform`` is to download:
+    its download option, "platform" as Settings lists the platform."""
+    d = options.get("download", "platform")
+    return d == "on" or (d == "platform" and platform not in profile_only_platforms(cfg))
+
+
+def profile_only(src, cfg=None, options=None):
+    """Whether a source row is profile only: shown, never synced (no job,
+    no folder made). A NONE source always is; any other as its download
+    option says (wants_download). ``options``: its stored_options, when
+    the caller has them."""
+    if src["tool"] == NONE:
+        return True
+    cfg = cfg if cfg is not None else config.load()
+    return not wants_download(src["platform"], options or stored_options(src, cfg), cfg)
+
+
+def profile_only_error(conn, row, accounts=None):
+    """PROFILE_ONLY (NEEDS_TOOL for a NONE source wanting to download),
+    naming the source's person or account."""
+    accounts = accounts if accounts is not None else db.accounts(conn)
+    key, person = _owner(conn, row, accounts)
+    if person is not None:
+        who = person["name"]
+    elif key is not None and accounts.get(key):
+        who = f"@{accounts[key]['handle'] or key[1]}"
+    else:
+        who = f"@{row['target']}" if row["tool"] == "instaloader" else row["target"]
+    return (NEEDS_TOOL if row["tool"] == NONE else PROFILE_ONLY).format(who=who)
+
+
 def inside_root(folder, roots):
     """``folder`` normalized, when it resolves (symlinks followed) inside a
     media root or to one, else None. It need not exist yet. Kept unresolved,
@@ -800,6 +924,7 @@ def _public(conn, row, accounts, active, cfg=None, flags=None, cache=None):
     job = active.get(row["id"])
     cfg = cfg if cfg is not None else config.load()
     options, overrides = _resolve(row, _stored(row), cfg)
+    only = profile_only(row, cfg, options)
     return {
         "id": row["id"], "tool": row["tool"], "platform": row["platform"], "target": row["target"],
         "url": row["target"] if row["tool"] != "instaloader" else db.profile_url(row["platform"], row["target"]),
@@ -820,6 +945,13 @@ def _public(conn, row, accounts, active, cfg=None, flags=None, cache=None):
         "job": job,
         # Its account or person is set to Don't sync: kept, never synced.
         "no_sync": not_synced(conn, row, accounts, flags, cache),
+        # Shown as theirs, never synced (#218); one with no tool that is
+        # to download (its download option or its platform's) needs a tool
+        # and a folder first (give_tool).
+        "profile_only": only,
+        "needs_tool": row["tool"] == NONE and wants_download(row["platform"], options, cfg),
+        # Its platform is in Settings → Profile only: what download "platform" means for it.
+        "platform_profile_only": row["platform"] in profile_only_platforms(cfg),
     }
 
 
@@ -1023,7 +1155,7 @@ def suggestions(conn, roots):
     def compute(conn):
         accounts = db.accounts(conn)
         off = nosync.flags(conn)[0]
-        taken = [r[0].rstrip(os.sep) for r in conn.execute("SELECT folder FROM sources")]
+        taken = [r[0].rstrip(os.sep) for r in conn.execute("SELECT folder FROM sources WHERE folder != ''")]
         taken_targets = {r[0] for r in conn.execute("SELECT target FROM sources WHERE tool = 'instaloader'")}
         # Posts in _saved left out, or they could stand for an account's folder.
         saved = [os.path.join(r.rstrip(os.sep), SAVED) + os.sep for r in roots]
@@ -1068,7 +1200,10 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
     update: what equals its platform's defaults is inherited), or None:
     everything inherited. ``pin``: options set on it even when equal to
     what it inherits (one another site created has no script or login,
-    whatever the defaults say later)."""
+    whatever the defaults say later). ``tool`` NONE: a profile-only
+    source of any site (``target`` a normalized link), no folder (create_profile)."""
+    if tool == NONE:
+        return create_profile(conn, target, person_id, account, options, now, table)
     if tool not in TOOLS:
         raise Refused(f"tool must be one of: {', '.join(TOOLS)}")
     if not roots:
@@ -1076,6 +1211,98 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
     table = table or dict(ROUTES)
     if check_target(tool, target, table) is None:
         raise Refused("the target is not a profile name or a profile link in the routing table")
+    real, platform, key = _checked_folder(conn, roots, tool, target, folder, account, table)
+    if person_id is not None and not people.exists(conn, person_id):
+        raise Refused("no such person")
+    # A profile-only one downloads nothing: Don't sync does not keep it out.
+    if options is None or wants_download(platform, options):
+        refused = _not_synced_target(conn, key, person_id)
+        if refused:
+            raise NotSynced(refused)
+    base = inherited(new_row(tool, platform, target))
+    stored = overrides_of(options, base) if options is not None else {"v": OVERRIDES}
+    stored.update({k: options[k] for k in pin if options is not None})
+    with conn:
+        sid = conn.execute(
+            "INSERT INTO sources(person_id, platform, author_id, tool, target, folder, options, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (person_id, platform, key[1] if key else None, tool, target, real, json.dumps(stored), now)).lastrowid
+    return sid
+
+
+def create_profile(conn, target, person_id, account, options, now, table=None):
+    """A profile-only source with no downloader (NONE): any site's profile
+    link (``target``, normalized as parse_url does), no folder. Its account:
+    ``account`` ((platform, id) of an indexed one), else the one with its
+    link's handle when exactly one has it. Added as profile only: its
+    download option is off, or follows its platform when Settings lists it
+    as profile only, so taking it off the list asks for a tool (give_tool)."""
+    table = table or dict(ROUTES)
+    parsed, _ = parse_url(target, table, any_host=True)
+    if parsed is None or parsed[0] != target:
+        raise Refused("the target is not a profile link")
+    platform = platform_of(parsed[1])
+    if existing(conn, NONE, target) is not None:
+        raise Refused(f"there is already a source for {target}")
+    if account is not None:
+        key = people.canonical(conn, *account)
+        if key not in db.accounts(conn) or key[0] != platform:
+            raise Refused(f"unknown account {account[0]}:{account[1]}")
+    else:
+        key = _handle_account(conn, platform, profile_handle(target))
+    if person_id is not None and not people.exists(conn, person_id):
+        raise Refused("no such person")
+    base = inherited(new_row(NONE, platform, target))
+    options = dict(options if options is not None else base)
+    if wants_download(platform, options):
+        options["download"] = "off"
+    stored = overrides_of(options, base)
+    with conn:
+        return conn.execute(
+            "INSERT INTO sources(person_id, platform, author_id, tool, target, folder, options, created_at) "
+            "VALUES (?, ?, ?, ?, ?, '', ?, ?)",
+            (person_id, platform, key[1] if key else None, NONE, target, json.dumps(stored), now)).lastrowid
+
+
+def give_tool(conn, sid, roots, folder, table, options):
+    """A NONE source becomes one that downloads: the tool the routing table
+    picks for its link (instaloader's target is the profile name), and
+    ``folder`` (None: the default one), checked as create() checks a new
+    source's; then ``options`` (with download on, as sent) are written.
+    Raises Refused (NotSynced: its account is set to Don't sync)."""
+    src = row(conn, sid)
+    if src is None or src["tool"] != NONE:
+        raise Refused("only a profile with no downloader is given one")
+    if not roots:
+        raise Refused("add a media root in Settings first")
+    parsed, error = parse_url(src["target"], table)
+    if parsed is None:
+        raise Refused(f"no downloader takes this link: {error}")
+    tool, target = parsed[2], src["target"]
+    if tool == "instaloader":
+        target = parse_target("instaloader", target)
+        if target is None:
+            raise Refused("instaloader takes an Instagram profile's link only")
+    account = (src["platform"], src["author_id"]) if src["author_id"] else None
+    if account is not None and people.canonical(conn, *account) not in db.accounts(conn):
+        account = None                         # gone from the index since: found again below
+    real, platform, key = _checked_folder(conn, roots, tool, target, folder, account, table, exclude=sid)
+    if platform != src["platform"]:
+        raise Refused(f"this link is a {platform} profile now, not {src['platform']}: remove it and add it again")
+    refused = _not_synced_target(conn, key, src["person_id"])
+    if refused:
+        raise NotSynced(refused)
+    with conn:
+        conn.execute("UPDATE sources SET tool = ?, target = ?, folder = ?, author_id = ? WHERE id = ?",
+                     (tool, target, real, key[1] if key else None, sid))
+    update(conn, sid, options)
+
+
+def _checked_folder(conn, roots, tool, target, folder, account, table, exclude=None):
+    """(folder, platform, account key or None) of a source of ``tool`` for
+    ``target`` downloading into ``folder`` (None: its default), each checked
+    as create() needs them; raises Refused. ``exclude``: the source being
+    given a tool (give_tool), not another one there already."""
     if tool == "instaloader":
         platform = PLATFORM[tool]
     else:
@@ -1097,7 +1324,8 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
     if platform_folder(real, roots, table):
         raise Refused(f"{real} is a platform's folder, where each account has a folder of its own: "
                       f"pick the account's, such as {default}")
-    if existing(conn, tool, target, real) is not None:
+    there = existing(conn, tool, target, real)
+    if there is not None and there != exclude:
         raise Refused(f"there is already a {tool} source for {target} or its folder")
     if account is not None:
         key = people.canonical(conn, *account)
@@ -1122,20 +1350,7 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
         shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
         raise Refused(f"{real} holds other accounts' posts ({shown}): pick the account's own folder, "
                       f"such as {default}")
-    if person_id is not None and not people.exists(conn, person_id):
-        raise Refused("no such person")
-    refused = _not_synced_target(conn, key, person_id)
-    if refused:
-        raise NotSynced(refused)
-    base = inherited(new_row(tool, platform, target))
-    stored = overrides_of(options, base) if options is not None else {"v": OVERRIDES}
-    stored.update({k: options[k] for k in pin if options is not None})
-    with conn:
-        sid = conn.execute(
-            "INSERT INTO sources(person_id, platform, author_id, tool, target, folder, options, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (person_id, platform, key[1] if key else None, tool, target, real, json.dumps(stored), now)).lastrowid
-    return sid
+    return real, platform, key
 
 
 def _not_synced_target(conn, key, person_id):
@@ -1169,11 +1384,28 @@ def existing(conn, tool, target, folder=None):
     """The id of the source of ``tool`` that is already there for a target:
     the same one in any case (X, TikTok and YouTube names are not
     case-sensitive), or one that downloads into the same folder (x.com and
-    twitter.com links to one profile). Else None."""
-    row = conn.execute("SELECT id FROM sources WHERE tool = ? AND (lower(target) = lower(?) OR folder = ?) "
-                       "ORDER BY lower(target) = lower(?) DESC, id LIMIT 1",
+    twitter.com links to one profile). Else, as a profile-only source with
+    no tool (NONE) is the same profile whatever the tool: a NONE source of
+    that profile, or for NONE, one of any tool. Else None."""
+    row = conn.execute("SELECT id FROM sources WHERE tool = ? AND (lower(target) = lower(?) "
+                       "OR (folder = ? AND folder != '')) ORDER BY lower(target) = lower(?) DESC, id LIMIT 1",
                        (tool, target, folder, target)).fetchone()
-    return row[0] if row else None
+    if row:
+        return row[0]
+    key = profile_key(tool, target)
+    for sid, t, other in conn.execute("SELECT id, tool, target FROM sources WHERE tool != ? "
+                                      "AND (tool = ? OR ? = ?) ORDER BY id", (tool, NONE, tool, NONE)):
+        if profile_key(t, other) == key:
+            return sid
+    return None
+
+
+def profile_key(tool, target):
+    """A source's profile as one text whatever its tool: its link, lowercase
+    (instaloader's profile name as its link)."""
+    if tool == "instaloader":
+        return f"https://instagram.com/{target}".lower()
+    return target.lower()
 
 
 def _handle_account(conn, platform, handle, accounts=None):
@@ -1414,7 +1646,8 @@ def adopt_all(conn, roots, now):
     every source with no account whose folder holds posts now, however
     they came (a sync, a post saved into it, files put there and a
     rescan). Commits nothing. Returns which user tables changed."""
-    rows = [r for r in conn.execute("SELECT * FROM sources WHERE author_id IS NULL ORDER BY id").fetchall()
+    rows = [r for r in conn.execute("SELECT * FROM sources WHERE author_id IS NULL AND folder != '' "
+                                    "ORDER BY id").fetchall()
             if _has_posts(conn, r["platform"], r["folder"])]
     if not rows:
         return []
@@ -1436,7 +1669,10 @@ def _has_posts(conn, platform, folder):
 def _adopt(conn, src, roots, now, accounts, linked):
     """adopt for one source row with no account, in the caller's
     transaction. ``accounts``: db.accounts; ``linked``: the accounts linked
-    by this pass (their rows do not say so yet): never one from a person."""
+    by this pass (their rows do not say so yet): never one from a person.
+    A profile-only source with no folder (NONE) takes none."""
+    if not src["folder"]:
+        return []
     key = _folder_account(conn, src["platform"], src["folder"], roots, accounts)
     if key is None:
         return []

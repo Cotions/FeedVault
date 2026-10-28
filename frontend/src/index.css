@@ -4105,6 +4105,17 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .state-line { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
 .source-row.is-nosync .source-id > .creator-name, .source-row.is-nosync .source-summary { color: var(--text-dim); }
 .creator-sub.nosync-note { margin: 0 0 10px; white-space: normal; overflow: visible; }
+/* Profile only (#218): shown as theirs, never downloaded. Dimmed like a
+   source set to Don't sync; its Add-source toggle sits at the end of the
+   resolved line; the folder field of a profile given a downloader fills
+   what is left of its line. */
+.source-row.is-profile-only { border-style: dashed; }
+.source-row.is-profile-only .source-id > .creator-name { color: var(--text-dim); }
+.source-only-toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--text-dim); cursor: pointer; }
+.source-give-folder { flex: 1 1 220px; min-width: 0; }
+.profile-only-list { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 12px; }
+.profile-only-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.profile-only-add .page-filter { flex: 0 1 260px; min-width: 0; }
 
 /* ── Phone pass (#85) ───────────────────────────────────── */
 /* A phone, or any touch screen (a phone on its side is wider than 640px). */

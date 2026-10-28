@@ -57,9 +57,10 @@ function freeName(name, people) {
 
 /* A card's sources: which one to show (syncing, else a failed one, else
    the latest sync), its job, and those not syncing already. One set to
-   Don't sync never runs: no status, Sync, Options or warning for it. */
+   Don't sync never runs: no status, Sync, Options or warning for it; nor
+   does a profile only one (#218). */
 function cardSync(all, jobOf) {
-  const sources = (all || []).filter(s => !s.no_sync);
+  const sources = (all || []).filter(s => !s.no_sync && !s.profile_only);
   if (!sources.length) return null;
   const jobs = sources.map(jobOf);
   const job = jobs.find(j => j?.state === "running") || jobs.find(Boolean) || null;
@@ -827,7 +828,7 @@ export default function Creators() {
         {/* Hidden, not gone, while filtering, searching or selecting: a source being typed stays. */}
         <section className="sources-panel" aria-label="Sources" hidden={sel.active || filtering || searching}>
           <AddSource onAdded={sources.reload} onDirty={setNewSource} />
-          <SyncAllBar count={sourceList.filter(src => !src.no_sync).length} syncAll={syncAll} />
+          <SyncAllBar count={sourceList.filter(src => !src.no_sync && !src.profile_only).length} syncAll={syncAll} />
           {loose.length > 0 && (
             <ul className="source-list">
               {loose.map(src => (

@@ -75,13 +75,27 @@ export default function BioImport({ person, enabled, onAdded, onImported }) {
     }
   }
 
+  // Profile only (#218), by suggestion: as ticked, else as it came (its
+  // platform is profile only in Settings, or no downloader takes its site).
+  const [only, setOnly] = useState({});
+  const onlyOf = (a, key) => a.tool === "none" || (only[key] ?? !!a.profile_only);
+
+  // A new one: a source of theirs, profile only (download off, or following
+  // its listed platform; tool "none" when no downloader takes it) or not.
+  function sourceBody(a, key) {
+    const body = { target: a.url, person: person.id };
+    if (a.tool === "none") return { ...body, tool: "none" };
+    if (onlyOf(a, key) !== !!a.profile_only) body.options = { download: onlyOf(a, key) ? "off" : "on" };
+    return body;
+  }
+
   async function add(a, key) {
     setBusy(key);
     setError(null);
     try {
       const r = a.status === "indexed"
         ? await linkAccounts(person.id, { add: [{ platform: a.account.platform, id: a.account.id }] })
-        : await createSource({ target: a.url, person: person.id });
+        : await createSource(sourceBody(a, key));
       if (!r?.ok) { setError(r?.error || "Could not add it."); return; }
       setAdded(m => ({ ...m, [key]: true }));
       onAdded?.(a);
@@ -150,6 +164,7 @@ export default function BioImport({ person, enabled, onAdded, onImported }) {
                 const key = `${a.platform}:${a.handle.toLowerCase()}`;
                 const profile = safeUrl(a.profile_url, ["https:"]);
                 const done = added[key];
+                const profileOnly = a.status === "new" && onlyOf(a, key);
                 return (
                   <li key={key} className="person-account bio-import-row">
                     <PlatformIcon platform={a.platform} />
@@ -169,12 +184,23 @@ export default function BioImport({ person, enabled, onAdded, onImported }) {
                         <Icon name="external" size={15} />
                       </a>
                     )}
+                    {a.status === "new" && !done && (
+                      <label className="source-only-toggle"
+                             title={a.tool === "none" ? "No downloader takes this site (Settings → Link routing): it can only be a profile"
+                               : "Shown as theirs, never downloaded; its Options can turn downloading on later"}>
+                        <input type="checkbox" checked={profileOnly} disabled={a.tool === "none" || !!busy}
+                               onChange={e => setOnly(m => ({ ...m, [key]: e.target.checked }))} />
+                        Profile only
+                      </label>
+                    )}
                     {(a.status === "indexed" || a.status === "new") && (
                       <button type="button" className="btn-primary" disabled={!!busy || done}
-                              aria-label={`Add @${a.handle} on ${platformLabel(a.platform)}`}
-                              title={a.status === "indexed" ? "Link this account to them" : "Add it as a source of theirs (nothing is downloaded until you sync)"}
+                              aria-label={`${profileOnly ? "Add profile" : "Add"} @${a.handle} on ${platformLabel(a.platform)}`}
+                              title={a.status === "indexed" ? "Link this account to them"
+                                : profileOnly ? "Add it as a profile of theirs: shown with their accounts, never downloaded"
+                                  : "Add it as a source of theirs (nothing is downloaded until you sync)"}
                               onClick={() => add(a, key)}>
-                        {done ? <><Icon name="check" size={14} /> Added</> : busy === key ? "Adding…" : "Add"}
+                        {done ? <><Icon name="check" size={14} /> Added</> : busy === key ? "Adding…" : profileOnly ? "Add profile" : "Add"}
                       </button>
                     )}
                   </li>

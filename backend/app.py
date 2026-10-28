@@ -1193,11 +1193,11 @@ def sync_person(pid):
     if not people.exists(conn, pid):
         return jsonify({"ok": False, "error": "no such person"}), 404
     ids = sources.of_person(conn, pid)
-    queued, skipped, errors, not_synced = sync.sync_all(only=set(ids), scripts_ok=not _foreign_origin())
+    queued, skipped, errors, not_synced, only = sync.sync_all(only=set(ids), scripts_ok=not _foreign_origin())
     if queued:
         print(f"[jobs] sync person {pid}: {len(queued)} queued")
     return jsonify({"ok": True, "sources": len(ids), "jobs": queued, "skipped": skipped, "errors": errors,
-                    "not_synced": not_synced})
+                    "not_synced": not_synced, "profile_only": only})
 
 
 @app.get("/api/people/<int:pid>")
@@ -1423,7 +1423,8 @@ def bio_import(pid):
         print(f"[people] link-in-bio import of {shown}: {e}")
         return jsonify({"ok": False, "error": str(e)}), e.status
     read, table = biofetch.read(page.text, page.url, page.resolved), sources.routes(cfg)
-    accounts = biofetch.suggest(conn, pid, biofetch.page_links(read), table, cfg["media_roots"])
+    accounts = biofetch.suggest(conn, pid, biofetch.page_links(read), table, cfg["media_roots"],
+                                sources.profile_only_platforms(cfg))
     found, dropped = biofetch.shown_links(read, page.url, table)
     kept = links.keep(conn, pid, found, _link_now(), biofetch.MAX_SAVED)
     if kept is None:                           # deleted while the page was fetched
@@ -1761,19 +1762,31 @@ def _source_or_404(sid):
 @app.get("/api/sources/resolve")
 def resolve_source():
     """What pasting a profile link would add: the tool, platform, target and
-    default folder, shown before saving."""
+    default folder, shown before saving. ``tool=none``: as a profile-only
+    source with no downloader, of any site. A link the routing table does
+    not take says, in ``profile``, what it would be added as that way."""
     cfg = config.load()
+    tool = request.args.get("tool")
     try:
-        if request.args.get("tool") == "instaloader":
+        if tool == "instaloader":
             # A profile name or @name, as POST /api/sources takes it with that tool.
             r = sources.resolve_name(request.args.get("url"), cfg["media_roots"])
         else:
-            r = sources.resolve(request.args.get("url"), sources.routes(cfg), cfg["media_roots"])
+            r = sources.resolve(request.args.get("url"), sources.routes(cfg), cfg["media_roots"],
+                                tool=sources.NONE if tool == sources.NONE else None)
     except sources.Refused as e:
         # An answer, not a failed request: the page asks as the user types.
-        return jsonify({"ok": False, "error": str(e)})
+        out, table = {"ok": False, "error": str(e)}, sources.routes(cfg)
+        # Only a host the table lacks: a post's link is no profile either way.
+        if tool is None and sources.parse_url(request.args.get("url"), table)[0] is None:
+            try:
+                out["profile"] = {k: v for k, v in sources.resolve(request.args.get("url"), table, [],
+                                                                   tool=sources.NONE).items() if k != "folder"}
+            except sources.Refused:
+                pass
+        return jsonify(out)
     conn = db.connect()
-    folder = sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]
+    folder = (sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]) if r["folder"] else None
     # What a new source would start from: its platform's download defaults.
     defaults = sources.inherited(sources.new_row(r["tool"], r["platform"], r["target"]), cfg)
     sid = sources.existing(conn, r["tool"], r["target"], folder)
@@ -1781,6 +1794,9 @@ def resolve_source():
     off = sources.not_synced(conn, sources.row(conn, sid)) if sid is not None \
         else sources.resolved_not_synced(conn, r["tool"], r["platform"], r["target"], folder, cfg["media_roots"])
     out = {"ok": True, **r, "source": sid, "no_sync": off,
+           # Added as it is, it is profile only (#218): no downloader, or its
+           # platform is in Settings → Profile only.
+           "profile_only": r["tool"] == sources.NONE or not sources.wants_download(r["platform"], defaults, cfg),
            "choices": sources.choices(r["tool"], r["platform"], r["target"])}
     if _foreign_origin():
         return jsonify(out)       # not the defaults, nor the session they use (_foreign_source)
@@ -1827,11 +1843,20 @@ def create_source():
     if isinstance(session, dict) and session.get("mode") != "none" and _foreign_origin():
         return jsonify({"ok": False, "error": FOREIGN_REFUSED}), 403
     tool = body.get("tool")
-    if tool is not None and tool not in sources.TOOLS:
-        return jsonify({"ok": False, "error": f"tool must be one of: {', '.join(sources.TOOLS)}"}), 400
+    if tool is not None and tool not in (*sources.TOOLS, sources.NONE):
+        return jsonify({"ok": False, "error": f"tool must be one of: {', '.join((*sources.TOOLS, sources.NONE))}"}), 400
     cfg = config.load()
     table = sources.routes(cfg)
-    if tool == "instaloader":
+    if tool == sources.NONE:
+        # A profile only (#218), of any site: no downloader, no folder.
+        try:
+            r = sources.resolve(body.get("target"), table, cfg["media_roots"], tool=sources.NONE)
+        except sources.Refused as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        if body.get("folder") is not None:
+            return jsonify({"ok": False, "error": "a profile with no downloader has no folder"}), 400
+        target = r["target"]
+    elif tool == "instaloader":
         target = sources.parse_target(tool, body.get("target"))
         if target is None:
             return jsonify({"ok": False, "error": "target must be a profile name, @name or profile URL"}), 400
@@ -1858,6 +1883,9 @@ def create_source():
             return jsonify({"ok": False, "error": "account must be { platform, id }"}), 400
         account = account[0]
     platform = sources.PLATFORM[tool] if tool == "instaloader" else r["platform"]
+    if tool == sources.NONE and isinstance(body.get("options"), dict) and body["options"].get("download") == "on":
+        return jsonify({"ok": False, "error": "a profile with no downloader cannot download: leave tool out "
+                                              "so the routing table picks one", "needs_tool": True}), 400
     # Over what it inherits (its platform's download defaults): an option
     # not sent, or sent as it would be anyway, follows them.
     base = sources.inherited(sources.new_row(tool, platform, target), cfg)
@@ -1927,6 +1955,11 @@ def update_source(sid):
         # ones. It reads the options again at the end, so a schedule can change.
         return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
     sent = body["options"]
+    if "folder" in body:
+        return _give_tool(conn, s, sent, body["folder"])
+    if s["tool"] == sources.NONE and sent.get("download") == "on":
+        return jsonify({"ok": False, "error": sources.profile_only_error(conn, sources.row(conn, sid)),
+                        "needs_tool": True}), 400
     # What it has with those reset: the value it inherits (sources.update
     # then stores none for them, as for any option equal to it).
     base = {**s["options"], **{k: s["defaults"][k] for k in reset or ()}}
@@ -1951,7 +1984,7 @@ def update_source(sid):
     pinned = sent if body.get("pin") is True else {}
     changed = {k: options[k] for k in sources.OPTION_KEYS if options[k] != base[k] or k in pinned}
     sources.write(conn, sid, changed, [k for k in reset or () if k not in changed])
-    if options["schedule"] != s["options"]["schedule"]:
+    if options["schedule"] != s["options"]["schedule"] or options["download"] != s["options"]["download"]:
         scheduler.forget(sid)
     # A new schedule or session: a source the scheduler stopped is tried again.
     if options["schedule"] != s["options"]["schedule"] or options["session"] != s["options"]["session"]:
@@ -1960,6 +1993,46 @@ def update_source(sid):
         _set_source_person(conn, sid, person)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
+def _give_tool(conn, s, sent, folder):
+    """POST /api/sources/<id> with "folder" (a path, or null for the
+    default): a profile with no downloader (tool none, #218) becomes a
+    source that downloads, with the tool the routing table picks for its
+    link, into that folder, and ``sent`` options (download on, or platform
+    when its platform is not profile only)."""
+    if s["tool"] != sources.NONE:
+        return jsonify({"ok": False, "error": "only a profile with no downloader is given a folder; "
+                                              "this one has one"}), 400
+    if folder is not None and not isinstance(folder, str):
+        return jsonify({"ok": False, "error": "folder must be an absolute path inside a media root, or null"}), 400
+    cfg = config.load()
+    table = sources.routes(cfg)
+    try:
+        r = sources.resolve(s["target"], table, cfg["media_roots"])
+    except sources.Refused as e:
+        return jsonify({"ok": False, "error": f"no downloader takes this link: {e}"}), 400
+    refused = _script_refused(sent, r["tool"])
+    if refused:
+        return jsonify({"ok": False, "error": refused[0]}), refused[1]
+    base = sources.inherited(sources.new_row(r["tool"], r["platform"], r["target"]), cfg)
+    options, error = sources.parse_options({"download": s["options"]["download"], **sent}, base=base,
+                                           tool=r["tool"], platform=r["platform"], target=r["target"])
+    if not error and not sources.wants_download(r["platform"], options, cfg):
+        error = (f"{r['platform']} is profile only in Settings: send download on"
+                 if options["download"] == "platform" else "send download on, or platform")
+    error = error or sources.login_refused(options, r["platform"], sync.session_of(r["tool"], options, cfg))
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    try:
+        sources.give_tool(conn, s["id"], cfg["media_roots"], folder, table, options)
+    except sources.NotSynced as e:
+        return jsonify({"ok": False, "error": str(e), "no_sync": True}), 409
+    except sources.Refused as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    scheduler.forget(s["id"])
+    userdata.changed("sources")
+    return jsonify({"ok": True, "source": _source_or_404(s["id"])})
 
 
 def _set_source_person(conn, sid, pid):
@@ -2065,6 +2138,8 @@ def sync_source(sid):
         return jsonify({"ok": False, "error": str(e)}), 409
     except sync.NotSynced as e:
         return jsonify({"ok": False, "error": str(e), "no_sync": True}), 409
+    except sync.ProfileOnly as e:
+        return jsonify({"ok": False, "error": str(e), "profile_only": True}), 409
     except sync.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 403
     except jobs.BadRequest as e:
@@ -2075,10 +2150,11 @@ def sync_source(sid):
 
 @app.post("/api/sources/sync-all")
 def sync_all_sources():
-    queued, skipped, errors, not_synced = sync.sync_all(scripts_ok=not _foreign_origin())
+    queued, skipped, errors, not_synced, only = sync.sync_all(scripts_ok=not _foreign_origin())
     if queued:
         print(f"[jobs] sync all: {len(queued)} queued")
-    return jsonify({"ok": True, "jobs": queued, "skipped": skipped, "errors": errors, "not_synced": not_synced})
+    return jsonify({"ok": True, "jobs": queued, "skipped": skipped, "errors": errors, "not_synced": not_synced,
+                    "profile_only": only})
 
 
 @app.delete("/api/sources/<int:sid>")
@@ -2123,6 +2199,10 @@ def _public_config(cfg):
             "schedules_paused": cfg.get("schedules_paused") is True,
             "desktop_notifications": notify.enabled(cfg),
             "bio_import": biofetch.enabled(cfg),
+            # Settings → Profile only (#218): the platforms whose sources
+            # are never downloaded unless one says otherwise, and those to pick from.
+            "profile_only_platforms": sources.profile_only_platforms(cfg),
+            "platforms": sources.known_platforms(db.connect(), cfg),
             # yt-dlp's metadata mode none embeds with it (sync.yt_dlp_mode).
             "ffmpeg": thumbs.have_ffmpeg(),
             # Settings → Download defaults: one block per tool and platform.
@@ -2204,6 +2284,10 @@ def _set_config(body):
         if not isinstance(body["bio_import"], bool):
             return jsonify({"ok": False, "error": "bio_import must be true or false"})
         changes["bio_import"] = body["bio_import"]
+    if "profile_only_platforms" in body:
+        changes["profile_only_platforms"], error = sources.clean_platforms(body["profile_only_platforms"])
+        if error:
+            return jsonify({"ok": False, "error": error})
     if "source_defaults" in body:
         defaults, error = sources.clean_defaults(body["source_defaults"], cfg.get("source_defaults"))
         error = error or _defaults_refused(body["source_defaults"], defaults, cfg)
@@ -2244,6 +2328,10 @@ def _set_config(body):
     # A new tool-level session: the sources using it that the scheduler stopped are tried again.
     resumed = [sources.resume_tool(db.connect(), t) for t, was in sessions.items()
                if was != sync.session_of(t, {"session": None}, cfg)]
+    if "profile_only_platforms" in changes:
+        # A source that stops or starts downloading: its schedule's note goes.
+        for (sid,) in db.connect().execute("SELECT id FROM sources").fetchall():
+            scheduler.forget(sid)
     if "source_defaults" in changes:
         # As for a source's own: a schedule or session it inherits that
         # changed, and the scheduler tries a source it stopped again.

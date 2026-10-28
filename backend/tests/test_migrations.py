@@ -260,8 +260,8 @@ def test_source_options_become_overrides(tmp_path, monkeypatch):
         {"v": 2}, {"v": 2}, {"v": 2},
         {"v": 2, "media": "videos"},
     ]
-    # The frozen defaults of migration 26 are BUILTIN's before metadata modes.
-    assert db._OPTIONS_25 == {k: v for k, v in sources.BUILTIN.items() if k != "metadata"}
+    # The frozen defaults of migration 26 are BUILTIN's before metadata modes and download (#218).
+    assert db._OPTIONS_25 == {k: v for k, v in sources.BUILTIN.items() if k not in ("metadata", "download")}
 
 
 def test_no_sync_tables_added_and_safe_to_run_again(tmp_path, monkeypatch):

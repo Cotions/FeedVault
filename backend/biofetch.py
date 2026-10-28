@@ -738,15 +738,17 @@ def page_links(page):
     return out
 
 
-_BEFORE_HANDLE = {"user", "users", "u", "profile", "channel", "c", "en", "ja", "member", "creator"}
+_BEFORE_HANDLE = {"user", "users", "u", "profile", "channel", "c", "en", "ja", "member", "creator", "artist"}
 
 
-def profile(link, table):
+def profile(link, table, any_host=False):
     """(platform, handle, url, tool, target) of a link to a profile the
     routing table knows, else None: a post, a video, a search or a site's
     home page is not one. ``url`` is the link as sources.parse_url
-    normalizes it (https, the table's host, the path checked)."""
-    parsed, _ = sources.parse_url(link, table)
+    normalizes it (https, the table's host, the path checked). With
+    ``any_host``, any site's profile, sources.NONE as the tool of one the
+    table does not know."""
+    parsed, _ = sources.parse_url(link, table, any_host)
     if parsed is None:
         return None
     url, host, tool = parsed
@@ -787,20 +789,28 @@ def _account(a):
     return {k: a[k] for k in ("platform", "id", "handle", "name", "count", "url")}
 
 
-def suggest(conn, pid, found_links, table, roots):
+def suggest(conn, pid, found_links, table, roots, profile_only=()):
     """[suggestion] for a person from a page's links (page_links): the
-    profiles the routing table knows, each once, at most MAX_SUGGESTIONS.
+    profiles the routing table knows, and those of the ``profile_only``
+    platforms (Settings → Profile only, #218) whatever the table says, each
+    once, at most MAX_SUGGESTIONS.
 
     A suggestion: {platform, handle, url, tool, status, profile_url,
-    account, person, source}. ``status``: "linked" (theirs already, as an account or a
+    account, person, source, profile_only}. ``status``: "linked" (theirs already, as an account or a
     source), "other" (``person``'s), "indexed" (an account in the index
     linked to nobody: add it to them), "source" (a source linked to nobody
-    yet), "new" (nothing downloaded: add it as a source of theirs)."""
+    yet), "new" (nothing downloaded: add it as a source of theirs).
+    ``profile_only``: added, it is a profile-only source (no downloader,
+    tool sources.NONE, or its platform is listed)."""
     accounts = db.accounts(conn)
     by_name = _by_name(accounts)
     out, seen = [], set()
     for link in found_links:
         found = profile(link, table)
+        if found is None and profile_only:
+            found = profile(link, table, any_host=True)
+            if found is not None and found[0] not in profile_only:
+                found = None
         if found is None:
             continue
         platform, handle, url, tool, target = found
@@ -831,7 +841,8 @@ def suggest(conn, pid, found_links, table, roots):
         out.append({"platform": platform, "handle": handle, "url": url, "tool": tool, "status": status,
                     "profile_url": (account or {}).get("url") or db.profile_url(platform, own),
                     "account": _account(account) if account else None,
-                    "person": {"id": owner["id"], "name": owner["name"]} if owner else None, "source": sid})
+                    "person": {"id": owner["id"], "name": owner["name"]} if owner else None, "source": sid,
+                    "profile_only": tool == sources.NONE or platform in profile_only})
     return out
 
 

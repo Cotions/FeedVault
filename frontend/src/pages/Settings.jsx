@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders, saveSourceDefaults, applySourceDefault } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders, saveSourceDefaults, applySourceDefault, saveProfileOnlyPlatforms } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED, SLIM_KIND, slimJobs } from "../lib/jobs";
@@ -579,6 +579,74 @@ function BioImportCard({ on, onSaved }) {
         <input type="checkbox" checked={on} disabled={busy} onChange={e => set(e.target.checked)} />
         <span>Import accounts from a link-in-bio page</span>
       </label>
+      {msg && <div className="msg err" role="alert">{msg}</div>}
+    </div>
+  );
+}
+
+/* Settings → Sync → Profile only (#218): the platforms whose sources are
+   shown as theirs and never downloaded, unless a source's own Download
+   says always. One switch per platform FeedVault knows (routed, or of a
+   source), and a field for another (a site no downloader takes yet).
+   Saved at once, like the switches above. */
+const PLATFORM_NAME = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+
+function ProfileOnlyCard({ listed, platforms, onSaved }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [extra, setExtra] = useState("");
+  const ref = useRef(null);
+  const location = useLocation();
+  useEffect(() => {
+    if (location.hash === "#profile-only") ref.current?.scrollIntoView({ block: "start" });
+  }, [location.hash, location.key]);
+  const on = new Set(listed);
+  const all = [...new Set([...platforms, ...listed])].sort();
+  const typed = extra.trim().toLowerCase();
+
+  async function save(next) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await saveProfileOnlyPlatforms([...next].sort());
+      if (r?.ok === false) setMsg(r.error || "Save failed.");
+      else { setExtra(""); onSaved(); }
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const flip = (platform, value) => {
+    const next = new Set(on);
+    if (value) next.add(platform); else next.delete(platform);
+    save(next);
+  };
+
+  return (
+    <div className="card" id="profile-only" ref={ref}>
+      <div className="card-title">Profile only</div>
+      <p className="page-lede">
+        A source on a platform ticked here is shown as theirs (on their page, with their accounts) and never
+        downloaded: no sync, scheduled or not, no folder. A source&rsquo;s own Download (its Options) can say always
+        or never instead. Already downloaded posts stay.
+      </p>
+      <div className="profile-only-list">
+        {all.map(platform => (
+          <label key={platform} className="dl-toggle">
+            <input type="checkbox" checked={on.has(platform)} disabled={busy} onChange={e => flip(platform, e.target.checked)} />
+            <PlatformIcon platform={platform} />
+            <span>{platformLabel(platform)}</span>
+          </label>
+        ))}
+      </div>
+      <form className="profile-only-add" onSubmit={e => { e.preventDefault(); if (PLATFORM_NAME.test(typed)) flip(typed, true); }}>
+        <input type="text" className="page-filter" aria-label="Another platform" placeholder="Another: twitch…"
+               value={extra} maxLength={64} disabled={busy} onChange={e => setExtra(e.target.value)} />
+        <button type="submit" className="btn-secondary" disabled={busy || !PLATFORM_NAME.test(typed) || on.has(typed)}>
+          <Icon name="plus" size={13} />Add
+        </button>
+      </form>
       {msg && <div className="msg err" role="alert">{msg}</div>}
     </div>
   );
@@ -1485,7 +1553,8 @@ const TABS = [
   { id: "about",      label: "About",      icon: "info" },
 ];
 // Cards linked to from elsewhere (/settings#downloaders), and their tab.
-const ANCHORS = { downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "download-defaults": "sync", "slim-metadata": "sync" };
+const ANCHORS = { downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "download-defaults": "sync", "slim-metadata": "sync",
+  "profile-only": "sync" };
 
 function tabOf(hash) {
   const h = hash.replace(/^#/, "");
@@ -1555,6 +1624,7 @@ export default function Settings() {
               </div>
               <div className="settings-group" hidden={tab !== "sync"}>
                 <SchedulesCard paused={config.schedules_paused === true} onSaved={reload} />
+                <ProfileOnlyCard listed={config.profile_only_platforms || []} platforms={config.platforms || []} onSaved={reload} />
                 <DesktopCard on={config.desktop_notifications === true} onSaved={reload} />
                 <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} onDirty={onDirty} />
                 <MetadataCard current={Object.fromEntries(["instaloader", "gallery-dl", "yt-dlp"].map(t => [t, config[t]?.metadata]))}

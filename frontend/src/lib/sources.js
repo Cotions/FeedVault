@@ -17,6 +17,16 @@ export function sourceName(s) {
   return s.tool === "instaloader" ? `@${s.target}` : s.target.replace(/^https:\/\//, "");
 }
 
+// A source's Download option (#218, docs/API.md "Profile only"): [value, label, what it does].
+export const DOWNLOADS = [
+  ["platform", "Follow platform", ""],
+  ["on", "Always", "downloads it, even on a platform set to profile only"],
+  ["off", "Never", "profile only: shown as theirs, never downloaded"],
+];
+
+// Whether a Download value downloads, ``platformOnly``: its platform is profile only.
+export const downloadWanted = (download, platformOnly) => download === "on" || (download !== "off" && !platformOnly);
+
 // last_result.error → a short badge
 export const ERRORS = {
   rate_limited: "rate limited",
@@ -97,7 +107,10 @@ export function useSyncAll() {
       for (const e of r.errors || []) toast(`Source ${e.source}: ${e.error}`, "err");
       if (!r.jobs.length) {
         toast(r.skipped ? "Every source is already syncing."
-          : r.not_synced ? "No source to sync: the others are set to Don't sync." : "No source to sync.");
+          : r.not_synced || r.profile_only
+            ? `No source to sync: the others are ${[r.not_synced && "set to Don't sync", r.profile_only && "profile only"]
+              .filter(Boolean).join(" or ")}.`
+            : "No source to sync.");
         return;
       }
       started(r.jobs[0]);
