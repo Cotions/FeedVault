@@ -1,5 +1,6 @@
 /* People and accounts (docs/API.md "People"): matching for the search boxes
    and pickers, and the bits of text every page shows the same way. */
+import { ratingMatch } from "./rating.js";
 
 // Everything an account is known by: handles old and new, names, its id and
 // folder-name aliases. Lowercase, for substring search.
@@ -145,10 +146,11 @@ export function countryName(code) {
 /* The Creators filters: each null for any, "" for "not set", else the
    value wanted (a label: one of theirs). */
 /* sync: null (any), "on" (synced) or "off" (set to Don't sync, see
-   notSynced). The others: a person's attributes, which an account linked to
-   nobody has none of. */
-export const NO_FILTERS = { gender: null, country: null, label: null, sync: null };
-export const attributeFiltersOn = f => f.gender != null || f.country != null || f.label != null;
+   notSynced). rating: null (any), "" (not rated) or "1" to "10" (rated
+   at least that: lib/rating.js). The others: a person's attributes, which
+   an account linked to nobody has none of. */
+export const NO_FILTERS = { gender: null, country: null, label: null, rating: null, sync: null };
+export const attributeFiltersOn = f => f.gender != null || f.country != null || f.label != null || f.rating != null;
 export const filtersOn = f => attributeFiltersOn(f) || f.sync != null;
 export const SYNC_FILTERS = ["on", "off"];
 export const syncFilter = v => (SYNC_FILTERS.includes(v) ? v : null);
@@ -164,6 +166,7 @@ export const syncMatch = (row, sync) => sync == null || (sync === "off") === not
 
 export function attributesMatch(p, f) {
   if (!syncMatch(p, f.sync)) return false;
+  if (!ratingMatch(p, f.rating)) return false;
   if (f.gender != null && fold(p.gender) !== fold(f.gender)) return false;
   if (f.country != null && (p.country || "") !== f.country) return false;
   if (f.label === "") return !(p.labels || []).length;
@@ -189,7 +192,10 @@ export function attributeChoices(people) {
     countries: count(people.map(p => p.country).filter(Boolean), v => v)
       .sort((a, b) => countryName(a.value).localeCompare(countryName(b.value))),
     labels: count(people.flatMap(p => p.labels || [])),
-    none: { gender: none(p => p.gender), country: none(p => p.country), label: none(p => p.labels?.length) },
+    none: { gender: none(p => p.gender), country: none(p => p.country), label: none(p => p.labels?.length),
+            rating: none(p => p.rating) },
+    // How many are rated at least n, for n from 1 to 10 (index n - 1).
+    ratedAtLeast: Array.from({ length: 10 }, (_, i) => people.filter(p => (p.rating || 0) > i).length),
   };
 }
 

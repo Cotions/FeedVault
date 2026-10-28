@@ -2,8 +2,10 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Icon from "./Icon";
 import TagInput from "./TagInput";
+import { RatingInput } from "./Rating";
 import { cleanGender, countryFlag, countryName, countryOptions, GENDER_PRESETS, MAX_GENDER, withLabel } from "../lib/people";
 import { usePopoverUnder } from "../lib/usePopoverUnder";
+import { starsText } from "../lib/rating";
 
 const MAX_LABELS = 50;
 
@@ -91,10 +93,12 @@ export function CountryPicker({ codes, value, onChange, id }) {
    the notes are: nothing is sent until Save (Enter in the gender field,
    or in an empty label field, saves too).
 
+   The rating is apart: a click on the stars saves it at once (onRate).
+
    Props: person, attributes (GET /api/people/attributes, or null while it
    loads), draft ({ gender, country, labels }, each null when untouched),
-   onDraft(changes), dirty, busy, onSave(), onDiscard(). */
-export default function PersonAbout({ person: p, attributes, draft, onDraft, dirty, busy, onSave, onDiscard }) {
+   onDraft(changes), dirty, busy, onSave(), onDiscard(), onRate(rating or null). */
+export default function PersonAbout({ person: p, attributes, draft, onDraft, dirty, busy, onSave, onDiscard, onRate }) {
   const ids = useId();
   const gender = draft.gender ?? p.gender;
   const country = draft.country ?? p.country;
@@ -108,6 +112,14 @@ export default function PersonAbout({ person: p, attributes, draft, onDraft, dir
     <section className="person-section person-about">
       <h3 className="card-title">About</h3>
       <form className="person-about-form" onSubmit={e => { e.preventDefault(); if (dirty && !busy) onSave(); }}>
+        <div className="about-field about-rating">
+          <span className="about-label">Rating</span>
+          <div className="about-rating-line">
+            <RatingInput value={p.rating} busy={busy} onChange={onRate} />
+            <span className="creator-sub">{p.rating ? `${starsText(p.rating)} of 5` : "Not rated"}</span>
+          </div>
+        </div>
+
         <div className="about-field">
           <label className="about-label" htmlFor={`${ids}-gender`}>Gender</label>
           <div className="about-gender">

@@ -550,6 +550,7 @@ export default function PersonPage() {
               busy={busy}
               onSave={() => save(aboutChanges, () => { setAbout({}); attrApi.reload(); })}
               onDiscard={() => setAbout({})}
+              onRate={rating => save({ rating })}
             />
           </div>
         </div>

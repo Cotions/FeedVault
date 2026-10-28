@@ -655,13 +655,20 @@ def _merge_links_28(conn, keep, other):
     return True
 
 
+def _migrate_29(conn):
+    """A person's rating (people.py): 1 to 10, the half stars of five (7 is
+    three and a half), NULL for not rated; everyone starts unrated. User
+    data, exported with the person in people.json."""
+    conn.execute("ALTER TABLE people ADD COLUMN rating INTEGER CHECK (rating BETWEEN 1 AND 10)")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
               _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
-              _migrate_26, _migrate_27, _migrate_28]
+              _migrate_26, _migrate_27, _migrate_28, _migrate_29]
 
 BACKUPS_KEPT = 3
 

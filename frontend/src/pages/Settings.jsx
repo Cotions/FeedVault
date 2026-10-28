@@ -20,6 +20,8 @@ import ProfileSettings from "../components/ProfileSettings";
 import BrowserPick from "../components/BrowserPick";
 import { cookiesFix, cookiesSession } from "../lib/browserProfiles";
 import PageHeader from "../components/PageHeader";
+import { Stars } from "../components/Rating";
+import { bandsProblem, DEFAULT_RATING_COLORS, MAX_RATING, starsShort, withBand } from "../lib/rating";
 
 /* A card tells the page whether it holds unsaved edits (``onDirty(name,
    dirty)``), so leaving Settings asks first (QA pass 3); a card that goes
@@ -1544,6 +1546,112 @@ function LinkLabelsCard({ saved, onSaved, msg, setMsg, onDirty }) {
   );
 }
 
+/* Settings → Appearance: the border a rated person's card takes on
+   Creators, by band (config.json's rating_colors, docs/API.md "Rating
+   colors"). Everything here is a draft until Save; Reset to defaults puts
+   the defaults in the draft. Each band shows a sample card. */
+function RatingColorsCard({ saved, onSaved, msg, setMsg, onDirty }) {
+  const [draft,  setDraft]  = useState(saved);
+  const [saving, setSaving] = useState(false);
+  const bands = draft.bands;
+  const problem = bandsProblem(bands);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  useReportDirty(onDirty, "Rating colors", dirty);
+
+  function edit(next) {
+    setDraft(d => ({ ...d, ...next }));
+    setMsg(null);
+  }
+  const editBand = (i, change) => edit({ bands: bands.map((b, j) => (j === i ? { ...b, ...change } : b)) });
+
+  async function save(e) {
+    e.preventDefault();
+    if (problem) return;
+    setSaving(true);
+    setMsg(null);
+    try {
+      const r = await saveSettings({ rating_colors: draft });
+      if (r?.ok) { onSaved(); setMsg({ ok: true, text: "Saved. The Creators page shows these colors." }); }
+      else setMsg({ ok: false, text: r?.error || "Save failed." });
+    } catch (err) {
+      setMsg({ ok: false, text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const added = withBand(bands);
+  const isDefault = JSON.stringify(draft) === JSON.stringify(DEFAULT_RATING_COLORS);
+  return (
+    <div className="card" id="rating-colors">
+      <div className="card-title">Rating colors</div>
+      <p className="page-lede">
+        A rated person&rsquo;s card on Creators takes the color of their rating&rsquo;s band: the band that
+        starts at or below their rating, the highest one. A rating below the first band, and a person not
+        rated, keep the plain border. Their stars are on the card either way.
+      </p>
+      <form className="insta-form" onSubmit={save}>
+        <label className="dl-toggle">
+          <input type="checkbox" checked={draft.enabled} onChange={e => edit({ enabled: e.target.checked })} />
+          <span>Color the border of a rated person&rsquo;s card</span>
+        </label>
+        <ul className="route-list rating-bands" aria-label="Rating bands">
+          {bands.map((b, i) => {
+            const top = i === bands.length - 1;
+            // What it covers: up to the next band's start (the top band, to 5 stars).
+            const reach = top ? "Top band" : bands[i + 1].min > b.min ? `Up to ${starsShort(bands[i + 1].min - 1)}★` : "";
+            return (
+              <li key={i} className="rating-band">
+                <input type="color" className="rating-band-color" value={b.color}
+                       aria-label={`Color from ${starsShort(b.min)} stars`}
+                       onChange={e => editBand(i, { color: e.target.value.toLowerCase() })} />
+                <label className="rating-band-min">
+                  <span>From</span>
+                  <select className="sort-select" value={b.min} aria-label={`Band ${i + 1} starts at`}
+                          onChange={e => editBand(i, { min: Number(e.target.value) })}>
+                    {Array.from({ length: MAX_RATING }, (_, n) => n + 1).map(n => (
+                      <option key={n} value={n}>{starsShort(n)}★</option>
+                    ))}
+                  </select>
+                </label>
+                <span className={`rating-sample is-rated${top ? " is-top-band" : ""}${draft.enabled ? "" : " is-off"}`}
+                      style={{ "--rating-color": b.color }}>
+                  <Stars rating={b.min} />
+                  <span className="creator-sub" title={reach}>{reach}</span>
+                </span>
+                <button type="button" className="del-btn del-btn-danger" disabled={bands.length <= 1}
+                        aria-label={`Remove the band from ${starsShort(b.min)} stars`} title="Remove"
+                        onClick={() => edit({ bands: bands.filter((_, j) => j !== i) })}>
+                  <Icon name="trash" size={15} />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        {problem && <div className="link-label-hint is-err">{problem}</div>}
+        <div className="settings-actions rating-actions">
+          <button type="button" className="btn-secondary" disabled={!added} onClick={() => edit({ bands: added })}
+                  title={added ? "A band half a star above the last" : "The last band starts at 5 stars, or there are 10"}>
+            <Icon name="plus" size={14} />Add a band
+          </button>
+          <button type="submit" className="btn-primary" disabled={saving || !dirty || !!problem}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button type="button" className="btn-ghost" disabled={isDefault} onClick={() => edit(DEFAULT_RATING_COLORS)}>
+            Reset to defaults
+          </button>
+          {dirty && (
+            <button type="button" className="btn-ghost" onClick={() => { setDraft(saved); setMsg(null); }}>
+              Discard changes
+            </button>
+          )}
+        </div>
+        {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="alert">{msg.text}</div>}
+      </form>
+    </div>
+  );
+}
+
 const TABS = [
   { id: "library",    label: "Library",    icon: "folder" },
   { id: "profiles",   label: "Profiles",   icon: "vault" },
@@ -1553,7 +1661,7 @@ const TABS = [
   { id: "about",      label: "About",      icon: "info" },
 ];
 // Cards linked to from elsewhere (/settings#downloaders), and their tab.
-const ANCHORS = { downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "download-defaults": "sync", "slim-metadata": "sync",
+const ANCHORS = { "rating-colors": "appearance", downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "download-defaults": "sync", "slim-metadata": "sync",
   "profile-only": "sync" };
 
 function tabOf(hash) {
@@ -1635,6 +1743,10 @@ export default function Settings() {
                   <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
                                saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} onDirty={onDirty} />
                 ))}
+              </div>
+              <div className="settings-group" hidden={tab !== "appearance"}>
+                <RatingColorsCard key={JSON.stringify(config.rating_colors)} saved={config.rating_colors || DEFAULT_RATING_COLORS}
+                                  onSaved={reload} {...note("rating_colors")} onDirty={onDirty} />
               </div>
               <div className="settings-group" hidden={tab !== "about"}>
                 <div className="card">

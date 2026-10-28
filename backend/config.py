@@ -439,6 +439,68 @@ def clean_tools(tools, known):
     return out, None
 
 
+# Rating colors (Settings → Appearance): the border a person's card on
+# Creators takes from their rating (people.py, 1 to 10: half stars). One
+# color per band; a rating takes the band with the highest ``min`` at or
+# below it, and one below the first band keeps the plain border, as an
+# unrated person always does. Shared by every profile, as the rest of
+# config.json is. Unset (or not readable: a hand-edited file), the defaults.
+RATING_COLORS_DEFAULT = {"enabled": True, "bands": [
+    {"min": 1, "color": "#d9534f"},            # red
+    {"min": 4, "color": "#f0ad4e"},            # orange: two stars
+    {"min": 6, "color": "#e6c84a"},            # yellow: three
+    {"min": 8, "color": "#5cb85c"},            # green: four
+    {"min": 10, "color": "#d4af37"},           # gold: five
+]}
+MAX_RATING_BANDS = 10
+_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def clean_rating_colors(value):
+    """Rating colors from Settings, or (None, error): {"enabled": bool,
+    "bands": [{"min", "color"}]}, 1 to 10 bands, each ``min`` a whole
+    number from 1 to 10, strictly increasing, each color ``#rrggbb``
+    (stored lowercase). Returns (value, None)."""
+    if not isinstance(value, dict) or set(value) != {"enabled", "bands"}:
+        return None, "rating_colors must be { enabled: true or false, bands: [{ min, color }] }"
+    if not isinstance(value["enabled"], bool):
+        return None, "rating_colors.enabled must be true or false"
+    bands = value["bands"]
+    if not isinstance(bands, list) or not 1 <= len(bands) <= MAX_RATING_BANDS:
+        return None, f"rating_colors.bands must be a list of 1 to {MAX_RATING_BANDS} bands"
+    out = []
+    for b in bands:
+        if not isinstance(b, dict) or set(b) != {"min", "color"}:
+            return None, "each band must be { min, color }"
+        low, color = b["min"], b["color"]
+        if not isinstance(low, int) or isinstance(low, bool) or not 1 <= low <= 10:
+            return None, "a band's min must be a whole number from 1 to 10 (half stars: 4 is two stars)"
+        if out and low <= out[-1]["min"]:
+            return None, "the bands' min must go up, each above the one before"
+        if not isinstance(color, str) or not _COLOR.fullmatch(color):
+            return None, f"a band's color must be #rrggbb, not {str(color)[:20]!r}"
+        out.append({"min": low, "color": color.lower()})
+    return {"enabled": value["enabled"], "bands": out}, None
+
+
+def rating_colors(cfg):
+    """The rating colors in use: config.json's, else the defaults."""
+    saved = cfg.get("rating_colors")
+    if saved is not None:
+        clean, error = clean_rating_colors(saved)
+        if error is None:
+            return clean
+    return {"enabled": RATING_COLORS_DEFAULT["enabled"], "bands": [dict(b) for b in RATING_COLORS_DEFAULT["bands"]]}
+
+
+def rating_band(rating, bands):
+    """The band a rating takes: the one with the highest ``min`` at or below
+    it, or None (not rated, or below the first band)."""
+    if rating is None:
+        return None
+    return next((b for b in reversed(bands) if b["min"] <= rating), None)
+
+
 def db_path(cfg=None):
     cfg = cfg or load()
     return os.path.join(cfg["data_directory"], "feedvault.db")

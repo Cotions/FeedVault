@@ -28,6 +28,10 @@ MAX_NOTES = 5000
 MAX_ACCOUNTS = 500              # accounts per call
 MAX_GENDER = 40
 MAX_LABELS = 50                 # labels per person
+# A rating is 1 to 10: the half stars of five (7 is three and a half), NULL
+# for not rated.
+MAX_RATING = 10
+KEEP = object()                 # update(): leave the rating as it is (None clears it)
 # Offered as quick choices; any other gender is kept as typed. One typed in
 # another case is stored as the preset.
 GENDERS = ("Female", "Male", "Transgender")
@@ -67,6 +71,14 @@ def clean_country(value):
     return value if value == "" or value in COUNTRIES else None
 
 
+def clean_rating(value):
+    """A rating: a whole number from 1 to MAX_RATING (not 3.5, not "7", not
+    true), or None when it is not one. Not rated is sent as null, not 0."""
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_RATING:
+        return value
+    return None
+
+
 def _fold(name):
     """A label as SQLite's NOCASE compares it: ASCII letters only."""
     return name.translate(_ASCII_LOWER)
@@ -90,12 +102,13 @@ def clean_labels(value):
 
 
 def restore_row(row):
-    """A people.json row as the API would store it: a gender, country or
-    picture name it would refuse (the file edited by hand) is dropped, not
-    the person."""
+    """A people.json row as the API would store it: a gender, country,
+    picture name or rating it would refuse (the file edited by hand) is
+    dropped, not the person. A file from before ratings has none: unrated."""
     return {**row, "gender": clean_gender(row.get("gender") or "") or "",
             "country": clean_country(row.get("country") or "") or "",
-            "avatar": avatars.clean_name(row.get("avatar") or "") or ""}
+            "avatar": avatars.clean_name(row.get("avatar") or "") or "",
+            "rating": clean_rating(row.get("rating"))}
 
 
 def restore_label(row):
@@ -271,7 +284,7 @@ def _person(row, accounts, labels, no_sync=False):
     return {
         "id": row["id"], "name": row["name"], "notes": row["notes"], "created_at": row["created_at"],
         "gender": row["gender"], "country": row["country"], "labels": labels,
-        "avatar": row["avatar"] or None, "no_sync": no_sync,
+        "avatar": row["avatar"] or None, "rating": row["rating"], "no_sync": no_sync,
         "accounts": accounts,
         "platforms": sorted({a["platform"] for a in accounts}),
         "count": sum(a["count"] for a in accounts),
@@ -448,9 +461,11 @@ def _set_labels(conn, pid, labels, now):
             conn.execute("INSERT INTO person_labels(person_id, label, at) VALUES (?, ?, ?)", (pid, name, now))
 
 
-def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=None, now=0, avatar=None):
+def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=None, now=0, avatar=None,
+           rating=KEEP):
     """Change what is given; None leaves it as it is (``avatar``: '' for none;
-    the caller drops the files of the one replaced, avatars.drop_unused)."""
+    the caller drops the files of the one replaced, avatars.drop_unused).
+    ``rating``: 1 to 10, None for not rated, KEEP to leave it."""
     if name is not None and not _name_free(conn, name, but=(pid,)):
         raise Refused("a person with that name exists")
     try:
@@ -467,6 +482,8 @@ def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=N
                 _set_labels(conn, pid, labels, now)
             if avatar is not None:
                 conn.execute("UPDATE people SET avatar = ? WHERE id = ?", (avatar, pid))
+            if rating is not KEEP:
+                conn.execute("UPDATE people SET rating = ? WHERE id = ?", (rating, pid))
     except sqlite3.IntegrityError:              # the name, taken by another request since the check
         raise Refused("a person with that name exists")
     return person(conn, pid)
@@ -504,7 +521,9 @@ def merge(conn, ids, name, accounts, now):
     notes and name stay, the others' accounts, sources and saved web links
     move to it and they are gone. Labels are put together; the gender, the
     country and the picture are those of the first person (in ``ids``) that
-    has one (the caller drops the files of the others', avatars.drop_unused)."""
+    has one (the caller drops the files of the others', avatars.drop_unused).
+    The rating is the highest of theirs: a merge never lowers anyone's,
+    whichever comes first (unrated when none of them is rated)."""
     keep = ids[0]
     if name is not None and not _name_free(conn, name, but=ids):
         raise Refused("a person with that name exists")
@@ -514,6 +533,7 @@ def merge(conn, ids, name, accounts, now):
     with conn:
         notes = [rows[i]["notes"].strip() for i in ids if rows[i]["notes"].strip()]
         first = lambda column: next((rows[i][column] for i in ids if rows[i][column]), "")  # noqa: E731
+        rating = max((rows[i]["rating"] for i in ids if rows[i]["rating"] is not None), default=None)
         web_links.merge_into(conn, keep, ids[1:])
         for other in ids[1:]:
             conn.execute("UPDATE person_accounts SET person_id = ? WHERE person_id = ?", (keep, other))
@@ -522,8 +542,9 @@ def merge(conn, ids, name, accounts, now):
             conn.execute("UPDATE OR IGNORE person_labels SET person_id = ? WHERE person_id = ?", (keep, other))
             conn.execute("DELETE FROM people WHERE id = ?", (other,))
         _attach(conn, keep, accounts, now)
-        conn.execute("UPDATE people SET notes = ?, gender = ?, country = ?, avatar = ? WHERE id = ?",
-                     ("\n\n".join(notes)[:MAX_NOTES], first("gender"), first("country"), first("avatar"), keep))
+        conn.execute("UPDATE people SET notes = ?, gender = ?, country = ?, avatar = ?, rating = ? WHERE id = ?",
+                     ("\n\n".join(notes)[:MAX_NOTES], first("gender"), first("country"), first("avatar"), rating,
+                      keep))
         if name is not None:
             conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, keep))
     return person(conn, keep)
