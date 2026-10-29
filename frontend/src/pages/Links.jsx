@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { getLinks, getPeople, createLink, updateLink, deleteLink, assignLinks, addLinkPerson, removeLinkPerson, deleteLinks } from "../lib/api";
 import { useApi } from "../lib/useApi";
+import { useLiveSearchParams } from "../lib/useLiveSearchParams";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
@@ -43,7 +44,7 @@ export default function Links() {
   const { unsortedLinks, refresh } = useJobs();
   const toast = useToast();
   const search = useHeaderSearch();
-  const [params, setParams] = useSearchParams();
+  const [params, setParams] = useLiveSearchParams();
   const kind   = ["social", "other"].includes(params.get("kind")) ? params.get("kind") : "";
   const site   = params.get("site") || "";
   const rawPerson = params.get("person") || "";
