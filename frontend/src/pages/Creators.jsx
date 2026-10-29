@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { getAuthors, getConfig, getPeople, getSuggestions, getNew, markSeen, createPerson, mergePeople, linkAccounts, dismissSuggestion, createSource } from "../lib/api";
 import { useApi } from "../lib/useApi";
+import { useLiveSearchParams } from "../lib/useLiveSearchParams";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
@@ -502,7 +503,7 @@ export default function Creators() {
     }
   }
   const [filter, setFilter] = useState("");
-  const [params, setParams] = useSearchParams();
+  const [params, setParams] = useLiveSearchParams();
   // Gender, country and label filters: from the address at first (a
   // person's label links here with ?label=), kept in it as they change.
   const [attrs, setAttrs] = useState(() => ({

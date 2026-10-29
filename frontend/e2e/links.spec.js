@@ -396,6 +396,36 @@ test("Links: a filter change asks before dropping a link's unsaved edits", async
   }
 });
 
+// #172: the router puts Clear filters in the address at once and renders it
+// in a transition; a Kind chosen before that render started from the
+// filters before the clear (`?q=…&kind=social`). Chosen in the same task as
+// the click, once the address is clear, so it always lands in between.
+test("Links: a filter changed right after Clear filters keeps the others cleared", async ({ page, request }) => {
+  const host = `e2e-clear-${Date.now()}.example`;
+  const ids = await makeLinks(request, [`https://${host}/a`]);
+  try {
+    await page.goto(`/links?q=${host}`);
+    await expect(page.locator(".link-list > li")).toHaveCount(1);
+    await idle(page);
+    const cleared = await page.evaluate(async () => {
+      const filters = document.querySelector(".links-filters");
+      [...filters.querySelectorAll("button")].find(b => b.textContent.includes("Clear filters")).click();
+      let n = 0;
+      while (location.search && n < 1000) { await Promise.resolve(); n++; }
+      const cleared = !location.search;
+      const kind = [...filters.querySelectorAll("select")].find(s => [...s.options].some(o => o.value === "social"));
+      kind.value = "social";
+      kind.dispatchEvent(new Event("change", { bubbles: true }));
+      return cleared;
+    });
+    expect(cleared).toBe(true);
+    await expect(page).toHaveURL("/links?kind=social");
+    await idle(page);
+  } finally {
+    for (const id of ids) await request.delete(`/api/links/${id}`, { headers: H });
+  }
+});
+
 // #126: an edit to an address saved already points at that link, as Add
 // does: every filter off, the link lit and in view, the edit still open.
 test("Links: an edit to a saved address lights the link that has it", async ({ page, request, pageErrors }) => {
