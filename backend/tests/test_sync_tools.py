@@ -240,9 +240,10 @@ def test_folder_escaped_for_yt_dlp(env, fake, client):
     args = sync._build_yt_dlp({"source": str(s["id"])})["args"]
     assert args[args.index("-o") + 1] == str(env["media"] / "100%% clips {x}") + "/" + sync.YT_DLP_NAME
     # gallery-dl takes -D as it is: no format string.
-    g = add(client, X, folder=str(folder))
+    other = env["media"] / "100% posts {x}"
+    g = add(client, X, folder=str(other))
     args = sync._build_gallery_dl({"source": str(g["id"])})["args"]
-    assert args[args.index("-D") + 1] == str(folder)
+    assert args[args.index("-D") + 1] == str(other)
 
 
 def test_argv_only_from_the_stored_source(env, fake, client):
@@ -733,10 +734,12 @@ def test_same_profile_twice_is_refused(env, client):
         assert "already" in post(client, "/api/sources", {"target": again}, 400)["error"], again
         r = get(client, f"/api/sources/resolve?url={again}")
         assert r["source"] is not None, again
-    # Another tool into the same folder is allowed (gallery-dl and yt-dlp for TikTok).
+    # Another tool is a source of its own, but never in the same folder (#174).
     add(client, "https://tiktok.com/@someone")
     set_config(routes={**sources.ROUTES, "tiktok.com": "gallery-dl"})
-    add(client, "https://tiktok.com/@someone")
+    r = post(client, "/api/sources", {"target": "https://tiktok.com/@someone"}, 400)
+    assert "is the folder of the yt-dlp source" in r["error"]
+    add(client, "https://tiktok.com/@someone", folder=str(env["media"] / "gallery-dl tiktok" / "someone"))
 
 
 # ---------------------------------------------------------------------------
