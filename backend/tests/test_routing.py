@@ -1,5 +1,7 @@
 """Profile links: the routing table, normalization, and adding a source by link."""
 
+import os
+
 from conftest import H
 
 import config
@@ -153,6 +155,41 @@ def test_create_by_link(env, client):
                  {"target": "https://x.com/$(id)"}, {"target": ["https://x.com/a"]}, {"target": "https://x.com/"},
                  {"target": "https://x.com/a", "tool": "sh"}]:
         assert post(client, "/api/sources", body, 400)["ok"] is False, body
+    assert db.connect().execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 4
+
+
+def test_two_tools_never_share_a_folder(env, client):
+    """instagram.com routed to gallery-dl: an instaloader source of the same
+    profile defaults to the same folder, and is refused it (#174)."""
+    media = env["media"]
+    post(client, "/api/config", {"routes": {**sources.ROUTES, "instagram.com": "gallery-dl"}})
+    g = post(client, "/api/sources", {"target": "https://instagram.com/someone"})["source"]
+    assert (g["tool"], g["folder"]) == ("gallery-dl", str(media / "instagram" / "someone"))
+    r = post(client, "/api/sources", {"tool": "instaloader", "target": "someone"}, 400)
+    assert r["error"] == (f"{media / 'instagram' / 'someone'} is the folder of the gallery-dl source for "
+                          "https://instagram.com/someone: two tools in one folder download posts twice; "
+                          "pick another folder")
+    for folder, where in [(media / "instagram" / "someone" / "x", "is inside the folder"),
+                          (media / "people", "holds the folder")]:
+        if where == "holds the folder":
+            post(client, "/api/sources", {"target": "https://instagram.com/other",
+                                          "folder": str(media / "people" / "other")})
+        r = post(client, "/api/sources", {"tool": "instaloader", "target": "someone", "folder": str(folder)}, 400)
+        assert f"{where} of the gallery-dl source" in r["error"], folder
+    os.symlink(media / "instagram" / "someone", media / "alias")             # followed
+    r = post(client, "/api/sources", {"tool": "instaloader", "target": "someone", "folder": str(media / "alias")},
+             400)
+    assert "is the folder of the gallery-dl source" in r["error"]
+    # A folder of its own is fine.
+    s = post(client, "/api/sources", {"tool": "instaloader", "target": "someone",
+                                      "folder": str(media / "instaloader" / "someone")})["source"]
+    assert s["tool"] == "instaloader"
+    # The other order: instaloader there first, gallery-dl refused its folder.
+    post(client, "/api/config", {"routes": sources.ROUTES})
+    post(client, "/api/sources", {"target": "https://instagram.com/third"})
+    post(client, "/api/config", {"routes": {**sources.ROUTES, "instagram.com": "gallery-dl"}})
+    r = post(client, "/api/sources", {"target": "https://instagram.com/third"}, 400)
+    assert r["error"].startswith(f"{media / 'instagram' / 'third'} is the folder of the instaloader source for third")
     assert db.connect().execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 4
 
 

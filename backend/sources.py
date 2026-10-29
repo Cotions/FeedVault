@@ -1327,6 +1327,9 @@ def _checked_folder(conn, roots, tool, target, folder, account, table, exclude=N
     there = existing(conn, tool, target, real, platform)
     if there is not None and there != exclude:
         raise Refused(f"there is already a {tool} source for {target} or its folder")
+    refused = _other_tool_folder(conn, tool, real, exclude)
+    if refused:
+        raise Refused(refused)
     if account is not None:
         key = people.canonical(conn, *account)
         if key not in db.accounts(conn) or key[0] != platform:
@@ -1351,6 +1354,32 @@ def _checked_folder(conn, roots, tool, target, folder, account, table, exclude=N
         raise Refused(f"{real} holds other accounts' posts ({shown}): pick the account's own folder, "
                       f"such as {default}")
     return real, platform, key
+
+
+def _other_tool_folder(conn, tool, folder, exclude=None):
+    """Why ``folder`` is refused to a source of ``tool`` when one of
+    another tool downloads into it, inside it or around it (symlinks
+    followed), else None: two tools name the same posts two ways and keep
+    two sets of stopping points (instaloader's stamps, gallery-dl's
+    archive), so posts come twice. ``exclude``: as _checked_folder's."""
+    real = os.path.realpath(folder)
+    for sid, other, target, f in conn.execute("SELECT id, tool, target, folder FROM sources "
+                                              "WHERE tool NOT IN (?, ?) AND folder != '' ORDER BY id",
+                                              (tool, NONE)):
+        if sid == exclude:
+            continue
+        theirs = os.path.realpath(f)
+        if real == theirs:
+            where = "is the folder"
+        elif real.startswith(theirs.rstrip(os.sep) + os.sep):
+            where = "is inside the folder"
+        elif theirs.startswith(real.rstrip(os.sep) + os.sep):
+            where = "holds the folder"
+        else:
+            continue
+        return (f"{folder} {where} of the {other} source for {target}: two tools in one folder "
+                f"download posts twice; pick another folder")
+    return None
 
 
 def _not_synced_target(conn, key, person_id):
