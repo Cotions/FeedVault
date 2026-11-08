@@ -87,7 +87,9 @@ def test_the_walk_covers_the_routes_named_in_the_issue():
     for route in (("POST", "/api/quit"), ("POST", "/api/trash/empty"), ("POST", "/api/trash/purge"),
                   ("POST", "/api/delete"), ("POST", "/api/yt-dlp/info-json-cookies"), ("POST", "/api/people/merge"),
                   ("POST", "/api/jobs"), ("DELETE", "/api/sources/<int:sid>"), ("POST", "/api/config"),
-                  ("GET", "/api/scripts"), ("POST", "/api/scripts/<sid>/run")):
+                  ("GET", "/api/scripts"), ("POST", "/api/scripts/<sid>/run"),
+                  # Starts a browser on this machine (openlink.py): the dashboard's alone.
+                  ("POST", "/api/open"), ("GET", "/api/open/browsers")):
         assert route in walked, route
     assert len(walked) > 100
 
