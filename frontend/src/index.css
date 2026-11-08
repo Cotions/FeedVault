@@ -3945,6 +3945,13 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .link-person { flex-shrink: 1; min-width: 0; max-width: 220px; gap: 4px; }
 .link-person svg { flex-shrink: 0; }
 .link-row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+/* The row's Open in… menu button: the size and look of its other icon
+   buttons (.del-btn), not a card's bordered ⋯. Always in view: it is how a
+   link opens elsewhere this once. */
+.link-open-menu .action-menu-btn { width: 26px; height: 26px; border: none; background: none; border-radius: 7px; color: var(--muted); }
+.link-open-menu .action-menu-btn:hover:not(:disabled),
+.link-open-menu .action-menu-btn.is-open { color: var(--text); background: rgba(255, 255, 255, 0.07); border: none; }
+.link-open-menu .action-menu-btn .icon { width: 14px; height: 14px; }
 /* Marked to download (another app downloads it; FeedVault keeps the mark):
    a small chip beside the kind, and the row's button lit while it is on.
    The button stays in view on a desktop (not .btn-ghost): sorting Unsorted
@@ -4146,6 +4153,13 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .route-row .insta-input { margin-left: 0; }
 .route-host { flex: 1; min-width: 0; max-width: 280px; }    /* shrinks on a phone: the tool and Remove stay in view */
 .route-tool { min-width: 130px; }
+/* Settings → Open links in: Browser, Profile and Private window on one line
+   (wrapped when narrow), the box at the selects' foot. */
+.open-links-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 18px; min-width: 0; }
+.open-links-row .filter { min-width: 0; }
+.open-links-row .sort-select { min-width: 200px; max-width: 320px; text-overflow: ellipsis; }
+.open-links-row .dl-toggle { min-height: 34px; align-items: center; }
+.open-links-none { margin: 10px 0 0; font-size: var(--fs-sm); }
 /* Settings → Link labels: a site and its label, what is wrong under them. */
 .link-label-row { display: flex; flex-direction: column; gap: 3px; }
 .link-label-text { flex: 1; min-width: 0; max-width: 280px; }

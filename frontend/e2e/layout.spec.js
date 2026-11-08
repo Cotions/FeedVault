@@ -10,7 +10,7 @@
 // stress.js: a 60-character creator, 15 tags, long names and paths.
 import fs from "node:fs";
 import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle, fakeBioImport,
-  openBioImport, openAddLink, openFilters } from "./fixtures.js";
+  openBioImport, openAddLink, openFilters, fakeOpenLinks } from "./fixtures.js";
 import { STRESS_PERSON } from "./stress.js";
 
 const SIZES = [
@@ -74,14 +74,28 @@ const VIEWS = [
   { name: "Post", open: page => openUrl(page, `/p/${S.post.platform}/${S.post.post_id}`, pg => pg.locator(".post-page-head")) },
   { name: "Creator", open: page => openUrl(page, `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`,
     pg => pg.locator("article.post-card").first()) },
-  { name: "Person", open: page => openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title")) },
+  // Link rows with their Open in… menu (fakeOpenLinks: two browsers "installed").
+  { name: "Person", open: async page => { await fakeOpenLinks(page); await openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title")); } },
   { name: "Collection", open: page => openUrl(page, `/collections/${S.collection}`, pg => pg.locator("h2.page-title")) },
-  { name: "Links, Unsorted", open: page => openUrl(page, "/links?person=none", pg => pg.locator(".link-assign").first()) },
+  { name: "Links, Unsorted", open: async page => {
+    await fakeOpenLinks(page);
+    await openUrl(page, "/links?person=none", pg => pg.locator(".link-open-menu").first());
+  } },
   { name: "Trash › History", open: page => openUrl(page, "/trash?view=history", pg => pg.locator(".trash-event, .trash-page .empty:not(:has-text('Loading'))").first()) },
   ...["profiles", "downloads", "sync", "appearance", "about"].map(tab => ({
     name: `Settings › ${tab}`,
     open: page => openUrl(page, `/settings#${tab}`, pg => pg.locator(`.settings-tab[aria-current="page"][href$="#${tab}"]`)),
   })),
+  // Its fold open, every field shown: a default in what /api/config answers (nothing is saved).
+  { name: "Settings › Open links in", open: async page => {
+    await fakeOpenLinks(page);
+    await page.route(url => url.pathname === "/api/config", async route => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), open_links: { browser: "firefox", profile: "work", private: true } } });
+    });
+    await openUrl(page, "/settings#open-links", pg => pg.locator("#open-links input[type=checkbox]:checked"));
+  } },
 ];
 
 test.describe("pages", () => {
