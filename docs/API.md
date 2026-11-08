@@ -1813,7 +1813,9 @@ there and missing from `people.json` is created again, and a row whose URL
 is not `http://` or `https://` is skipped. A file from before several
 people (a row with `"person": "<name>"` or `null`, `position`, `tied_at`)
 is still read; two rows whose URL is one once cleaned become one link with
-both rows' people.
+both rows' people (and the mark to download either had). Each row has its
+`download_at` too (`null`: not marked); one that is not a time, or a file
+from before the mark, puts the link back unmarked.
 
 FeedVault never fetches a saved link: no title, preview or icon is looked
 up, and nothing leaves the machine. (The [link-in-bio
@@ -1829,7 +1831,7 @@ A **link**:
 { "id": 12, "url": "https://www.patreon.com/somebody", "title": "Patreon", "notes": "",
   "site": "patreon.com", "kind": "social", "label": "Patreon",
   "people": [{ "id": 3, "name": "Some Body" }, { "id": 5, "name": "The Band" }],
-  "position": 2, "created_at": 1727500000 }
+  "position": 2, "created_at": 1727500000, "download_at": null }
 ```
 
 - `url`: stored cleaned, and saved once. Only `http` and `https`, with a
@@ -1880,16 +1882,24 @@ A **link**:
   Each person has the link at their own place among their links.
   `position`: that place for the person a list is for (`?person=`, a
   person's page), else `null`.
+- `download_at`: when the link was marked **to download**, or `null`. The
+  user's note, while sorting links out (the Links page's To download tab),
+  that another app should download what it points at: FeedVault never
+  downloads from a link, nor reads the mark for anything else. It is apart
+  from the link's people: giving a link to someone (or to no one) keeps it,
+  and marking one does not touch its people. Marking a link marked already
+  keeps its time.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/links?person=&kind=&site=&q=` | `{ "links": [link, …], "sites": [{ "site": "patreon.com", "count": 4 }, …] }`, see below |
+| GET | `/api/links?person=&kind=&site=&q=&download=&sort=` | `{ "links": [link, …], "sites": [{ "site": "patreon.com", "count": 4 }, …] }`, see below |
 | POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` or `"people": [3, 5]` in place of `person` (all but `url` may be omitted; `person` `null` or `people` `[]` for no one; from another site, the userscript's "Add this page", `url` and `title` only, else a 403) → `{ "ok": true, "link": {…} }` |
-| POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person`, `people` (`person`: that one person in place of any other, `null` unties it from everyone; `people`: exactly those, `[]` for no one; none is a 400) → `{ "ok": true, "link": {…} }` |
+| POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person`, `people`, `download` (`person`: that one person in place of any other, `null` unties it from everyone; `people`: exactly those, `[]` for no one; `download`: `true` marks it to download, `false` clears the mark, anything else a 400; none of them is a 400) → `{ "ok": true, "link": {…} }` |
 | DELETE | `/api/links/<id>` | → `{ "ok": true }` |
 | POST | `/api/links/assign` | body `{ "ids": [12, 9], "person": 3 }` or `"people": [3, 5]` (1 to 5000 ids; `person` `null` or `people` `[]` unties them; optional `if_person`) → `{ "ok": true, "moved": 2, "skipped": [], "links": [link, …] }`, see below |
 | POST | `/api/links/add-person` | body `{ "ids": [12, 9], "person": 5 }` (1 to 5000 ids) → `{ "ok": true, "added": [12], "links": [link, …] }`, see below |
 | POST | `/api/links/remove-person` | body `{ "ids": [12, 9], "person": 5 }` (1 to 5000 ids) → `{ "ok": true, "removed": [12], "links": [link, …] }`, see below |
+| POST | `/api/links/to-download` | body `{ "ids": [12, 9], "download": true }` (1 to 5000 ids; `false` clears the mark; optional `skip_missing`) → `{ "ok": true, "changed": [12], "missing": [], "links": [link, …] }`, see below |
 | POST | `/api/links/delete` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "deleted": 2 }`; ids no link has are passed over |
 | POST | `/api/people/<id>/links/order` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "links": [link, …] }`, the person's links in their new order |
 | GET | `/api/people/recent-links?limit=10` | `{ "people": [{ "id": 3, "name": "Some Body", "at": 1727500000 }, …] }`: the people most recently given a link, latest first, see below |
@@ -1900,7 +1910,15 @@ A **link**:
   400); `site` matches `site` exactly; `q` (at most 200 characters) matches
   any part of the URL, title or notes, without regard to (ASCII) case, and
   a link with no title whose site's rule label (see [Link labels](#link-labels))
-  holds it, without regard to case.
+  holds it, without regard to case. `download=1` lists only the links
+  marked to download (with `person=none`: those of no one; `0` or none:
+  every link; anything else is a 400).
+  `sort` is `newest` (the default: newest first, or with `person` that
+  person's order), `oldest` (oldest saved first, with `person` too), or
+  `site`: by `site`, A to Z, the newest first within each site (the page
+  shows a heading over each); anything else is a 400. Two links saved in
+  the same second keep the order they were saved in. A person's page
+  (`GET /api/people/<id>`) is never sorted by it.
   `sites` counts every link by site, whatever the filters, for a site
   picker, most links first.
 - A URL saved already (once cleaned) is a 409
@@ -1941,7 +1959,17 @@ A **link**:
   that were theirs; ids no link has are passed over. `person` must be a
   person's id (`null` is a 400) for both.
 - The links tied to no one (`?person=none`, the Links page's **Unsorted**)
-  are counted in `unsorted_links` of `GET /api/jobs`, for the sidebar's badge.
+  are counted in `unsorted_links` of `GET /api/jobs`, for the sidebar's badge;
+  the links marked to download (`?download=1`, its **To download** tab) in
+  `download_links`, for that tab's count.
+- `/api/links/to-download` marks every link listed to download (`"download":
+  true`, `download_at` now; one marked already keeps its time) or clears
+  their mark (`false`), in one transaction; their people are not touched.
+  `changed` are the ids whose mark changed; `links` are the links listed
+  that still exist, as they are now. An id no link has is a 404 `{ "ok":
+  false, "error": "no such link", "missing": [7] }`, and nothing changes;
+  with `"skip_missing": true` (the page's Undo) those are passed over and
+  listed in `missing`. `download` must be `true` or `false`.
 - A person's links (`GET /api/people/<id>`, `/links/order`) come socials
   first, then the others, each in the person's order. A new link, or one
   given to another person, goes last in that person's order; one taken
@@ -3481,7 +3509,7 @@ A **job**:
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "unsorted_links": 3, "notifications": { "unread": 1, "latest": 42, "desktop": false } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `unsorted_links` the number of links tied to no one, see [Links](#links); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
+| GET | `/api/jobs` | `{ "running": 1, "queued": 0, "jobs": [job, …], "sync_all": batch, "new": 12, "new_until": 1727500000, "unsorted_links": 3, "download_links": 1, "notifications": { "unread": 1, "latest": 42, "desktop": false } }`: queued and running jobs and the last 100 ended ones, newest first; `sync_all` see [Sync all](#sync-all); `new` the number of new posts and `new_until` the newest one's `first_seen` (or `null`), see [New posts](#new-posts); `unsorted_links` the number of links tied to no one and `download_links` the number marked to download, see [Links](#links); `notifications` the unread entries and the newest id, see [Notifications](#notifications); for the sidebar, which polls this |
 | GET | `/api/jobs/kinds` | `[{ "kind": "tool-version", "label": "…", "params": { "tool": { "type": "choice", "choices": ["instaloader", "gallery-dl", "yt-dlp", "ffmpeg"] } } }]` |
 | POST | `/api/jobs` | body `{ "kind": "tool-version", "params": { "tool": "yt-dlp" } }` → `{ "ok": true, "job": {…} }`; 400 `{ "ok": false, "error": "…" }`, also for a body that is not an object, a `kind` that is not text, and a kind another route starts (the saves: `POST /api/save`; `script`, `script-sync`: a script's Run or a source's Sync), and a sync kind for a source set to [Don't sync](#dont-sync) |
 | GET | `/api/jobs/<id>` | job, or 404 |

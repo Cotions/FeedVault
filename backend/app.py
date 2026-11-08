@@ -1619,10 +1619,16 @@ def list_links():
         return jsonify({"ok": False, "error": "kind must be social or other"}), 400
     if len(q) > links.MAX_QUERY:
         return jsonify({"ok": False, "error": f"q must be at most {links.MAX_QUERY} characters"}), 400
+    # The To download tab (download=1), and the order (links.SORTS; none: newest first).
+    download, sort = request.args.get("download") or "0", request.args.get("sort") or "newest"
+    if download not in ("0", "1"):
+        return jsonify({"ok": False, "error": "download must be 1 (only the links marked to download) or 0"}), 400
+    if sort not in links.SORTS:
+        return jsonify({"ok": False, "error": f"sort must be one of {', '.join(links.SORTS)}"}), 400
     cfg = config.load()
     out = links.listing(db.connect(), person=None if v == "none" else _person_arg(), no_person=v == "none",
                         kind_=kind, site_=request.args.get("site") or None, q=q or None,
-                        q_sites=linklabels.matching(cfg, q) if q else ())
+                        q_sites=linklabels.matching(cfg, q) if q else (), download=download == "1", sort=sort)
     _labelled(out["links"], cfg)
     return jsonify(out)
 
@@ -1665,16 +1671,19 @@ def update_link(lid):
         return jsonify({"ok": False, "error": _BAD_URL}), 400
     title, notes, error = _link_text(body)
     pids, error = (None, error) if error else _link_people(body)
+    download = body.get("download")
+    if not error and "download" in body and not isinstance(download, bool):
+        error = _BAD_DOWNLOAD
     if error:
         return jsonify({"ok": False, "error": error}), 400
-    if not {"url", "title", "notes", "person", "people"} & set(body):
-        return jsonify({"ok": False, "error": "send url, title, notes, person or people"}), 400
+    if not {"url", "title", "notes", "person", "people", "download"} & set(body):
+        return jsonify({"ok": False, "error": "send url, title, notes, person, people or download"}), 400
     other = links.find(conn, url) if url is not None else None
     if other is not None and other != lid:
         return _taken(other)
-    kw = {"pids": pids, "now": _link_now()} if pids is not links.UNSET else {}
+    kw = {"pids": pids} if pids is not links.UNSET else {}
     try:
-        link = links.update(conn, lid, url=url, title=title, notes=notes, **kw)
+        link = links.update(conn, lid, url=url, title=title, notes=notes, download=download, now=_link_now(), **kw)
     except links.NoSuchPerson:
         return jsonify(_GONE_PERSON), 400
     except sqlite3.IntegrityError:
@@ -1690,6 +1699,10 @@ def delete_link(lid):
         return jsonify({"ok": False, "error": "no such link"}), 404
     userdata.changed("links")
     return jsonify({"ok": True})
+
+
+# A link's mark to download (links.py): true marks it, false clears it.
+_BAD_DOWNLOAD = "download must be true (mark it to download) or false (clear the mark)"
 
 
 def _link_ids(body):
@@ -1731,6 +1744,33 @@ def assign_links():
     # A link deleted right after is left out, not given as null.
     out = [x for x in (links.get(conn, i) for i in dict.fromkeys(ids)) if x is not None]
     return jsonify({"ok": True, "moved": moved, "skipped": skipped, "links": _labelled(out)})
+
+
+@app.post("/api/links/to-download")
+def mark_links_download():
+    """Mark many links to download (``download`` true) or clear their mark
+    (false), in one transaction (links.mark_download); their people are not
+    touched. All or none: an id no link has is a 404 and nothing changes.
+    With ``skip_missing`` true (the page's Undo), ids no link has are passed
+    over and listed in ``missing``. ``changed``: the ids whose mark changed
+    (a link marked already keeps when it was marked)."""
+    body = _body()
+    ids, error = _link_ids(body)
+    on, skip = body.get("download"), body.get("skip_missing", False)
+    if not error and not isinstance(on, bool):
+        error = _BAD_DOWNLOAD
+    if not error and not isinstance(skip, bool):
+        error = "skip_missing must be true or false"
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    conn = db.connect()
+    changed, gone = links.mark_download(conn, ids, on, _link_now(), all_or_none=not skip)
+    if changed is None:
+        return jsonify({"ok": False, "error": "no such link", "missing": gone}), 404
+    if changed:
+        userdata.changed("links")
+    out = [x for x in (links.get(conn, i) for i in dict.fromkeys(ids)) if x is not None]
+    return jsonify({"ok": True, "changed": changed, "missing": gone, "links": _labelled(out)})
 
 
 @app.post("/api/links/delete")
@@ -2785,14 +2825,15 @@ def clean_info_json_cookies():
 
 @app.get("/api/jobs")
 def list_jobs():
-    # The sidebar's "New" and Unsorted links counts ride along with the poll (news.py, links.py).
+    # The sidebar's "New" and Unsorted links counts ride along with the poll (news.py, links.py), and
+    # the Links page's To download count, for its tab.
     new, new_until = news.count(db.connect())
     unread, latest = notify.unread(db.connect())
     # A tab that shows desktop notifications itself says so: notify-send waits.
     if request.args.get("desktop") == "1":
         notify.tab_shows()
     return jsonify({**jobs.listing(), "sync_all": sync.batch(), "new": new, "new_until": new_until,
-                    "unsorted_links": links.unsorted(db.connect()),
+                    "unsorted_links": links.unsorted(db.connect()), "download_links": links.to_download(db.connect()),
                     "notifications": {"unread": unread, "latest": latest, "desktop": notify.enabled()}})
 
 
