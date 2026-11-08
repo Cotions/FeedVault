@@ -339,14 +339,16 @@ export function dismissSuggestion(id) { return post("/api/people/suggestions/dis
 /* ── Links (any web address, any number of people's; never fetched) ── */
 
 // { links: [link], sites: [{ site, count }] }. params: person (an id, or
-// "none"), kind ("social" | "other"), site, q.
+// "none"), kind ("social" | "other"), site, q, download (1: only the links
+// marked to download), sort ("newest" | "oldest" | "site").
 export function getLinks(params = {}, opts) { return get(`/api/links${qs(params)}`, opts); }
 // body { url, title, notes, person } (or people: [ids]) → { ok, link }; a saved URL is
 // { ok: false, error, id, link } (409), ``link`` the saved one, with its people.
 export function createLink(body) { return post("/api/links", body); }
 // The people most recently given a link, latest first → { people: [{ id, name, at }] }.
 export function getRecentLinkPeople(limit = 10) { return get(`/api/people/recent-links${qs({ limit })}`); }
-// changes: any of url, title, notes, person (one id or null: replaces every person) or people ([ids]).
+// changes: any of url, title, notes, person (one id or null: replaces every person), people ([ids])
+// or download (true marks it to download, false clears the mark).
 export function updateLink(id, changes) { return post(`/api/links/${id}`, changes); }
 export function deleteLink(id) { return del(`/api/links/${id}`); }
 // Many links to one person (null: no one) or, `person` a list of ids, to
@@ -363,6 +365,13 @@ export function assignLinks(ids, person, ifPerson) {
 export function addLinkPerson(ids, person) { return post("/api/links/add-person", { ids, person }); }
 // Taken from this person, their other people kept → { ok, removed, links }; ids no link has are passed over.
 export function removeLinkPerson(ids, person) { return post("/api/links/remove-person", { ids, person }); }
+// Marked to download (`on` true) or the mark cleared, their people kept; all
+// or none → { ok, changed, missing, links }, `changed` the ids whose mark
+// changed. An id no link has: { ok: false, error, missing } (404), unless
+// `skipMissing` (for Undo): then passed over, listed in `missing`.
+export function markLinksDownload(ids, on, skipMissing = false) {
+  return post("/api/links/to-download", skipMissing ? { ids, download: on, skip_missing: true } : { ids, download: on });
+}
 // → { ok, deleted }; ids no link has are passed over.
 export function deleteLinks(ids) { return post("/api/links/delete", { ids }); }
 // The ids take the places they held among the person's links → { ok, links }.

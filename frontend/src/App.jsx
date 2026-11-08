@@ -432,10 +432,11 @@ export default function App() {
   useEffect(() => { if (onJobsPage) pollJobs(); }, [onJobsPage, pollJobs]);
 
   // refresh(): the counts the poll carries changed here (a link saved,
-  // given to someone, deleted: the Unsorted badge), read them now.
+  // given to someone, deleted: the Unsorted badge; marked to download: the
+  // Links page's To download tab), read them now.
   const jobsCtx = useMemo(
     () => ({ list: jobList, running: jobsRunning, active: jobsActive, newCount: jobList?.new ?? 0, newUntil: jobList?.new_until ?? null,
-             unsortedLinks: jobList?.unsorted_links ?? 0, started: jobStarted, refresh: jobStarted }),
+             unsortedLinks: jobList?.unsorted_links ?? 0, downloadLinks: jobList?.download_links ?? 0, started: jobStarted, refresh: jobStarted }),
     [jobList, jobsRunning, jobsActive, jobStarted],
   );
 

@@ -136,7 +136,7 @@ def test_site_and_kind(url, site, kind):
 
 def test_kind_is_never_stored(env):
     cols = [r[1] for r in db.connect().execute("PRAGMA table_info(links)")]
-    assert cols == ["id", "url", "title", "notes", "created_at"]
+    assert cols == ["id", "url", "title", "notes", "created_at", "download_at"]
     cols = [r[1] for r in db.connect().execute("PRAGMA table_info(link_people)")]
     assert cols == ["link_id", "person_id", "position", "tied_at"]
 
@@ -944,12 +944,12 @@ def test_userdata_round_trip_by_person_name(env, client):
     assert rows == [
         {"url": "https://alice.example", "title": "", "notes": "",
          "people": [{"name": "Alice", "position": 1, "tied_at": rows[0]["created_at"]}],
-         "created_at": rows[0]["created_at"], "id": 2},
+         "created_at": rows[0]["created_at"], "download_at": None, "id": 2},
         {"url": "https://news.example/a", "title": "An article", "notes": "", "people": [],
-         "created_at": rows[1]["created_at"], "id": 3},
+         "created_at": rows[1]["created_at"], "download_at": None, "id": 3},
         {"url": "https://www.patreon.com/alice", "title": "Patreon", "notes": "tiers",
          "people": [{"name": "Alice", "position": 2, "tied_at": rows[2]["created_at"]}],
-         "created_at": rows[2]["created_at"], "id": 1},
+         "created_at": rows[2]["created_at"], "download_at": None, "id": 1},
     ]
 
     # A rebuilt index: each link gets its id back, the person is found again by name.
@@ -1000,6 +1000,200 @@ def test_restore_cleans_a_row_as_the_api_would(env):
     assert tied(find("https://alice.example"))[:2] == (conn.execute(
         "SELECT id FROM people WHERE name = 'Alice'").fetchone()[0], None)
     assert tied(find("https://x.com/a")) == (None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# To download (download_at: the user's mark; FeedVault never downloads)
+# ---------------------------------------------------------------------------
+
+def marked(lid):
+    return db.connect().execute("SELECT download_at FROM links WHERE id = ?", (lid,)).fetchone()[0]
+
+
+def downloads(client):
+    return get(client, "/api/jobs")["download_links"]
+
+
+def test_mark_one_link_to_download(client, clock, no_network):
+    alice = person(client, "Alice")
+    lid = add(client, "https://a.example")["link"]["id"]
+    other = add(client, "https://b.example", person=alice)["link"]["id"]
+    assert [x["download_at"] for x in get(client, "/api/links")["links"]] == [None, None]
+    assert downloads(client) == 0
+
+    clock[0] += 10
+    r = post(client, f"/api/links/{lid}", {"download": True})
+    assert r["link"]["download_at"] == 1_000_010 and r["link"]["people"] == []
+    assert urls(client, "?download=1") == ["https://a.example"] and downloads(client) == 1
+    # Marked again: when it was first marked stays.
+    clock[0] += 10
+    assert post(client, f"/api/links/{lid}", {"download": True})["link"]["download_at"] == 1_000_010
+    # Given to someone in the same body, or later: the mark stays, and it leaves Unsorted.
+    r = post(client, f"/api/links/{lid}", {"person": alice, "download": True})
+    assert (r["link"]["download_at"], names_of(r["link"])) == (1_000_010, ["Alice"])
+    assert urls(client, "?person=none&download=1") == [] and urls(client, f"?person={alice}&download=1") == [
+        "https://a.example"]
+    post(client, f"/api/links/{other}", {"download": True})
+    assert urls(client, "?download=1") == ["https://b.example", "https://a.example"] and downloads(client) == 2
+    assert urls(client, "?download=0") == urls(client)
+
+    r = post(client, f"/api/links/{lid}", {"download": False})
+    assert r["link"]["download_at"] is None and names_of(r["link"]) == ["Alice"]
+    assert urls(client, "?download=1") == ["https://b.example"] and downloads(client) == 1
+    for bad in ("yes", 1, None, []):
+        assert "download must be" in post(client, f"/api/links/{other}", {"download": bad}, 400)["error"]
+    assert marked(other) == 1_000_020
+    assert get(client, "/api/links?download=yes", 400)["ok"] is False
+    delete(client, f"/api/links/{other}")
+    assert downloads(client) == 0
+
+
+def test_mark_many_to_download(client, clock, monkeypatch):
+    alice = person(client, "Alice")
+    a, b, c = (add(client, f"https://{n}.example")["link"]["id"] for n in "abc")
+    post(client, "/api/links/assign", {"ids": [b], "person": alice})
+    seen = []
+    monkeypatch.setattr(userdata, "changed", seen.append)
+    clock[0] += 5
+    r = post(client, "/api/links/to-download", {"ids": [c, a, c], "download": True})
+    assert (r["ok"], r["changed"], r["missing"]) == (True, [c, a], [])
+    assert [(x["id"], x["download_at"]) for x in r["links"]] == [(c, 1_000_005), (a, 1_000_005)]
+    # A link marked already keeps its time and is not counted; another person's is marked, theirs still.
+    clock[0] += 5
+    r = post(client, "/api/links/to-download", {"ids": [a, b], "download": True})
+    assert r["changed"] == [b] and [marked(i) for i in (a, b)] == [1_000_005, 1_000_010]
+    assert names_of(r["links"][1]) == ["Alice"]
+    assert downloads(client) == 3 and urls(client, "?person=none&download=1") == ["https://c.example", "https://a.example"]
+    # All or none: an id no link has changes nothing.
+    r = post(client, "/api/links/to-download", {"ids": [a, c + 50], "download": False}, 404)
+    assert r == {"ok": False, "error": "no such link", "missing": [c + 50]}
+    assert marked(a) == 1_000_005
+    # The Undo's: ids no link has are passed over.
+    r = post(client, "/api/links/to-download", {"ids": [a, c + 50, c], "download": False, "skip_missing": True})
+    assert (r["changed"], r["missing"], [x["id"] for x in r["links"]]) == ([a, c], [c + 50], [a, c])
+    assert downloads(client) == 1
+    assert post(client, "/api/links/to-download", {"ids": [a], "download": False})["changed"] == []
+    assert seen == ["links", "links", "links"]                   # only when a mark changed
+    for body in ({"ids": [a]}, {"ids": [a], "download": "1"}, {"ids": [], "download": True},
+                 {"ids": ["1"], "download": True}, {"ids": list(range(1, links.MAX_IDS + 2)), "download": True},
+                 {"ids": [a], "download": True, "skip_missing": "yes"}):
+        assert post(client, "/api/links/to-download", body, 400)["ok"] is False
+    assert downloads(client) == 1
+
+
+def test_assign_keeps_the_mark(client):
+    alice = person(client, "Alice")
+    a = add(client, "https://a.example")["link"]["id"]
+    post(client, "/api/links/to-download", {"ids": [a], "download": True})
+    r = post(client, "/api/links/assign", {"ids": [a], "person": alice})
+    assert r["links"][0]["download_at"] is not None
+    post(client, "/api/links/add-person", {"ids": [a], "person": person(client, "Bob")})
+    post(client, "/api/links/assign", {"ids": [a], "person": None})
+    assert urls(client, "?person=none&download=1") == ["https://a.example"]
+
+
+def test_jobs_poll_counts_download_links(client):
+    assert downloads(client) == 0
+    alice = person(client, "Alice")
+    a, b = (add(client, f"https://{n}.example")["link"]["id"] for n in "ab")
+    post(client, "/api/links/to-download", {"ids": [a, b], "download": True})
+    r = get(client, "/api/jobs")
+    assert (r["download_links"], r["unsorted_links"]) == (2, 2)
+    post(client, "/api/links/assign", {"ids": [a], "person": alice})     # sorted out, still to download
+    r = get(client, "/api/jobs")
+    assert (r["download_links"], r["unsorted_links"]) == (2, 1)
+    post(client, "/api/links/delete", {"ids": [b]})
+    assert downloads(client) == 1
+
+
+def test_the_mark_survives_a_restore(env, client, clock):
+    data = str(env["tmp"] / "data")
+    alice = person(client, "Alice")
+    a = add(client, "https://a.example", person=alice)["link"]["id"]
+    add(client, "https://b.example")
+    clock[0] += 7
+    post(client, "/api/links/to-download", {"ids": [a], "download": True})
+    conn = db.connect()
+    for name in ("people", "links"):
+        userdata.export(conn, name, data)
+    with open(userdata.path(data, "links")) as f:
+        assert {r["url"]: r["download_at"] for r in json.load(f)["rows"]} == {
+            "https://a.example": 1_000_007, "https://b.example": None}
+    with conn:
+        conn.execute("DELETE FROM links")
+    assert userdata.load(conn, "links", data) == 2
+    assert [(x["url"], x["download_at"]) for x in get(client, "/api/links?download=1")["links"]] == [
+        ("https://a.example", 1_000_007)]
+    assert names_of(get(client, "/api/links?download=1")["links"][0]) == ["Alice"]
+
+
+def test_restore_reads_a_mark_as_the_api_would(env):
+    """A file from before the mark, or hand-edited: a time is a mark, anything
+    else none; two rows of one URL keep the mark either had."""
+    data = str(env["tmp"] / "data")
+    (env["tmp"] / "data" / "userdata").mkdir(parents=True, exist_ok=True)
+    with open(userdata.path(data, "links"), "w") as f:
+        json.dump({"version": 1, "rows": [
+            {"url": "https://old.example", "people": [], "created_at": 5},
+            {"url": "https://yes.example", "people": [], "created_at": 5, "download_at": 9},
+            {"url": "https://text.example", "download_at": "soon"},
+            {"url": "https://bool.example", "download_at": True},
+            {"url": "https://neg.example", "download_at": -1},
+            {"url": "https://two.example/?utm_source=x", "created_at": 5},
+            {"url": "https://two.example", "created_at": 6, "download_at": 12},
+        ]}, f)
+    conn = db.connect()
+    assert userdata.load(conn, "links", data) == 6
+    assert dict(conn.execute("SELECT url, download_at FROM links")) == {
+        "https://old.example": None, "https://yes.example": 9, "https://text.example": None,
+        "https://bool.example": None, "https://neg.example": None, "https://two.example": 12}
+
+
+# ---------------------------------------------------------------------------
+# Sort (newest, oldest, by site)
+# ---------------------------------------------------------------------------
+
+def test_sort_orders(client, clock):
+    alice = person(client, "Alice")
+    for url in ("https://b.example/1", "https://www.patreon.com/x", "https://a.example/1", "https://b.example/2",
+                "https://a.example/2"):
+        clock[0] += 1
+        add(client, url, person=alice if "patreon" in url or url.endswith("/1") else None)
+    newest = ["https://a.example/2", "https://b.example/2", "https://a.example/1", "https://www.patreon.com/x",
+              "https://b.example/1"]
+    assert urls(client) == urls(client, "?sort=newest") == newest
+    assert urls(client, "?sort=oldest") == list(reversed(newest))
+    # By site, A to Z (site as the link shows it: www. dropped), the newest first in each.
+    assert urls(client, "?sort=site") == ["https://a.example/2", "https://a.example/1", "https://b.example/2",
+                                          "https://b.example/1", "https://www.patreon.com/x"]
+    # With the other filters, and on a tab.
+    assert urls(client, "?sort=site&person=none") == ["https://a.example/2", "https://b.example/2"]
+    assert urls(client, "?sort=oldest&kind=other") == ["https://b.example/1", "https://a.example/1",
+                                                       "https://b.example/2", "https://a.example/2"]
+    # A person's links: in their order (socials first) by default, else in the order asked for.
+    assert urls(client, f"?person={alice}") == ["https://www.patreon.com/x", "https://b.example/1",
+                                                "https://a.example/1"]
+    assert urls(client, f"?person={alice}&sort=oldest") == ["https://b.example/1", "https://www.patreon.com/x",
+                                                            "https://a.example/1"]
+    assert urls(client, f"?person={alice}&sort=site") == ["https://a.example/1", "https://b.example/1",
+                                                          "https://www.patreon.com/x"]
+    # Their own page is not sorted by any of these.
+    assert [x["url"] for x in get(client, f"/api/people/{alice}")["links"]] == urls(client, f"?person={alice}")
+    assert "sort must be one of newest, oldest, site" in get(client, "/api/links?sort=title", 400)["error"]
+
+
+def test_sort_holds_with_links_found_by_their_label(client, clock):
+    """q matching a site's label adds untitled links of it: they are sorted
+    in with the others, whatever the order."""
+    post(client, "/api/config", {"link_labels": {"b.example": "Fan shop"}})
+    for url, title in (("https://a.example/shop", ""), ("https://b.example/1", ""), ("https://c.example/x", "shop")):
+        clock[0] += 1
+        add(client, url, title=title)
+    assert urls(client, "?q=shop") == ["https://c.example/x", "https://b.example/1", "https://a.example/shop"]
+    assert urls(client, "?q=shop&sort=oldest") == ["https://a.example/shop", "https://b.example/1",
+                                                   "https://c.example/x"]
+    assert urls(client, "?q=shop&sort=site") == ["https://a.example/shop", "https://b.example/1",
+                                                 "https://c.example/x"]
 
 
 def test_changes_mark_links_for_export(client, monkeypatch):

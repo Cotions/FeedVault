@@ -567,6 +567,19 @@ every link it shows (a shop, a Patreon, a site, the profiles), so they stay
 when the page changes or goes. Import again later and only what is new is
 added; nothing you saved or edited is replaced or removed. See [docs/API.md](docs/API.md#links).
 
+Three tabs sit over the list: **All links**, **Unsorted** (the links of no
+one yet, each with an Assign… to give it to a person) and **To download**.
+Sorting out Unsorted, mark a link **to download** (the download button on
+its row, or **Mark N to download** for a selection) when it points at
+something you want another app to download: FeedVault never downloads from
+Links, the mark is only your note. It is apart from the link's people, so a
+link can be both an artist's and to download; it stays in Unsorted until you
+assign it, and assigning keeps the mark. The To download tab lists the marked
+links with their count; clear a mark there (its row's button, or **Clear
+mark** for a selection) once downloaded and the link leaves the tab, with an
+Undo. **Sort** orders any tab newest first (the default), oldest first, or by
+site, A to Z, under a heading per site with its count.
+
 To save the page you are reading in another tab, drag **Save to FeedVault**
 (under Add a link on the Links page) to your bookmarks bar. Clicked on any
 page, this bookmarklet opens FeedVault's `/links/add` in a small window

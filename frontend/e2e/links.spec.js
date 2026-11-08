@@ -1262,3 +1262,148 @@ test("Links: a link shared by two people, on both, each one removable alone", as
     await request.delete(`/api/people/${mid}`, { headers: H });
   }
 });
+
+/* ── To download and Sort (sorting Unsorted out) ── */
+
+async function downloadCount(request) {
+  return (await (await request.get("/api/jobs", { headers: H })).json()).download_links;
+}
+
+// A link of no one is to download, an artist's, or both: the mark is apart
+// from its people, it stays in Unsorted until assigned, and the To
+// download tab lists it until its mark is cleared (with an Undo).
+test("To download: marked in Unsorted, kept by an assign, cleared from its tab with Undo", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-download-${stamp}.example`;
+  const name = `E2E artist ${stamp}`;
+  const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  try {
+    await makeLinks(request, ["a", "b", "c"].map(x => `https://${host}/${x}`));
+    const before = await downloadCount(request);
+    await page.goto(`/links?person=none&q=${host}`);
+    const rows = page.locator(".link-list > li");
+    await expect(rows).toHaveCount(3);                      // newest first: c, b, a
+    await idle(page);
+    const tab = page.locator(".links-tabs").getByRole("button", { name: /^To download/ });
+
+    // One row's button: marked, it stays in Unsorted, says so, and the tab counts it.
+    await page.getByRole("button", { name: `Mark ${host}/b to download` }).click();
+    const clearB = page.getByRole("button", { name: `Clear the download mark of ${host}/b` });
+    await expect(clearB).toBeFocused();
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(1).locator(".link-dl-mark")).toHaveText("To download");
+    await expect(rows.locator(".link-dl-mark")).toHaveCount(1);
+    await expect(tab).toHaveText(`To download${before + 1}`);
+
+    // The selection: the others marked too; they stay, selected, to be assigned next.
+    await rows.nth(0).getByRole("checkbox").click();
+    await rows.nth(2).getByRole("checkbox").click();
+    const bar = page.getByRole("toolbar", { name: "Selection" });
+    await bar.getByRole("button", { name: "Mark 2 to download" }).click();
+    await expect(page.locator(".toast", { hasText: "2 links marked to download" })).toBeVisible();
+    await expect(rows.locator(".link-dl-mark")).toHaveCount(3);
+    await expect(bar.locator(".select-count")).toHaveText("2 selected");
+    await expect(bar.getByRole("button", { name: "Mark 2 to download" })).toBeDisabled();
+    await expect(tab).toHaveText(`To download${before + 3}`);
+    await bar.getByRole("button", { name: "Clear", exact: true }).click();
+
+    // Assigned, b leaves Unsorted and keeps its mark.
+    await page.getByRole("button", { name: `Assign ${host}/b to a person` }).click();
+    const picker = page.getByRole("combobox", { name: `Assign ${host}/b to` });
+    await picker.fill(name);
+    await picker.press("Enter");
+    await expect(rows).toHaveCount(2);
+    expect((await linkByUrl(request, `https://${host}/b`)).download_at).not.toBeNull();
+
+    // The tab: every marked link, whoever's, in the address.
+    await tab.click();
+    await expect(page).toHaveURL(/\/links\?(?=.*download=1)(?!.*person=)/);
+    await expect(tab).toHaveAttribute("aria-pressed", "true");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(1).locator(".link-person")).toHaveText([name]);
+
+    // Cleared there, a link leaves the tab; focus goes on to the next one's button; Undo brings it back.
+    await page.getByRole("button", { name: `Clear the download mark of ${host}/c` }).click();
+    await expect(rows).toHaveCount(2);
+    const toast = page.locator(".toast", { hasText: `${host}/c: download mark cleared` });
+    await expect(toast).toBeVisible();
+    await expect(clearB).toBeFocused();
+    await expect(tab).toHaveText(`To download${before + 2}`);
+    expect((await linkByUrl(request, `https://${host}/c`)).download_at).toBeNull();
+    await toast.getByRole("button", { name: "Undo" }).click();
+    await expect(rows).toHaveCount(3);
+    await expect(tab).toHaveText(`To download${before + 3}`);
+
+    // The selection's Clear mark: all of them leave, with an Undo.
+    await rows.nth(0).getByRole("checkbox").click();
+    await bar.getByRole("button", { name: "Select all loaded (3)" }).click();
+    await bar.getByRole("button", { name: "Clear mark" }).click();
+    await expect(rows).toHaveCount(0);
+    await expect(page.locator(".card .empty")).toHaveText("No link matches.");
+    const cleared = page.locator(".toast", { hasText: "3 links: download mark cleared" });
+    await expect(cleared).toBeVisible();
+    await expect(tab).toHaveText(before ? `To download${before}` : "To download");
+    await cleared.getByRole("button", { name: "Undo" }).click();
+    await expect(rows).toHaveCount(3);
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, pid);
+  }
+});
+
+// Sort, in the address: by site, A to Z, a heading per site with its count
+// (rows of the windowed list), the newest first in each; a shift range
+// runs over the headings, links only; Clear filters keeps the sort.
+test("Links: sort by site shows a heading per site; oldest first; the sort stays in the address", async ({ page, request }) => {
+  const stamp = Date.now();
+  const tag = `sort-${stamp}`;
+  const [a, b] = [`a-${tag}.example`, `b-${tag}.example`];
+  try {
+    await makeLinks(request, [`https://${b}/1`, `https://${a}/1`, `https://${b}/2`]);
+    await page.goto(`/links?q=${tag}`);
+    const titles = page.locator(".link-list .link-row-title");
+    await expect(titles).toHaveText([`${b}/2`, `${a}/1`, `${b}/1`]);
+    await expect(page.locator(".link-site-head")).toHaveCount(0);
+    await idle(page);
+
+    const sort = page.locator(".links-filters").getByLabel(/^Sort/);
+    await sort.selectOption("site");
+    await expect(page).toHaveURL(/[?&]sort=site(&|$)/);
+    const heads = page.locator(".link-list > .link-site-head");
+    await expect(heads.locator(".link-site-name")).toHaveText([a, b]);
+    await expect(heads.locator(".link-site-count")).toHaveText(["1 link", "2 links"]);
+    await expect(titles).toHaveText([`${a}/1`, `${b}/2`, `${b}/1`]);
+    await expect(page.locator(".link-list > li").nth(0)).toHaveClass(/link-site-head/);
+    await expect(page.locator(".link-list > li").nth(2)).toHaveClass(/link-site-head/);
+
+    // A shift range from a's link to b's last: three links, no heading in it.
+    const rows = page.locator(".link-list > .link-row");
+    await rows.nth(0).getByRole("checkbox").click();
+    await rows.nth(2).getByRole("checkbox").click({ modifiers: ["Shift"] });
+    const bar = page.getByRole("toolbar", { name: "Selection" });
+    await expect(bar.locator(".select-count")).toHaveText("3 selected");
+    await bar.getByRole("button", { name: "Clear", exact: true }).click();
+
+    await page.reload();
+    await expect(heads.locator(".link-site-name")).toHaveText([a, b]);
+    await expect(sort).toHaveValue("site");
+
+    await sort.selectOption("oldest");
+    await expect(page).toHaveURL(/[?&]sort=oldest(&|$)/);
+    await expect(titles).toHaveText([`${b}/1`, `${a}/1`, `${b}/2`]);
+    await expect(heads).toHaveCount(0);
+
+    await sort.selectOption("newest");
+    await expect(page).not.toHaveURL(/sort=/);
+    await expect(titles).toHaveText([`${b}/2`, `${a}/1`, `${b}/1`]);
+
+    // Clear filters drops the search, not the sort.
+    await sort.selectOption("site");
+    await page.getByRole("button", { name: "Clear filters" }).click();
+    await expect(page).toHaveURL(/\/links\?sort=site$/);
+    await expect(heads.first()).toBeVisible();
+    await idle(page);
+  } finally {
+    await cleanUp(request, tag, null);
+  }
+});

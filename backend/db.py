@@ -777,13 +777,24 @@ def _migrate_31(conn):
               "or sources already")
 
 
+def _migrate_32(conn):
+    """A link may be marked "to download" (links.py: the Links page's To
+    download tab, filled while the Unsorted queue is sorted out):
+    ``download_at``, when it was marked, NULL for not marked. FeedVault never
+    downloads from a link (another app does): the mark is only the user's
+    note of it, apart from its people. Every link starts unmarked. User
+    data, exported with the link in links.json."""
+    conn.execute("ALTER TABLE links ADD COLUMN download_at INTEGER")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
               _migrate_9, _migrate_10, _migrate_11, _migrate_12,
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
               _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
-              _migrate_26, _migrate_27, _migrate_28, _migrate_29, _migrate_30, _migrate_31]
+              _migrate_26, _migrate_27, _migrate_28, _migrate_29, _migrate_30, _migrate_31,
+              _migrate_32]
 
 BACKUPS_KEPT = 3
 

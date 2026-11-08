@@ -432,7 +432,8 @@ def test_links_get_their_people_table(tmp_path, monkeypatch, capsys):
     assert "[db] Links:" not in capsys.readouterr().out          # nothing merged: no line, no mark
     assert version(path)[0] == len(db.MIGRATIONS) >= 30
     conn = sqlite3.connect(path)
-    assert [r[1] for r in conn.execute("PRAGMA table_info(links)")] == ["id", "url", "title", "notes", "created_at"]
+    assert [r[1] for r in conn.execute("PRAGMA table_info(links)")] == [
+        "id", "url", "title", "notes", "created_at", "download_at"]                # download_at: 32's
     assert conn.execute("SELECT id, url, title, notes, created_at FROM links ORDER BY id").fetchall() == [
         (1, "https://linktr.ee/alice", "Linktree", "n", 10), (2, "https://alice.example", "", "", 11),
         (3, "https://bob.example", "Bob", "", 12), (4, "https://loose.example", "", "to sort", 13)]
@@ -553,8 +554,9 @@ def test_links_json_from_before_30_restores_into_the_new_tables(tmp_path, monkey
     userdata.export(conn, "links", str(data))
     assert json.loads(old.read_text())["rows"] == [
         {"url": "https://a.example", "title": "A", "notes": "", "people": [{"name": "Alice", "position": 2, "tied_at": 7}],
-         "created_at": 5, "id": 3},
-        {"url": "https://b.example", "title": "", "notes": "n", "people": [], "created_at": 6, "id": 4},
+         "created_at": 5, "download_at": None, "id": 3},
+        {"url": "https://b.example", "title": "", "notes": "n", "people": [], "created_at": 6, "download_at": None,
+         "id": 4},
     ]
 
 
@@ -593,3 +595,25 @@ def test_a_persons_profiles_leave_their_links(tmp_path, monkeypatch, capsys):
     db._migrate_31(conn)
     conn.execute("COMMIT")
     assert "[db] Links:" not in capsys.readouterr().out
+
+
+def test_links_get_a_mark_to_download(tmp_path, monkeypatch):
+    """Migration 32: links gain ``download_at`` (when marked to download),
+    every link unmarked; nothing else of them changes, their people stay."""
+    path = links_at_27(tmp_path, monkeypatch, [
+        ("https://alice.example", "A", "n", 1, 1, 10, 10),
+        ("https://loose.example", "", "", None, None, 11, None),
+    ])
+    migrate_to(path, monkeypatch, 31)
+    conn = sqlite3.connect(path)
+    before = conn.execute("SELECT id, url, title, notes, created_at FROM links ORDER BY id").fetchall()
+    conn.close()
+    db.migrate(path)
+    assert version(path)[0] == len(db.MIGRATIONS) >= 32
+    conn = sqlite3.connect(path)
+    assert [r[1] for r in conn.execute("PRAGMA table_info(links)")][-1] == "download_at"
+    assert conn.execute("SELECT id, url, title, notes, created_at FROM links ORDER BY id").fetchall() == before
+    assert conn.execute("SELECT COUNT(*) FROM links WHERE download_at IS NOT NULL").fetchone()[0] == 0
+    assert ties(conn) == [("https://alice.example", "Alice", 1, 10)]
+    conn.execute("UPDATE links SET download_at = 99 WHERE id = 2")
+    assert conn.execute("SELECT url FROM links WHERE download_at IS NOT NULL").fetchall() == [("https://loose.example",)]

@@ -3922,6 +3922,19 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .link-person { flex-shrink: 1; min-width: 0; max-width: 220px; gap: 4px; }
 .link-person svg { flex-shrink: 0; }
 .link-row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+/* Marked to download (another app downloads it; FeedVault keeps the mark):
+   a small chip beside the kind, and the row's button lit while it is on.
+   The button stays in view on a desktop (not .btn-ghost): sorting Unsorted
+   out, it is clicked as often as Assign…. */
+.link-dl-mark { flex-shrink: 0; gap: 4px; color: var(--text); border-color: rgba(91, 157, 255, 0.4); background: rgba(91, 157, 255, 0.1); }
+.link-dl-mark .icon { color: var(--blue); }
+.link-dl.is-on { color: var(--blue); background: rgba(91, 157, 255, 0.12); }
+.link-dl.is-on:hover { color: var(--text); background: rgba(91, 157, 255, 0.2); }
+/* Sorted by site: a heading over each site's links, a row of the list. */
+.link-site-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 10px 4px 0; }
+.link-site-head:first-child { padding-top: 0; }
+.link-site-name { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.link-site-count { flex-shrink: 0; font-size: var(--fs-xs); color: var(--text-dim); }
 .link-confirm { overflow-wrap: anywhere; }
 .person-link-group { margin-bottom: 12px; }
 /* The person page's sub-headings: a link group, the Add a link and import boxes. */

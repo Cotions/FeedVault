@@ -149,8 +149,10 @@ register("sources", "sources", ("tool", "target", "platform", "author_id", "pers
 # would (links.restore_row): the file may have been edited by hand, and a
 # link is rendered as a link. A URL the API would refuse is not put back. A
 # file from before a link had several people (``person``, ``position``,
-# ``tied_at``) is read as one person.
-register("links", "links", ("url", "title", "notes", "people", "created_at"), "url",
+# ``tied_at``) is read as one person. ``download_at``: when it was marked to
+# download (the Links page's To download), null for not marked; a file from
+# before the mark has none, and its links come back unmarked.
+register("links", "links", ("url", "title", "notes", "people", "created_at", "download_at"), "url",
          select=links.export_rows, insert=links.restore, clean=links.restore_row, ids=True)
 
 # New handles the user accepted for a source's account (sources.rename).
