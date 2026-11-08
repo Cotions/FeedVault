@@ -34,6 +34,7 @@ import hashing
 import info_cookies
 import jobs
 import library
+import linkimport
 import linklabels
 import links
 import news
@@ -1529,6 +1530,38 @@ def import_links():
           f"{kept['shared']} saved already and now theirs too, {kept['already']} there already, {dropped} dropped, "
           f"{kept['over']} over the limit")
     return jsonify({"ok": True, "url": page_url, "person": pid, "links": kept})
+
+
+_BAD_MANY = (f"send {{ text: pasted addresses, or a bookmarks file (HTML or Firefox JSON) read as text, "
+             f"of at most {linkimport.MAX_TEXT} characters }}")
+
+
+@app.post("/api/links/import-many")
+def import_many_links():
+    """Many links at once, to no one (the Links page's Unsorted): pasted
+    addresses or a browser's exported bookmarks (linkimport.py reads them,
+    each URL cleaned; nothing is fetched). Insert-only, as links.keep: an
+    address saved already, in any spelling, is left as it is. A bookmark
+    keeps when it was added (its created_at) and its folder (in its
+    notes). Never from another site (_origin_guard)."""
+    if (request.content_length or 0) > 2 * linkimport.MAX_TEXT + 1024:   # JSON escapes, at most twice the text
+        return jsonify({"ok": False, "error": _BAD_MANY}), 413
+    body = _body()
+    if set(body) != {"text"} or not isinstance(body["text"], str):
+        return jsonify({"ok": False, "error": _BAD_MANY}), 400
+    now = _link_now()
+    try:
+        read = linkimport.read(body["text"], now)
+    except linkimport.TooLarge:
+        return jsonify({"ok": False, "error": _BAD_MANY}), 413
+    kept = links.keep(db.connect(), None, read["found"], now, linkimport.MAX_LINKS)
+    if kept["saved"]:
+        userdata.changed("links")
+    out = {"saved": kept["saved"], "already": kept["already"] + read["repeated"], "skipped": read["skipped"],
+           "over": kept["over"]}
+    print(f"[links] import of many: {out['saved']} saved to no one, {out['already']} there already, "
+          f"{out['skipped']} skipped, {out['over']} over the limit")
+    return jsonify({"ok": True, **out})
 
 
 # ---------------------------------------------------------------------------

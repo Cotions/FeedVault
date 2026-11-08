@@ -3829,6 +3829,29 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 }
 .links-bookmarklet-btn:hover { background: rgba(var(--accent-rgb), 0.26); }
 .links-bookmarklet .dim { flex: 1 1 320px; min-width: 0; }
+/* Import many… (LinkImport.jsx): a row as the bookmarklet's, and its dialog. */
+.links-import {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-soft);
+  font-size: var(--fs-sm); line-height: 1.5;
+}
+.links-import > .dim { flex: 1 1 320px; min-width: 0; }
+.links-import-open { padding: 5px 12px; font-size: var(--fs-sm); }
+.modal:has(.links-import-body) { width: 600px; }
+.links-import-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.links-import-body .links-import-term { color: var(--text); }
+.links-import-text {
+  display: block; width: 100%; min-width: 0; min-height: 140px; max-height: 40vh; resize: vertical;
+  padding: 8px 11px; font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.5;
+}
+.links-import-text:disabled { opacity: 0.55; }
+.links-import-file { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.links-import-file > * { flex-shrink: 0; }
+.links-import-file .btn-secondary { padding: 6px 12px; font-size: var(--fs-sm); }
+.links-import-file > .links-import-name {
+  min-width: 0; flex: 0 1 auto;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 700; color: var(--text);
+}
 /* A URL dragged over the window. It takes no events: the drop lands on
    what is under it, so a text field there still takes the text itself. */
 .drop-overlay {

@@ -592,6 +592,24 @@ travel in the URL's fragment (`/links/add#url=…&title=…`), so they never
 reach FeedVault's request log. Each click opens its own window. If the
 browser blocks it, the page opens in the same tab instead (Back returns).
 
+To bring in many links at once, click **Import many…** under Add a link.
+Everything goes to **Unsorted**, to give to people from there; an address
+saved already is left as it is, and nothing is fetched.
+
+- **Open tabs**: paste their addresses into the box, any number, one per
+  line or with anything between them (`Title - https://…` lines and
+  Markdown links keep their title). Or bookmark all tabs into a folder
+  (right-click a tab, **Bookmark all tabs**) and import the bookmarks as
+  below.
+- **Favorites / bookmarks**: export them to an HTML file (Firefox:
+  Bookmarks → Manage bookmarks → Import and Backup → **Export Bookmarks to
+  HTML**; Chrome and Edge: Bookmarks manager → ⋮ → **Export bookmarks**),
+  then **Choose file** and pick it. Each bookmark keeps its title, the date
+  you bookmarked it (so newest first means newest bookmarked) and its
+  folder, written in its notes (`Folder: Bookmarks bar / Art`). A Firefox
+  JSON backup or a plain `.txt` list works too. Entries that are not web
+  addresses (`javascript:`, `place:`, `about:`, `file:`) are skipped.
+
 ## Scripts
 
 When the built-in commands are not what you want, write your own as files in
