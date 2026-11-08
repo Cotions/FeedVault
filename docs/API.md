@@ -1900,6 +1900,7 @@ A **link**:
 | POST | `/api/links/add-person` | body `{ "ids": [12, 9], "person": 5 }` (1 to 5000 ids) → `{ "ok": true, "added": [12], "links": [link, …] }`, see below |
 | POST | `/api/links/remove-person` | body `{ "ids": [12, 9], "person": 5 }` (1 to 5000 ids) → `{ "ok": true, "removed": [12], "links": [link, …] }`, see below |
 | POST | `/api/links/to-download` | body `{ "ids": [12, 9], "download": true }` (1 to 5000 ids; `false` clears the mark; optional `skip_missing`) → `{ "ok": true, "changed": [12], "missing": [], "links": [link, …] }`, see below |
+| POST | `/api/links/import-many` | body `{ "text": "…" }` (pasted addresses, or a bookmarks file read as text) → `{ "ok": true, "saved": 42, "already": 3, "skipped": 1, "over": 0 }`, see below |
 | POST | `/api/links/delete` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "deleted": 2 }`; ids no link has are passed over |
 | POST | `/api/people/<id>/links/order` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "links": [link, …] }`, the person's links in their new order |
 | GET | `/api/people/recent-links?limit=10` | `{ "people": [{ "id": 3, "name": "Some Body", "at": 1727500000 }, …] }`: the people most recently given a link, latest first, see below |
@@ -1958,6 +1959,26 @@ A **link**:
   them, and a link left with no one goes to Unsorted. `removed` are the ids
   that were theirs; ids no link has are passed over. `person` must be a
   person's id (`null` is a 400) for both.
+- `/api/links/import-many` (the Links page's **Import many…**) saves many
+  links at once to no one (Unsorted), insert-only: an address saved already,
+  in any spelling (http or https, `www.`, a last slash), is left as it is
+  and counted in `already`, as is one listed twice in the text. `text` is
+  read as one of: a browser's bookmarks exported to HTML (the Netscape
+  bookmark file of Firefox's "Export Bookmarks to HTML" and Chrome's or
+  Edge's "Export bookmarks": each `<A HREF>` with its text as the title,
+  its `ADD_DATE` as the link's `created_at`, clamped to now, and the
+  folders over it in its notes as `Folder: Bookmarks bar / Art`); a
+  Firefox JSON bookmarks backup (the same, from `uri`, `title`,
+  `dateAdded`); else pasted text, any addresses in it (`http://`,
+  `https://`, or a bare `www.`), whatever is between them, with the rest
+  of a line that holds one address as its title (`Title - https://…`) and
+  Markdown links `[title](https://…)`, saved now. Each URL is cleaned as
+  above (tracking parameters dropped); an entry that is not an `http(s)`
+  address (`place:`, `javascript:`, `about:`, `file:`, `chrome://`) or that
+  cleaning refuses is counted in `skipped`; a title past 300 characters is
+  cut. At most 5000 new links are saved, the rest counted in `over`.
+  `text` past 10 MiB characters (or a body past twice that) is a 413.
+  Nothing is fetched.
 - The links tied to no one (`?person=none`, the Links page's **Unsorted**)
   are counted in `unsorted_links` of `GET /api/jobs`, for the sidebar's badge;
   the links marked to download (`?download=1`, its **To download** tab) in

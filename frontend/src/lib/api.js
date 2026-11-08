@@ -345,6 +345,9 @@ export function getLinks(params = {}, opts) { return get(`/api/links${qs(params)
 // body { url, title, notes, person } (or people: [ids]) → { ok, link }; a saved URL is
 // { ok: false, error, id, link } (409), ``link`` the saved one, with its people.
 export function createLink(body) { return post("/api/links", body); }
+// Many links to no one (Unsorted), insert-only: pasted addresses or an exported bookmarks
+// file's text (HTML, Firefox JSON) → { ok, saved, already, skipped, over }.
+export function importManyLinks(text) { return post("/api/links/import-many", { text }); }
 // The people most recently given a link, latest first → { people: [{ id, name, at }] }.
 export function getRecentLinkPeople(limit = 10) { return get(`/api/people/recent-links${qs({ limit })}`); }
 // changes: any of url, title, notes, person (one id or null: replaces every person), people ([ids])
