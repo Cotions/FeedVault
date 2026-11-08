@@ -114,6 +114,8 @@ export default function Trash() {
 // ``state``: "restoring" while its restore runs (the rest of the page stays
 // usable), "restored" once back: it stays listed, with a link to the post,
 // until the list is next loaded.
+const TRASH_FILTERS_FROM = 10;
+
 function TrashEntry({ entry: e, index, selectMode, selected, onToggle, onRestore, busy, state }) {
   const [broken, setBroken] = useState(false);
   const who = whoOf(e);
@@ -428,14 +430,21 @@ function TrashContents({ tabs }) {
       )}
       actions={<>
         {trash?.entries > 0 && !sel.active && (
-          <button type="button" className="btn-secondary" onClick={checkFiles} disabled={busy}
+          <button type="button" className="btn-secondary" onClick={checkFiles} disabled={busy} aria-label="Check for missing files"
             title="Look at every trashed file now. The list checks the entries it shows; this finds files moved or deleted by hand anywhere in the trash">
-            <Icon name="search" size={14} />Check for missing files
+            <Icon name="search" size={14} /><span className="head-btn-label">Check for missing files</span>
           </button>
         )}
         {items.length > 0 && !sel.active && (
           <button type="button" className="btn-secondary" onClick={sel.enter}>
             <Icon name="check" size={14} />Select
+          </button>
+        )}
+        {/* With filters, the bar's "Delete all n forever…" does it for what they match. */}
+        {trash?.entries > 0 && !sel.active && !(author || person || when) && current && (
+          <button type="button" className="btn-danger-soft" onClick={askBulk} disabled={busy || restoring}
+            title="Permanently delete everything in the trash">
+            Empty trash…
           </button>
         )}
         {sel.active && (
@@ -474,11 +483,7 @@ function TrashContents({ tabs }) {
       {head}
       {tabs}
       <p className="page-lede">
-        Deleted posts and items wait here, in a <code>.feedvault-trash</code> folder inside their media root,
-        until you delete them for good. Restoring puts the files back where they were and the posts back in
-        the feed. What was deleted lately, restored or not, is in the{" "}
-        <Link to="/trash?view=history" className="text-link">History</Link>. Emptying the whole trash is
-        in <Link to="/settings" className="text-link">Settings</Link>.
+        Deleted posts wait here until you delete them for good. Restoring puts the files back where they were.
       </p>
       {error && <div className="msg err" role="alert">Could not refresh: {error.message}</div>}
 
@@ -493,6 +498,8 @@ function TrashContents({ tabs }) {
         </div>
       ) : (
         <>
+          {/* Filters only earn their row on a trash worth filtering. */}
+          {(anyFilter || trash.entries >= TRASH_FILTERS_FROM) && (
           <div className="feed-filters" role="group" aria-label="Filters">
             <label className="filter filter-author">
               <span>Creator</span>
@@ -543,6 +550,7 @@ function TrashContents({ tabs }) {
               </button>
             )}
           </div>
+          )}
 
           <div className="card">
             <DeleteErrors errors={errors?.list} summary={errors?.summary} onDismiss={() => setErrors(null)} />
@@ -604,7 +612,7 @@ function TrashContents({ tabs }) {
         <p>
           This <strong>permanently deletes {bulk ? "up to " : ""}{plural(bulk ? bulk.files : selFiles, "file")} ({fmtBytes(bulk ? bulk.bytes : selBytes)})</strong> of{" "}
           {plural(bulk ? bulk.total : sel.count, "trashed entry", "trashed entries")}
-          {bulk ? `, every one the filters match (${filterText(result?.authors, author, when, shownPerson)})` : ""} from
+          {bulk && (author || person || when) ? `, every one the filters match (${filterText(result?.authors, author, when, shownPerson)})` : bulk ? ", everything in the trash" : ""} from
           disk. They do not go to the system trash, and this cannot be undone.
           {bulk ? " Entries off the page count as last measured: a file removed by hand since is not freed again." : ""}
         </p>
@@ -632,9 +640,9 @@ function whatHappened(e) {
 }
 
 const STATE = {
-  in_trash: { label: "In the trash", title: "Still in the trash: Restore puts it back" },
-  restored: { label: "Restored", title: "Back where it was, and in the feed" },
-  gone:     { label: "Gone", title: "Deleted for good: nothing left to restore" },
+  in_trash: { label: "Now: in the trash", title: "Still in the trash: Restore puts it back" },
+  restored: { label: "Now: restored", title: "Back where it was, and in the feed" },
+  gone:     { label: "Now: gone", title: "Deleted for good: nothing left to restore" },
 };
 
 function HistoryRow({ event: e, pending, onRestore }) {
@@ -781,8 +789,7 @@ function TrashHistory({ tabs }) {
       />
       {tabs}
       <p className="page-lede">
-        What was deleted, restored and deleted for good, newest first. A post still in the trash can be
-        restored from here; one that is back opens from its row.
+        Everything deleted, restored or purged, newest first.
       </p>
       <div className="card">
         <DeleteErrors errors={errors?.list} summary={errors?.summary} onDismiss={() => setErrors(null)} />

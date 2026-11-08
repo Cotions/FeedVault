@@ -7,7 +7,7 @@ import { useScan } from "../lib/scan";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
 import { useUndoDelete } from "../lib/useUndoDelete";
-import { albumLabel, excerpt, fmt, fmtBytes, fmtFullDate, fmtIso, platformLabel, plural, safeUrl, authorFeedPath } from "../lib/fmt";
+import { albumLabel, excerpt, fmt, fmtBytes, fmtFullDate, fmtIso, fmtShortDate, platformLabel, plural, safeUrl, authorFeedPath } from "../lib/fmt";
 import MediaCarousel from "../components/MediaCarousel";
 import RichText from "../components/RichText";
 import Icon from "../components/Icon";
@@ -43,9 +43,7 @@ function PostTags({ post, onChanged }) {
   return (
     <div className="card post-tags">
       <div className="card-title"><Icon name="tag" size={13} />Tags</div>
-      {tags.length > 0
-        ? <TagChips tags={tags} onRemove={name => change({ remove: [name] })} busy={busy} />
-        : <p className="dim post-tags-none">No tags yet.</p>}
+      {tags.length > 0 && <TagChips tags={tags} onRemove={name => change({ remove: [name] })} busy={busy} />}
       <TagInput tags={tagsApi.data || []} exclude={tags} onAdd={name => change({ add: [name] })} />
     </div>
   );
@@ -156,7 +154,8 @@ export default function PostPage() {
         </button>
       )}
       actions={shown && (
-        <button type="button" className="btn-danger-soft" onClick={() => ask({ type: "post" })}>
+        // Neutral: the red is for the confirm it opens.
+        <button type="button" className="btn-secondary" onClick={() => ask({ type: "post" })}>
           <Icon name="trash" size={14} />Delete post
         </button>
       )}
@@ -259,11 +258,11 @@ export default function PostPage() {
             <dl className="post-dates">
               <div>
                 <dt>Posted</dt>
-                <dd><time dateTime={fmtIso(post.posted_at)}>{fmtFullDate(post.posted_at)}</time></dd>
+                <dd><time dateTime={fmtIso(post.posted_at)} title={fmtFullDate(post.posted_at)}>{fmtShortDate(post.posted_at)}</time></dd>
               </div>
               <div>
                 <dt>Saved</dt>
-                <dd><time dateTime={fmtIso(post.saved_at)}>{fmtFullDate(post.saved_at)}</time></dd>
+                <dd><time dateTime={fmtIso(post.saved_at)} title={fmtFullDate(post.saved_at)}>{fmtShortDate(post.saved_at)}</time></dd>
               </div>
               {post.album && (
                 <div>
@@ -280,7 +279,7 @@ export default function PostPage() {
             </dl>
 
             {original && (
-              <a className="btn-primary btn-original" href={original} target="_blank" rel="noreferrer">
+              <a className="btn-secondary btn-original" href={original} target="_blank" rel="noreferrer">
                 <Icon name="external" size={14} />Open original on {platformLabel(post.platform)}
               </a>
             )}
@@ -288,7 +287,7 @@ export default function PostPage() {
 
           {hasStats && (
             <div className="vp-stats">
-              {statCells.map((s, i) => (
+              {statCells.filter(s => s.v != null).map((s, i) => (
                 <div key={s.key} className="vp-stat" style={{ animationDelay: `${i * 80}ms` }} title={s.v != null ? s.v.toLocaleString() : "not captured"}>
                   <span className="vp-stat-num">{fmt(s.v)}</span>
                   <span className="vp-stat-label"><Icon name={s.icon} size={11} />{s.label}</span>
@@ -307,7 +306,7 @@ export default function PostPage() {
                   <li key={c.id} className="tag-chip is-collection"><Link to={`/collections/${c.id}`} title={c.name}><span className="tag-chip-name">{c.name}</span></Link></li>
                 ))}
               </ul>
-            ) : <p className="dim post-tags-none">In no collection.</p>}
+            ) : null}
             <button type="button" className="btn-secondary" onClick={() => setCollecting(true)}>
               <Icon name="plus" size={14} />Add to collection…
             </button>
@@ -321,8 +320,9 @@ export default function PostPage() {
             )}
           </div>
 
-          <div className="card post-source">
-            <div className="card-title">Source</div>
+          {/* The files behind the post: rarely needed, so folded. */}
+          <details className="card post-source">
+            <summary className="card-title">File details</summary>
             <div className="kv-row">
               <span className="kv-key">tool</span>
               <span className="kv-val">{src.tool || "—"}{src.version ? <span className="dim"> {src.version}</span> : null}</span>
@@ -340,7 +340,7 @@ export default function PostPage() {
               </span>
             </div>
             {src.meta_path && <CopyField label="meta" value={src.meta_path} />}
-          </div>
+          </details>
         </div>
       </div>
     </div>

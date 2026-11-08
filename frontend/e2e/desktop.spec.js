@@ -1,7 +1,7 @@
 // Desktop, 1440x900: every page loads clean, the Feed shows posts, Review
 // decides from the keyboard, and a person's link-in-bio import (faked).
 import { test, expect, PAGES, openPage, keepTrashUndo, reviewLeft, stressData, idle, fakeBioImport, BIO_ACCOUNTS,
-  openBioImport, menuItem } from "./fixtures.js";
+  openBioImport, menuItem, openFilters, openFold } from "./fixtures.js";
 
 test.describe("every page in the nav loads, no console error, no failed /api request", () => {
   for (const p of PAGES) {
@@ -13,7 +13,7 @@ test.describe("every page in the nav loads, no console error, no failed /api req
 
 test("the Feed shows posts", async ({ page }) => {
   await openPage(page, PAGES[0]);
-  await expect(page.locator(".page-count").first()).toHaveText(/^[1-9][\d,]*$/);
+  await expect(page.locator(".page-count").first()).toHaveText(/^[1-9][\d,]* posts?$/);
   await expect(page.locator("article.post-card").first()).toBeVisible();
   expect(await page.locator("article.post-card").count()).toBeGreaterThan(1);
 });
@@ -82,9 +82,11 @@ test("Review: Keep and Trash post stay put from a single item to an album", asyn
   const item = bar.getByRole("button", { name: /^Trash this item/ });
   const seen = new Map();
   for (let i = 0; i < 40 && seen.size < 2; i++) {
-    await expect(item).toBeVisible();
     const album = await page.locator(".review-stage .carousel-dot, .review-stage .carousel-arrow").count() > 0;
-    if (album) await expect(item).toBeEnabled(); else await expect(item).toBeDisabled();
+    // A single item has nothing to trash apart from the post: the button is
+    // hidden then, and only an album shows it.
+    if (album) { await expect(item).toBeVisible(); await expect(item).toBeEnabled(); }
+    else await expect(item).toBeHidden();
     if (!seen.has(album)) {
       seen.set(album, await Promise.all(["Keep", "Trash post"].map(async n =>
         Math.round((await bar.getByRole("button", { name: new RegExp(`^${n}`) }).boundingBox()).y))));
@@ -171,7 +173,7 @@ test("Review: re-review goes through a creator's kept posts too and leaves them 
   const sent = [];
   page.on("request", r => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/review") sent.push(r.postDataJSON()); });
   const open = page.locator(".review-open");
-  const kept = page.locator(".review-byline .review-kept");
+  const kept = page.locator(".review-meta .review-kept");
   const session = page.locator(".review-session");
   try {
     // Every post kept: the usual Review has nothing left, and offers the re-review.
@@ -181,6 +183,7 @@ test("Review: re-review goes through a creator's kept posts too and leaves them 
     await page.getByRole("link", { name: "Re-review all posts, kept too" }).click();
     await expect(page).toHaveURL(`/review?${scope}&again=1`);
     await expect(page.getByRole("heading", { level: 2, name: "Re-review" })).toBeVisible();
+    await openFilters(page);
     await expect(page.getByRole("combobox", { name: "Posts to review" })).toHaveValue("1");
     await expect(page.locator(".review-progress")).toContainText("left in this pass");
     expect(await reviewLeft(page)).toBe(posts.length);
@@ -481,6 +484,7 @@ test("deleting posts from the Feed updates the new counts at once", async ({ pag
   const sidebar = page.locator("#main-nav .side-new");
   const chip = page.getByRole("button", { name: /^New since last visit/ });
   await expect(sidebar).toHaveText("5 new");
+  await openFilters(page);
   await expect(chip).toHaveText("New since last visit (5)");
 
   await page.getByRole("button", { name: "Select", exact: true }).click();
@@ -734,7 +738,7 @@ test("Browser profile: picked in Settings and on a source, a missing one stays s
   };
   try {
     await page.goto("/settings#sync");
-    const card = page.locator(".card", { hasText: "Instagram sync (instaloader)" });
+    const card = await openFold(page, "Instagram");
     await card.getByRole("radio", { name: /Use my browser/ }).check();
     const browser = card.getByRole("combobox", { name: "Browser", exact: true });
     const profile = card.getByRole("combobox", { name: "Browser profile" });
@@ -762,6 +766,7 @@ test("Browser profile: picked in Settings and on a source, a missing one stays s
     // Renamed in Firefox since: still the stored one, marked, with why.
     names = ["cotions", "default", "TRND"];
     await page.reload();
+    await openFold(page, "Instagram");      // a reload folds it again
     await expect(profile).toHaveValue("test");
     await expect(profile.locator("option")).toHaveText(["Default (the tool picks)", "test · not found", "cotions", "default", "TRND"]);
     const note = card.locator(".browser-pick-note");

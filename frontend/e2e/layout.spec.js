@@ -10,7 +10,7 @@
 // stress.js: a 60-character creator, 15 tags, long names and paths.
 import fs from "node:fs";
 import { test, expect, PAGES, openPage, stressData, stillPage, checkLayout, formatFindings, settle, idle, fakeBioImport,
-  openBioImport, openAddLink } from "./fixtures.js";
+  openBioImport, openAddLink, openFilters } from "./fixtures.js";
 import { STRESS_PERSON } from "./stress.js";
 
 const SIZES = [
@@ -259,6 +259,7 @@ const DIALOGS = [
     name: "Feed › Creator picker open",
     open: async page => {
       await openPage(page, PAGES[0]);
+      await openFilters(page);
       await page.locator(".feed-filters .picker-input").first().click();
       await expect(page.locator(".picker-list").first()).toBeVisible();
     },
@@ -427,6 +428,8 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
 
   await openPage(page, { name: "Links", path: "/links" });
   await stillPage(page);
+  // The form's other fields show once an address is typed.
+  await page.locator(".links-add .link-form-url input").fill("https://example.com/layout");
   for (const s of LINE_SIZES) {
     await page.setViewportSize({ width: s.width, height: s.height });
     await settle(page);
@@ -455,13 +458,13 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
 // The sidebar fits short desktop windows: at 1280x800 and 1366x768 every
 // entry shows without scrolling it, the last (Quit) whole and clear of the
 // sidebar's bottom edge by its focus ring, and each entry stays a 24px target.
-// Its links come in three named groups (Browse, Library, System), in the
-// order they always had, Rescan and Quit after them.
+// Its links come in three named groups (Browse, Library, and More, folded
+// by default; the fixtures open it), Rescan and Quit after them.
 const SIDEBAR_SIZES = [SIZES[1], { label: "1366x768", width: 1366, height: 768 }];
 const SIDEBAR_GROUPS = {
-  Browse: ["Feed", "Review", "Creators", "Tags", "Links", "Collections"],
-  Library: ["Stats", "Storage", "Trash", "Unmatched", "Duplicates"],
-  System: ["Jobs", "Notifications", "Scripts", "Settings"],
+  Browse: ["Feed", "Review", "Creators", "Collections", "Tags", "Links"],
+  Library: ["Trash", "Notifications", "Settings"],
+  More: ["Stats", "Storage", "Duplicates", "Unmatched", "Jobs", "Scripts"],
 };
 
 test("the sidebar fits without scrolling", async ({ page }, testInfo) => {
@@ -473,7 +476,6 @@ test("the sidebar fits without scrolling", async ({ page }, testInfo) => {
   for (const [i, [name, entries]] of Object.entries(SIDEBAR_GROUPS).entries()) {
     const group = groups.nth(i);
     await expect(group).toHaveAccessibleName(name);
-    await expect(group.locator(".side-group-label")).toHaveText(name);
     await expect(group.locator(".side-link")).toHaveText(entries.map(e => new RegExp(`^${e}`)));
   }
   // The foot: Rescan and Quit, outside the groups.
@@ -483,12 +485,18 @@ test("the sidebar fits without scrolling", async ({ page }, testInfo) => {
   for (const s of SIDEBAR_SIZES) {
     await page.setViewportSize({ width: s.width, height: s.height });
     await settle(page);
+    // At 768px tall the nav fits with More folded (that is what the fold is for);
+    // the taller size is measured with it open, as the fixtures leave it.
+    const more = page.locator("#side-more-btn");
+    const wantOpen = s.height >= 800;
+    if (await more.getAttribute("aria-expanded") !== String(wantOpen)) await more.click();
+    await settle(page);
     const m = await page.evaluate(() => {
       const nav = document.querySelector("#main-nav");
       const box = nav.getBoundingClientRect();
       const items = [...nav.children].filter(e => e.getBoundingClientRect().height > 0);
       const last = items.at(-1).getBoundingClientRect();
-      const small = [...nav.querySelectorAll(".side-link")].filter(e => e.getBoundingClientRect().height < 24)
+      const small = [...nav.querySelectorAll(".side-link")].filter(e => e.getBoundingClientRect().height && e.getBoundingClientRect().height < 24)
         .map(e => e.textContent.trim());
       return { scroll: nav.scrollHeight, client: nav.clientHeight, lastBottom: last.bottom, navBottom: box.bottom, small,
                lastText: items.at(-1).textContent.trim() };
@@ -513,11 +521,13 @@ async function feedBar(page) {
   return page.evaluate(() => {
     const bar = document.querySelector(".feed-filters");
     const b = bar.getBoundingClientRect();
-    const items = [...bar.querySelectorAll(":scope > *, .feed-scope > *")]
-      .filter(e => !e.matches(".feed-scope, .page-head-spacer") && e.getBoundingClientRect().width > 0);
+    const rowsOf = els => new Set(els.filter(e => e.getBoundingClientRect().width > 0)
+      .map(e => Math.round(e.getBoundingClientRect().bottom))).size;
+    const head = [...bar.querySelectorAll(":scope > *")].filter(e => !e.matches(".feed-scope, .page-head-spacer"));
+    const items = [...bar.querySelectorAll(".feed-scope > *")];
     const sort = bar.querySelector(".filter-sort").getBoundingClientRect();
     return {
-      rows: new Set(items.map(e => Math.round(e.getBoundingClientRect().bottom))).size,
+      headRows: rowsOf(head), rows: rowsOf(items),
       sortRight: sort.right, barRight: b.right,
       select: [...bar.querySelectorAll("button")].some(x => /^(Select|Done)$/.test(x.textContent.trim())),
     };
@@ -532,6 +542,7 @@ test("the Feed's filter bar is one row at 1440, Select in the head", async ({ pa
     if (!collections) await page.route(noCollections, route => route.fulfill({ json: [] }));
     else await page.unroute(noCollections);
     await openPage(page, PAGES[0]);
+    await openFilters(page);
     await expect(page.locator(".filter-collection")).toHaveCount(collections ? 1 : 0);
     await expect(page.locator(".page-head-actions").getByRole("button", { name: "Select", exact: true })).toBeVisible();
     for (const s of [SIZES[2], SIZES[1]]) {
@@ -541,7 +552,9 @@ test("the Feed's filter bar is one row at 1440, Select in the head", async ({ pa
       const at = `Feed${collections ? " with a collection" : ""} at ${s.label}`;
       if (m.select) problems.push(`${at}: Select is in the filter bar`);
       const most = !collections && s === SIZES[2] ? 1 : 2;
-      if (m.rows > most) problems.push(`${at}: the filter bar takes ${m.rows} rows (${most} at most)`);
+      // The toggle and Sort are one row of their own; the filters, opened, take the rows under it.
+      if (m.headRows !== 1) problems.push(`${at}: the toggle and Sort take ${m.headRows} rows (1)`);
+      if (m.rows > most) problems.push(`${at}: the opened filters take ${m.rows} rows (${most} at most)`);
       if (Math.abs(m.sortRight - m.barRight) > 1) problems.push(`${at}: Sort ends at x=${m.sortRight}, the bar at x=${m.barRight}`);
     }
   }

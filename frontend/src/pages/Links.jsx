@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { getLinks, getPeople, createLink, updateLink, deleteLink, assignLinks, addLinkPerson, removeLinkPerson, deleteLinks } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useLiveSearchParams } from "../lib/useLiveSearchParams";
@@ -342,9 +341,7 @@ export default function Links() {
       <div className="card links-add">
         <h3 className="card-title">Add a link</h3>
         <p className="page-lede">
-          A creator's Linktree, Patreon, site or Discord invite, an interview, an article: anything with an
-          address. FeedVault keeps the text only; it never opens the link itself. A link with no title is
-          named by its site: <Link to="/settings#link-labels" className="text-link">Link labels</Link>.
+          Any address: a Linktree, a Patreon, an article. FeedVault keeps the text and never opens it.
         </p>
         <LinkForm people={people || []} busy={busy} onSubmit={add} idPrefix="links-add" onDirty={setAdding} />
         <Bookmarklet />

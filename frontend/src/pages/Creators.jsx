@@ -29,7 +29,7 @@ import {
 } from "../components/Sources";
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
 import { optionsSummary } from "../lib/sourceOptions";
-import { warnings } from "../lib/health";
+import { healthBadge, warnings } from "../lib/health";
 import PageHeader from "../components/PageHeader";
 import { useUnsaved } from "../lib/unsaved";
 import { useWindow } from "../lib/windowing";
@@ -354,6 +354,8 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
 
 // "Sync these?": profile folders already downloaded with instaloader, offered
 // as sources. Nothing is added until the user says so.
+const MANAGE_KEY = "feedvault.creatorsSources";
+
 function SourceSuggestions({ list, busy, onAdd, onAddAll }) {
   const [all, setAll] = useState(false);
   if (!list?.length) return null;
@@ -385,7 +387,7 @@ function SourceSuggestions({ list, busy, onAdd, onAddAll }) {
               <span>{fmtInt(s.count)} posts indexed</span>
             </div>
             <div className="suggestion-actions">
-              <button type="button" className="btn-primary" disabled={busy} onClick={() => onAdd(s)}>
+              <button type="button" className="btn-secondary" disabled={busy} onClick={() => onAdd(s)}>
                 <Icon name="plus" size={14} /> Add
               </button>
             </div>
@@ -644,12 +646,23 @@ export default function Creators() {
   const loose = sourceList.filter(src => src.health?.rename
     || (!src.person && !(src.account && shownAccounts.has(accountKey(src.account)))));
   const syncOf = k => cardSync(cardSources.get(k), sources.jobOf);
+  // The Sources fold: as left (this browser), open while a source is
+  // being typed or one is asked for (?source=).
+  const attention = loose.filter(src => src.health?.rename || healthBadge(src.health)
+    || src.last_result?.state === "failed").length;
+  const suggestCount = (sources.data?.suggestions?.length || 0) + (suggestApi.data?.suggestions?.length || 0);
+  const [manageOpen, setManageOpenState] = useState(() => { try { return localStorage.getItem(MANAGE_KEY) === "1"; } catch { return false; } });
+  function setManageOpen(v) {
+    setManageOpenState(v);
+    try { localStorage.setItem(MANAGE_KEY, v ? "1" : "0"); } catch { /* this visit only */ }
+  }
   // Where the source asked for is shown: its own row, else its card.
   const flashSource = flash == null ? null : sourceList.find(src => src.id === flash);
   const flashKey = !flashSource ? null
     : loose.includes(flashSource) ? `source:${flashSource.id}`
     : flashSource.person ? `person:${flashSource.person.id}`
     : flashSource.account ? `account:${accountKey(flashSource.account)}` : null;
+  const manageShown = manageOpen || newSource || flashKey?.startsWith("source:");
 
   async function addSuggested(list) {
     setBusy(true);
@@ -817,7 +830,8 @@ export default function Creators() {
       <PageHeader
         title="Creators"
         sub={data && peopleApi.data
-          ? `${plural(peopleAll.length, "person", "people")} · ${plural(data.length, "account")} · ${plural(total, "post")}`
+          ? [peopleAll.length > 0 && plural(peopleAll.length, "person", "people"), plural(data.length, "account"), plural(total, "post")]
+              .filter(Boolean).join(" · ")
           : "…"}
         actions={<>
           {!searching && (data?.length > 8 || peopleAll.length > 8) && (
@@ -851,33 +865,47 @@ export default function Creators() {
         </>}
       />
       <div className="card">
-        {/* Hidden, not gone, while filtering, searching or selecting: a source being typed stays. */}
-        <section className="sources-panel" aria-label="Sources" hidden={sel.active || filtering || searching}>
-          <AddSource onAdded={sources.reload} onDirty={setNewSource} />
-          <SyncAllBar count={sourceList.filter(src => !src.no_sync && !src.profile_only).length} syncAll={syncAll} />
-          {loose.length > 0 && (
-            <ul className="source-list">
-              {loose.map(src => (
-                // Linked to a person: it leaves this list for their card, which the cards' reload shows.
-                <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
-                           onSaved={sources.reload} onLinked={onNoSync} flash={flashKey === `source:${src.id}`} />
-              ))}
-            </ul>
-          )}
+        {/* Sources and suggestions fold under one line (#ui-declutter), so
+            the creators come first; the line says what waits inside. Hidden,
+            not gone, while filtering, searching or selecting: a source being
+            typed stays. */}
+        <section className={`creators-manage${manageShown ? " is-open" : ""}`} aria-label="Sources and suggestions"
+                 hidden={sel.active || filtering || searching}>
+          <div className="creators-manage-bar">
+            <button type="button" className="creators-manage-btn" aria-expanded={manageShown}
+                    aria-controls="creators-manage-body" onClick={() => setManageOpen(!manageShown)}>
+              <Icon name="chevDown" size={14} className="creators-manage-chev" />
+              <span className="creators-manage-title">Sources</span>
+              <span className="creators-manage-sum">
+                {plural(sourceList.length, "source")}
+                {attention > 0 && <span className="warn-text"> · {fmtInt(attention)} need{attention === 1 ? "s" : ""} a look</span>}
+                {suggestCount > 0 && <span className="ok-text"> · {plural(suggestCount, "suggestion")}</span>}
+              </span>
+            </button>
+            <SyncAllBar count={sourceList.filter(src => !src.no_sync && !src.profile_only).length} syncAll={syncAll} />
+          </div>
+          <div className="creators-manage-body" id="creators-manage-body" hidden={!manageShown}>
+            <div className="sources-panel">
+              <AddSource onAdded={sources.reload} onDirty={setNewSource} />
+              {loose.length > 0 && (
+                <ul className="source-list">
+                  {loose.map(src => (
+                    // Linked to a person: it leaves this list for their card, which the cards' reload shows.
+                    <SourceRow key={src.id} source={src} job={sources.jobOf(src)} onSync={sources.sync} onRemove={setRemoving}
+                               onSaved={sources.reload} onLinked={onNoSync} flash={flashKey === `source:${src.id}`} />
+                  ))}
+                </ul>
+              )}
+            </div>
+            <SourceSuggestions
+              list={sources.data?.suggestions}
+              busy={busy}
+              onAdd={s => addSuggested([s])}
+              onAddAll={() => setAddAll({ error: null })}
+            />
+            <Suggestions data={suggestApi.data} busy={busy} onLink={linkSuggestion} onDismiss={dismiss} />
+          </div>
         </section>
-
-        {!sel.active && !filtering && !searching && (
-          <SourceSuggestions
-            list={sources.data?.suggestions}
-            busy={busy}
-            onAdd={s => addSuggested([s])}
-            onAddAll={() => setAddAll({ error: null })}
-          />
-        )}
-
-        {!sel.active && !filtering && !searching && (
-          <Suggestions data={suggestApi.data} busy={busy} onLink={linkSuggestion} onDismiss={dismiss} />
-        )}
 
         {peopleApi.data && !searching && <AttributeFilters people={peopleAll} accounts={data || []} value={attrs} onChange={changeAttrs} />}
 

@@ -188,8 +188,8 @@ test.describe("Links, 2,000 links", () => {
     await row.getByRole("button", { name: /^Edit/ }).click();
     const title = page.locator(".link-row.is-editing").getByLabel("Title");
     await title.fill("Edited, not saved");
-    // Focus out of the list: the edit, not focus, is what keeps the row.
-    await page.locator(".links-add .link-form").getByLabel("Title").focus();
+    // Focus out of the list (the add form's Title is hidden until its Address has text): the edit, not focus, is what keeps the row.
+    await page.locator(".links-add .link-form").getByLabel("Address").focus();
     await scrollToBottom(page);
     await expect(page.locator(".link-row", { hasText: "Big link 1999" })).toBeInViewport();
     expect(await rows.count()).toBeLessThan(MAX_ROWS);

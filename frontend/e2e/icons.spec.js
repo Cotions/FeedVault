@@ -86,10 +86,11 @@ test("Feed: a card's author follows the platform's logo", async ({ page }) => {
   await expectBeforeName(card.locator(".post-meta").getByRole("img").first(), card.locator(".post-author"));
 });
 
-test("Review: the byline's handle follows the platform's logo, the chips after it", async ({ page }) => {
+// The chips (kind, Kept, Restored) are on the meta line under it, so a long
+// handle keeps its one line.
+test("Review: the byline's handle follows the platform's logo", async ({ page }) => {
   await openPage(page, { name: "Review", path: "/review" });
   const byline = page.locator(".review-byline");
   const handle = byline.locator(".post-byline-handle");
   await expectBeforeName(byline.getByRole("img"), handle);
-  const [h, chip] = [await handle.boundingBox(), await byline.locator(".chip").first().boundingBox()];
-  expect(h.x + h.width).toBeLessThanOrEqual(chip.x);});
+});

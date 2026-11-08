@@ -21,6 +21,7 @@ export default function ProfileSettings({ onDirty }) {
   const [dlgErr,   setDlgErr]   = useState(null);
   const [msg,      setMsg]      = useState(null);    // { ok, text }, under the list
   const [formMsg,  setFormMsg]  = useState(null);    // the same, under the form
+  const [adding,   setAdding]   = useState(false);   // the New profile form, opened by its button
 
   const dirty = !!(form.name.trim() || form.data.trim() || form.roots.length || form.typed.trim());
   function edit(changes) {
@@ -114,10 +115,8 @@ export default function ProfileSettings({ onDirty }) {
       <div className="card" id="profiles-card">
         <div className="card-title">Profiles</div>
         <p className="page-lede">
-          Each profile is a library of its own: its media roots, and a data directory holding its database,
-          thumbnails, tags, people, collections, links and sources. One is active at a time; switching reloads
-          FeedVault in the other. Downloaders and their settings are shared. Scheduled syncs, and the
-          userscript&rsquo;s Save, only reach the active profile.
+          Each profile is a library of its own, with its own media roots, tags, people and sources. One is
+          active at a time; scheduled syncs and the userscript only reach that one.
         </p>
         <ul className="roots-list profile-list">
           {profiles.map(p => (
@@ -165,13 +164,20 @@ export default function ProfileSettings({ onDirty }) {
           ))}
         </ul>
         {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role={msg.ok ? "status" : "alert"}>{msg.text}</div>}
+        {!(adding || dirty || formMsg) && (
+          <div className="settings-actions">
+            <button type="button" className="btn-secondary" onClick={() => setAdding(true)}>
+              <Icon name="plus" size={14} />New profile…
+            </button>
+          </div>
+        )}
       </div>
 
-      <form className="card" onSubmit={create}>
+      {(adding || dirty || formMsg) && <form className="card" onSubmit={create}>
         <div className="card-title">New profile</div>
         <p className="page-lede">
-          Pick an empty data directory to start a new library, or the one a removed profile used to have it back.
-          Media roots can also be set later, in Library, once you have switched to it; a folder can only be in one profile.
+          An empty data directory starts a new library; a removed profile&rsquo;s brings it back. Media roots can
+          wait until you switch to it.
         </p>
         <div className="profile-form">
           <label className="profile-field">
@@ -226,9 +232,14 @@ export default function ProfileSettings({ onDirty }) {
               Discard
             </button>
           )}
+          {!dirty && (
+            <button type="button" className="btn-ghost" onClick={() => { setAdding(false); setFormMsg(null); }}>
+              Cancel
+            </button>
+          )}
         </div>
         {formMsg && <div className={`msg ${formMsg.ok ? "ok" : "err"}`} role={formMsg.ok ? "status" : "alert"}>{formMsg.text}</div>}
-      </form>
+      </form>}
 
       <ConfirmDialog
         open={removing != null}

@@ -23,7 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   test, expect, PAGES, stressData, settle, frame, quiet, addProbes, STATE_ALLOW, formatStateFindings,
-  fakeDecisions, underToasts, dismissToasts,
+  fakeDecisions, openFilters, underToasts, dismissToasts,
 } from "./fixtures.js";
 
 const SIZES = [
@@ -208,6 +208,7 @@ const POPOVERS = [
     name: "Feed › creator picker",
     open: async page => {
       await open(page, "Feed");
+      await openFilters(page);
       await page.locator(".feed-filters .picker-input").first().click();
     },
     pop: ".picker-list",
