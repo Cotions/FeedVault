@@ -226,8 +226,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "rating_colors": { "enabled": true, "bands": [{ "min": 1, "color": "#d9534f" }, …] }, "source_defaults": [block, …], "profile_only_platforms": ["spotify"], "platforms": ["instagram", "spotify", "tiktok", …] }` (see [Download defaults](#download-defaults) and [Rating colors](#rating-colors); `platforms`: those Settings → Profile only offers, see [Profile only](#profile-only)) |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "rating_colors": {…} }` (see [Rating colors](#rating-colors), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)), `{ "profile_only_platforms": ["spotify", …] }` (see [Profile only](#profile-only)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "rating_colors": { "enabled": true, "bands": [{ "min": 1, "color": "#d9534f" }, …] }, "open_links": null, "source_defaults": [block, …], "profile_only_platforms": ["spotify"], "platforms": ["instagram", "spotify", "tiktok", …] }` (see [Download defaults](#download-defaults) and [Rating colors](#rating-colors); `platforms`: those Settings → Profile only offers, see [Profile only](#profile-only)) |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "rating_colors": {…} }` (see [Rating colors](#rating-colors), `{ "open_links": {…} }` or `null` (see [Opening a link elsewhere](#opening-a-link-elsewhere)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)), `{ "profile_only_platforms": ["spotify", …] }` (see [Profile only](#profile-only)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/profiles` | `{ "active": "default", "profiles": [profile, …] }`, see [Profiles](#profiles) |
 | POST | `/api/profiles` | body `{ "name", "data_directory", "media_roots": [...] }` → `{ "ok": true, "profile": profile, "active", "profiles" }`: a new profile, not switched to; see [Profiles](#profiles) |
 | POST | `/api/profiles/<id>` | body `{ "name" }` → `{ "ok": true, "active", "profiles" }`: renames it |
@@ -1823,7 +1823,10 @@ import](#link-in-bio-import) fetches only the page pasted into it, when
 switched on; it saves that page's address and the links it shows to the
 person's Links, as text, and fetches none of them.) The dashboard opens a
 link in a new tab (`rel="noopener noreferrer"`), and only an `http:` or
-`https:` one.
+`https:` one; or, when asked, in another browser, profile or private
+window, which FeedVault starts on the link (see [Opening a link
+elsewhere](#opening-a-link-elsewhere)): the browser fetches it, not
+FeedVault.
 
 A **link**:
 
@@ -2041,6 +2044,64 @@ is.
   the address says whose profile it is), else the site's own name, its
   first letter a capital (`patreon.com` → `Patreon.com`, `bbc.co.uk` →
   `Bbc.co.uk`; an IP address as it is).
+
+### Opening a link elsewhere
+
+A link opens in the browser showing FeedVault by default. FeedVault runs on
+your own machine, so it can also start another browser on a link, in one of
+its profiles and in a private window if asked (`backend/openlink.py`):
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/open/browsers` | `{ "browsers": [{ "id": "firefox", "name": "Firefox", "flatpak": false, "profiles": ["default", "work"] }, …], "default": { "browser": "firefox", "profile": "work", "private": false } }`: the browsers installed (only those), each with its profiles, and the saved default (`null`: this browser) |
+| POST | `/api/open` | body `{ "url": "https://…", "browser": "chrome", "profile": "Profile 1", "private": true }` (`browser` omitted or `null`: the saved default's; with `private` sent, the default's browser and profile with that this once; `profile` omitted, `null` or `""`: none) → `{ "ok": true, "browser", "profile", "private" }`, or 400 `{ "ok": false, "error" }`; 403 from another site |
+
+- The browsers are `firefox`, `chrome`, `chromium`, `brave` and `edge`, as
+  in [Browser profiles](#browser-profiles). Each is looked for on `PATH`
+  by its usual names (`firefox`; `google-chrome`, `google-chrome-stable`;
+  `chromium`, `chromium-browser`; `brave-browser`, `brave`;
+  `microsoft-edge`, `microsoft-edge-stable`), else as a Flatpak
+  (`org.mozilla.firefox`, `com.google.Chrome`, `org.chromium.Chromium`,
+  `com.brave.Browser`, `com.microsoft.Edge`, run as `flatpak run <id>`)
+  when `flatpak` is on `PATH` and the app's folder is in
+  `/var/lib/flatpak/app` or `~/.local/share/flatpak/app`. Nothing is run to
+  find them. A Chromium-family Flatpak is listed with no profiles (its
+  profiles are in its own folder): it opens in the one it picks.
+- A profile is a name `GET /api/browsers/profiles` lists: Firefox's
+  `profiles.ini` name, the others' folder name (`Default`, `Profile 1`).
+- The command, an argument list (never a shell), the URL last:
+  Firefox `firefox -P <name> --new-tab <url>`, private
+  `firefox -P <name> --private-window <url>`; the others `<browser>
+  --profile-directory=<name> <url>`, private with `--incognito` (Edge:
+  `--inprivate`) before the URL. Without a profile, its flag is left out.
+  It starts detached (its own session, no terminal, every stream on
+  `/dev/null`) and FeedVault does not wait for it: a browser already
+  running takes the link from it.
+- Refused, a 400 that says why, nothing started: a URL that is not one a
+  link may be (`http` or `https`, see the link's `url` above; one starting
+  with `-` too), a browser not in the list or not installed, a profile name
+  that cannot be one or that the browser does not have now, `private` not
+  `true` or `false`, no browser with no default saved. The URL goes
+  cleaned as a link's is.
+- The backend's log says which browser, profile and private or not, never
+  the URL.
+- With `FEEDVAULT_NO_LAUNCH=1` in its environment (the e2e tests' instance)
+  the backend refuses every launch, after the checks above.
+
+The default is `"open_links"` in `config.json` (shared by every
+[profile](#profiles)): `GET /api/config` has `"open_links": { "browser",
+"profile", "private" }` or `null` (this browser); `POST /api/config` with
+`{ "open_links": { "browser": "firefox", "profile": "work", "private":
+false } }` sets it (`profile` and `private` may be left out: none, and
+`false`), `{ "open_links": null }` goes back to this browser. A browser or
+profile that is gone since keeps the setting; opening a link then says so.
+A setting a hand edit broke reads as `null`.
+
+In the dashboard (Settings → Downloads → More link settings → **Open links
+in**), a left click on a link's title opens it there when a default is
+set; a middle click or Ctrl/Cmd-click still opens a tab here. Each link row
+has an **Open in…** menu: this browser, then each installed browser and
+profile, each in a normal and a private window.
 
 ## Sources
 

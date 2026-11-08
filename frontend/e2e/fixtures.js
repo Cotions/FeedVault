@@ -1177,3 +1177,27 @@ export async function openFold(page, title) {
   if (!(await fold.evaluate(d => d.open))) await fold.locator(":scope > summary").click();
   return fold.locator(":scope > .settings-more-body");
 }
+
+/* ── Open links in (openlink.py) ────────────────────────────── */
+
+// The browsers GET /api/open/browsers lists, as if installed (the test
+// instance's PATH is empty: it finds none; the default stays the
+// backend's), and POST /api/open answered here with ``answer``, never by
+// the backend (which refuses every launch anyway: FEEDVAULT_NO_LAUNCH=1,
+// harness.js). Returns the bodies POST /api/open was sent.
+export const OPEN_BROWSERS = [
+  { id: "firefox", name: "Firefox", flatpak: false, profiles: ["default", "work"] },
+  { id: "chromium", name: "Chromium", flatpak: true, profiles: [] },
+];
+export async function fakeOpenLinks(page, { answer = { ok: true } } = {}) {
+  const sent = [];
+  await page.route("**/api/open/browsers", async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), browsers: OPEN_BROWSERS } });
+  });
+  await page.route("**/api/open", async route => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill({ status: answer.ok ? 200 : 400, json: answer });
+  });
+  return sent;
+}

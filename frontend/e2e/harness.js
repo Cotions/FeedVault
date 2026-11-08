@@ -178,6 +178,9 @@ function isolatedEnv(root, python) {
     PYTHONDONTWRITEBYTECODE: "1",
     PYTHONPATH: path.join(TESTS, "guard_site"),
     FEEDVAULT_TEST_GUARD: JSON.stringify(guard),
+    // POST /api/open refuses every launch (backend/openlink.py): no test
+    // starts a browser through it, a stub forgotten or not.
+    FEEDVAULT_NO_LAUNCH: "1",
   };
 }
 

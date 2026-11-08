@@ -40,6 +40,7 @@ import links
 import news
 import nosync
 import notify
+import openlink
 import organize
 import people
 import save
@@ -2413,6 +2414,8 @@ def _public_config(cfg):
             "platforms": sources.known_platforms(db.connect(), cfg),
             # Creators' card borders by rating (config.rating_colors).
             "rating_colors": config.rating_colors(cfg),
+            # Where a link opens (openlink.py): null is the browser showing FeedVault.
+            "open_links": openlink.setting(cfg),
             # yt-dlp's metadata mode none embeds with it (sync.yt_dlp_mode).
             "ffmpeg": thumbs.have_ffmpeg(),
             # Settings → Download defaults: one block per tool and platform.
@@ -2516,6 +2519,14 @@ def _set_config(body):
                 return jsonify({"ok": False, "error": error})
         else:
             changes["rating_colors"] = None
+    if "open_links" in body:
+        # null: this browser (the key leaves config.json).
+        if body["open_links"] is not None:
+            changes["open_links"], error = openlink.clean_setting(body["open_links"])
+            if error:
+                return jsonify({"ok": False, "error": error})
+        else:
+            changes["open_links"] = None
     if "source_defaults" in body:
         defaults, error = sources.clean_defaults(body["source_defaults"], cfg.get("source_defaults"))
         error = error or _defaults_refused(body["source_defaults"], defaults, cfg)
@@ -2547,8 +2558,9 @@ def _set_config(body):
         cfg["instaloader"] = insta
     before = dict(cfg)
     cfg.update(changes)
-    if "rating_colors" in changes and changes["rating_colors"] is None:
-        del cfg["rating_colors"]
+    for key in ("rating_colors", "open_links"):
+        if key in changes and changes[key] is None:
+            cfg.pop(key, None)
     if tools is not None or roots is not None or insta is not None or changes:
         # The old switch (slim_metadata) is instaloader's metadata mode now.
         if "slim_metadata" in cfg:
@@ -2824,6 +2836,47 @@ def browser_profiles():
     """The profiles a cookies session can name, per browser: names only,
     read from Firefox's profiles.ini and the other browsers' folder names."""
     return jsonify({"profiles": browsers.listing()})
+
+
+# ---------------------------------------------------------------------------
+# Opening a link in another browser, profile or private window (openlink.py)
+# ---------------------------------------------------------------------------
+
+NO_DEFAULT_BROWSER = "links open in this browser (Settings → Downloads → Open links in): name a browser"
+
+
+@app.get("/api/open/browsers")
+def open_browsers():
+    """The browsers a link can be opened in (installed ones only), each
+    with its profiles, and the saved default (null: this browser)."""
+    return jsonify({"browsers": openlink.installed(), "default": openlink.setting(config.load())})
+
+
+@app.post("/api/open")
+def open_link():
+    """Open ``url`` in a browser: the one named, else the saved default
+    (with ``private`` sent: the default's browser and profile, private or
+    not this once). The dashboard's alone, as every route the userscript
+    does not call: _origin_guard refuses another site before this runs, so
+    no page on the web can start a browser here."""
+    body = _body()
+    if body.get("browser") is None:
+        chosen = openlink.setting(config.load())
+        if chosen is None:
+            return jsonify({"ok": False, "error": NO_DEFAULT_BROWSER}), 400
+        if "private" in body:
+            chosen = {**chosen, "private": body["private"]}
+    else:
+        chosen = {"browser": body["browser"], "profile": body.get("profile"), "private": body.get("private", False)}
+    try:
+        openlink.open_url(body.get("url"), chosen["browser"], chosen["profile"], chosen["private"])
+    except (openlink.Refused, browsers.Unknown) as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    # Never the address: a private window's link leaves no trace in the log.
+    print(f"[open] a link in {chosen['browser']}" + (f" ({chosen['profile']})" if chosen["profile"] else "")
+          + (", private" if chosen["private"] else ""))
+    return jsonify({"ok": True, "browser": chosen["browser"], "profile": chosen["profile"] or None,
+                    "private": chosen["private"]})
 
 
 @app.post("/api/downloaders/check")

@@ -1,11 +1,15 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { getRecentLinkPeople } from "../lib/api";
+import { getRecentLinkPeople, openLink } from "../lib/api";
 import { plural, safeUrl } from "../lib/fmt";
 import { personPath } from "../lib/people";
 import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, linkLabel, linkName, namesText, withScheme } from "../lib/links";
 import { focusLost, restoreFocus, trapTab } from "../lib/layout";
+import { choiceLabel, isPlainClick, openChoices, sameChoice } from "../lib/openIn";
+import { useOpenLinks } from "../lib/openLinks";
+import { useToast } from "../lib/toast";
+import ActionMenu from "./ActionMenu";
 import Icon from "./Icon";
 import CreatorPicker from "./CreatorPicker";
 import DiscardDialog from "./DiscardDialog";
@@ -172,7 +176,16 @@ export function LinkForm({
    go under it. A link marked to download says so wherever it is shown
    (a "To download" chip beside its kind): FeedVault never downloads it,
    the mark is the user's note for another app.
-   Without onEdit and onDelete (a search's results) it is read only. */
+   Without onEdit and onDelete (a search's results) it is read only.
+
+   Where it opens (docs/API.md "Opening a link elsewhere"): with a default
+   set in Settings (Open links in), a plain left click on the title (Enter
+   too) asks FeedVault to start that browser on it (POST /api/open, the
+   saved default) in place of following it; a middle click, Ctrl/Cmd- or
+   Shift-click stay the browser's own (a tab or a window here). Its "Open
+   in…" menu (when another browser is installed) offers this browser and
+   each browser × profile, normal or private, for this once. A refusal
+   (the browser gone, a profile renamed) is a toast with "Open here". */
 export function LinkRow({
   link: l, showPerson = true, here = null, busy = false, onEdit, onDelete, onRemove, onUp, onDown, flash = false, index, select,
   onAssign, onDownload, children,
@@ -186,6 +199,37 @@ export function LinkRow({
   const label = linkName(l);
   const named = !!(l.title || l.label);           // shown is not the address: the address goes under it
   const marked = l.download_at != null;
+  const { browsers, default: dflt } = useOpenLinks();
+  const toast = useToast();
+
+  // choice: { browser, profile, private }, or null for the saved default.
+  async function openElsewhere(choice) {
+    let r;
+    try {
+      r = await openLink({ url: l.url, ...(choice || {}) });
+    } catch (e) {
+      r = { ok: false, error: e.message };
+    }
+    if (r?.ok) return;
+    toast(r?.error || "Could not open the link.", "err",
+          { label: "Open here", onClick: () => { window.open(href, "_blank", "noopener,noreferrer"); } });
+  }
+  function onTitleClick(e) {
+    if (!dflt || !isPlainClick(e)) return;
+    e.preventDefault();
+    openElsewhere(null);
+  }
+  const mark = c => (sameChoice(c, dflt) ? " (default)" : "");
+  const openItems = href && browsers?.length ? [
+    { label: `This browser${mark(null)}`, href, icon: "external", title: "A new tab here" },
+    "separator",
+    ...openChoices(browsers).map(c => ({
+      label: `${choiceLabel(c, browsers)}${mark(c)}`, onSelect: () => openElsewhere(c),
+      title: c.private ? "In a private window" : undefined,
+    })),
+    "separator",
+    { label: "Set the default…", to: "/settings#open-links", icon: "settings" },
+  ] : null;
   return (
     <li className={`link-row${flash ? " is-flash" : ""}${select?.checked ? " is-selected" : ""}${children ? " is-assigning" : ""}`}
         data-link-id={l.id} data-index={index}>
@@ -198,7 +242,8 @@ export function LinkRow({
       <span className="link-row-main">
         <span className="link-row-head">
           {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="link-row-title" title={named ? `${shown}\n${l.url}` : l.url}>
+            <a href={href} target="_blank" rel="noopener noreferrer" className="link-row-title" onClick={onTitleClick}
+               title={`${named ? `${shown}\n${l.url}` : l.url}${dflt ? `\nOpens in ${choiceLabel(dflt, browsers)} (Ctrl-click: a tab here)` : ""}`}>
               {shown}
             </a>
           ) : <span className="link-row-title">{shown}</span>}
@@ -228,6 +273,7 @@ export function LinkRow({
         </span>
       )}
       <span className="link-row-actions">
+        {openItems && <ActionMenu className="link-open-menu" icon="external" label={`Open ${label} in…`} items={openItems} />}
         {onAssign && people.length === 0 && (
           <button type="button" className="btn-secondary link-assign" disabled={busy} aria-expanded={!!children}
                   onClick={() => onAssign(l)} aria-label={`Assign ${label} to a person`} title="Give it to a person">

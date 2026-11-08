@@ -8,6 +8,8 @@ import Icon from "./Icon";
    is the button's accessible name and names the subject ("More for
    @handle"); the menu takes it too. ``buttonRef``: a ref to the button,
    for a page that gives focus back to it (the person page's rename).
+   ``icon``: the button's, "more" (⋯) unless the menu is one thing (a
+   link row's Open in…: "external").
 
    ``items``, in order (falsy ones are skipped, so a list can say
    ``cond && {…}``):
@@ -30,7 +32,7 @@ import Icon from "./Icon";
    item starting with it, Enter and Space activate, Escape closes it onto
    the button, Tab closes it and moves on from the button. A click outside
    closes it. */
-export default function ActionMenu({ label, items, className = "", buttonRef = null }) {
+export default function ActionMenu({ label, items, className = "", buttonRef = null, icon = "more" }) {
   const [open, setOpen] = useState(null);       // null (closed), "first" or "last": the item focused on opening
   const ownRef = useRef(null);
   const btnRef = buttonRef || ownRef;           // a page's own ref, to give focus back to the button itself
@@ -139,7 +141,7 @@ export default function ActionMenu({ label, items, className = "", buttonRef = n
         onClick={() => setOpen(o => (o ? null : "first"))}
         onKeyDown={onButtonKey}
       >
-        <Icon name="more" size={16} />
+        <Icon name={icon} size={16} />
       </button>
       {open && (
         <div ref={menuRef} id={menuId} className="action-menu" role="menu" aria-labelledby={btnId} popover="manual"

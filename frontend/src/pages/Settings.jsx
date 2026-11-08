@@ -19,6 +19,7 @@ import AppearanceSettings from "../components/AppearanceSettings";
 import ProfileSettings from "../components/ProfileSettings";
 import BrowserPick from "../components/BrowserPick";
 import { cookiesFix, cookiesSession } from "../lib/browserProfiles";
+import { reloadOpenLinks, setOpenDefault, useOpenLinks } from "../lib/openLinks";
 import PageHeader from "../components/PageHeader";
 import { Stars } from "../components/Rating";
 import { bandsProblem, DEFAULT_RATING_COLORS, MAX_RATING, starsShort, withBand } from "../lib/rating";
@@ -542,6 +543,101 @@ function BioImportCard({ on, onSaved }) {
         <input type="checkbox" checked={on} disabled={busy} onChange={e => set(e.target.checked)} />
         <span>Import accounts from a link-in-bio page</span>
       </label>
+      {msg && <div className="msg err" role="alert">{msg}</div>}
+    </div>
+  );
+}
+
+/* Settings → Downloads → Open links in (docs/API.md "Opening a link
+   elsewhere"): where a click on a saved link opens it. This browser (a
+   plain link, as always), or a browser FeedVault starts on it, one of its
+   profiles, a private window. Only the installed browsers are offered
+   (GET /api/open/browsers); a saved one that is gone since stays shown,
+   marked, and opening a link then says so. Saved at once, like the
+   switches around it; the link rows follow at once (setOpenDefault). */
+function OpenLinksCard({ saved, onSaved }) {
+  const { browsers } = useOpenLinks();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const ref = useRef(null);
+  const location = useLocation();
+  useEffect(() => {
+    if (location.hash === "#open-links") ref.current?.scrollIntoView({ block: "start" });
+  }, [location.hash, location.key]);
+
+  // What the fields show: the choice as sent, at once, back to the saved
+  // one when the save fails, and the saved one again once it is read back
+  // (not a remount: focus stays in the select).
+  const [cur, setCur] = useState(saved);
+  const [was, setWas] = useState(saved);
+  if (JSON.stringify(was) !== JSON.stringify(saved)) { setWas(saved); setCur(saved); }
+  const browser = cur?.browser || "";
+  const listed = browsers?.find(b => b.id === browser);
+  const profiles = listed?.profiles || [];
+  const profile = cur?.profile || "";
+
+  async function set(next) {
+    const value = next.browser ? { browser: next.browser, profile: next.profile || null, private: !!next.private } : null;
+    setCur(value);
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await saveSettings({ open_links: value });
+      if (r?.ok === false) { setCur(saved); setMsg(r.error || "Save failed."); }
+      else { setOpenDefault(r?.config?.open_links ?? value); onSaved(); }
+    } catch (e) {
+      setCur(saved);
+      setMsg(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" id="open-links" ref={ref}>
+      <div className="card-title">Open links in</div>
+      <p className="page-lede">
+        Where a click on a saved link opens it (on Links, a person&rsquo;s page and in search). This browser opens a
+        new tab here. Another browser, one of its profiles, or a private window: FeedVault starts that browser on
+        the link. Ctrl-click or a middle click still opens a tab here, and each link&rsquo;s Open in&hellip; button
+        opens it elsewhere once.
+      </p>
+      <div className="open-links-row">
+        <label className="filter">
+          <span>Browser</span>
+          <select className="sort-select" aria-label="Browser" value={browser} disabled={busy || !browsers}
+                  onChange={e => set({ browser: e.target.value, profile: "", private: cur?.private })}>
+            <option value="">This browser (a new tab here)</option>
+            {(browsers || []).map(b => <option key={b.id} value={b.id}>{b.name}{b.flatpak ? " (Flatpak)" : ""}</option>)}
+            {browser && browsers && !listed && <option value={browser}>{browser} · not found</option>}
+          </select>
+        </label>
+        {browser && (
+          <>
+            <label className="filter">
+              <span>Profile</span>
+              <select className="sort-select" aria-label="Profile" value={profile} disabled={busy}
+                      onChange={e => set({ browser, profile: e.target.value, private: cur?.private })}>
+                <option value="">The browser picks</option>
+                {profiles.map(n => <option key={n} value={n}>{n}</option>)}
+                {profile && browsers && !profiles.includes(profile) && <option value={profile}>{profile} · not found</option>}
+              </select>
+            </label>
+            <label className="dl-toggle">
+              <input type="checkbox" checked={!!cur?.private} disabled={busy}
+                     onChange={e => set({ browser, profile, private: e.target.checked })} />
+              <span>Private window</span>
+            </label>
+          </>
+        )}
+      </div>
+      {browsers && browsers.length === 0 && (
+        <p className="dim open-links-none">
+          No other browser was found (Firefox, Google Chrome, Chromium, Brave or Microsoft Edge, on PATH or as a
+          Flatpak).{" "}
+          <button type="button" className="btn-ghost" onClick={reloadOpenLinks}>Check again</button>
+        </p>
+      )}
       {msg && <div className="msg err" role="alert">{msg}</div>}
     </div>
   );
@@ -1620,7 +1716,7 @@ const TABS = [
   { id: "about",      label: "About",      icon: "info" },
 ];
 // Cards linked to from elsewhere (/settings#downloaders), and their tab.
-const ANCHORS = { "rating-colors": "appearance", downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "download-defaults": "sync", "slim-metadata": "sync",
+const ANCHORS = { "rating-colors": "appearance", downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "open-links": "downloads", "download-defaults": "sync", "slim-metadata": "sync",
   "profile-only": "sync" };
 
 function tabOf(hash) {
@@ -1715,7 +1811,8 @@ export default function Settings() {
               </div>
               <div className="settings-group" hidden={tab !== "downloads"}>
                 <DownloadersCard saved={config.tools || {}} onSaved={reload} onDirty={onDirty} />
-                <SettingsMore title="More link settings" sum="which tool each site goes to, link labels, link-in-bio import">
+                <SettingsMore title="More link settings" sum="where links open, which tool each site goes to, link labels, link-in-bio import">
+                  <OpenLinksCard saved={config.open_links ?? null} onSaved={reload} />
                   <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} onDirty={onDirty} />
                   <LinkLabelsCard key={JSON.stringify(config.link_labels)} saved={config.link_labels || {}} onSaved={reload}
                                   {...note("link_labels")} onDirty={onDirty} />

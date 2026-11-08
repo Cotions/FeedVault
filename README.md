@@ -560,8 +560,8 @@ downloads: a creator's Linktree, Patreon, personal site or Discord invite,
 an interview, an article. A link can belong to a person (it shows on their
 page too, socials first, in the order you give them) or to no one. Whether a
 link is a social profile or something else is read from its address.
-FeedVault never opens or fetches a saved link itself; it only stores the
-text and opens it in a new tab when you click it. The link-in-bio import
+FeedVault never fetches a saved link itself; it only stores the text and
+opens it in a new tab when you click it (or in another browser, see below). The link-in-bio import
 on a person's page saves to their Links too: the page's own address and
 every link it shows (a shop, a Patreon, a site, the profiles), so they stay
 when the page changes or goes. Import again later and only what is new is
@@ -579,6 +579,19 @@ links with their count; clear a mark there (its row's button, or **Clear
 mark** for a selection) once downloaded and the link leaves the tab, with an
 Undo. **Sort** orders any tab newest first (the default), oldest first, or by
 site, A to Z, under a heading per site with its count.
+
+A link can open in another browser than the one showing FeedVault, in one of
+its profiles, or in a private window: set it in **Settings → Downloads →
+More link settings → Open links in** (Firefox, Google Chrome, Chromium,
+Brave or Microsoft Edge, installed on this machine or as a Flatpak; the
+profiles are the browser's own: Firefox's names, the others' `Default`,
+`Profile 1`). A click on a link's title then starts that browser on it;
+Ctrl-click or a middle click still opens a tab here. Each link's **Open
+in…** button (the arrow out of a box, on its row) picks a browser, profile
+and private window for that link only, or this browser. FeedVault starts the
+browser as you would from a terminal, on that one address and nothing else;
+if it cannot (the browser removed, a profile renamed), a message says why,
+with **Open here**. See [docs/API.md](docs/API.md#opening-a-link-elsewhere).
 
 To save the page you are reading in another tab, drag **Save to FeedVault**
 (under Add a link on the Links page) to your bookmarks bar. Clicked on any

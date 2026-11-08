@@ -56,7 +56,7 @@ def test_the_lists_cover_the_routes_named_in_the_issue():
                   "/api/duplicates/dismiss", "/api/review", "/api/tags/apply", "/api/collections",
                   "/api/collections/<int:cid>/<action>", "/api/people", "/api/people/merge",
                   "/api/people/<int:pid>", "/api/people/<int:pid>/accounts", "/api/sources", "/api/config",
-                  "/api/jobs", "/api/yt-dlp/info-json-cookies"):
+                  "/api/jobs", "/api/yt-dlp/info-json-cookies", "/api/open"):
         assert ("POST", route) in body, route
     assert ("POST", "/api/quit") not in body   # no body: never sent one here
     ids = {(m, r.rule) for m, r in ID_ROUTES}

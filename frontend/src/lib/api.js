@@ -403,6 +403,13 @@ export function checkDownloaders() { return post("/api/downloaders/check"); }
 // { profiles: { firefox: [names], chrome: [...], … } }: what a cookies session's "profile" can be.
 export function getBrowserProfiles() { return get("/api/browsers/profiles"); }
 
+// Opening a link in another browser (docs/API.md "Opening a link elsewhere").
+// { browsers: [{ id, name, flatpak, profiles: [names] }], default: { browser, profile, private } | null }
+export function getOpenBrowsers() { return get("/api/open/browsers"); }
+// { url, browser?, profile?, private? } (no browser: the saved default's)
+// → { ok, browser, profile, private } or { ok: false, error }
+export function openLink(body) { return post("/api/open", body); }
+
 /* ── Scripts (see docs/API.md "Scripts") ─────────────────── */
 
 // Files on disk, read-only here: nothing in the API writes one.
