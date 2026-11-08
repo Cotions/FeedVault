@@ -66,6 +66,9 @@ const TOAST_RESUME_MS = 2000;
    for each: going from one to the next in the app (a link between two
    people, Back, Forward) keeps nothing typed or opened for the first, so a
    save always goes to the entity whose text it is. */
+const MORE_KEY = "feedvault.sidebarMore";
+const MORE_PAGES = ["/stats", "/storage", "/duplicates", "/unmatched", "/jobs", "/scripts"];
+
 function PerEntity({ page: Page }) {
   const params = useParams();
   return <Page key={JSON.stringify(params)} />;
@@ -106,6 +109,16 @@ export default function App() {
   // Quick-add a link (#165): { url, clipboard, n } while open; n remounts it for another drop.
   const [quickAdd, setQuickAdd] = useState(null);
   const [dropping, setDropping] = useState(false);   // a URL is dragged over the window
+  // The sidebar's "More" group: as the user left it (this browser), and
+  // always open on one of its own pages.
+  const [moreOpen, setMoreOpenState] = useState(() => { try { return localStorage.getItem(MORE_KEY) === "1"; } catch { return false; } });
+  const setMoreOpen = useCallback(v => {
+    setMoreOpenState(v);
+    try { localStorage.setItem(MORE_KEY, v ? "1" : "0"); } catch { /* private window: this visit only */ }
+  }, []);
+  // A creator's or person's feed (/?author= or /?person=) belongs to Creators in the sidebar.
+  const creatorFeed = location.pathname === "/" && /[?&](author|person)=/.test(location.search);
+  const moreShown = moreOpen || MORE_PAGES.some(p => location.pathname.startsWith(p));
 
   const toast = useCallback((text, kind = "ok", link) => {
     const id = ++toastId.current;
@@ -530,6 +543,10 @@ export default function App() {
           )}
         </div>
         <div className="header-right">
+          <button type="button" className="icon-btn icon-btn-wide header-add" onClick={() => openQuickAdd()}
+                  title="Save a web address to Links (Alt+L)" aria-label="Add a link" aria-keyshortcuts="Alt+L">
+            <Icon name="plus" size={14} />Link
+          </button>
           <ProfileSwitch />
           {jobsActive > 0 && (
             <Link to="/jobs" className="nav-jobs-live" title={`${jobsRunning} running, ${jobsActive - jobsRunning} queued`}
@@ -556,13 +573,14 @@ export default function App() {
               <Icon name="close" size={15} />
             </button>
           </div>
-          {/* Three groups, each named by a small label (a role="group" for
-              screen readers): what to look at, what the library holds, and
-              the app itself. Rescan and Quit stay apart at the foot. */}
-          <div className="side-group" role="group" aria-labelledby="side-group-browse">
-            <span className="side-group-label" id="side-group-browse">Browse</span>
+          {/* Three groups (role="group" for screen readers): the pages used
+              every day, unlabelled; Trash, notifications and Settings; and
+              the occasional ones folded under "More", open by itself on one
+              of its pages. Rescan and Quit stay apart at the foot. */}
+          <div className="side-group" role="group" aria-label="Browse">
             <div className="side-row">
-              <NavLink to="/" end className="side-link"><Icon name="feed" />Feed</NavLink>
+              <NavLink to="/" end className={({ isActive }) => `side-link${isActive && !creatorFeed ? " active" : ""}`}
+                       aria-current={creatorFeed ? false : "page"}><Icon name="feed" />Feed</NavLink>
               {jobList?.new > 0 && (
                 <Link to="/?new=1" className="side-badge side-new" title="Posts indexed since you last marked everything seen">
                   {fmtInt(jobList.new)} new
@@ -570,52 +588,55 @@ export default function App() {
               )}
             </div>
             <NavLink to="/review" className="side-link"><Icon name="review" />Review</NavLink>
-            <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
+            <NavLink to="/creators" className={({ isActive }) => `side-link${isActive || creatorFeed || location.pathname.startsWith("/people/") ? " active" : ""}`}><Icon name="users" />Creators</NavLink>
+            <NavLink to="/collections" className="side-link"><Icon name="bookmark" />Collections</NavLink>
             <NavLink to="/tags" className="side-link"><Icon name="tag" />Tags</NavLink>
             <div className="side-row side-row-split">
               <NavLink to="/links" className="side-link"><Icon name="link" />Links</NavLink>
-              <span className="side-row-end">
-                {unsorted > 0 && (
+              {unsorted > 0 && (
+                <span className="side-row-end">
                   <Link to={UNSORTED_PATH} className="side-badge side-unsorted"
                         title={`${plural(unsorted, "link")} tied to no one yet: sort them`}
                         aria-label={`Unsorted links: ${fmtInt(unsorted)}`}>
                     {unsorted > 99 ? "99+" : unsorted}
                   </Link>
-                )}
-                <button type="button" className="side-badge side-add" onClick={() => openQuickAdd()}
-                        title="Add a link (Alt+L)" aria-label="Add a link" aria-keyshortcuts="Alt+L">
-                  <Icon name="plus" size={11} />Link
-                </button>
-              </span>
-            </div>
-            <NavLink to="/collections" className="side-link"><Icon name="bookmark" />Collections</NavLink>
-          </div>
-          <div className="side-group" role="group" aria-labelledby="side-group-library">
-            <span className="side-group-label" id="side-group-library">Library</span>
-            <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
-            <NavLink to="/storage" className="side-link"><Icon name="disk" />Storage</NavLink>
-            <NavLink to="/trash" className="side-link"><Icon name="trash" />Trash</NavLink>
-            <NavLink to="/unmatched" className="side-link"><Icon name="unmatched" />Unmatched</NavLink>
-            <NavLink to="/duplicates" className="side-link"><Icon name="copy" />Duplicates</NavLink>
-          </div>
-          <div className="side-group" role="group" aria-labelledby="side-group-system">
-            <span className="side-group-label" id="side-group-system">System</span>
-            <NavLink
-              to="/jobs"
-              className="side-link"
-              title={jobsActive ? `${jobsRunning} running, ${jobsActive - jobsRunning} queued` : "Downloads and other jobs"}
-            >
-              <Icon name="terminal" />Jobs
-              {jobsActive > 0 && (
-                <span className="side-badge" aria-label={`${jobsActive} job${jobsActive === 1 ? "" : "s"} active`}>
-                  <JobsIcon running={jobsRunning} size={11} />{jobsActive}
                 </span>
               )}
-            </NavLink>
+            </div>
+          </div>
+          <div className="side-group" role="group" aria-label="Library">
+            <NavLink to="/trash" className="side-link"><Icon name="trash" />Trash</NavLink>
             <Notifications unread={jobList?.notifications?.unread ?? 0} latest={jobList?.notifications?.latest ?? null}
                            onRead={jobStarted} />
-            <NavLink to="/scripts" className="side-link" title="Your own download commands and shell scripts"><Icon name="pencil" />Scripts</NavLink>
             <NavLink to="/settings" className="side-link"><Icon name="settings" />Settings</NavLink>
+          </div>
+          <div className={`side-group side-more${moreShown ? " is-open" : ""}`} role="group" aria-labelledby="side-more-btn">
+            <button type="button" id="side-more-btn" className="side-more-btn" aria-expanded={moreShown}
+                    aria-controls="side-more-list" onClick={() => setMoreOpen(!moreShown)}
+                    title={moreShown ? "Hide the occasional pages" : "Stats, storage, duplicates, jobs, scripts"}>
+              More
+              {!moreShown && jobsActive > 0 && <span className="side-more-dot" aria-label={`${jobsActive} job${jobsActive === 1 ? "" : "s"} active`} />}
+              <Icon name="chevDown" size={13} className="side-more-chev" />
+            </button>
+            <div className="side-more-list" id="side-more-list" hidden={!moreShown}>
+              <NavLink to="/stats" className="side-link"><Icon name="chart" />Stats</NavLink>
+              <NavLink to="/storage" className="side-link"><Icon name="disk" />Storage</NavLink>
+              <NavLink to="/duplicates" className="side-link"><Icon name="copy" />Duplicates</NavLink>
+              <NavLink to="/unmatched" className="side-link"><Icon name="unmatched" />Unmatched</NavLink>
+              <NavLink
+                to="/jobs"
+                className="side-link"
+                title={jobsActive ? `${jobsRunning} running, ${jobsActive - jobsRunning} queued` : "Downloads and other jobs"}
+              >
+                <Icon name="terminal" />Jobs
+                {jobsActive > 0 && (
+                  <span className="side-badge" aria-label={`${jobsActive} job${jobsActive === 1 ? "" : "s"} active`}>
+                    <JobsIcon running={jobsRunning} size={11} />{jobsActive}
+                  </span>
+                )}
+              </NavLink>
+              <NavLink to="/scripts" className="side-link" title="Your own download commands and shell scripts"><Icon name="pencil" />Scripts</NavLink>
+            </div>
           </div>
           <div className="side-sep" />
           <button
@@ -636,7 +657,9 @@ export default function App() {
                 <span title={last.finished_at ? new Date(last.finished_at * 1000).toLocaleString() : ""}>
                   {fmtAgo(last.finished_at)}
                 </span>
-                <span className="scan-delta">+{last.added ?? 0} ~{last.updated ?? 0}</span>
+                {(last.added > 0 || last.updated > 0) && (
+                  <span className="scan-delta">+{last.added ?? 0} ~{last.updated ?? 0}</span>
+                )}
                 {lastErrors > 0 && (
                   <NavLink to="/settings" className="scan-errors" title="See scan errors in Settings">
                     {lastErrors} err

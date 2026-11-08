@@ -44,7 +44,7 @@ export default function Suggestions({ data, busy, onLink, onDismiss, title = "Li
               ))}
             </div>
             <div className="suggestion-actions">
-              <button type="button" className="btn-primary" disabled={busy} onClick={() => onLink(s)}>
+              <button type="button" className="btn-secondary" disabled={busy} onClick={() => onLink(s)}>
                 <Icon name="check" size={14} /> Link
               </button>
               <button type="button" className="btn-ghost" disabled={busy} onClick={() => onDismiss(s)}

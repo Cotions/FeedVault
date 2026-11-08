@@ -7,7 +7,8 @@ import { test, expect, idle } from "./fixtures.js";
 const H = { "X-FeedVault": "1" };
 
 async function openCard(page) {
-  await page.goto("/settings#sync");
+  // Its anchor opens the "More sync settings" fold it sits in.
+  await page.goto("/settings#slim-metadata");
   const card = page.locator("#slim-metadata");
   await expect(card).toBeVisible();
   await idle(page);

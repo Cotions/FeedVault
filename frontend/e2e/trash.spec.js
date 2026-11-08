@@ -51,12 +51,12 @@ test("History: a deleted post shows as in the trash, comes back from there, and 
     const row = page.locator(".trash-event").filter({ hasText: /^Deleted/ }).first();
     await expect(row.locator(".trash-event-title")).toHaveText("Deleted from its post page");
     await expect(row.locator(".trash-event-meta")).toContainText(`@${post.author.handle}`);
-    await expect(row.locator(".trash-state")).toHaveText("In the trash");
+    await expect(row.locator(".trash-state")).toHaveText("Now: in the trash");
     await expect(row.locator(".trash-event-thumb img")).toBeVisible();
     await idle(page);
 
     await row.getByRole("button", { name: `Restore @${post.author.handle}` }).click();
-    await expect(row.locator(".trash-state")).toHaveText("Restored");
+    await expect(row.locator(".trash-state")).toHaveText("Now: restored");
     const open = row.getByRole("link", { name: `Open @${post.author.handle}'s post` });
     await expect(open).toBeVisible();
     await expect(page.locator(".toast", { hasText: `Restored @${post.author.handle}'s post` }).getByRole("link", { name: "Open post" })).toBeVisible();

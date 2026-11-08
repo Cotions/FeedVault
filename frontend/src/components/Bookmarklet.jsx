@@ -24,10 +24,7 @@ export default function Bookmarklet() {
          onClick={e => { e.preventDefault(); toast("Drag it to your bookmarks bar, then click it on any page.", "info"); }}>
         <Icon name="link" size={13} />Save to FeedVault
       </a>
-      <span className="dim">
-        Drag it to your bookmarks bar. Clicked on any page, it opens a small FeedVault window with that page's address and
-        title; nothing is saved until you choose who it goes to (or no one) there.
-      </span>
+      <span className="dim">Drag it to your bookmarks bar to save any page you are on.</span>
     </div>
   );
 }

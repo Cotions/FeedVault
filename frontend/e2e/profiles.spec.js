@@ -50,6 +50,7 @@ test("a second profile is made, switched to from the header and back, and remove
     await expect(page.locator("#profiles-card .profile-row")).toHaveCount(1);
     await expect(page.locator(".profile-switch")).toHaveCount(0);
 
+    await page.getByRole("button", { name: "New profile…" }).click();
     await page.getByRole("textbox", { name: "Name", exact: true }).fill(name);
     await page.getByRole("textbox", { name: "Data directory" }).fill(data);
     await page.getByRole("button", { name: "Create profile" }).click();

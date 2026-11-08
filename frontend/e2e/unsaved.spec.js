@@ -3,7 +3,7 @@
 // from another (#120), and typed edits are never dropped without asking
 // (#125). People, collections and links are made for each test and removed
 // after it.
-import { test, expect, idle, openAddLink, menuItem } from "./fixtures.js";
+import { test, expect, idle, openAddLink, menuItem, openFold } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -486,6 +486,7 @@ test("Settings: leaving asks before dropping unsaved edits; its tabs keep them",
   await page.locator(".settings-tabs").getByRole("link", { name: "Sync" }).click();
   await expect(page).toHaveURL(/\/settings#sync$/);
   await expect(dialog).toHaveCount(0);
+  await openFold(page, "Instagram");
   const pause = page.getByRole("textbox", { name: "Pause in seconds", exact: true });
   await pause.fill("61");
   await nav(page, "/links");
@@ -500,6 +501,7 @@ test("Settings: leaving asks before dropping unsaved edits; its tabs keep them",
 
   // Put back by hand: nothing left to ask about.
   await page.goto("/settings#sync");
+  await openFold(page, "Instagram");
   await pause.fill("61");
   await pause.fill(String(before.instaloader?.pause ?? 60));
   await nav(page, "/links");
@@ -517,6 +519,8 @@ test("Settings: a saved browser login is not an unsaved edit", async ({ page, re
     const set = await request.post("/api/config", { headers: H, data: { instaloader: { session: cookies }, "gallery-dl": { session: cookies } } });
     expect((await set.json()).ok).toBe(true);
     await page.goto("/settings#sync");
+    await openFold(page, "Instagram");
+    await openFold(page, "X, Reddit");
     await expect(page.getByRole("combobox", { name: "Browser", exact: true })).toHaveCount(2);
     await idle(page);
     await nav(page, "/links");

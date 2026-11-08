@@ -199,8 +199,9 @@ test.describe("an iPhone: no Fullscreen API on the page", () => {
         // The row's other buttons fill it: no hole where it was.
         const row = await sizes(page, ".review-actions-row button");
         const bar = await page.locator(".review-actions").boundingBox();
-        const right = await page.locator(".review-actions-row button").last().boundingBox();
-        expect(row.length).toBe(5);
+        const right = await page.locator(".review-actions-row button:visible").last().boundingBox();
+        // ↑, Skip, Undo, Mute: no shortcuts button on a phone.
+        expect(row.length).toBe(4);
         expect(bar.x + bar.width - (right.x + right.width)).toBeLessThan(16);
         seen.picture = true;
       }

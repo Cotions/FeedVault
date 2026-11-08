@@ -319,15 +319,15 @@ export default function Feed() {
     ? authors.find(a => (a.id === author || a.aliases?.includes(author)) && (!platform || a.platform === platform)) : null;
   const selectedPerson = person ? (peopleApi.data || []).find(p => String(p.id) === person) : null;
 
-  // On a phone the filters fold behind a toggle; Sort stays beside it.
-  const [filtersOpen, setFiltersOpen] = useFiltersOpen();
-  // Sort's choices in short there, so they fit beside the toggle.
-  const phone = usePhone();
   // Counted as Review counts them: a creator account sets its platform too,
   // so the two are one filter (a person and a platform are two). Each tag
   // counts. Sort does not: it stays in sight, as does the header's search.
   const activeFilters = [author || person, !author && platform, ...tagFilter, untagged, kind, collection, review, newOnly, notification]
     .filter(Boolean).length;
+  // The filters fold behind a toggle; Sort stays beside it.
+  const [filtersOpen, setFiltersOpen] = useFiltersOpen();
+  // Sort's choices in short on a phone, so they fit beside the toggle.
+  const phone = usePhone();
 
   function clearFilters() {
     const next = new URLSearchParams();
@@ -349,20 +349,16 @@ export default function Feed() {
           : selectedPerson ? selectedPerson.name : selectedAuthor ? `@${selectedAuthor.handle}`
           : tagFilter.length === 1 ? <span className="page-title-tag"><Icon name="tag" size={17} />{tagFilter[0]}</span>
           : selectedCollection ? <span className="page-title-tag"><Icon name="bookmark" size={17} />{selectedCollection.name}</span> : "Feed"}
-        sub={<>
-          <span className="page-count">
+        sub={
+          <span className="page-count"
+                title={freeable ? `Deleting every match would move ${fmtInt(freeable.posts)} post${freeable.posts === 1 ? "" : "s"} (${fmtBytes(freeable.bytes)}) to the trash` : undefined}>
             {current && !error
-              ? q ? `${result.total.toLocaleString()} for “${q}”` : result.total.toLocaleString()
+              ? q ? `${plural(result.total, "result")} for “${q}”` : plural(result.total, "post")
               : "…"}
           </span>
-          {freeable && (
-            <span className="page-count would-free" title="What deleting every match would move to the trash (media files only)">
-              {fmtInt(freeable.posts)} post{freeable.posts === 1 ? "" : "s"} · {fmtBytes(freeable.bytes)}
-            </span>
-          )}
-        </>}
+        }
         actions={<>
-          {newCount > 0 && (
+          {newCount > 0 && !rawQ && !author && !person && (
             <button type="button" className="btn-secondary" onClick={runMarkSeen} disabled={marking}
                     title="These new posts stop being new; any indexed since stay new">
               <Icon name="check" size={14} />{marking ? "Marking…" : "Mark all seen"}
@@ -419,6 +415,7 @@ export default function Feed() {
                 accounts={authors}
                 platform={person ? "" : platform}
                 value={person ? { person } : author ? { platform, id: author } : null}
+                allLabel="Any creator"
                 onChange={onCreator}
               />
             </div>
@@ -488,7 +485,7 @@ export default function Feed() {
           </label>
           {anyFilter && (
             <button type="button" className="btn-ghost filter-clear" onClick={clearFilters}>
-              <Icon name="close" size={12} /> clear filters
+              <Icon name="close" size={12} /> {rawQ && !activeFilters ? "clear search" : "clear filters"}
             </button>
           )}
           <div className="page-head-spacer" />

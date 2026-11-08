@@ -5,7 +5,7 @@ import { setTagColors } from "../lib/tagColors";
 import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
-import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, platformLabel, authorFeedPath } from "../lib/fmt";
+import { KINDS, albumLabel, excerpt, fmtBytes, fmtFullDate, fmtIso, fmtShortDate, platformLabel, authorFeedPath } from "../lib/fmt";
 import { sameTag, tagsMatch, withTags } from "../lib/tags";
 import RichText from "../components/RichText";
 import TagChips from "../components/TagChips";
@@ -584,12 +584,12 @@ function ReviewSession({ scope, scopeControls, againTo }) {
       <PageHeader
         className="review-head"
         title={scope.again ? "Re-review" : "Review"}
-        actions={
-          <p className="review-last" title={last ? `Last: ${last}` : undefined}>
+        actions={last && (
+          <p className="review-last" title={`Last: ${last}`}>
             <Icon name="undo" size={12} />
-            {last ? <span><span className="dim">Last:</span> {last}</span> : <span className="dim">Nothing to undo yet.</span>}
+            <span><span className="dim">Last:</span> {last}</span>
           </p>
-        }
+        )}
       />
       <div className="review" ref={rootRef}>
         <div className="review-stage" ref={stageRef} {...swipe}>
@@ -617,9 +617,9 @@ function ReviewSession({ scope, scopeControls, againTo }) {
           {scopeControls}
 
           <div className="review-progress">
-            <span className="review-left mono">{left == null ? "…" : left.toLocaleString()}</span>
+            <span className="review-left">{left == null ? "…" : left.toLocaleString()}</span>
             <span className="dim">{scope.again ? "left in this pass" : "left to review"}</span>
-            <span className="review-session mono">
+            <span className="review-session">
               <span className="ok-text">{session.kept} kept</span> · <span className="warn-text">{session.trashed} trashed</span>
               {session.items > 0 && <> · {session.items} item{session.items === 1 ? "" : "s"}</>}
             </span>
@@ -629,7 +629,12 @@ function ReviewSession({ scope, scopeControls, againTo }) {
             <div className="review-info" ref={infoRef}>
               <div className="review-byline">
                 <PlatformIcon platform={cur.platform} />
-                <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle">@{handle}</Link>
+                <Link to={authorFeedPath(cur.platform, cur.author)} className="post-byline-handle" title={`@${handle}`}>@{handle}</Link>
+              </div>
+              <div className="review-meta">
+                <time dateTime={fmtIso(cur.posted_at)} title={fmtFullDate(cur.posted_at)}>{fmtShortDate(cur.posted_at)}</time>
+                {m?.size != null && <span className="dim"> · {fmtBytes(m.size)}</span>}
+                <span className="dim"> · {cur.kind}</span>
                 {marked && (
                   <span className="chip review-back" title="Undone: this post is back where it was">
                     <Icon name="undo" size={11} />{BACK_LABEL[marked.kind]}
@@ -638,17 +643,12 @@ function ReviewSession({ scope, scopeControls, againTo }) {
                 {cur.decision === "keep" && status[cur.id] !== "trash" && (
                   <span className="chip review-kept" title="Marked as kept before this session"><span className="kept-dot" aria-hidden="true" />Kept</span>
                 )}
-                {media.length > 1 && <span className="chip">{safeItem + 1}/{media.length}</span>}
-                <span className="chip">{cur.kind}</span>
-              </div>
-              <div className="review-meta mono">
-                <time dateTime={fmtIso(cur.posted_at)}>{fmtFullDate(cur.posted_at)}</time>
-                {m?.size != null && <span className="dim"> · {fmtBytes(m.size)}</span>}
               </div>
               {post?.album && <div className="review-album"><span className="dim">{albumLabel(post.platform)}</span> {post.album}</div>}
               {cur.text
                 ? <div className="review-caption"><RichText text={cur.text} /></div>
                 : <p className="dim review-caption">No caption.</p>}
+              <div className="review-organize">
               <div className="review-tags">
                 <TagChips tags={curTags} onRemove={name => tagPost({ remove: [name] })} busy={busy} />
                 {tagging ? (
@@ -678,6 +678,7 @@ function ReviewSession({ scope, scopeControls, againTo }) {
                   <Icon name="bookmark" size={13} />Collection<Kbd>C</Kbd>
                 </button>
               </div>
+              </div>
               <Link className="text-link review-open" to={`/p/${encodeURIComponent(cur.platform)}/${encodeURIComponent(cur.post_id)}`}>
                 Open post page
               </Link>
@@ -694,14 +695,14 @@ function ReviewSession({ scope, scopeControls, againTo }) {
             {/* Always there, so Keep and Trash post never move between posts. */}
             <button
               type="button"
-              className={`btn-danger-soft${media.length > 1 ? "" : " is-single"}`}
+              className={`btn-danger-soft review-trash-item${media.length > 1 ? "" : " is-single"}`}
               onClick={e => act(e, trashItem)}
               disabled={media.length < 2 || !m || busy}
               title={cur && media.length < 2 ? "This post has a single item" : undefined}
             >
               <Icon name="trash" size={14} />Trash <span className="review-wide">this </span>item<Kbd>X</Kbd>
             </button>
-            <div className="review-actions-row">
+            <div className="review-actions-row review-nav">
               <button type="button" className="btn-secondary" onClick={e => act(e, () => dispatch({ type: "prev" }))} title="Previous post (↑ or J)" aria-label="Previous post">
                 <Icon name="arrowUp" size={14} /><Kbd>↑</Kbd>
               </button>
@@ -746,7 +747,7 @@ function ReviewSession({ scope, scopeControls, againTo }) {
                   <div key={k}><dt><Kbd>{k}</Kbd></dt><dd>{d}</dd></div>
                 ))}
               </dl>
-              <p className="dim">Trashing moves files to the trash folder; undo, or the Trash page, brings them back. Empty the trash from Settings.</p>
+              <p className="dim">Trashing moves files to the trash folder; undo, or the Trash page, brings them back.</p>
               <button type="button" className="btn-secondary" onClick={() => setHelp(false)} autoFocus>Close</button>
             </div>
           </div>
@@ -772,10 +773,10 @@ export default function Review() {
     [platform, author, person, kind, order, tag, untagged, newOnly, collection, again]);
   const scopeKey = JSON.stringify(scope);
 
-  const [filtersOpen, setFiltersOpen] = useFiltersOpen();
   // A creator account sets its platform too: one filter, not two (a person
   // and a platform are two).
   const active = [author || person, !author && platform, kind, tag || untagged, collection, newOnly, again, order === "asc"].filter(Boolean).length;
+  const [filtersOpen, setFiltersOpen] = useFiltersOpen();
 
   const { data: authorsData } = useApi(getAuthors, 0);
   const { data: peopleData } = useApi(getPeople, 0);

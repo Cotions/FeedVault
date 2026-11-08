@@ -50,6 +50,16 @@ export const test = base.extend({
   context: async ({ context, baseURL }, provide) => {
     const asked = [];
     offsiteAsked.set(context, asked);
+    // The sidebar's More and Creators' Sources start folded for a person;
+    // a test starts with both open, as most reach into them. A test about
+    // the folds clears these keys first.
+    await context.addInitScript(() => {
+      try {
+        for (const k of ["feedvault.sidebarMore", "feedvault.creatorsSources"]) {
+          if (localStorage.getItem(k) === null) localStorage.setItem(k, "1");
+        }
+      } catch { /* a page without storage */ }
+    });
     await context.route(url => offsite(url.href, baseURL), route => {
       const r = route.request();
       asked.push(`offsite: ${r.method()} ${r.url()} (${r.resourceType()})`);
@@ -122,6 +132,14 @@ export async function openPage(page, { name, path }) {
   await idle(page);
 }
 
+// Feed's and Review's filters are folded behind a "Filters" button at every
+// width: unfold them, whatever state they are in.
+export async function openFilters(page) {
+  const toggle = page.locator(".filters-toggle").first();
+  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
 // No request of any kind (the API, scripts, images, media) has been in
 // flight for ``ms``, and none starts in the two frames after: what the
 // last answer renders has asked for its images. What networkidle waits
@@ -190,6 +208,7 @@ export async function underToasts(page, sel) {
     for (const b of document.querySelectorAll(q)) {
       const r = b.getBoundingClientRect();
       if (!r.width || !r.height) continue;
+      if (getComputedStyle(b).visibility === "hidden") continue;   // a held slot (Review's Trash item on a single item)
       const hit = toasts.some(t => t.left < r.right && r.left < t.right && t.top < r.bottom && r.top < t.bottom);
       const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       if (hit || !b.contains(top)) out.push((b.getAttribute("aria-label") || b.textContent).trim());
@@ -220,7 +239,7 @@ export async function keepTrashUndo(page, { keep, trash, undo }) {
   const left = await reviewLeft(page);
   expect(left).toBeGreaterThan(2);
   await expect(session).toHaveText("0 kept · 0 trashed");
-  await expect(last).toHaveText("Nothing to undo yet.");
+  await expect(last).toHaveCount(0);        // nothing to undo yet: the line is not there
   const first = await open.getAttribute("href");
   const firstBy = (await handle.textContent()).trim();
 
@@ -249,7 +268,7 @@ export async function keepTrashUndo(page, { keep, trash, undo }) {
   await expect(session).toHaveText("1 kept · 0 trashed");
   await expect(leftNow).toHaveText(String(left - 1));
   await expect(open).toHaveAttribute("href", second);
-  await expect(page.locator(".review-byline .review-back")).toHaveText("Restored");
+  await expect(page.locator(".review-meta .review-back")).toHaveText("Restored");
   await expect(last).toHaveText(`Last: kept ${firstBy}`);
 }
 
@@ -1149,4 +1168,12 @@ export async function fakeBioImport(page, { found = null } = {}) {
     await route.fulfill({ json: { ok: true, source: { id: 9999 } } });
   });
   return sent;
+}
+
+// Settings: open the fold (a tool's login, "More … settings") whose summary
+// says ``title``, unless it is open already; its body.
+export async function openFold(page, title) {
+  const fold = page.locator(".settings-more", { has: page.locator(":scope > summary", { hasText: title }) }).first();
+  if (!(await fold.evaluate(d => d.open))) await fold.locator(":scope > summary").click();
+  return fold.locator(":scope > .settings-more-body");
 }

@@ -474,7 +474,7 @@ test("Links: an address with no scheme is added as https://", async ({ page, req
   }
 });
 
-/* ── Quick-add (#165 A): Alt+L, the nav's + Link, a dropped URL ── */
+/* ── Quick-add (#165 A): Alt+L, the header's + Link, a dropped URL ── */
 
 // The clipboard as the quick-add reads it: this text, or a refusal (as a
 // browser that was not given the permission). No real clipboard is touched.
@@ -574,12 +574,12 @@ test("quick-add: Alt+L prefills the clipboard's address, Enter saves to a recent
   }
 });
 
-test("quick-add: the nav's + Link saves a typed address to no one; no clipboard is fine", async ({ page, request }) => {
+test("quick-add: the header's + Link saves a typed address to no one; no clipboard is fine", async ({ page, request }) => {
   const host = `e2e-quick-untied-${Date.now()}.example`;
   try {
     await stubClipboard(page, null);                 // the permission refused: nothing shows, nothing fails
     await openPage(page, { name: "Feed", path: "/" });
-    await page.locator("#main-nav").getByRole("button", { name: "Add a link" }).click();
+    await page.getByRole("banner").getByRole("button", { name: "Add a link" }).click();
     const dialog = page.getByRole("dialog", { name: "Add a link" });
     const address = dialog.getByLabel("Address");
     await expect(address).toBeFocused();
@@ -772,7 +772,7 @@ test("Unsorted: the tab, and the nav's count that follows saves, deletes and ass
     await page.getByRole("button", { name: `Delete ${host}/a` }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete link" }).click();
     await expect(badge).toHaveText(String(before - 1));
-    await page.locator("#main-nav").getByRole("button", { name: "Add a link" }).click();
+    await page.getByRole("banner").getByRole("button", { name: "Add a link" }).click();
     const dialog = page.getByRole("dialog", { name: "Add a link" });
     await dialog.getByLabel("Address").fill(`https://${host}/quick`);
     await dialog.getByLabel("Address").press("Enter");
@@ -925,7 +925,7 @@ test("Links: a shift range holds after a row comes in; Undo gives each link back
 
     // The anchor is c; a quick-add then puts d on top. The shift range is still c to a.
     await rows.nth(0).getByRole("checkbox").click();
-    await page.locator("#main-nav").getByRole("button", { name: "Add a link" }).click();
+    await page.getByRole("banner").getByRole("button", { name: "Add a link" }).click();
     const add = page.getByRole("dialog", { name: "Add a link" });
     await add.getByLabel("Address").fill(url("d"));
     await add.getByLabel("Address").press("Enter");
@@ -1121,7 +1121,7 @@ test("the bookmarklet opens /links/add in a popup that closes after the save; bl
   await expect(mark).toHaveAttribute("href", /^javascript:/);
   const href = await mark.getAttribute("href");
   expect(decodeURIComponent(href.slice("javascript:".length))).toContain(JSON.stringify(`${origin}/links/add`));
-  await expect(page.locator(".links-bookmarklet")).toContainText("nothing is saved until you choose who it goes to");
+  await expect(page.locator(".links-bookmarklet")).toContainText("Drag it to your bookmarks bar to save any page you are on");
   // A click here runs nothing: it says how it is used.
   await mark.click();
   await expect(page.locator(".toast", { hasText: "Drag it to your bookmarks bar" })).toBeVisible();

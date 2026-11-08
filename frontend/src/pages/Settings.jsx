@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, emptyTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders, saveSourceDefaults, applySourceDefault, saveProfileOnlyPlatforms } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders, saveSourceDefaults, applySourceDefault, saveProfileOnlyPlatforms } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED, SLIM_KIND, slimJobs } from "../lib/jobs";
@@ -134,9 +134,12 @@ function RootsEditor({ saved, onSaved, msg, setMsg, onDirty }) {
       </form>
 
       <div className="settings-actions">
-        <button type="button" className="btn-primary" onClick={save} disabled={!dirty || saving}>
-          {saving ? "Saving…" : "Save"}
-        </button>
+        {/* Only once the list changed: a greyed Save beside Rescan read as broken. */}
+        {(dirty || saving) && (
+          <button type="button" className="btn-primary" onClick={save} disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        )}
         {dirty && (
           <button type="button" className="btn-ghost" onClick={() => { setRoots(saved); setMsg(null); }}>
             Discard changes
@@ -196,89 +199,43 @@ function LastScan() {
    Refetched on every mount, so it is current after deleting elsewhere. */
 function TrashCard() {
   const { refreshKey } = useScan();
-  const { data: trash, error, reload } = useApi(getTrash, refreshKey);
-  const [confirm, setConfirm] = useState(false);
-  const [busy,    setBusy]    = useState(false);
-  const [dlgErr,  setDlgErr]  = useState(null);
-  const [msg,     setMsg]     = useState(null);
-
-  async function runEmpty() {
-    setBusy(true);
-    setDlgErr(null);
-    try {
-      const r = await emptyTrash();
-      if (!r?.ok) { setDlgErr(r?.error || "Could not empty the trash."); return; }
-      setConfirm(false);
-      setMsg({ ok: true, text: `Deleted ${(r.files ?? 0).toLocaleString()} file${r.files === 1 ? "" : "s"} for good, freed ${fmtBytes(r.bytes ?? 0)}.` });
-      reload();
-    } catch (e) {
-      setDlgErr(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  const { data: trash, error } = useApi(getTrash, refreshKey);
   const files = trash?.files ?? 0;
   return (
     <div className="card">
       <div className="card-title">Trash</div>
       <p className="page-lede">
-        Deleting a post or item moves its files to a <code>.feedvault-trash</code> folder inside
-        the media root it came from. They stay there until you empty the trash, or delete them
-        one by one on the <Link to="/trash" className="text-link">Trash</Link> page.
+        Deleted files wait in a <code>.feedvault-trash</code> folder inside the media root they came from.
       </p>
       {!trash ? (
         <div className="dim">{error ? `Could not read the trash: ${error.message}` : "Loading…"}</div>
       ) : (
         <>
-          <div className="trash-total">
-            <span className="mono trash-num">{files.toLocaleString()}</span>
-            <span className="dim">file{files === 1 ? "" : "s"}</span>
-            <span className="mono trash-num">{fmtBytes(trash.bytes ?? 0)}</span>
-          </div>
-          {trash.roots?.length > 0 && (
+          <p className="trash-sum">
+            {files ? <><strong>{plural(files, "file")}</strong> · {fmtBytes(trash.bytes ?? 0)} in the trash</> : "The trash is empty."}
+          </p>
+          {/* Where, only once there is more than one place. */}
+          {trash.roots?.length > 1 && (
             <ul className="roots-list">
               {trash.roots.map(r => (
                 <li key={r.path} className="root-row trash-row">
                   <Icon name="trash" size={15} className="root-icon" />
                   <span className="trash-root">
                     <code className="root-path" title={r.path}>{r.path}</code>
-                    <span className="dim">{r.root}</span>
                   </span>
-                  <span className="mono trash-row-count">{(r.files ?? 0).toLocaleString()} · {fmtBytes(r.bytes ?? 0)}</span>
+                  <span className="trash-row-count">{(r.files ?? 0).toLocaleString()} · {fmtBytes(r.bytes ?? 0)}</span>
                 </li>
               ))}
             </ul>
           )}
         </>
       )}
+      {/* Restoring, deleting for good and emptying it are on the Trash page. */}
       <div className="settings-actions trash-card-actions">
-        <Link to="/trash" className="btn-secondary" title="See what is in the trash, restore or delete single posts">
-          <Icon name="search" size={14} />Browse the trash
+        <Link to="/trash" className="btn-secondary" title="Restore or delete single posts, empty the trash, see the history">
+          <Icon name="trash" size={14} />Open Trash
         </Link>
-        <Link to="/trash?view=history" className="btn-secondary" title="What was deleted and restored lately, and from where">
-          <Icon name="clock" size={14} />History
-        </Link>
-        <button type="button" className="btn-danger" onClick={() => { setDlgErr(null); setMsg(null); setConfirm(true); }} disabled={!files}>
-          <Icon name="trash" size={14} />Empty trash…
-        </button>
       </div>
-      {msg && <div className={`msg ${msg.ok ? "ok" : "err"}`} role="status">{msg.text}</div>}
-      <ConfirmDialog
-        open={confirm}
-        danger
-        busy={busy}
-        error={dlgErr}
-        title="Permanently delete the trash?"
-        confirmLabel="Delete forever"
-        onConfirm={runEmpty}
-        onCancel={() => setConfirm(false)}
-      >
-        <p>
-          This <strong>permanently deletes {files.toLocaleString()} file{files === 1 ? "" : "s"} ({fmtBytes(trash?.bytes ?? 0)})</strong> from
-          disk. They do not go to the system trash, and this cannot be undone.
-        </p>
-      </ConfirmDialog>
     </div>
   );
 }
@@ -397,13 +354,16 @@ function DownloaderRow({ info, saved, test, update, onSaved, shownLog, showLog, 
           </button>
         )}
       </div>
-      <div className="kv-row">
-        <span className="kv-key">path</span>
-        <span className="kv-val">
-          {info.path ? <code title={info.real_path ? `links to ${info.real_path}` : undefined}>{info.path}</code> : <span className="dim">—</span>}
-          {info.real_path && <span className="dim"> → <code>{info.real_path}</code></span>}
-        </span>
-      </div>
+      {/* Where it was found, when the field below does not already say it. */}
+      {info.path && (info.path !== (saved || "") || info.real_path) && (
+        <div className="kv-row">
+          <span className="kv-key">found</span>
+          <span className="kv-val">
+            <code title={info.real_path ? `links to ${info.real_path}` : undefined}>{info.path}</code>
+            {info.real_path && <span className="dim"> → <code>{info.real_path}</code></span>}
+          </span>
+        </div>
+      )}
       {tool !== "ffmpeg" && (
         <div className="kv-row">
           <span className="kv-key">login</span>
@@ -431,9 +391,10 @@ function DownloaderRow({ info, saved, test, update, onSaved, shownLog, showLog, 
       {info.found && !info.update.possible && (
         <div className="kv-row">
           <span className="kv-key">update</span>
-          <span className="kv-val dl-update">
-            <span className="dim">{info.update.reason}</span>
-            {info.update.command && <CopyCommand command={info.update.command} />}
+          {/* Why FeedVault cannot run it is the same long line for each
+              tool: in the title once a command is there to copy. */}
+          <span className="kv-val dl-update" title={info.update.command ? info.update.reason : undefined}>
+            {info.update.command ? <CopyCommand command={info.update.command} /> : <span className="dim">{info.update.reason}</span>}
           </span>
         </div>
       )}
@@ -678,8 +639,7 @@ function SchedulesCard({ paused, onSaved }) {
     <div className="card">
       <div className="card-title">Schedules</div>
       <p className="page-lede">
-        A source can sync on its own, hourly, daily or weekly (its Options). The next time counts from the end of its
-        last sync; one that failed waits longer each time, up to a day. Sources of one site start a few minutes apart.
+        A source can sync hourly, daily or weekly, set in its Options. One that failed waits longer each time, up to a day.
       </p>
       <label className="dl-toggle">
         <input type="checkbox" checked={paused} disabled={busy} onChange={e => set(e.target.checked)} />
@@ -721,9 +681,8 @@ function DesktopCard({ on, onSaved }) {
     <div className="card">
       <div className="card-title">Desktop notifications</div>
       <p className="page-lede">
-        A sync that brings new posts or fails pops up on your desktop, besides the bell&rsquo;s list. An open
-        FeedVault tab shows it (the browser asks once); with no tab open, notify-send does, if it is installed.
-        Muted people and accounts never do.
+        A sync that brings new posts or fails pops up on your desktop: from an open FeedVault tab, or from
+        notify-send with none open.
       </p>
       <label className="dl-toggle">
         <input type="checkbox" checked={on} disabled={busy} onChange={e => set(e.target.checked)} />
@@ -1155,8 +1114,8 @@ function DownloadDefaultsCard({ blocks, config, onSaved, onDirty }) {
 }
 
 const COOKIE_TOOLS = {
-  "gallery-dl": { title: "X, Reddit, Bluesky, pixiv sync (gallery-dl)", sites: "X, Reddit, Bluesky or pixiv" },
-  "yt-dlp": { title: "YouTube and TikTok sync (yt-dlp)", sites: "YouTube or TikTok" },
+  "gallery-dl": { title: "X, Reddit, Bluesky, pixiv sync (gallery-dl)", short: "X, Reddit, Bluesky, pixiv", sites: "X, Reddit, Bluesky or pixiv" },
+  "yt-dlp": { title: "YouTube and TikTok sync (yt-dlp)", short: "YouTube and TikTok", sites: "YouTube or TikTok" },
 };
 const TOOL_PAUSE = 30;
 const IGNORE_FLAG = { "gallery-dl": "--config-ignore", "yt-dlp": "--ignore-config" };
@@ -1402,7 +1361,7 @@ function RoutesCard({ saved, onSaved, msg, setMsg, onDirty }) {
             <li key={i} className="route-row">
               <input type="text" className="insta-input route-host" aria-label="Site" placeholder="example.com"
                      maxLength={253} value={r.host} onChange={e => edit(i, { host: e.target.value })} />
-              <select className="insta-input route-tool" aria-label={`Tool for ${r.host || "this site"}`} value={r.tool}
+              <select className="sort-select insta-input route-tool" aria-label={`Tool for ${r.host || "this site"}`} value={r.tool}
                       onChange={e => edit(i, { tool: e.target.value })}>
                 {ROUTE_TOOLS.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
@@ -1669,6 +1628,37 @@ function tabOf(hash) {
   return TABS.some(t => t.id === h) ? h : ANCHORS[h] || "library";
 }
 
+/* Cards changed once and then left alone, folded under one line
+   (#ui-declutter). A link to a card inside (#download-defaults) opens it
+   first: a layout effect, so before the card's own effect scrolls to it. */
+/* A tool's login, in a word, for its fold's summary. */
+function loginSum(session) {
+  if (session?.mode === "cookies") return `cookies from ${session.browser || "a browser"}${session.profile ? ` (${session.profile})` : ""}`;
+  if (session?.mode === "login") return `signed in as ${session.user}`;
+  return "no login";
+}
+
+// The folds open in this visit, by title: a save reloads the settings and
+// remounts them, and the one being edited stays open.
+const openFolds = new Set();
+
+function SettingsMore({ title, sum, tool = false, children }) {
+  const ref = useRef(null);
+  const location = useLocation();
+  useLayoutEffect(() => {
+    const id = location.hash.slice(1);
+    if (id && ref.current && [...ref.current.querySelectorAll("[id]")].some(e => e.id === id)) ref.current.open = true;
+  }, [location.hash, location.key]);
+  return (
+    <details className={`settings-more${tool ? " is-tool" : ""}`} ref={ref} open={openFolds.has(title) || undefined}
+             onToggle={e => { if (e.currentTarget.open) openFolds.add(title); else openFolds.delete(title); }}>
+      <summary><Icon name="chevDown" size={14} className="settings-more-chev" /><span className="settings-more-title">{title}</span>
+        {sum && <span className="settings-more-sum">{sum}</span>}</summary>
+      <div className="settings-more-body">{children}</div>
+    </details>
+  );
+}
+
 export default function Settings() {
   const { refreshKey } = useScan();
   const { data: config, error, reload } = useApi(getConfig, refreshKey);
@@ -1718,31 +1708,40 @@ export default function Settings() {
                   onDirty={onDirty}
                 />
                 <TrashCard />
-                <LastScan />
+                <SettingsMore title="Last scan" sum="counts and errors of the latest scan"><LastScan /></SettingsMore>
               </div>
               <div className="settings-group" hidden={tab !== "profiles"}>
                 <ProfileSettings onDirty={onDirty} />
               </div>
               <div className="settings-group" hidden={tab !== "downloads"}>
                 <DownloadersCard saved={config.tools || {}} onSaved={reload} onDirty={onDirty} />
-                <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} onDirty={onDirty} />
-                <LinkLabelsCard key={JSON.stringify(config.link_labels)} saved={config.link_labels || {}} onSaved={reload}
-                                {...note("link_labels")} onDirty={onDirty} />
-                <BioImportCard on={config.bio_import === true} onSaved={reload} />
+                <SettingsMore title="More link settings" sum="which tool each site goes to, link labels, link-in-bio import">
+                  <RoutesCard key={JSON.stringify(config.routes)} saved={config.routes || {}} onSaved={reload} {...note("routes")} onDirty={onDirty} />
+                  <LinkLabelsCard key={JSON.stringify(config.link_labels)} saved={config.link_labels || {}} onSaved={reload}
+                                  {...note("link_labels")} onDirty={onDirty} />
+                  <BioImportCard on={config.bio_import === true} onSaved={reload} />
+                </SettingsMore>
               </div>
               <div className="settings-group" hidden={tab !== "sync"}>
                 <SchedulesCard paused={config.schedules_paused === true} onSaved={reload} />
-                <ProfileOnlyCard listed={config.profile_only_platforms || []} platforms={config.platforms || []} onSaved={reload} />
                 <DesktopCard on={config.desktop_notifications === true} onSaved={reload} />
-                <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} onDirty={onDirty} />
-                <MetadataCard current={Object.fromEntries(["instaloader", "gallery-dl", "yt-dlp"].map(t => [t, config[t]?.metadata]))}
-                              ffmpeg={config.ffmpeg !== false} onSaved={reload} />
-                <DownloadDefaultsCard blocks={config.source_defaults || []}
-                                      config={config} onSaved={reload} onDirty={onDirty} />
+                {/* Each tool's login and pace, folded: set once, read rarely. */}
+                <SettingsMore tool title="Instagram" sum={`instaloader · ${loginSum(config.instaloader?.session)}`}>
+                  <InstaloaderCard key={JSON.stringify(config.instaloader)} saved={config.instaloader || {}} onSaved={reload} onDirty={onDirty} />
+                </SettingsMore>
                 {Object.keys(COOKIE_TOOLS).map(t => (
-                  <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
-                               saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} onDirty={onDirty} />
+                  <SettingsMore key={t} tool title={COOKIE_TOOLS[t].short} sum={`${t} · ${loginSum(config[t]?.session)}`}>
+                    <CookiesCard key={`${t}:${JSON.stringify(config[t])}:${t === "yt-dlp" ? config.youtube_max_seconds : ""}`} tool={t}
+                                 saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} onDirty={onDirty} />
+                  </SettingsMore>
                 ))}
+                <SettingsMore title="More sync settings" sum="profile-only platforms, metadata files, download defaults">
+                  <ProfileOnlyCard listed={config.profile_only_platforms || []} platforms={config.platforms || []} onSaved={reload} />
+                  <MetadataCard current={Object.fromEntries(["instaloader", "gallery-dl", "yt-dlp"].map(t => [t, config[t]?.metadata]))}
+                                ffmpeg={config.ffmpeg !== false} onSaved={reload} />
+                  <DownloadDefaultsCard blocks={config.source_defaults || []}
+                                        config={config} onSaved={reload} onDirty={onDirty} />
+                </SettingsMore>
               </div>
               <div className="settings-group" hidden={tab !== "appearance"}>
                 <RatingColorsCard key={JSON.stringify(config.rating_colors)} saved={config.rating_colors || DEFAULT_RATING_COLORS}
