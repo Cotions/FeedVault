@@ -167,11 +167,15 @@ export function LinkForm({
    Only an http(s) address is ever a link (safeUrl); anything else is text.
    On the Links page: ``select`` ({ checked, onClick(event) }) puts a
    checkbox first (shift-click for a range), ``onAssign`` an "Assign…" on a
-   link of no one, and ``children`` (the open assign picker) go under it.
+   link of no one, ``onDownload(link)`` the button that marks it to
+   download or clears its mark, and ``children`` (the open assign picker)
+   go under it. A link marked to download says so wherever it is shown
+   (a "To download" chip beside its kind): FeedVault never downloads it,
+   the mark is the user's note for another app.
    Without onEdit and onDelete (a search's results) it is read only. */
 export function LinkRow({
   link: l, showPerson = true, here = null, busy = false, onEdit, onDelete, onRemove, onUp, onDown, flash = false, index, select,
-  onAssign, children,
+  onAssign, onDownload, children,
 }) {
   const people = l.people || [];
   const others = people.filter(p => p.id !== here);
@@ -181,6 +185,7 @@ export function LinkRow({
   // a site share its label).
   const label = linkName(l);
   const named = !!(l.title || l.label);           // shown is not the address: the address goes under it
+  const marked = l.download_at != null;
   return (
     <li className={`link-row${flash ? " is-flash" : ""}${select?.checked ? " is-selected" : ""}${children ? " is-assigning" : ""}`}
         data-link-id={l.id} data-index={index}>
@@ -200,6 +205,11 @@ export function LinkRow({
           <span className={`chip link-kind is-${l.kind}`} title={l.kind === "social" ? "A social or creator platform" : "Any other site"}>
             {KIND_LABEL[l.kind] || l.kind}
           </span>
+          {marked && (
+            <span className="chip link-dl-mark" title="Marked to download, with another app: FeedVault never downloads it">
+              <Icon name="download" size={11} />To download
+            </span>
+          )}
         </span>
         <span className="link-row-sub creator-sub">
           <span className="link-site">{l.site}</span>
@@ -222,6 +232,13 @@ export function LinkRow({
           <button type="button" className="btn-secondary link-assign" disabled={busy} aria-expanded={!!children}
                   onClick={() => onAssign(l)} aria-label={`Assign ${label} to a person`} title="Give it to a person">
             <Icon name="users" size={13} />Assign…
+          </button>
+        )}
+        {onDownload && (
+          <button type="button" className={`del-btn link-dl${marked ? " is-on" : ""}`} disabled={busy} onClick={() => onDownload(l)}
+                  aria-label={marked ? `Clear the download mark of ${label}` : `Mark ${label} to download`}
+                  title={marked ? "Downloaded? Clear the mark" : "Mark it to download (with another app: FeedVault only keeps the mark)"}>
+            <Icon name="download" size={14} />
           </button>
         )}
         {onUp && (
