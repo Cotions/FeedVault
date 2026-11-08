@@ -418,6 +418,9 @@ def keep(conn, pid, found, now, limit):
     saved. ``pid`` None saves them to no one (the Links page's Unsorted),
     with no place, as create does; a URL saved already is then left as it
     is.
+    An item may carry two more: (url, title, at, notes): a new link is
+    saved with ``at`` as its created_at (in place of ``now``; None: now)
+    and those notes (the Links page's import of bookmarks, linkimport.py).
 
     {"saved", "already" (this person's; with no person, any link saved
     already), "shared" (saved already, not theirs: now theirs too), "over"
@@ -435,7 +438,9 @@ def keep(conn, pid, found, now, limit):
         saved = {}
         for lid, u in conn.execute("SELECT id, url FROM links ORDER BY id DESC"):
             saved[spelling(u)] = lid
-        for url, title in found:
+        for url, title, *more in found:
+            at = more[0] if more and more[0] is not None else now
+            notes = more[1] if len(more) > 1 else ""
             s = spelling(url)
             lid = find(conn, url) or saved.get(s)
             if s in have or (lid is not None and pid is None):
@@ -447,8 +452,8 @@ def keep(conn, pid, found, now, limit):
             elif out["saved"] >= limit:
                 out["over"] += 1
             else:
-                lid = conn.execute("INSERT INTO links(url, title, notes, created_at) VALUES (?, ?, '', ?)",
-                                   (url, title, now)).lastrowid
+                lid = conn.execute("INSERT INTO links(url, title, notes, created_at) VALUES (?, ?, ?, ?)",
+                                   (url, title, notes, at)).lastrowid
                 if pid is not None:
                     _tie(conn, lid, pid, now)
                 out["saved"] += 1
