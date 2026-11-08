@@ -172,7 +172,7 @@ function TrashEntry({ entry: e, index, selectMode, selected, onToggle, onRestore
           ) : (
             <span className="big-file-author" title={e.post && e.post !== who ? `${who} · ${e.post}` : who}>{who}</span>
           )}
-          <span className="trash-entry-when" title={`Deleted ${fmtFullDate(e.at)}${e.posted_at ? ` · posted ${fmtFullDate(e.posted_at)}` : ""}`}>
+          <span className="trash-entry-when" title={`${deleted}: ${fmtFullDate(e.at)}${e.posted_at ? ` · posted ${fmtFullDate(e.posted_at)}` : ""}`}>
             {deleted}
           </span>
         </span>
