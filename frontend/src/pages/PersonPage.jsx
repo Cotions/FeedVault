@@ -271,7 +271,7 @@ export default function PersonPage() {
   const [busy,     setBusy]     = useState(false);
   const [editName, setEditName] = useState(null);     // the name being typed, null when not renaming
   const [notes,    setNotes]    = useState(null);     // edited notes, null when untouched
-  const [about,    setAbout]    = useState({});       // edited gender, country, labels (absent: untouched)
+  const [about,    setAbout]    = useState({});       // edited aliases, gender, country, labels (absent: untouched)
   const [confirm,  setConfirm]  = useState(false);
   const [picture,  setPicture]  = useState(false);    // the picture dialog is open
   const [dlgError, setDlgError] = useState(null);
@@ -301,6 +301,7 @@ export default function PersonPage() {
     about.gender != null && cleanGender(about.gender) !== p.gender && ["gender", about.gender],
     about.country != null && about.country !== p.country && ["country", about.country],
     about.labels != null && !sameLabels(about.labels, p.labels) && ["labels", about.labels],
+    about.aliases != null && !sameLabels(about.aliases, p.aliases || []) && ["aliases", about.aliases],
   ].filter(Boolean));
   const aboutDirty = Object.keys(aboutChanges);
   // A search on the page (?q=) hides what is typed, never drops it: it goes through.

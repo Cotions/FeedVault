@@ -1012,6 +1012,7 @@ def _people_changed(names=False):
     if names:
         userdata.changed("people")
         userdata.changed("person_labels")
+        userdata.changed("person_aliases")
         userdata.changed("sources")
         userdata.changed("muted_people")
         userdata.changed("no_sync_people")
@@ -1235,6 +1236,7 @@ def update_person(pid):
     gender = None if body.get("gender") is None else people.clean_gender(body["gender"])
     country = None if body.get("country") is None else people.clean_country(body["country"])
     labels = None if body.get("labels") is None else people.clean_labels(body["labels"])
+    aliases = None if body.get("aliases") is None else people.clean_aliases(body["aliases"])
     # Sent as null, the rating is cleared; not sent, it stays.
     rating = people.KEEP
     if "rating" in body:
@@ -1252,14 +1254,18 @@ def update_person(pid):
     if body.get("labels") is not None and labels is None:
         return jsonify({"ok": False, "error": f"labels must be a list of at most {people.MAX_LABELS} names of "
                                               f"1 to {organize.MAX_NAME} characters, no quotes"}), 400
+    if body.get("aliases") is not None and aliases is None:
+        return jsonify({"ok": False, "error": f"aliases must be a list of at most {people.MAX_ALIASES} names of "
+                                              f"1 to {organize.MAX_NAME} characters, no quotes"}), 400
     if body.get("rating") is not None and rating is None:
         return jsonify({"ok": False, "error": f"rating must be a whole number from 1 to {people.MAX_RATING} "
                                               "(half stars: 7 is three and a half), or null for none"}), 400
     if name is None and notes is None and gender is None and country is None and labels is None \
-            and rating is people.KEEP:
-        return jsonify({"ok": False, "error": "send name, notes, gender, country, labels or rating"}), 400
+            and aliases is None and rating is people.KEEP:
+        return jsonify({"ok": False, "error": "send name, notes, gender, country, labels, aliases or rating"}), 400
     try:
-        p = people.update(conn, pid, name, notes, gender, country, labels, int(time.time()), rating=rating)
+        p = people.update(conn, pid, name, notes, gender, country, labels, int(time.time()), rating=rating,
+                          aliases=aliases)
     except people.Refused as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     _people_changed(names=name is not None)
@@ -1267,6 +1273,8 @@ def update_person(pid):
         userdata.changed("people")
     if labels is not None:
         userdata.changed("person_labels")
+    if aliases is not None:
+        userdata.changed("person_aliases")
     return jsonify({"ok": True, "person": p})
 
 

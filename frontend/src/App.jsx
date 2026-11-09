@@ -397,9 +397,17 @@ export default function App() {
 
   // Saved: a toast one click from where it went. A page that lists links
   // (Links, a person's) loads them again; the Unsorted badge is read again.
-  const quickSaved = useCallback(link => {
+  // A person made for the link: their page opens, to fill in.
+  const quickSaved = useCallback((link, created) => {
     setQuickAdd(null);
     const p = link.people?.[0];
+    if (created) {
+      toast(`${created.name} created, link saved`, "ok");
+      navigateRef.current(personPath(created.id));
+      setRefreshKey(k => k + 1);
+      pollJobs();
+      return;
+    }
     toast(p ? `Link saved to ${p.name}` : "Link saved to Unsorted", "ok",
       { to: p ? personPath(p.id) : UNSORTED_PATH, label: "Show" });
     if (/^\/(links|people\/)/.test(window.location.pathname)) setRefreshKey(k => k + 1);

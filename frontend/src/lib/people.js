@@ -10,9 +10,9 @@ export function accountText(a) {
     .filter(Boolean).join(" ").toLowerCase();
 }
 
-// A person's name, accounts, gender, country (by name) and labels.
+// A person's name and aliases, accounts, gender, country (by name) and labels.
 export function personText(p) {
-  return [p.name, p.gender, countryName(p.country), ...(p.labels || []), ...(p.accounts || []).map(accountText)]
+  return [p.name, ...(p.aliases || []), p.gender, countryName(p.country), ...(p.labels || []), ...(p.accounts || []).map(accountText)]
     .filter(Boolean).join(" ").toLowerCase();
 }
 
@@ -81,16 +81,34 @@ export function personPath(id) { return `/people/${id}`; }
 /* A link's person picker (components/PersonPicker.jsx). */
 const MAX_PICK = 200;
 export const NO_PERSON = { key: "none", person: null };
+export const MAX_NAME = 64;                    // a person's name (organize.MAX_NAME)
+
+// The name a new person typed in the picker would get, or null when it
+// cannot be one (empty, quotes, too long: the backend's rules).
+export function newPersonName(query) {
+  const name = query.split(/\s+/).filter(Boolean).join(" ");
+  const bad = [...name].some(c => c === '"' || c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127);
+  return name && name.length <= MAX_NAME && !bad ? name : null;
+}
 
 /* The options for ``query``: with none typed, "No person" first, then the
    people most recently given a link (``recent``, [{ id, name }]), then
    everyone else by name; typed, the people it matches (the recent ones
    first), and "No person" last, so it is always there. With ``none``
    false (assigning an Unsorted link: no one is where it is already), no
-   "No person" at all. */
-export function personOptions(people, recent, query, { none = true } = {}) {
-  const out = withNone(people, recent, query);
-  return none ? out : out.filter(o => o !== NO_PERSON);
+   "No person" at all. With ``create``, a name typed that is nobody's
+   (nor an alias of anyone's) also offers a new person by that name: first
+   when nobody matches, else after the people it matches. */
+export function personOptions(people, recent, query, { none = true, create = false } = {}) {
+  let out = withNone(people, recent, query);
+  if (!none) out = out.filter(o => o !== NO_PERSON);
+  const name = create && people ? newPersonName(query) : null;
+  if (name && !people.some(p => [p.name, ...(p.aliases || [])].some(n => fold(n) === fold(name)))) {
+    const made = { key: "create", person: null, create: name };
+    const at = out.some(o => o.person) ? out.findIndex(o => o === NO_PERSON) : 0;
+    out = at < 0 ? [...out, made] : [...out.slice(0, at), made, ...out.slice(at)];
+  }
+  return out;
 }
 
 function withNone(people, recent, query) {

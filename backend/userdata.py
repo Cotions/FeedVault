@@ -121,6 +121,13 @@ register("person_labels", "person_labels", ("person", "label", "at"), ("person",
          insert=("INSERT OR IGNORE INTO person_labels(person_id, label, at) "
                  "SELECT id, :label, COALESCE(:at, 0) FROM people WHERE name = :person",),
          clean=people.restore_label)
+# A person's aliases (the other names they go by) by person name, after people.
+register("person_aliases", "person_aliases", ("person", "alias", "at"), ("person", "alias"),
+         select="SELECT p.name, pa.alias, pa.at FROM person_aliases pa JOIN people p ON p.id = pa.person_id "
+                "ORDER BY p.name, pa.alias",
+         insert=("INSERT OR IGNORE INTO person_aliases(person_id, alias, at) "
+                 "SELECT id, :alias, COALESCE(:at, 0) FROM people WHERE name = :person",),
+         clean=people.restore_alias)
 register("person_accounts", "person_accounts", ("platform", "author_id", "person", "at"), ("platform", "author_id"),
          select="SELECT pa.platform, pa.author_id, p.name, pa.at FROM person_accounts pa "
                 "JOIN people p ON p.id = pa.person_id ORDER BY pa.platform, pa.author_id",

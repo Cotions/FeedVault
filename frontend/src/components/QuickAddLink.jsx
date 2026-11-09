@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { createLink, getPeople, getRecentLinkPeople } from "../lib/api";
+import { createLink, createPerson, getPeople, getRecentLinkPeople } from "../lib/api";
 import { MAX_NOTES, MAX_TITLE, MAX_URL, externalUrl, withScheme } from "../lib/links";
 import { NO_PERSON, personPath } from "../lib/people";
 import { focusLost, restoreFocus, trapTab } from "../lib/layout";
@@ -11,13 +11,15 @@ import PersonPicker from "./PersonPicker";
 export const UNSORTED_PATH = "/links?person=none";
 
 /* Save a link in a few keys (#165): its address, an optional title and
-   notes, and who it goes to (PersonPicker: no one, a recent person, or
-   anyone found by name). Enter in the address, title or person field saves
+   notes, and who it goes to (PersonPicker: no one, a recent person,
+   anyone found by name or alias, or a new person by the name typed, made
+   before the link is saved). Enter in the address, title or person field saves
    to the highlighted choice. A URL saved already says whose it is, with a
    link there, instead of failing silently.
 
    Props: url and title (to start with), clipboard (read the clipboard for
-   an address when ``url`` is empty), onSaved(link), onLeave() (a link in
+   an address when ``url`` is empty), onSaved(link, created: the person
+   made for it, or undefined), onLeave() (a link in
    the form was followed, or Cancel), onCancel() (Cancel, when it is not
    onLeave), escape (whether the hint tells of Esc: what is around the form
    closes on it), confirm (the address came from another page: Enter saves
@@ -81,8 +83,18 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
     if (sent !== url) setUrl(sent);
     setBusy(true);
     try {
-      const r = await createLink({ url: sent, title, notes, person: option.person ? option.person.id : null });
-      if (r?.ok) { onSaved(r.link); return; }
+      let person = option.person, created;
+      if (option.create) {
+        const made = await createPerson(option.create);
+        if (!made?.ok) { setError(made?.error || "Could not create the person."); return; }
+        // Theirs from now on: saving again (the address taken) makes nobody twice.
+        person = created = made.person;
+        const opt = { key: `person:${person.id}`, person, recent: false };
+        setPeople(ps => [...(ps || []), person]);
+        setActive(opt);
+      }
+      const r = await createLink({ url: sent, title, notes, person: person ? person.id : null });
+      if (r?.ok) { onSaved(r.link, created); return; }
       if (r?.link) setTaken(r.link);
       else setError(r?.error || "Could not save the link.");
     } catch (e) {
@@ -92,7 +104,7 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
     }
   }
 
-  const to = active.person ? active.person.name : "Unsorted";
+  const to = active?.person ? active.person.name : active?.create ? `new person ${active.create}` : "Unsorted";
   return (
     <form className="quick-add" onSubmit={e => { e.preventDefault(); save(active); }} aria-busy={busy}
           onKeyDown={e => {
@@ -123,7 +135,7 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
       </div>
       <div className="filter quick-add-person">
         <span>Person</span>
-        <PersonPicker people={people} recent={recent} active={active} chosen={chosen}
+        <PersonPicker people={people} recent={recent} active={active} chosen={chosen} create
                       onActive={o => { setChosen(true); setError(null); setActive(o); }}
                       onPick={o => { setChosen(true); setActive(o); save(o); }}
                       inputRef={personRef} label="Person" />
@@ -151,7 +163,7 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
 /* QuickAddForm in a dialog over any page: Escape or a click beside it
    closes it, Tab stays inside, and focus goes back where it was.
 
-   Props: url, clipboard (as QuickAddForm), onSaved(link), onClose */
+   Props: url, clipboard (as QuickAddForm), onSaved(link, created), onClose */
 export default function QuickAddLink({ url, clipboard, onSaved, onClose }) {
   const boxRef = useRef(null);
   const titleId = useId();
