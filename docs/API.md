@@ -1268,9 +1268,9 @@ One person often posts on several platforms, under different handles. An
 An account with no person is shown on its own, as before.
 
 People and their links are user data: tables `people`, `person_accounts`
-and `person_labels`, never touched by a rescan, and written to
-`<data_directory>/userdata/people.json`, `person_accounts.json` and
-`person_labels.json` (accounts by platform and author id, people by name)
+`person_labels` and `person_aliases`, never touched by a rescan, and written to
+`<data_directory>/userdata/people.json`, `person_accounts.json`,
+`person_labels.json` and `person_aliases.json` (accounts by platform and author id, people by name)
 2 s after the last change, so a
 rebuilt index gets them back. Links are by account, not by post: a post
 trashed and restored, or replaced by a duplicate copy, keeps its person.
@@ -1351,7 +1351,7 @@ A **person**:
 ```json
 { "id": 3, "name": "Some Body", "notes": "", "created_at": 1727500000,
   "gender": "Female", "country": "FR", "labels": ["cosplay", "Travel"],
-  "avatar": "3f9a1c0b7d2e4f6a8b1c", "rating": 7,
+  "aliases": ["Somebody Else"], "avatar": "3f9a1c0b7d2e4f6a8b1c", "rating": 7,
   "accounts": [account, …], "platforms": ["instagram", "twitter"],
   "count": 900, "bytes": 2347483648, "newest": 1727481600, "no_sync": false }
 ```
@@ -1367,6 +1367,11 @@ A **person**:
   each a name as a tag's (1 to 64 characters, no `"` or control
   characters), once each without regard to (ASCII) case. They are not
   [tags](#tags): post tags and the Tags page never see them.
+- `aliases`: the other names the person goes by, at most 20, each a name
+  as the person's own, once each without regard to (ASCII) case; one that
+  is the person's name is dropped (a rename to an alias drops it too).
+  The searches and the people pickers find the person by them, and a
+  link's picker offers no new person by an alias already taken.
 - `avatar`: the name of the person's picture, or `null`; see
   [Profile pictures](#profile-pictures).
 - `rating`: a whole number from 1 to 10, the half stars of five (`7` is
@@ -1389,7 +1394,7 @@ A **person**:
 | POST | `/api/people/<id>/sync` | → `{ "ok": true, "sources": 3, "jobs": [job, …], "skipped": 0, "errors": [{ "source", "error" }], "not_synced": 0, "profile_only": 0 }`: a sync of each of the person's sources, as Sync all does for every source (`not_synced`: those left out, set to [Don't sync](#dont-sync); `profile_only`: those left out, [profile only](#profile-only)); 404 for an unknown id |
 | GET | `/api/people/attributes` | `{ "labels": [{ "name", "count" }], "genders": [{ "name", "count" }], "presets": ["Female", "Male", "Transgender"], "countries": ["AD", …] }`: the labels and genders people have, most used first (what the person page suggests and the Creators filters offer), and every country code a person can have |
 | GET | `/api/people/<id>` | person, with its `links` (see [Links](#links)), or 404 |
-| POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"], "rating": 7 }` (none is a 400; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date; `"rating": null` clears the rating, and anything but a whole number from 1 to 10 or `null` (`0`, `11`, `3.5`, `"7"`, `true`) is a 400) → `{ "ok": true, "person": {…} }` |
+| POST | `/api/people/<id>` | body with any of `{ "name": "…", "notes": "…", "gender": "…", "country": "FR", "labels": ["…"], "aliases": ["…"], "rating": 7 }` (none is a 400; `aliases` replaces them; `""` clears gender or country; `labels` replaces the person's labels, those kept keep their date; `"rating": null` clears the rating, and anything but a whole number from 1 to 10 or `null` (`0`, `11`, `3.5`, `"7"`, `true`) is a 400) → `{ "ok": true, "person": {…} }` |
 | DELETE | `/api/people/<id>` | → `{ "ok": true, "unlinked": 2 }`: the person and its links are gone, never a post; its saved [links](#links) stay, their other people's, or tied to no one when they had no other |
 | POST | `/api/people/<id>/accounts` | body `{ "add": [{ "platform", "id" }], "remove": [{ "platform", "id" }] }` (either may be omitted; at most 500 each) → `{ "ok": true, "added": 1, "removed": 0, "person": {…} }` |
 | POST | `/api/people/merge` | body `{ "ids": [3, 7], "name": "…", "accounts": [{ "platform", "id" }], "confirm": true }` → `{ "ok": true, "person": {…} }`, see below; 409 `{ "ok": false, "confirm": true, "sources": 2, "error" }` when one of them is set to [Don't sync](#dont-sync) and sources that sync now would stop, until sent with `"confirm": true` |
@@ -1423,7 +1428,8 @@ A **person**:
   time per tool, the tool's pause between two, a source already queued or
   running counted in `skipped`, a refused one in `errors`.
 - Merge keeps the first id: its name (or `name`, when given), and the
-  others' notes appended to its own. Its labels are those of all of them;
+  others' notes appended to its own. Its labels are those of all of them, its
+  aliases too, and the others' names become aliases of it;
   its gender, country and picture are the first person's (in `ids` order)
   that has one (the others' pictures are deleted). Its `rating` is the
   highest of theirs, whichever person has it (a merge never lowers a
