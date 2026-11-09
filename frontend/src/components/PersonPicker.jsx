@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { personOptions } from "../lib/people";
+import Icon from "./Icon";
 import PersonAvatar from "./PersonAvatar";
 
 /* Who a link goes to: a search field over an open list (not a dropdown:
@@ -12,15 +13,17 @@ import PersonAvatar from "./PersonAvatar";
    onActive(option), onPick(option), inputRef, label, disabled, none
    (false: no "No person" choice, for links that have none already),
    autoFocus, chosen (false: nothing is highlighted, and Enter picks
-   nothing, until the arrows, typing or a click choose) */
+   nothing, until the arrows, typing or a click choose), create (a name
+   typed that is nobody's offers "Create …": an option { key: "create",
+   create: name } that the caller makes the person of) */
 export default function PersonPicker({
   people, recent, active, onActive, onPick, inputRef, label = "Person", disabled = false, none = true, autoFocus = false,
-  chosen = true,
+  chosen = true, create = false,
 }) {
   const [query, setQuery] = useState("");
   const listRef = useRef(null);
   const listId = useId();
-  const options = personOptions(people, recent, query, { none });
+  const options = personOptions(people, recent, query, { none, create });
   const at = chosen ? Math.max(0, options.findIndex(o => o.key === active?.key)) : -1;
 
   // The highlight stays in view as the arrows move it through a long list.
@@ -30,7 +33,7 @@ export default function PersonPicker({
 
   function type(value) {
     setQuery(value);
-    onActive(personOptions(people, recent, value, { none })[0] ?? null);
+    onActive(personOptions(people, recent, value, { none, create })[0] ?? null);
   }
 
   function onKeyDown(e) {
@@ -70,7 +73,7 @@ export default function PersonPicker({
         onKeyDown={onKeyDown}
       />
       <ul ref={listRef} className="person-pick-list" id={listId} role="listbox" aria-label={label} tabIndex={-1}>
-        {query.trim() && !matched && <li className="picker-empty" role="presentation">No person matches “{query.trim()}”</li>}
+        {query.trim() && !matched && !options.some(o => o.create) && <li className="picker-empty" role="presentation">No person matches “{query.trim()}”</li>}
         {!query.trim() && !none && !matched && people && <li className="picker-empty" role="presentation">No people yet</li>}
         {options.map((o, i) => (
           <PickRow key={o.key} o={o} i={i} listId={listId} active={i === at} onPick={onPick} disabled={disabled}
@@ -91,12 +94,13 @@ function PickRow({ o, i, listId, active, onPick, disabled, head }) {
         role="option"
         aria-selected={active}
         aria-disabled={disabled || undefined}
-        className={`person-pick-option${active ? " is-active" : ""}${o.person ? "" : " is-none"}`}
-        title={o.person ? o.person.name : undefined}
+        className={`person-pick-option${active ? " is-active" : ""}${o.person ? "" : o.create ? " is-create" : " is-none"}`}
+        title={o.person ? o.person.name : o.create ? `A new person named ${o.create}` : undefined}
         onMouseDown={e => e.preventDefault()}
         onClick={() => { if (!disabled) onPick(o); }}
       >
-        {o.person ? <><PersonAvatar person={o.person} size="chip" />{o.person.name}</> : "No person (Unsorted)"}
+        {o.person ? <><PersonAvatar person={o.person} size="chip" />{o.person.name}</>
+          : o.create ? <><Icon name="plus" size={14} />Create “{o.create}”</> : "No person (Unsorted)"}
       </li>
     </>
   );

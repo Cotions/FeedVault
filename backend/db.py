@@ -787,6 +787,20 @@ def _migrate_32(conn):
     conn.execute("ALTER TABLE links ADD COLUMN download_at INTEGER")
 
 
+def _migrate_33(conn):
+    """A person's aliases (people.py): the other names they go by, which the
+    searches and pickers find them by too. Many per person, unique per
+    person without regard to case, same rules as a person's name. User data:
+    person_aliases is mirrored by userdata.py, the person by name."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS person_aliases (
+            person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            alias     TEXT NOT NULL COLLATE NOCASE,
+            at        INTEGER NOT NULL,
+            PRIMARY KEY (person_id, alias)
+        ) WITHOUT ROWID""")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
@@ -794,7 +808,7 @@ MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migra
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
               _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
               _migrate_26, _migrate_27, _migrate_28, _migrate_29, _migrate_30, _migrate_31,
-              _migrate_32]
+              _migrate_32, _migrate_33]
 
 BACKUPS_KEPT = 3
 

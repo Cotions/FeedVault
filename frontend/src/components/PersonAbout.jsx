@@ -8,6 +8,7 @@ import { usePopoverUnder } from "../lib/usePopoverUnder";
 import { starsText } from "../lib/rating";
 
 const MAX_LABELS = 50;
+const MAX_ALIASES = 20;
 
 /* A country field: type a name or a code, ↑/↓ through the matches, Enter
    picks, Esc puts the field back. Shows the country picked, flag first.
@@ -89,20 +90,22 @@ export function CountryPicker({ codes, value, onChange, id }) {
   );
 }
 
-/* A person's gender, country and labels, edited together and saved as
+/* A person's aliases (the other names they go by: the searches and pickers
+   find them by these too), gender, country and labels, edited together and saved as
    the notes are: nothing is sent until Save (Enter in the gender field,
    or in an empty label field, saves too).
 
    The rating is apart: a click on the stars saves it at once (onRate).
 
    Props: person, attributes (GET /api/people/attributes, or null while it
-   loads), draft ({ gender, country, labels }, each null when untouched),
+   loads), draft ({ aliases, gender, country, labels }, each null when untouched),
    onDraft(changes), dirty, busy, onSave(), onDiscard(), onRate(rating or null). */
 export default function PersonAbout({ person: p, attributes, draft, onDraft, dirty, busy, onSave, onDiscard, onRate }) {
   const ids = useId();
   const gender = draft.gender ?? p.gender;
   const country = draft.country ?? p.country;
   const labels = draft.labels ?? p.labels;
+  const aliases = draft.aliases ?? p.aliases ?? [];
   const presets = GENDER_PRESETS;
   const isPreset = g => cleanGender(gender) === g;
   // Genders others have, beyond the presets: suggested as they are typed.
@@ -117,6 +120,36 @@ export default function PersonAbout({ person: p, attributes, draft, onDraft, dir
           <div className="about-rating-line">
             <RatingInput value={p.rating} busy={busy} onChange={onRate} />
             <span className="creator-sub">{p.rating ? `${starsText(p.rating)} of 5` : "Not rated"}</span>
+          </div>
+        </div>
+
+        <div className="about-field about-labels about-aliases">
+          <span className="about-label" id={`${ids}-aliases`}>Also known as</span>
+          <div className="about-labels-edit">
+            {aliases.length > 0 && (
+              <ul className="tag-chips label-chips" aria-labelledby={`${ids}-aliases`}>
+                {aliases.map(name => (
+                  <li key={name} className="tag-chip label-chip">
+                    <span className="tag-chip-name">{name}</span>
+                    <button type="button" className="tag-chip-x" disabled={busy}
+                            onClick={() => onDraft({ aliases: aliases.filter(a => a !== name) })}
+                            title={`Remove ${name}`} aria-label={`Remove alias ${name}`}>
+                      <Icon name="close" size={10} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {aliases.length < MAX_ALIASES && (
+              <TagInput
+                tags={[]}
+                exclude={aliases}
+                placeholder="Add another name…"
+                onAdd={name => { if (name.toLowerCase() !== p.name.toLowerCase()) onDraft({ aliases: withLabel(aliases, name) }); }}
+                onEmptyEnter={() => { if (dirty && !busy) onSave(); }}
+                onClose={() => {}}
+              />
+            )}
           </div>
         </div>
 

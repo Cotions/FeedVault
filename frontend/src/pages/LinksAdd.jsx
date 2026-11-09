@@ -110,7 +110,8 @@ export default function LinksAdd() {
               <p className="msg err links-add-refused">The page's address was not filled in: {start.refused}.</p>
             )}
             <QuickAddForm key={start.n} url={start.url} title={start.title} escape={popup} confirm={!!start.url}
-                          onSaved={setSaved} onLeave={() => {}}
+                          onSaved={(link, created) => (created ? navigate(personPath(created.id)) : setSaved(link))}
+                          onLeave={() => {}}
                           onCancel={() => (popup ? window.close() : navigate("/links"))} />
           </>
         )}

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   accountChips, ACCOUNTS_SHOWN, attributeChoices, attributeFiltersOn, attributesMatch, cleanGender, countryFlag, countryName, countryOptions, filtersOn,
-  mergeSet, mergeStopping, NO_FILTERS, notSynced, personText, sameLabels, syncFilter, syncMatch, withLabel,
+  mergeSet, mergeStopping, newPersonName, NO_FILTERS, NO_PERSON, notSynced, personOptions, personText, sameLabels, syncFilter, syncMatch, withLabel,
 } from "../src/lib/people.js";
 
 const person = (over = {}) => ({ name: "Someone", gender: "", country: "", labels: [], accounts: [], ...over });
@@ -144,4 +144,28 @@ test("a card's accounts: each its own chip while they fit, else one per platform
   const { chips, rest } = accountChips(many);
   assert.equal(chips.flat().length + rest.length, many.length);
   assert.deepEqual(handles(accountChips(many, 5)), [[["a", "b", "c", "d"], ["t"], ["k"], ["y"], ["s1", "s2"]], []]);
+});
+
+test("a person is found by an alias too", () => {
+  assert.ok(personText(person({ name: "Alice", aliases: ["Lissa B"] })).includes("lissa b"));
+});
+
+test("the link picker offers a new person by a name that is nobody's", () => {
+  const people = [{ id: 1, name: "Alice", aliases: ["Lissa"], accounts: [] }, { id: 2, name: "Alicia", accounts: [] }];
+  const keys = q => personOptions(people, [], q, { create: true }).map(o => o.create ?? o.key);
+  assert.deepEqual(keys("bob  smith"), ["bob smith", "none"]);             // nobody matches: first
+  assert.deepEqual(keys("ali"), ["person:1", "person:2", "ali", "none"]);  // after the matches
+  assert.deepEqual(keys("ALICE"), ["person:1", "none"]);                   // a name taken
+  assert.deepEqual(keys("lissa"), ["person:1", "none"]);                   // an alias taken
+  assert.deepEqual(keys(""), ["none", "person:1", "person:2"]);
+  assert.deepEqual(personOptions(people, [], "bob", {}).map(o => o.key), [NO_PERSON.key]);   // not asked for
+  assert.deepEqual(personOptions(null, [], "bob", { create: true }).map(o => o.key), ["none"]);  // still loading
+  assert.deepEqual(personOptions(people, [], "bob", { none: false, create: true }).map(o => o.create), ["bob"]);
+});
+
+test("a new person's name follows the backend's rules", () => {
+  assert.equal(newPersonName("  a   b "), "a b");
+  assert.equal(newPersonName("   "), null);
+  assert.equal(newPersonName('say "hi"'), null);
+  assert.equal(newPersonName("x".repeat(65)), null);
 });

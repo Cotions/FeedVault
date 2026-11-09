@@ -298,7 +298,7 @@ export function createPerson(name, accounts = [], profiles) {
   return post("/api/people", profiles ? { name, accounts, profiles } : { name, accounts });
 }
 export function syncPerson(id) { return post(`/api/people/${seg(id)}/sync`); }
-// changes: any of { name, notes, gender, country, labels } → { ok, person }
+// changes: any of { name, notes, gender, country, labels, aliases, rating } → { ok, person }
 export function updatePerson(id, changes) { return post(`/api/people/${seg(id)}`, changes); }
 // Unlinks every account; posts are never touched → { ok, unlinked }
 export function deletePerson(id) { return del(`/api/people/${seg(id)}`); }

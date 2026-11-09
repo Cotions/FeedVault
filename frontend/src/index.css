@@ -3770,6 +3770,9 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 .person-pick-option:hover { background: rgba(255, 255, 255, 0.04); }
 .person-pick-option.is-active { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--accent); }
 .person-pick-option.is-none { color: var(--text-dim); font-weight: 500; }
+.person-pick-option.is-create { color: var(--accent); }
+.person-pick-option.is-create { display: flex; align-items: center; gap: 6px; }
+.person-pick-option.is-create svg { flex: none; }
 .quick-add-taken a { color: inherit; font-weight: 700; text-decoration: underline; }
 .quick-add-actions { align-items: center; }
 .quick-add-hint { font-size: var(--fs-sm); }

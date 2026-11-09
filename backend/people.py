@@ -28,6 +28,7 @@ MAX_NOTES = 5000
 MAX_ACCOUNTS = 500              # accounts per call
 MAX_GENDER = 40
 MAX_LABELS = 50                 # labels per person
+MAX_ALIASES = 20                # aliases per person
 # A rating is 1 to 10: the half stars of five (7 is three and a half), NULL
 # for not rated.
 MAX_RATING = 10
@@ -87,10 +88,10 @@ def _fold(name):
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 
 
-def clean_labels(value):
+def clean_labels(value, limit=MAX_LABELS):
     """Label names (same rules as a tag name), once each without regard to
     case, in the order given; None when any is malformed or there are too many."""
-    if not isinstance(value, list) or len(value) > MAX_LABELS:
+    if not isinstance(value, list) or len(value) > limit:
         return None
     out = {}
     for v in value:
@@ -111,10 +112,21 @@ def restore_row(row):
             "rating": clean_rating(row.get("rating"))}
 
 
+def clean_aliases(value):
+    """A person's aliases, as clean_labels (same rules as a person's name)."""
+    return clean_labels(value, MAX_ALIASES)
+
+
 def restore_label(row):
     """A person_labels.json row with its label cleaned, or None to skip it."""
     label = clean_name(row.get("label"))
     return {**row, "label": label} if label else None
+
+
+def restore_alias(row):
+    """A person_aliases.json row with its alias cleaned, or None to skip it."""
+    alias = clean_name(row.get("alias"))
+    return {**row, "alias": alias} if alias else None
 
 
 def clean_accounts(value):
@@ -277,13 +289,13 @@ def account_set(conn, person_id):
 # Reads
 # ---------------------------------------------------------------------------
 
-def _person(row, accounts, labels, no_sync=False):
+def _person(row, accounts, labels, no_sync=False, aliases=()):
     """A person as the API shows it. ``accounts`` are account rows (db.accounts).
     ``no_sync``: the person is set to Don't sync (nosync.py)."""
     newest = [a["newest"] for a in accounts if a["newest"] is not None]
     return {
         "id": row["id"], "name": row["name"], "notes": row["notes"], "created_at": row["created_at"],
-        "gender": row["gender"], "country": row["country"], "labels": labels,
+        "gender": row["gender"], "country": row["country"], "labels": labels, "aliases": list(aliases),
         "avatar": row["avatar"] or None, "rating": row["rating"], "no_sync": no_sync,
         "accounts": accounts,
         "platforms": sorted({a["platform"] for a in accounts}),
@@ -322,14 +334,20 @@ def _linked(conn, rows):
     return out
 
 
-def _labels(conn, ids=None):
-    """{person id: [label]}, each person's by name."""
+def _labels(conn, ids=None, table="person_labels", column="label"):
+    """{person id: [label]}, each person's by name (or their aliases, with
+    the table and column of those)."""
     out = collections.defaultdict(list)
     where = f"WHERE person_id IN ({', '.join('?' for _ in ids)}) " if ids is not None else ""
-    for pid, label in conn.execute(f"SELECT person_id, label FROM person_labels {where}ORDER BY label",
+    for pid, label in conn.execute(f"SELECT person_id, {column} FROM {table} {where}ORDER BY {column}",
                                    list(ids or ())):
         out[pid].append(label)
     return out
+
+
+def _aliases(conn, ids=None):
+    """{person id: [alias]}, each person's by name."""
+    return _labels(conn, ids, "person_aliases", "alias")
 
 
 def people(conn):
@@ -337,7 +355,8 @@ def people(conn):
     def compute(conn):
         rows = conn.execute("SELECT * FROM people ORDER BY name COLLATE NOCASE, id").fetchall()
         linked, labels, off = _linked(conn, rows), _labels(conn), _no_sync_people(conn)
-        return [_person(r, linked[r["id"]], labels[r["id"]], r["id"] in off) for r in rows]
+        aliases = _aliases(conn)
+        return [_person(r, linked[r["id"]], labels[r["id"]], r["id"] in off, aliases[r["id"]]) for r in rows]
     return db._memo(conn, ("people",), compute)
 
 
@@ -365,8 +384,8 @@ def exists(conn, pid):
 
 def person(conn, pid):
     row = conn.execute("SELECT * FROM people WHERE id = ?", (pid,)).fetchone()
-    return _person(row, _linked(conn, [row])[pid], _labels(conn, [pid])[pid], pid in _no_sync_people(conn)) \
-        if row else None
+    return _person(row, _linked(conn, [row])[pid], _labels(conn, [pid])[pid], pid in _no_sync_people(conn),
+                   _aliases(conn, [pid])[pid]) if row else None
 
 
 def _no_sync_people(conn):
@@ -446,26 +465,35 @@ def create(conn, name, accounts, now):
     return person(conn, pid)
 
 
-def _set_labels(conn, pid, labels, now):
+def _set_labels(conn, pid, labels, now, table="person_labels", column="label"):
     """A person's labels become ``labels``: the ones kept keep their date
-    (and take the case they are given in)."""
-    have = {_fold(r[0]): r[0] for r in conn.execute("SELECT label FROM person_labels WHERE person_id = ?", (pid,))}
+    (and take the case they are given in). Their aliases too, with the
+    table and column of those."""
+    have = {_fold(r[0]): r[0] for r in conn.execute(f"SELECT {column} FROM {table} WHERE person_id = ?", (pid,))}
     wanted = {_fold(name): name for name in labels}
     for key, name in have.items():
         if key not in wanted:
-            conn.execute("DELETE FROM person_labels WHERE person_id = ? AND label = ?", (pid, name))
+            conn.execute(f"DELETE FROM {table} WHERE person_id = ? AND {column} = ?", (pid, name))
     for key, name in wanted.items():
         if key in have:
-            conn.execute("UPDATE person_labels SET label = ? WHERE person_id = ? AND label = ?", (name, pid, have[key]))
+            conn.execute(f"UPDATE {table} SET {column} = ? WHERE person_id = ? AND {column} = ?",
+                         (name, pid, have[key]))
         else:
-            conn.execute("INSERT INTO person_labels(person_id, label, at) VALUES (?, ?, ?)", (pid, name, now))
+            conn.execute(f"INSERT INTO {table}(person_id, {column}, at) VALUES (?, ?, ?)", (pid, name, now))
+
+
+def _drop_own_name(conn, pid):
+    """An alias that is the person's own name (after a rename) is not one."""
+    conn.execute("DELETE FROM person_aliases WHERE person_id = ? AND alias = (SELECT name FROM people WHERE id = ?)",
+                 (pid, pid))
 
 
 def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=None, now=0, avatar=None,
-           rating=KEEP):
+           rating=KEEP, aliases=None):
     """Change what is given; None leaves it as it is (``avatar``: '' for none;
     the caller drops the files of the one replaced, avatars.drop_unused).
-    ``rating``: 1 to 10, None for not rated, KEEP to leave it."""
+    ``rating``: 1 to 10, None for not rated, KEEP to leave it. ``aliases``
+    replaces the other names they go by (one that is their name is dropped)."""
     if name is not None and not _name_free(conn, name, but=(pid,)):
         raise Refused("a person with that name exists")
     try:
@@ -484,6 +512,10 @@ def update(conn, pid, name=None, notes=None, gender=None, country=None, labels=N
                 conn.execute("UPDATE people SET avatar = ? WHERE id = ?", (avatar, pid))
             if rating is not KEEP:
                 conn.execute("UPDATE people SET rating = ? WHERE id = ?", (rating, pid))
+            if aliases is not None:
+                _set_labels(conn, pid, aliases, now, "person_aliases", "alias")
+            if aliases is not None or name is not None:
+                _drop_own_name(conn, pid)
     except sqlite3.IntegrityError:              # the name, taken by another request since the check
         raise Refused("a person with that name exists")
     return person(conn, pid)
@@ -523,7 +555,8 @@ def merge(conn, ids, name, accounts, now):
     country and the picture are those of the first person (in ``ids``) that
     has one (the caller drops the files of the others', avatars.drop_unused).
     The rating is the highest of theirs: a merge never lowers anyone's,
-    whichever comes first (unrated when none of them is rated)."""
+    whichever comes first (unrated when none of them is rated). Aliases are
+    put together too, and the others' names become aliases of the one kept."""
     keep = ids[0]
     if name is not None and not _name_free(conn, name, but=ids):
         raise Refused("a person with that name exists")
@@ -540,6 +573,9 @@ def merge(conn, ids, name, accounts, now):
             conn.execute("UPDATE sources SET person_id = ? WHERE person_id = ?", (keep, other))
             # A label both have stays the kept person's; the other's copy goes with them.
             conn.execute("UPDATE OR IGNORE person_labels SET person_id = ? WHERE person_id = ?", (keep, other))
+            conn.execute("UPDATE OR IGNORE person_aliases SET person_id = ? WHERE person_id = ?", (keep, other))
+            conn.execute("INSERT OR IGNORE INTO person_aliases(person_id, alias, at) "
+                         "SELECT ?, name, ? FROM people WHERE id = ?", (keep, now, other))
             conn.execute("DELETE FROM people WHERE id = ?", (other,))
         _attach(conn, keep, accounts, now)
         conn.execute("UPDATE people SET notes = ?, gender = ?, country = ?, avatar = ?, rating = ? WHERE id = ?",
@@ -547,6 +583,7 @@ def merge(conn, ids, name, accounts, now):
                       keep))
         if name is not None:
             conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, keep))
+        _drop_own_name(conn, keep)
     return person(conn, keep)
 
 

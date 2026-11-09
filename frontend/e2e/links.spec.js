@@ -561,7 +561,8 @@ test("quick-add: Alt+L prefills the clipboard's address, Enter saves to a recent
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("Title").fill("typed, kept");
     await dialog.getByRole("combobox", { name: "Person" }).fill(`recent ${stamp}`);
-    await expect(options).toHaveText([name, "No person (Unsorted)"]);
+    // Matches first; a name that is nobody's can still be made a new person.
+    await expect(options).toHaveText([name, `Create “recent ${stamp}”`, "No person (Unsorted)"]);
     await dialog.getByRole("button", { name: "Cancel" }).focus();
     await page.keyboard.press("Alt+l");
     await expect(dialog.getByLabel("Title")).toHaveValue("typed, kept");
@@ -639,6 +640,48 @@ test("quick-add: a dropped URL opens it; one saved already says whose it is", as
     await alert.getByRole("link", { name }).click();
     await expect(dialog).toBeHidden();
     await expect(page).toHaveURL(`/people/${pid}`);
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, pid);
+  }
+});
+
+test("quick-add: a name that is nobody's creates the person, whose page opens; an alias finds them", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-quick-new-${stamp}.example`;
+  const name = `E2E new artist ${stamp}`;
+  let pid = null;
+  try {
+    await openPage(page, { name: "Collections", path: "/collections" });
+    await dragUrlIn(page, `https://${host}/new`);
+    await dropOnOverlay(page);
+    const dialog = page.getByRole("dialog", { name: "Add a link" });
+    const picker = dialog.getByRole("combobox", { name: "Person" });
+    await picker.fill(name);
+    await expect(dialog.getByRole("option", { name: `Create “${name}”` })).toHaveAttribute("aria-selected", "true");
+    await expect(dialog.getByRole("button", { name: `Save to new person ${name}` })).toBeVisible();
+    await picker.press("Enter");
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(".toast", { hasText: `${name} created, link saved` })).toBeVisible();
+    await expect(page).toHaveURL(/\/people\/\d+$/);
+    pid = Number(new URL(page.url()).pathname.split("/").pop());
+    const saved = await linkByUrl(request, `https://${host}/new`);
+    expect(saved.people.map(p => p.id)).toEqual([pid]);
+
+    // Also known as: saved with the About fields, and the pickers find them by it.
+    const alias = `Alias ${stamp}`;
+    const field = page.getByPlaceholder("Add another name…");
+    await field.fill(alias);
+    await field.press("Enter");
+    await page.locator(".person-about").getByRole("button", { name: "Save" }).click();
+    await expect(page.locator(".person-about").getByRole("button", { name: "Save" })).toHaveCount(0);
+    const got = await (await request.get(`/api/people/${pid}`, { headers: H })).json();
+    expect(got.aliases).toEqual([alias]);
+    await page.getByRole("banner").getByRole("button", { name: "Add a link" }).click();
+    await dialog.getByRole("combobox", { name: "Person" }).fill(alias);
+    await expect(dialog.getByRole("option", { name })).toBeVisible();
+    await expect(dialog.getByRole("option", { name: /^Create/ })).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
     await idle(page);
   } finally {
     await cleanUp(request, host, pid);
