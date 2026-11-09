@@ -561,7 +561,8 @@ test("quick-add: Alt+L prefills the clipboard's address, Enter saves to a recent
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("Title").fill("typed, kept");
     await dialog.getByRole("combobox", { name: "Person" }).fill(`recent ${stamp}`);
-    await expect(options).toHaveText([name, "No person (Unsorted)"]);
+    // Matches first; a name that is nobody's can still be made a new person.
+    await expect(options).toHaveText([name, `Create “recent ${stamp}”`, "No person (Unsorted)"]);
     await dialog.getByRole("button", { name: "Cancel" }).focus();
     await page.keyboard.press("Alt+l");
     await expect(dialog.getByLabel("Title")).toHaveValue("typed, kept");
