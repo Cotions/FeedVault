@@ -53,8 +53,8 @@ export function SourceStatus({ source: s, job, compact = false, hint = !compact,
   const stopped = r.state === "cancelled" || r.state === "interrupted";
   const note = !compact && !asked && r.state === "done" ? r.message : "";
   const short = failed && hint ? failureHint(r) || r.message : "";
-  // The title holds everything the row may cut: the few words, then the sentence.
-  const title = [short !== r.message && short, r.message, r.line, s.last_sync_at && fmtFullDate(s.last_sync_at)].filter(Boolean).join("\n");
+  // The title holds everything the row may cut: the sentence, then the few words.
+  const title = [r.message, short !== r.message && short, r.line, s.last_sync_at && fmtFullDate(s.last_sync_at)].filter(Boolean).join("\n");
   // A private profile synced with no session: the sentence said where to set one.
   const noSession = failed && r.error === "private" && /no (?:cookies|login) in use/.test(r.message || "");
   return (
