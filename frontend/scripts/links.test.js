@@ -2,8 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  MAX_TITLE, droppedUrl, externalUrl, importedParts, linkLabel, linkName, linkSite, mayCarryUrl, namesText, peopleKey, sharedTitle,
-  urlLines, urlProblem, withScheme,
+  DOWNLOADS_PATH, MAX_TITLE, UNSORTED_PATH, copyUrl, downloadState, droppedUrl, externalUrl, importedParts, inLinksView, linkLabel,
+  linkName, linkSite, mayCarryUrl, namesText, peopleKey, savedPlace, sharedTitle, splitDownloads, urlLines, urlProblem, withScheme,
 } from "../src/lib/links.js";
 import { NO_PERSON, personOptions } from "../src/lib/people.js";
 
@@ -75,6 +75,70 @@ test("Copy URLs: one address per line, in the order given", () => {
   assert.equal(urlLines([{ url: "https://a.example" }]), "https://a.example");
   assert.equal(urlLines([]), "");
   assert.equal(urlLines(null), "");
+});
+
+// Links as the server gives them: a social, a download to do, one downloaded.
+const PLAIN = { id: 1, url: "https://a.example", download_at: null, downloaded_at: null, people: [{ id: 7, name: "Ana" }] };
+const TODO = { id: 2, url: "https://b.example", download_at: 10, downloaded_at: null, people: [] };
+const DONE = { id: 3, url: "https://c.example", download_at: 10, downloaded_at: 20, people: [{ id: 7, name: "Ana" }, { id: 8, name: "Bo" }] };
+
+test("a download is to do, then downloaded; any other link is neither", () => {
+  assert.equal(downloadState(PLAIN), "none");
+  assert.equal(downloadState(TODO), "todo");
+  assert.equal(downloadState(DONE), "done");
+  assert.equal(downloadState({ url: "https://d.example" }), "none");    // a link read before the fields were
+  assert.equal(downloadState(null), "none");
+});
+
+test("a person's links split from their downloads, each in the order given", () => {
+  const other = { ...TODO, id: 4 };
+  assert.deepEqual(splitDownloads([TODO, PLAIN, DONE, other]), { links: [PLAIN], todo: [TODO, other], done: [DONE] });
+  assert.deepEqual(splitDownloads([]), { links: [], todo: [], done: [] });
+  assert.deepEqual(splitDownloads(null), { links: [], todo: [], done: [] });
+});
+
+test("which of the Links page's lists hold a link", () => {
+  // All links: never a download.
+  assert.deepEqual([PLAIN, TODO, DONE].map(l => inLinksView(l, { download: "none" })), [true, false, false]);
+  // Unsorted: no creator, downloads included.
+  assert.deepEqual([PLAIN, TODO, DONE].map(l => inLinksView(l, { person: "none" })), [false, true, false]);
+  // Downloads, by state.
+  assert.deepEqual([PLAIN, TODO, DONE].map(l => inLinksView(l, { download: "todo" })), [false, true, false]);
+  assert.deepEqual([PLAIN, TODO, DONE].map(l => inLinksView(l, { download: "done" })), [false, false, true]);
+  assert.deepEqual([PLAIN, TODO, DONE].map(l => inLinksView(l, { download: "all" })), [false, true, true]);
+  // And by whose: with a creator, without, one person's.
+  assert.deepEqual([TODO, DONE].map(l => inLinksView(l, { download: "all", person: "any" })), [false, true]);
+  assert.deepEqual([TODO, DONE].map(l => inLinksView(l, { download: "all", person: "none" })), [true, false]);
+  assert.deepEqual([PLAIN, DONE].map(l => inLinksView(l, { person: 8 })), [false, true]);
+  // No view given: every link.
+  assert.deepEqual([PLAIN, TODO, DONE].map(l => inLinksView(l)), [true, true, true]);
+});
+
+test("where a link just saved is listed", () => {
+  assert.deepEqual(savedPlace(PLAIN), { to: "/people/7", name: "Ana" });
+  assert.deepEqual(savedPlace(DONE), { to: "/people/7", name: "Ana" });
+  assert.deepEqual(savedPlace(TODO), { to: DOWNLOADS_PATH, name: "Downloads" });
+  assert.deepEqual(savedPlace({ url: "https://d.example", people: [] }), { to: UNSORTED_PATH, name: "Unsorted" });
+});
+
+test("a row's Copy: the address on the clipboard, and a toast either way", async () => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const said = [];
+  const toast = (...args) => said.push(args);
+  try {
+    const copied = [];
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async t => { copied.push(t); } } } });
+    await copyUrl(TODO, toast);
+    assert.deepEqual(copied, ["https://b.example"]);
+    assert.deepEqual(said, [["Copied"]]);
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true, value: { clipboard: { writeText: async () => { throw new Error("not allowed"); } } },
+    });
+    await copyUrl(TODO, toast);
+    assert.deepEqual(said[1], ["Could not copy the link: not allowed", "err"]);
+  } finally {
+    if (had) Object.defineProperty(globalThis, "navigator", had); else delete globalThis.navigator;
+  }
 });
 
 test("a drop gives its first link, else its text, if it is an address", () => {

@@ -1,6 +1,7 @@
 // Saved links (docs/API.md "Links"): the backend's caps (links.py), so a
 // field stops where the server would refuse, and the kinds' labels.
 import { plural } from "./fmt.js";
+import { personPath } from "./people.js";
 
 export const MAX_URL = 2048;
 export const MAX_TITLE = 300;
@@ -19,6 +20,54 @@ export const bareUrl = url => url.replace(/^https?:\/\//, "");
 // A link in the names of its row's buttons and fields ("Edit …"): its title,
 // else its address, which tells two links of one site apart (they share its label).
 export const linkName = l => l.title || bareUrl(l.url);
+
+/* What a link is as a download (docs/API.md "Links"): "none" (not one: a
+   social or any other link), "todo" (tagged a download, still to do) or
+   "done" (downloaded). FeedVault never downloads it: the tag and the state
+   are the user's notes for another app. */
+export function downloadState(l) {
+  return l?.download_at == null ? "none" : l.downloaded_at == null ? "todo" : "done";
+}
+
+// The Links page's Unsorted tab, and its Downloads tab on what is still to do.
+export const UNSORTED_PATH = "/links?person=none";
+export const DOWNLOADS_PATH = "/links?download=todo";
+
+/* Where a link just saved is listed, { to, name }: its first person's
+   page, else Downloads (a download), else Unsorted. */
+export function savedPlace(link) {
+  const p = link.people?.[0];
+  if (p) return { to: personPath(p.id), name: p.name };
+  return link.download_at != null ? { to: DOWNLOADS_PATH, name: "Downloads" } : { to: UNSORTED_PATH, name: "Unsorted" };
+}
+
+// The states of the Downloads lists' To download | Downloaded | All switch (?download=), the first the default.
+export const DOWNLOAD_VIEWS = ["todo", "done", "all"];
+
+/* A person's links as their page shows them: ``links`` (socials and others,
+   never a download) apart from their downloads, ``todo`` and ``done``, each
+   in the order given. */
+export function splitDownloads(links) {
+  const out = { links: [], todo: [], done: [] };
+  for (const l of links || []) {
+    const state = downloadState(l);
+    out[state === "none" ? "links" : state].push(l);
+  }
+  return out;
+}
+
+/* Whether a link belongs in a view of the Links page, to tell if a change
+   takes it out of the list shown. ``view``: { download: "none" (All links),
+   "todo" | "done" | "all" (Downloads) or null (Unsorted: downloads too),
+   person: "none" (no creator), "any" (with one), an id, or null (anyone) }. */
+export function inLinksView(l, { download = null, person = null } = {}) {
+  const state = downloadState(l);
+  if (download === "none" ? state !== "none" : download === "all" ? state === "none" : download && state !== download) return false;
+  const people = l.people || [];
+  if (person === "none") return people.length === 0;
+  if (person === "any") return people.length > 0;
+  return person == null || people.some(p => p.id === person);
+}
 
 // People's names in a sentence: "Ana", "Ana and Bo", "Ana, Bo and The Band".
 export function namesText(names) {
@@ -124,6 +173,16 @@ export async function copyUrls(links, toast) {
     toast(`Copied ${plural(links.length, "link")}`);
   } catch (e) {
     toast(`Could not copy the links: ${e.message}`, "err");
+  }
+}
+
+// A row's Copy: that link's address on the clipboard, and a toast that says so (or why not).
+export async function copyUrl(link, toast) {
+  try {
+    await navigator.clipboard.writeText(link.url);
+    toast("Copied");
+  } catch (e) {
+    toast(`Could not copy the link: ${e.message}`, "err");
   }
 }
 

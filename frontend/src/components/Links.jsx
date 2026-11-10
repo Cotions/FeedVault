@@ -4,7 +4,9 @@ import { Link } from "react-router-dom";
 import { getRecentLinkPeople, openLink } from "../lib/api";
 import { plural, safeUrl } from "../lib/fmt";
 import { personPath } from "../lib/people";
-import { KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, linkLabel, linkName, namesText, withScheme } from "../lib/links";
+import {
+  KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, copyUrl, downloadState, linkLabel, linkName, namesText, withScheme,
+} from "../lib/links";
 import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 import { choiceLabel, isPlainClick, openChoices, sameChoice } from "../lib/openIn";
 import { useOpenLinks } from "../lib/openLinks";
@@ -28,16 +30,23 @@ import PersonPicker from "./PersonPicker";
    "+ Add link…" button and opens in its place, focus in Address. It stays
    open after an add, empty for the next one; Cancel or Escape closes it,
    asking first when something is typed (the question the page asks before
-   leaving it). */
+   leaving it).
+
+   ``download`` (a new link's form; true or false, what it starts as): a
+   "Download" checkbox, and the link goes as { download: true } when it is
+   ticked: a link to download with another app, kept apart from the
+   person's other links. It stays as set from one add to the next (several
+   downloads in a row) and is not an edit: nothing is asked about it. */
 export function LinkForm({
   link = null, people = null, onSubmit, onCancel, onDirty, busy = false, submitLabel = "Add link", idPrefix = "link",
-  folded = false,
+  folded = false, download = null,
 }) {
   const [url,    setUrl]    = useState(link?.url || "");
   const [title,  setTitle]  = useState(link?.title || "");
   const [notes,  setNotes]  = useState(link?.notes || "");
   const had = (link?.people || []).map(p => p.id);
   const [chosen, setChosen] = useState(had);         // the people's ids, in the order picked
+  const [toGet,  setToGet]  = useState(!!download);  // the Download checkbox
   const [error,  setError]  = useState(null);
   const [open,   setOpen]   = useState(!folded);
   const [asking, setAsking] = useState(false);        // Cancel with something typed: discard it?
@@ -60,7 +69,7 @@ export function LinkForm({
   });
 
   function fold() {
-    setUrl(""); setTitle(""); setNotes(""); setChosen([]); setError(null);
+    setUrl(""); setTitle(""); setNotes(""); setChosen([]); setError(null); setToGet(!!download);
     focusTo.current = "open";
     setOpen(false);
   }
@@ -78,7 +87,7 @@ export function LinkForm({
     // "example.org/x" goes as https://example.org/x, and the field shows what went.
     const sent = withScheme(url);
     if (sent !== url) setUrl(sent);
-    const body = { url: sent, title, notes, ...(people ? { people: chosen } : {}) };
+    const body = { url: sent, title, notes, ...(people ? { people: chosen } : {}), ...(download != null && toGet ? { download: true } : {}) };
     const problem = await onSubmit(body);
     if (problem) { setError(problem); return; }
     if (!link) { setUrl(""); setTitle(""); setNotes(""); setChosen([]); }
@@ -145,6 +154,7 @@ export function LinkForm({
                   onChange={e => setNotes(e.target.value)} />
       </label>
       <div className="link-form-actions">
+        {download != null && <DownloadCheck checked={toGet} onChange={setToGet} />}
         <button type="submit" className="btn-primary" disabled={busy || !url.trim()}>
           {!link && <Icon name="plus" size={14} />}{submitLabel}
         </button>
@@ -162,33 +172,66 @@ export function LinkForm({
   );
 }
 
+/* The "Download" checkbox of every form that adds links (a link's form,
+   the quick-add, Import many): ticked, what is added is a download, to do.
+   FeedVault never downloads it: another app does. */
+export function DownloadCheck({ checked, onChange, disabled = false }) {
+  return (
+    <label className="link-dl-check" title="A link to download with another app: it goes to Downloads, to do. FeedVault never downloads it.">
+      <input type="checkbox" checked={checked} disabled={disabled} aria-label="Download" onChange={e => onChange(e.target.checked)} />
+      <span>Download</span>
+      <span className="link-dl-check-hint dim">to download with another app</span>
+    </label>
+  );
+}
+
 /* One link: its title (else its site's label, else its address) opening
-   the site in a new tab, the address under it when the label is not it, the
-   site and kind, its people (``showPerson``; on a person's page ``here``,
-   their id, leaves them out: the others it is shared with), notes, and the
-   row's actions; ``onRemove`` (a person's page, a shared link) takes it
-   from them only.
-   Only an http(s) address is ever a link (safeUrl); anything else is text.
-   On the Links page: ``select`` ({ checked, onClick(event) }) puts a
-   checkbox first (shift-click for a range), ``onAssign`` an "Assign…" on a
-   link of no one, ``onDownload(link)`` the button that marks it to
-   download or clears its mark, and ``children`` (the open assign picker)
-   go under it. A link marked to download says so wherever it is shown
-   (a "To download" chip beside its kind): FeedVault never downloads it,
-   the mark is the user's note for another app.
-   Without onEdit and onDelete (a search's results) it is read only.
+   the site in a new tab, the address under it when the title is not it
+   (so the site is read once, #236), its people (``showPerson``; on a
+   person's page ``here``, their id, leaves them out: the others it is
+   shared with) and notes. Only an http(s) address is ever a link
+   (safeUrl); anything else is text.
+
+   Then, in sight: Copy (its address on the clipboard, a toast says so),
+   at most one button, and one "⋯" menu with everything else.
+   The one button: ``assign`` (the Links page's Unsorted) puts "Assign…"
+   on a link of no one; otherwise a download link gets its done toggle
+   (``onDone``): a check that marks it downloaded, lit once it is (a click
+   then takes that back).
+   The menu, each entry only where it applies: Open (a new tab here), the
+   other browsers and profiles ("Open in", below), Edit (``onEdit``),
+   Assign… (``onAssign``, a link of no one) or Also link to… (``onAlso``,
+   one that has people), Move to Downloads or Not a download
+   (``onDownload(link, on)``), Mark downloaded or Mark to download
+   (``onDone(link, on)``), Move up and Move down (``onUp``, ``onDown``:
+   { ok, run }, a person's page), Remove from this creator (``onRemove``,
+   a shared link, taken from them only) and Delete (``onDelete``).
+   Without any of them (a search's results) the row is read only: Copy,
+   and the menu only when there is another browser to open it in.
+
+   A download is its own category (lib/links.js downloadState), never a
+   social or other link: it shows no kind (``showKind``: nor does a
+   person's page, whose groups say it). Downloaded, the row is dimmed and
+   says "Downloaded"; still to do, it says "To download" only where
+   downloads are mixed with other links (``mixed``: Unsorted, a search).
+   FeedVault never downloads it: the states are the user's notes for
+   another app.
+
+   On the Links page: ``select`` ({ checked, onClick(event) }, in select
+   mode) puts a checkbox first (shift-click for a range), and ``children``
+   (the open assign picker) go under the row.
 
    Where it opens (docs/API.md "Opening a link elsewhere"): with a default
    set in Settings (Open links in), a plain left click on the title (Enter
    too) asks FeedVault to start that browser on it (POST /api/open, the
    saved default) in place of following it; a middle click, Ctrl/Cmd- or
-   Shift-click stay the browser's own (a tab or a window here). Its "Open
-   in…" menu (when another browser is installed) offers this browser and
-   each browser × profile, normal or private, for this once. A refusal
-   (the browser gone, a profile renamed) is a toast with "Open here". */
+   Shift-click stay the browser's own (a tab or a window here). The menu's
+   "Open in" group (when another browser is installed) offers each
+   browser × profile, normal or private, for this once. A refusal (the
+   browser gone, a profile renamed) is a toast with "Open here". */
 export function LinkRow({
-  link: l, showPerson = true, here = null, busy = false, onEdit, onDelete, onRemove, onUp, onDown, flash = false, index, select,
-  onAssign, onDownload, children,
+  link: l, showPerson = true, showKind = true, mixed = false, here = null, busy = false, flash = false, index, select,
+  assign = false, onAssign, onAlso, onDownload, onDone, onEdit, onDelete, onRemove, onUp, onDown, children,
 }) {
   const people = l.people || [];
   const others = people.filter(p => p.id !== here);
@@ -198,7 +241,7 @@ export function LinkRow({
   // a site share its label).
   const label = linkName(l);
   const named = !!(l.title || l.label);           // shown is not the address: the address goes under it
-  const marked = l.download_at != null;
+  const state = downloadState(l);
   const { browsers, default: dflt } = useOpenLinks();
   const toast = useToast();
 
@@ -220,25 +263,57 @@ export function LinkRow({
     openElsewhere(null);
   }
   const mark = c => (sameChoice(c, dflt) ? " (default)" : "");
-  const openItems = href && browsers?.length ? [
-    { label: `This browser${mark(null)}`, href, icon: "external", title: "A new tab here" },
-    "separator",
+  const openIn = href && browsers?.length ? [
+    { heading: "Open in" },
     ...openChoices(browsers).map(c => ({
       label: `${choiceLabel(c, browsers)}${mark(c)}`, onSelect: () => openElsewhere(c),
       title: c.private ? "In a private window" : undefined,
     })),
-    "separator",
     { label: "Set the default…", to: "/settings#open-links", icon: "settings" },
+  ] : [];
+  const assignHere = assign && !!onAssign && people.length === 0;
+  const doneHere = !assignHere && !!onDone && state !== "none";
+  const acts = [
+    onEdit && { label: "Edit", icon: "pencil", disabled: busy, onSelect: () => onEdit(l) },
+    onAssign && people.length === 0 && { label: "Assign…", icon: "users", disabled: busy, onSelect: () => onAssign(l), title: "Give it to a person" },
+    onAlso && people.length > 0 && {
+      label: "Also link to…", icon: "userPlus", disabled: busy, onSelect: () => onAlso(l),
+      title: "To one more person: a shared account, theirs and their other people's",
+    },
+    onDownload && (state === "none"
+      ? { label: "Move to Downloads", icon: "download", disabled: busy, onSelect: () => onDownload(l, true),
+          title: "A link to download with another app: FeedVault only keeps the note" }
+      : { label: "Not a download", icon: "link", disabled: busy, onSelect: () => onDownload(l, false),
+          title: "Back among the other links" }),
+    onDone && state === "todo" && { label: "Mark downloaded", icon: "check", disabled: busy, onSelect: () => onDone(l, true) },
+    onDone && state === "done" && { label: "Mark to download", icon: "undo", disabled: busy, onSelect: () => onDone(l, false) },
+    "separator",
+    onUp && { label: "Move up", icon: "arrowUp", disabled: busy || !onUp.ok, onSelect: onUp.run },
+    onDown && { label: "Move down", icon: "arrowDown", disabled: busy || !onDown.ok, onSelect: onDown.run },
+    "separator",
+    onRemove && others.length > 0 && {
+      label: "Remove from this creator", icon: "close", disabled: busy, onSelect: () => onRemove(l),
+      title: `Not theirs any more: it stays ${namesText(others.map(p => p.name))}'s`,
+    },
+    onDelete && { label: "Delete", icon: "trash", danger: true, disabled: busy, onSelect: () => onDelete(l) },
+  ];
+  // Read only and no other browser: Open alone would say what the title does.
+  const menu = openIn.length || acts.some(a => a && a !== "separator") ? [
+    href && { label: "Open", href, icon: "external", title: "A new tab here" },
+    "separator",
+    ...openIn,
+    "separator",
+    ...acts,
   ] : null;
   return (
-    <li className={`link-row${flash ? " is-flash" : ""}${select?.checked ? " is-selected" : ""}${children ? " is-assigning" : ""}`}
+    <li className={`link-row${flash ? " is-flash" : ""}${select?.checked ? " is-selected" : ""}${children ? " is-assigning" : ""}${state === "done" ? " is-downloaded" : ""}`}
         data-link-id={l.id} data-index={index}>
       {select ? (
         <label className="link-check" title="Select (shift-click: a range)">
           <input type="checkbox" checked={select.checked} onChange={() => {}} onClick={select.onClick}
                  aria-label={`Select ${label}`} />
         </label>
-      ) : <span className="link-row-icon" aria-hidden="true"><Icon name="link" size={15} /></span>}
+      ) : <span className="link-row-icon" aria-hidden="true"><Icon name={state === "none" ? "link" : "download"} size={15} /></span>}
       <span className="link-row-main">
         <span className="link-row-head">
           {href ? (
@@ -247,19 +322,27 @@ export function LinkRow({
               {shown}
             </a>
           ) : <span className="link-row-title">{shown}</span>}
-          <span className={`chip link-kind is-${l.kind}`} title={l.kind === "social" ? "A social or creator platform" : "Any other site"}>
-            {KIND_LABEL[l.kind] || l.kind}
-          </span>
-          {marked && (
-            <span className="chip link-dl-mark" title="Marked to download, with another app: FeedVault never downloads it">
+          {showKind && state === "none" && (
+            <span className={`chip link-kind is-${l.kind}`} title={l.kind === "social" ? "A social or creator platform" : "Any other site"}>
+              {KIND_LABEL[l.kind] || l.kind}
+            </span>
+          )}
+          {state === "done" && (
+            <span className="chip link-dl-mark is-done" title="Downloaded, with another app">
+              <Icon name="check" size={11} />Downloaded
+            </span>
+          )}
+          {state === "todo" && mixed && (
+            <span className="chip link-dl-mark" title="To download, with another app: FeedVault never downloads it">
               <Icon name="download" size={11} />To download
             </span>
           )}
         </span>
-        <span className="link-row-sub creator-sub">
-          <span className="link-site">{l.site}</span>
-          {named && <span className="link-url" title={l.url}>{l.url}</span>}
-        </span>
+        {named && (
+          <span className="link-row-sub creator-sub">
+            <span className="link-url" title={l.url}>{l.url}</span>
+          </span>
+        )}
         {l.notes && <span className="link-notes" title={l.notes}>{l.notes}</span>}
       </span>
       {showPerson && others.length > 0 && (
@@ -273,40 +356,25 @@ export function LinkRow({
         </span>
       )}
       <span className="link-row-actions">
-        {openItems && <ActionMenu className="link-open-menu" icon="external" label={`Open ${label} in…`} items={openItems} />}
-        {onAssign && people.length === 0 && (
+        <button type="button" className="del-btn link-copy" onClick={() => copyUrl(l, toast)}
+                aria-label={`Copy the address of ${label}`} title="Copy the address">
+          <Icon name="copy" size={14} />
+        </button>
+        {assignHere && (
           <button type="button" className="btn-secondary link-assign" disabled={busy} aria-expanded={!!children}
                   onClick={() => onAssign(l)} aria-label={`Assign ${label} to a person`} title="Give it to a person">
             <Icon name="users" size={13} />Assign…
           </button>
         )}
-        {onDownload && (
-          <button type="button" className={`del-btn link-dl${marked ? " is-on" : ""}`} disabled={busy} onClick={() => onDownload(l)}
-                  aria-label={marked ? `Clear the download mark of ${label}` : `Mark ${label} to download`}
-                  title={marked ? "Downloaded? Clear the mark" : "Mark it to download (with another app: FeedVault only keeps the mark)"}>
-            <Icon name="download" size={14} />
+        {doneHere && (
+          <button type="button" className={`del-btn link-done${state === "done" ? " is-on" : ""}`} disabled={busy}
+                  aria-pressed={state === "done"} onClick={() => onDone(l, state !== "done")}
+                  aria-label={state === "done" ? `Mark ${label} to download` : `Mark ${label} downloaded`}
+                  title={state === "done" ? "Downloaded — undo" : "Mark downloaded"}>
+            <Icon name="check" size={14} />
           </button>
         )}
-        {onUp && (
-          <button type="button" className="del-btn" disabled={busy || !onUp.ok} onClick={onUp.run}
-                  title="Move up" aria-label={`Move ${label} up`}>
-            <Icon name="arrowUp" size={14} />
-          </button>
-        )}
-        {onDown && (
-          <button type="button" className="del-btn" disabled={busy || !onDown.ok} onClick={onDown.run}
-                  title="Move down" aria-label={`Move ${label} down`}>
-            <Icon name="arrowDown" size={14} />
-          </button>
-        )}
-        {onEdit && <button type="button" className="btn-ghost" disabled={busy} onClick={() => onEdit(l)} aria-label={`Edit ${label}`}>Edit</button>}
-        {onRemove && others.length > 0 && (
-          <button type="button" className="btn-ghost" disabled={busy} onClick={() => onRemove(l)} aria-label={`Remove ${label} from them`}
-                  title={`Not theirs any more: it stays ${namesText(others.map(p => p.name))}'s`}>
-            Remove
-          </button>
-        )}
-        {onDelete && <button type="button" className="btn-ghost" disabled={busy} onClick={() => onDelete(l)} aria-label={`Delete ${label}`}>Delete</button>}
+        {menu && <ActionMenu className="link-menu" label={`More for ${label}`} items={menu} />}
       </span>
       {children}
     </li>

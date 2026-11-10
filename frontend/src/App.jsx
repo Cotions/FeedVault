@@ -9,7 +9,7 @@ import { fmtAgo, fmtInt, plural } from "./lib/fmt";
 import { SETUP_ERRORS, SYNC_KINDS, batchKey } from "./lib/sources";
 import { personPath } from "./lib/people";
 import { SearchContext, scopeText, searchScope } from "./lib/search";
-import { droppedUrl, mayCarryUrl } from "./lib/links";
+import { UNSORTED_PATH, droppedUrl, mayCarryUrl, savedPlace } from "./lib/links";
 import { desktopAllowed, notificationPath } from "./lib/notify";
 import { FOCUSABLE, PHONE } from "./lib/layout";
 import Icon            from "./components/Icon";
@@ -17,7 +17,8 @@ import CyberBackground from "./components/CyberBackground";
 import Notifications   from "./components/Notifications";
 import ProfileSwitch   from "./components/ProfileSwitch";
 import ScrollManager   from "./components/ScrollManager";
-import QuickAddLink, { UNSORTED_PATH } from "./components/QuickAddLink";
+import QuickAddLink from "./components/QuickAddLink";
+import { QuickAddContext } from "./lib/quickAdd";
 import Feed            from "./pages/Feed";
 import PostPage        from "./pages/PostPage";
 import Review          from "./pages/Review";
@@ -106,7 +107,7 @@ export default function App() {
   const navRef    = useRef(null);
   const headerRef = useRef(null);
   const mainRef   = useRef(null);
-  // Quick-add a link (#165): { url, clipboard, n } while open; n remounts it for another drop.
+  // Quick-add a link (#165): { url, clipboard, download, n } while open; n remounts it for another drop.
   const [quickAdd, setQuickAdd] = useState(null);
   const [dropping, setDropping] = useState(false);   // a URL is dragged over the window
   // The sidebar's "More" group: as the user left it (this browser), and
@@ -172,10 +173,11 @@ export default function App() {
 
   // The phone's drawer closes first: it traps Tab and makes the rest inert.
   // Opened again while open (Alt+L), it stays as it is, typing and all; a
-  // dropped address starts it afresh with that address.
-  const openQuickAdd = useCallback((url = "") => {
+  // dropped address starts it afresh with that address. ``download``: its
+  // Download checkbox starts ticked (the Links page's Downloads tab).
+  const openQuickAdd = useCallback((url = "", { download = false } = {}) => {
     setDrawer(false);
-    setQuickAdd(q => (q && !url ? q : { url, clipboard: !url, n: (q?.n ?? 0) + 1 }));
+    setQuickAdd(q => (q && !url ? q : { url, clipboard: !url, download, n: (q?.n ?? 0) + 1 }));
   }, []);
   const closeQuickAdd = useCallback(() => setQuickAdd(null), []);
 
@@ -408,8 +410,9 @@ export default function App() {
       pollJobs();
       return;
     }
-    toast(p ? `Link saved to ${p.name}` : "Link saved to Unsorted", "ok",
-      { to: p ? personPath(p.id) : UNSORTED_PATH, label: "Show" });
+    const place = savedPlace(link);
+    toast(p && link.download_at != null ? `Download saved to ${p.name}` : `Link saved to ${place.name}`, "ok",
+      { to: place.to, label: "Show" });
     if (/^\/(links|people\/)/.test(window.location.pathname)) setRefreshKey(k => k + 1);
     pollJobs();
   }, [toast, pollJobs]);
@@ -510,6 +513,7 @@ export default function App() {
     <ToastContext.Provider value={toast}>
     <ProfilesContext.Provider value={profilesCtx}>
     <SearchContext.Provider value={searchCtx}>
+    <QuickAddContext.Provider value={openQuickAdd}>
       <CyberBackground />
       <ScrollManager />
       <header ref={headerRef}>
@@ -734,7 +738,7 @@ export default function App() {
       </div>
 
       {quickAdd && (
-        <QuickAddLink key={quickAdd.n} url={quickAdd.url} clipboard={quickAdd.clipboard}
+        <QuickAddLink key={quickAdd.n} url={quickAdd.url} download={quickAdd.download} clipboard={quickAdd.clipboard}
                       onSaved={quickSaved} onClose={closeQuickAdd} />
       )}
       {dropping && (
@@ -746,6 +750,7 @@ export default function App() {
       <div className="toasts" role="status" aria-live="polite">
         {toasts.map(t => <Toast key={t.id} toast={t} onDismiss={dismissToast} />)}
       </div>
+    </QuickAddContext.Provider>
     </SearchContext.Provider>
     </ProfilesContext.Provider>
     </ToastContext.Provider>
