@@ -1358,11 +1358,8 @@ def _ended(job):
     src = sources.row(conn, sid)
     if job["state"] == "done" and (options["full_history"] or options["first_posts"]):
         floor = _first_posts_floor(conn, src, job, listed) if options["first_posts"] else None
-        since = max(filter(None, (floor, options["since"])), default=None)
         # Once is enough; "last N" stays for the next run when there is no floor to stop it.
-        sources.update(conn, sid, {**options, "full_history": False, "since": since,
-                                   "first_posts": options["first_posts"] if floor is None else None},
-                       keys=("full_history", "since", "first_posts"))
+        sources.first_synced(conn, sid, options, floor)
     if job["state"] in ("done", "failed"):
         roots = config.load()["media_roots"]
         changed.update(sources.adopt(conn, sid, roots, job["ended_at"]))
