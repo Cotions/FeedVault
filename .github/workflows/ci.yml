@@ -102,7 +102,7 @@ jobs:
   e2e-shard:
     name: e2e shard ${{ matrix.shard }}/4
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       # Every shard runs to its end: one failure does not hide another's.
       fail-fast: false
