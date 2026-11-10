@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { externalUrl, sharedTitle, urlProblem } from "../lib/links";
+import { externalUrl, savedPlace, sharedTitle, urlProblem } from "../lib/links";
 import { personPath } from "../lib/people";
 import Icon from "../components/Icon";
-import { QuickAddForm, UNSORTED_PATH } from "../components/QuickAddLink";
+import { QuickAddForm } from "../components/QuickAddLink";
 
 // How long "Saved to X" shows before a popup closes itself.
 const CLOSE_AFTER_MS = 900;
@@ -15,6 +15,7 @@ const CLOSE_AFTER_MS = 900;
    address (externalUrl; else a line says why not), the title as plain
    text, capped. An address given so is saved only once a person, or no
    one, is chosen: Enter alone, pressed as the window opens, saves nothing.
+   The form's Download checkbox saves the page as a download, to do.
    Opened as a popup (?popup=1, or by a script), it says where the link
    went and closes; otherwise it says so with links there and "Add
    another". */
@@ -82,7 +83,7 @@ export default function LinksAdd() {
     setStart(s => ({ url: "", title: "", refused: null, n: s.n + 1 }));
   }
 
-  const p = saved?.people?.[0];
+  const place = saved && savedPlace(saved);
   return (
     <div className="links-add-page">
       <div className="links-add-box">
@@ -94,7 +95,7 @@ export default function LinksAdd() {
           <div className="links-add-done">
             <p className="msg ok" role="status">
               <Icon name="check" size={15} />
-              <span>Saved to {p ? <Link to={personPath(p.id)}>{p.name}</Link> : <Link to={UNSORTED_PATH}>Unsorted</Link>}.
+              <span>Saved to <Link to={place.to}>{place.name}</Link>.
                 {popup && !closeTried && " Closing…"}</span>
             </p>
             <div className="modal-actions">

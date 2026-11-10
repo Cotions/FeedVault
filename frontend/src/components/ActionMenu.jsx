@@ -17,6 +17,8 @@ import Icon from "./Icon";
    - a link in the app: { label, to, icon?, title? } (a router Link)
    - a link to another site: { label, href, icon?, title? } (a new tab)
    - "separator" (one at the start, the end or after another is dropped)
+   - a group's name: { heading } (text over the items after it, never
+     focused: a link row's "Open in")
    A toggle is an action whose label says what a click does (Mute and
    Unmute, Don't sync and Sync again): the card or row shows the state
    itself. ``disabled`` is aria-disabled: the item stays focusable and its
@@ -53,9 +55,11 @@ export default function ActionMenu({ label, items, className = "", buttonRef = n
       const w = menu.offsetWidth, h = menu.offsetHeight;
       const vw = document.documentElement.clientWidth, vh = window.innerHeight;
       const left = Math.max(8, Math.min(r.right - w, vw - w - 8));
-      const below = r.bottom + 4 + h <= vh - 8 || r.top - 4 - h < 8;
+      // Under the button, else over it; with room for neither (a long menu
+      // in a short window), under it and moved up to stay whole in the window.
+      const below = r.bottom + 4 + h <= vh - 8, above = r.top - 4 - h >= 8;
       menu.style.left = `${left}px`;
-      menu.style.top = `${below ? r.bottom + 4 : Math.max(8, r.top - 4 - h)}px`;
+      menu.style.top = `${below ? r.bottom + 4 : above ? r.top - 4 - h : Math.max(8, vh - h - 8)}px`;
     }
     place();
     const items = menuItems(menu);
@@ -148,6 +152,7 @@ export default function ActionMenu({ label, items, className = "", buttonRef = n
              onKeyDown={onMenuKey}>
           {entries.map((it, i) => {
             if (it === "separator") return <div key={`sep-${i}`} className="action-menu-sep" role="separator" />;
+            if (it.heading) return <div key={`head-${i}`} className="action-menu-head" role="presentation">{it.heading}</div>;
             const key = `${i}-${it.label}`;
             const props = {
               role: "menuitem",

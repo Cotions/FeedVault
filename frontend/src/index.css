@@ -363,6 +363,8 @@ input[type="text"].header-search:focus {
 .action-menu-item[aria-disabled="true"]:hover { color: var(--text-dim); background: none; }
 .action-menu-gap { flex-shrink: 0; width: 14px; }
 .action-menu-sep { height: 1px; margin: 3px 6px; background: var(--border-soft); }
+/* A group's name over its items (a link row's "Open in"). */
+.action-menu-head { padding: 5px 10px 2px; font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 @media (pointer: coarse) {
   .action-menu-item { min-height: 44px; }
   .page-head .action-menu-btn { width: 44px; height: 44px; }
@@ -3638,7 +3640,6 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
    not gone, so what was typed in it is still there after. */
 .person-hero[hidden], .person-section[hidden], .person-link-add[hidden] { display: none; }
 .person-search .creator-sub { white-space: normal; }
-.person-link-add:has(> .link-form-open) > .link-group-title { display: none; }
 :is(.bio-import-open, .link-form-open) { display: inline-flex; align-items: center; gap: 7px; }
 .bio-import-form > .btn-ghost, .link-form-actions > .btn-ghost { flex-shrink: 0; }
 .bio-import-off { white-space: normal; overflow: visible; margin: 0 0 8px; }
@@ -3827,10 +3828,11 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
   .links-add-page { padding: 0; }
   .links-add-box { min-height: 100vh; border: 0; border-radius: 0; padding: 16px; }
 }
-/* The bookmarklet on the Links page: a chip to drag, and how it is used. */
+/* The bookmarklet on the Links page (shown from its More menu): a strip
+   over the list, a chip to drag and how it is used. */
 .links-bookmarklet {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
-  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft);
+  margin-bottom: 14px; padding: 8px 8px 8px 12px; border: 1px dashed var(--border); border-radius: 10px;
   font-size: var(--fs-sm); line-height: 1.5;
 }
 .links-bookmarklet-label {
@@ -3844,14 +3846,7 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 }
 .links-bookmarklet-btn:hover { background: rgba(var(--accent-rgb), 0.26); }
 .links-bookmarklet .dim { flex: 1 1 320px; min-width: 0; }
-/* Import many… (LinkImport.jsx): a row as the bookmarklet's, and its dialog. */
-.links-import {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
-  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-soft);
-  font-size: var(--fs-sm); line-height: 1.5;
-}
-.links-import > .dim { flex: 1 1 320px; min-width: 0; }
-.links-import-open { padding: 5px 12px; font-size: var(--fs-sm); }
+/* Import many… (LinkImport.jsx): its dialog. */
 .modal:has(.links-import-body) { width: 600px; }
 .links-import-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .links-import-body .links-import-term { color: var(--text); }
@@ -3886,15 +3881,21 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
   pointer-events: none;
 }
 .drop-overlay-card .icon { color: var(--glow); }
-.links-add .page-lede { margin-top: -8px; }
-.links-filters { align-items: flex-end; margin-bottom: 16px; }
-/* All links | Unsorted (#165 B): a two-way switch over the list. */
+.links-filters { margin-bottom: 14px; }
+/* The page's "+ Add link", as tall as the head's other buttons. */
+.links-add-open { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; white-space: nowrap; }
+/* The "Download" checkbox of the forms that add links (DownloadCheck). */
+.link-dl-check { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin-right: auto; font-size: var(--fs-sm); font-weight: 600; color: var(--text); cursor: pointer; user-select: none; }
+.link-dl-check input { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: var(--glow); cursor: pointer; }
+.link-dl-check-hint { font-weight: 400; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.links-import-body .link-dl-check { margin-right: 0; }
+/* All links | Unsorted | Downloads: a switch over the list. */
 .links-tabs {
   display: flex; gap: 3px; width: fit-content; margin-bottom: 14px; padding: 3px;
   background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 10px;
 }
 .links-tab {
-  display: inline-flex; align-items: center; gap: 7px;
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
   min-height: 30px; padding: 5px 14px; border-radius: 7px;
   background: transparent; color: var(--text-dim);
 }
@@ -3906,7 +3907,17 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
   color: var(--accent-hover); background: rgba(var(--accent-rgb), 0.14);
   border: 1px solid rgba(var(--glow-rgb), 0.3); border-radius: 999px; padding: 1px 7px;
 }
-/* A row's checkbox, where the link icon is elsewhere: the label is the 24px target. */
+/* A smaller switch under the tabs (the Downloads tab's two) and in a
+   section's head (a person's Downloads). */
+.links-switches { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: -4px 0 14px; }
+.links-tabs.is-small { margin-bottom: 0; }
+.links-tabs { flex-wrap: wrap; max-width: 100%; }
+/* The Links page's bar holds a button more than the Feed's: its hint gives way first, so the bar stays one row. */
+@media (max-width: 1500px) { .select-bar:has(.select-more) .select-hint { display: none; } }
+.select-more .action-menu-btn { width: 36px; height: 36px; }
+@media (max-width: 640px) { .links-tab { padding: 5px 9px; } }
+.links-tabs.is-small .links-tab { min-height: 28px; padding: 3px 12px; font-size: var(--fs-sm); }
+/* A row's checkbox (select mode), where the link icon is otherwise: the label is the 24px target. */
 .link-check { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; margin-left: -4px; cursor: pointer; user-select: none; }
 .link-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--glow); cursor: pointer; }
 .link-row.is-selected { border-color: rgba(var(--glow-rgb), 0.55); background: rgba(var(--accent-rgb), 0.07); }
@@ -3945,7 +3956,6 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .link-kind { flex-shrink: 0; }
 .link-kind.is-social { color: var(--accent-text); border-color: rgba(var(--glow-rgb), 0.35); background: rgba(var(--accent-rgb), 0.12); }
 .link-row-sub { display: flex; gap: 8px; min-width: 0; }
-.link-site { flex-shrink: 0; font-family: var(--mono); color: var(--text-dim); }
 .link-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .link-notes {
   font-size: var(--fs-sm); color: var(--text-dim); white-space: pre-line; overflow-wrap: anywhere;
@@ -3960,21 +3970,28 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .link-person { flex-shrink: 1; min-width: 0; max-width: 220px; gap: 4px; }
 .link-person svg { flex-shrink: 0; }
 .link-row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-/* The row's Open in… menu button: the size and look of its other icon
-   buttons (.del-btn), not a card's bordered ⋯. Always in view: it is how a
-   link opens elsewhere this once. */
-.link-open-menu .action-menu-btn { width: 26px; height: 26px; border: none; background: none; border-radius: 7px; color: var(--muted); }
-.link-open-menu .action-menu-btn:hover:not(:disabled),
-.link-open-menu .action-menu-btn.is-open { color: var(--text); background: rgba(255, 255, 255, 0.07); border: none; }
-.link-open-menu .action-menu-btn .icon { width: 14px; height: 14px; }
-/* Marked to download (another app downloads it; FeedVault keeps the mark):
-   a small chip beside the kind, and the row's button lit while it is on.
-   The button stays in view on a desktop (not .btn-ghost): sorting Unsorted
-   out, it is clicked as often as Assign…. */
+/* The row's ⋯ menu button: the size and look of its other icon buttons
+   (.del-btn: Copy, the done check), not a card's bordered ⋯. Its menu may
+   be long (every browser and profile to open the link in): it scrolls
+   before it leaves the window. */
+.link-menu .action-menu-btn { width: 28px; height: 28px; border: none; background: none; border-radius: 7px; color: var(--muted); }
+.link-menu .action-menu-btn:hover:not(:disabled),
+.link-menu .action-menu-btn.is-open { color: var(--text); background: rgba(255, 255, 255, 0.07); border: none; }
+.link-menu .action-menu { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; }
+.link-row-actions .del-btn { width: 28px; height: 28px; padding: 0; }
+/* A download (another app downloads it; FeedVault keeps the two notes):
+   "To download" where downloads are mixed with other links, "Downloaded"
+   once done, the row dimmed and its check lit. */
 .link-dl-mark { flex-shrink: 0; gap: 4px; color: var(--text); border-color: rgba(91, 157, 255, 0.4); background: rgba(91, 157, 255, 0.1); }
 .link-dl-mark .icon { color: var(--blue); }
-.link-dl.is-on { color: var(--blue); background: rgba(91, 157, 255, 0.12); }
-.link-dl.is-on:hover { color: var(--text); background: rgba(91, 157, 255, 0.2); }
+.link-dl-mark.is-done { color: var(--text-dim); border-color: var(--border); background: transparent; }
+.link-dl-mark.is-done .icon { color: var(--glow); }
+.link-row.is-downloaded :is(.link-row-title, .link-row-icon, .link-row-sub, .link-notes) { opacity: 0.6; }
+.link-done.is-on { color: var(--glow); background: rgba(var(--glow-rgb), 0.12); }
+.link-done.is-on:hover { color: var(--text); background: rgba(var(--glow-rgb), 0.2); }
+/* A section's quiet Copy URLs (a person's Links and Downloads). */
+.person-links-copy { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
+.person-downloads-section .person-section-head .card-title { flex: 0 1 auto; margin-right: auto; }
 /* Sorted by site: a heading over each site's links, a row of the list. */
 .link-site-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 10px 4px 0; }
 .link-site-head:first-child { padding-top: 0; }
@@ -4396,8 +4413,6 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 }
 /* Prose in a card or page stays a comfortable line. */
 .page-lede, .card > p, .settings-lede { max-width: 72ch; }
-/* Links' add form: the address first; title, person and notes once one is typed. */
-.links-add .link-form:has(.link-form-url input:placeholder-shown) :is(.link-form-title, .link-form-person, .link-form-notes) { display: none; }
 
 /* ── Settings: folded cards (#ui-declutter) ── */
 .settings-more { border: 1px solid var(--border-soft); border-radius: 12px; background: rgba(10, 12, 17, 0.5); }

@@ -1542,7 +1542,7 @@ def import_links():
 
 
 _BAD_MANY = (f"send {{ text: pasted addresses, or a bookmarks file (HTML or Firefox JSON) read as text, "
-             f"of at most {linkimport.MAX_TEXT} characters }}")
+             f"of at most {linkimport.MAX_TEXT} characters; download: true to save them as downloads (optional) }}")
 
 
 @app.post("/api/links/import-many")
@@ -1552,18 +1552,22 @@ def import_many_links():
     each URL cleaned; nothing is fetched). Insert-only, as links.keep: an
     address saved already, in any spelling, is left as it is. A bookmark
     keeps when it was added (its created_at) and its folder (in its
-    notes). Never from another site (_origin_guard)."""
+    notes). ``download`` true saves each new one as a download, to do (one
+    saved already stays what it was). Never from another site
+    (_origin_guard)."""
     if (request.content_length or 0) > 2 * linkimport.MAX_TEXT + 1024:   # JSON escapes, at most twice the text
         return jsonify({"ok": False, "error": _BAD_MANY}), 413
     body = _body()
-    if set(body) != {"text"} or not isinstance(body["text"], str):
+    if not {"text"} <= set(body) <= {"text", "download"} or not isinstance(body["text"], str) \
+            or not isinstance(body.get("download", False), bool):
         return jsonify({"ok": False, "error": _BAD_MANY}), 400
     now = _link_now()
     try:
         read = linkimport.read(body["text"], now)
     except linkimport.TooLarge:
         return jsonify({"ok": False, "error": _BAD_MANY}), 413
-    kept = links.keep(db.connect(), None, read["found"], now, linkimport.MAX_LINKS)
+    kept = links.keep(db.connect(), None, read["found"], now, linkimport.MAX_LINKS,
+                      download=body.get("download", False))
     if kept["saved"]:
         userdata.changed("links")
     out = {"saved": kept["saved"], "already": kept["already"] + read["repeated"], "skipped": read["skipped"],
@@ -1661,16 +1665,20 @@ def list_links():
         return jsonify({"ok": False, "error": "kind must be social or other"}), 400
     if len(q) > links.MAX_QUERY:
         return jsonify({"ok": False, "error": f"q must be at most {links.MAX_QUERY} characters"}), 400
-    # The To download tab (download=1), and the order (links.SORTS; none: newest first).
+    # Which links by their download tag (links.DOWNLOADS; none: every link), and the order
+    # (links.SORTS; none: newest first). download=1 is "todo" and 0 no filter, as before the two states.
     download, sort = request.args.get("download") or "0", request.args.get("sort") or "newest"
-    if download not in ("0", "1"):
-        return jsonify({"ok": False, "error": "download must be 1 (only the links marked to download) or 0"}), 400
+    download = {"0": None, "1": "todo"}.get(download, download)
+    if download is not None and download not in links.DOWNLOADS:
+        return jsonify({"ok": False, "error": "download must be todo (the downloads still to do), done (the "
+                        "downloaded ones), all (both) or none (the links that are not downloads)"}), 400
     if sort not in links.SORTS:
         return jsonify({"ok": False, "error": f"sort must be one of {', '.join(links.SORTS)}"}), 400
     cfg = config.load()
-    out = links.listing(db.connect(), person=None if v == "none" else _person_arg(), no_person=v == "none",
-                        kind_=kind, site_=request.args.get("site") or None, q=q or None,
-                        q_sites=linklabels.matching(cfg, q) if q else (), download=download == "1", sort=sort)
+    # person: an id, "none" (the links of no one) or "any" (those of someone, whoever).
+    out = links.listing(db.connect(), person=None if v in ("none", "any") else _person_arg(), no_person=v == "none",
+                        any_person=v == "any", kind_=kind, site_=request.args.get("site") or None, q=q or None,
+                        q_sites=linklabels.matching(cfg, q) if q else (), download=download, sort=sort)
     _labelled(out["links"], cfg)
     return jsonify(out)
 
@@ -1686,6 +1694,9 @@ def create_link():
         return jsonify({"ok": False, "error": _BAD_URL}), 400
     title, notes, error = _link_text(body)
     pids, error = (None, error) if error else _link_people(body)
+    download = body.get("download", False)
+    if not error and not isinstance(download, bool):
+        error = _BAD_DOWNLOAD
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
@@ -1693,7 +1704,8 @@ def create_link():
     if taken is not None:
         return _taken(taken)
     try:
-        link = links.create(conn, url, title or "", notes or "", [] if pids is links.UNSET else pids, _link_now())
+        link = links.create(conn, url, title or "", notes or "", [] if pids is links.UNSET else pids, _link_now(),
+                            download=download)
     except links.NoSuchPerson:
         return jsonify(_GONE_PERSON), 400
     except sqlite3.IntegrityError:             # saved by another request in between
@@ -1713,19 +1725,19 @@ def update_link(lid):
         return jsonify({"ok": False, "error": _BAD_URL}), 400
     title, notes, error = _link_text(body)
     pids, error = (None, error) if error else _link_people(body)
-    download = body.get("download")
-    if not error and "download" in body and not isinstance(download, bool):
-        error = _BAD_DOWNLOAD
+    download, downloaded, bad = _link_marks(body)
+    error = error or bad
     if error:
         return jsonify({"ok": False, "error": error}), 400
-    if not {"url", "title", "notes", "person", "people", "download"} & set(body):
-        return jsonify({"ok": False, "error": "send url, title, notes, person, people or download"}), 400
+    if not {"url", "title", "notes", "person", "people", "download", "downloaded"} & set(body):
+        return jsonify({"ok": False, "error": "send url, title, notes, person, people, download or downloaded"}), 400
     other = links.find(conn, url) if url is not None else None
     if other is not None and other != lid:
         return _taken(other)
     kw = {"pids": pids} if pids is not links.UNSET else {}
     try:
-        link = links.update(conn, lid, url=url, title=title, notes=notes, download=download, now=_link_now(), **kw)
+        link = links.update(conn, lid, url=url, title=title, notes=notes, download=download, downloaded=downloaded,
+                            now=_link_now(), **kw)
     except links.NoSuchPerson:
         return jsonify(_GONE_PERSON), 400
     except sqlite3.IntegrityError:
@@ -1743,8 +1755,25 @@ def delete_link(lid):
     return jsonify({"ok": True})
 
 
-# A link's mark to download (links.py): true marks it, false clears it.
-_BAD_DOWNLOAD = "download must be true (mark it to download) or false (clear the mark)"
+# A link's download tag (links.py): true tags it a download, false clears the tag. And a
+# download's state: true says it is downloaded, false that it is to download again.
+_BAD_DOWNLOAD = "download must be true (a download, to do) or false (not a download)"
+_BAD_DOWNLOADED = "downloaded must be true (it is downloaded) or false (to download again)"
+
+
+def _link_marks(body):
+    """(download, downloaded, error): the body's two marks, each True,
+    False or None when absent. ``downloaded`` true on a link that is not a
+    download makes it one, downloaded; with ``download`` false it is
+    refused: a link that is not a download was not downloaded."""
+    download, downloaded = body.get("download"), body.get("downloaded")
+    if "download" in body and not isinstance(download, bool):
+        return None, None, _BAD_DOWNLOAD
+    if "downloaded" in body and not isinstance(downloaded, bool):
+        return None, None, _BAD_DOWNLOADED
+    if download is False and downloaded is True:
+        return None, None, "downloaded true needs a download: not with download false"
+    return download, downloaded, None
 
 
 def _link_ids(body):
@@ -1790,23 +1819,27 @@ def assign_links():
 
 @app.post("/api/links/to-download")
 def mark_links_download():
-    """Mark many links to download (``download`` true) or clear their mark
-    (false), in one transaction (links.mark_download); their people are not
-    touched. All or none: an id no link has is a 404 and nothing changes.
-    With ``skip_missing`` true (the page's Undo), ids no link has are passed
-    over and listed in ``missing``. ``changed``: the ids whose mark changed
-    (a link marked already keeps when it was marked)."""
+    """Tag many links downloads (``download`` true) or clear the tag
+    (false), and/or say them downloaded (``downloaded`` true: one that is
+    not a download becomes one) or to download again (false), in one
+    transaction (links.mark_download); their people are not touched. All or
+    none: an id no link has is a 404 and nothing changes. With
+    ``skip_missing`` true (the page's Undo), ids no link has are passed
+    over and listed in ``missing``. ``changed``: the ids something changed
+    for (a download already keeps when it was tagged, and its state)."""
     body = _body()
     ids, error = _link_ids(body)
-    on, skip = body.get("download"), body.get("skip_missing", False)
-    if not error and not isinstance(on, bool):
-        error = _BAD_DOWNLOAD
+    skip = body.get("skip_missing", False)
+    on, downloaded, bad = _link_marks(body)
+    error = error or bad
+    if not error and on is None and downloaded is None:
+        error = "send download (true or false) or downloaded (true or false)"
     if not error and not isinstance(skip, bool):
         error = "skip_missing must be true or false"
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
-    changed, gone = links.mark_download(conn, ids, on, _link_now(), all_or_none=not skip)
+    changed, gone = links.mark_download(conn, ids, on, _link_now(), all_or_none=not skip, downloaded=downloaded)
     if changed is None:
         return jsonify({"ok": False, "error": "no such link", "missing": gone}), 404
     if changed:
@@ -3038,7 +3071,7 @@ def clean_info_json_cookies():
 @app.get("/api/jobs")
 def list_jobs():
     # The sidebar's "New" and Unsorted links counts ride along with the poll (news.py, links.py), and
-    # the Links page's To download count, for its tab.
+    # how many downloads are still to do, for the Links page's Downloads tab.
     new, new_until = news.count(db.connect())
     unread, latest = notify.unread(db.connect())
     # A tab that shows desktop notifications itself says so: notify-send waits.

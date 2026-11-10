@@ -74,13 +74,15 @@ const VIEWS = [
   { name: "Post", open: page => openUrl(page, `/p/${S.post.platform}/${S.post.post_id}`, pg => pg.locator(".post-page-head")) },
   { name: "Creator", open: page => openUrl(page, `/?platform=${S.post.platform}&author=${encodeURIComponent(S.author.id)}`,
     pg => pg.locator("article.post-card").first()) },
-  // Link rows with their Open in… menu (fakeOpenLinks: two browsers "installed").
+  // Link rows: Copy and their ⋯ menu; the person's Links and Downloads sections.
   { name: "Person", open: async page => { await fakeOpenLinks(page); await openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title")); } },
   { name: "Collection", open: page => openUrl(page, `/collections/${S.collection}`, pg => pg.locator("h2.page-title")) },
   { name: "Links, Unsorted", open: async page => {
     await fakeOpenLinks(page);
-    await openUrl(page, "/links?person=none", pg => pg.locator(".link-open-menu").first());
+    await openUrl(page, "/links?person=none", pg => pg.locator(".link-menu").first());
   } },
+  // The stress person's downloads, to do and done: the tab's two switches, each row's check.
+  { name: "Links, Downloads", open: page => openUrl(page, "/links?download=all", pg => pg.locator(".link-done").first()) },
   { name: "Trash › History", open: page => openUrl(page, "/trash?view=history", pg => pg.locator(".trash-event, .trash-page .empty:not(:has-text('Loading'))").first()) },
   ...["profiles", "downloads", "sync", "appearance", "about"].map(tab => ({
     name: `Settings › ${tab}`,
@@ -206,7 +208,8 @@ const DIALOGS = [
   {
     name: "Links › Selection bar",
     open: async page => {
-      await openUrl(page, "/links?person=none", pg => pg.locator(".link-check").first());
+      await openUrl(page, "/links?person=none", pg => pg.locator(".link-menu").first());
+      await page.locator(".page-head .select-toggle").click();
       await page.locator(".link-check input").first().click();
       await page.locator(".link-check input").nth(2).click({ modifiers: ["Shift"] });
       await expect(page.locator(".select-bar .select-count")).toHaveText("3 selected");
@@ -216,9 +219,10 @@ const DIALOGS = [
   {
     name: "Links › Assign the selected links",
     open: async page => {
-      await openUrl(page, "/links?person=none", pg => pg.locator(".link-check").first());
+      await openUrl(page, "/links?person=none", pg => pg.locator(".link-menu").first());
+      await page.locator(".page-head .select-toggle").click();
       await page.locator(".link-check input").first().click();
-      await page.locator(".select-bar").getByRole("button", { name: /^Assign 1 to/ }).click();
+      await page.locator(".select-bar").getByRole("button", { name: "Assign to…" }).click();
       await expect(page.locator(".assign-modal .person-pick-option").first()).toBeVisible();
       await idle(page);
     },
@@ -266,6 +270,18 @@ const DIALOGS = [
       await openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title"));
       await page.locator(".page-head .action-menu-btn").click();
       await expect(page.getByRole("menuitem", { name: "Delete person" })).toBeVisible();
+    },
+    scope: ".action-menu",
+  },
+  {
+    // A link row's one ⋯ menu, at its longest: Open, the Open in group
+    // (fakeOpenLinks: two browsers "installed"), then the row's own actions.
+    name: "Links › A row's ⋯ menu",
+    open: async page => {
+      await fakeOpenLinks(page);
+      await openUrl(page, "/links?download=all", pg => pg.locator(".link-menu").first());
+      await page.locator(".link-menu .action-menu-btn").first().click();
+      await expect(page.getByRole("menuitem", { name: "Delete" })).toBeVisible();
     },
     scope: ".action-menu",
   },
@@ -378,8 +394,7 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
 //  - The link-in-bio import, opened, is a box inside Accounts, as wide as
 //    the opened Add a link box, and both have the same sub-heading style.
 //  - Add a link's title field and its buttons (Add link, Cancel) end at the
-//    same x (a person's page); on the Links page the button ends where the
-//    Person field does.
+//    same x (a person's page).
 //  - A long person name on the Links page ends in an ellipsis inside its chip.
 const LINE_SIZES = [SIZES[1], SIZES[2], SIZES[3]];
 
@@ -442,24 +457,18 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
 
   await openPage(page, { name: "Links", path: "/links" });
   await stillPage(page);
-  // The form's other fields show once an address is typed.
-  await page.locator(".links-add .link-form-url input").fill("https://example.com/layout");
   for (const s of LINE_SIZES) {
     await page.setViewportSize({ width: s.width, height: s.height });
     await settle(page);
     const at = `Links at ${s.label}`;
     const m = await page.evaluate(person => {
-      const form = document.querySelector(".links-add .link-form");
       const chip = [...document.querySelectorAll(".link-person")].find(c => c.title === `Person: ${person}`);
       const text = chip?.querySelector(".chip-text");
       return {
-        personRight: form.querySelector(".link-form-person .picker-input").getBoundingClientRect().right,
-        buttonRight: form.querySelector(".link-form-actions .btn-primary").getBoundingClientRect().right,
         chip: chip ? chip.getBoundingClientRect().right : null,
         text: text ? { right: text.getBoundingClientRect().right, cut: text.scrollWidth > text.clientWidth, overflow: getComputedStyle(text).textOverflow } : null,
       };
     }, STRESS_PERSON);
-    if (!near(m.personRight, m.buttonRight)) problems.push(`${at}: Add link ends at x=${m.buttonRight}, the Person field at x=${m.personRight}`);
     if (!m.text) problems.push(`${at}: no person chip with a .chip-text for ${STRESS_PERSON}`);
     else {
       if (!m.text.cut || m.text.overflow !== "ellipsis") problems.push(`${at}: the long person name is not cut with an ellipsis (${JSON.stringify(m.text)})`);

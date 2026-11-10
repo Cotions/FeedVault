@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { getAuthors, getConfig, getPeopleAttributes, getPerson, getSuggestions, getNew, markSeen, updatePerson, deletePerson, linkAccounts, dismissSuggestion, syncPerson,
-  createLink, updateLink, deleteLink, addLinkPerson, removeLinkPerson, orderPersonLinks, setSourcePerson, getPostsSummary } from "../lib/api";
+  setSourcePerson, getPostsSummary } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs } from "../lib/jobs";
@@ -25,9 +25,8 @@ import PageHeader from "../components/PageHeader";
 import PersonAbout from "../components/PersonAbout";
 import PersonAvatar from "../components/PersonAvatar";
 import AvatarDialog from "../components/AvatarDialog";
-import { LinkForm, LinkRow } from "../components/Links";
-import { copyUrls, linkLabel, namesText } from "../lib/links";
-import { useOneEdit, useUnsaved } from "../lib/unsaved";
+import PersonLinks from "../components/PersonLinks";
+import { useUnsaved } from "../lib/unsaved";
 import { accountMatches, linkMatches, sourceMatches, useSearchName } from "../lib/search";
 
 /* A profile only source of theirs (#218) with no account of its own yet
@@ -112,137 +111,6 @@ function AccountRow({ account: a, busy, onUnlink, personOff = null, onNoSync, pr
       ]} />
       {noSync.dialog}
     </li>
-  );
-}
-
-/* A person's saved links: socials first, then the others, each group in
-   the person's order (up and down move a link within its group). Add one
-   with the person preset; edit and delete in place. A link they share
-   with others (a band's account, #215) shows the others; Remove takes it
-   from this person only, Delete from everyone. onDirty(bool): whether
-   the link being edited has unsaved changes; onAddDirty(bool): whether the
-   new link's form has something typed. */
-function PersonLinks({ person: p, query = "", onChanged, onDirty, onAddDirty }) {
-  const toast = useToast();
-  const { refresh } = useJobs();
-  const [busy,     setBusy]     = useState(false);
-  const edit = useOneEdit();                          // the link being edited, and whether it has changes
-  const [removing, setRemoving] = useState(null);
-  const [dlgError, setDlgError] = useState(null);
-  const all = p.links || [];
-  // While the header's search has something in it: the links it matches,
-  // not moved up or down (their places are among all of them), nor added.
-  const searching = !!query.trim();
-  const links = searching ? all.filter(l => linkMatches(l, query)) : all;
-  const groups = [["Socials", links.filter(l => l.kind === "social")], ["Other", links.filter(l => l.kind !== "social")]];
-  useEffect(() => { onDirty(edit.dirty); }, [edit.dirty, onDirty]);
-  const sharedWith = (removing?.people || []).filter(o => o.id !== p.id);
-
-  async function call(fn, failed) {
-    setBusy(true);
-    try {
-      const r = await fn();
-      if (!r?.ok) return r?.id != null ? "That address is saved already, as another link (see Links)." : r?.error || failed;
-      onChanged();
-      refresh();                                      // the nav's Unsorted count
-      return null;
-    } catch (err) {
-      return err.message;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function move(group, i, by) {
-    const ids = group.map(l => l.id);
-    [ids[i], ids[i + by]] = [ids[i + by], ids[i]];
-    const problem = await call(() => orderPersonLinks(p.id, ids), "Could not reorder.");
-    if (problem) toast(problem, "err");
-  }
-
-  async function remove() {
-    setDlgError(null);
-    const problem = await call(() => deleteLink(removing.id), "Could not delete.");
-    if (problem) { setDlgError(problem); return; }
-    toast("Link deleted.");
-    setRemoving(null);
-  }
-
-  // Not theirs any more; the link stays its other people's. Undo gives it
-  // back to them (at the end of their links).
-  async function untie(l) {
-    const problem = await call(() => removeLinkPerson([l.id], p.id), "Could not remove it.");
-    if (problem) { toast(problem, "err"); return; }
-    const undo = async () => {
-      const back = await call(() => addLinkPerson([l.id], p.id), "Could not undo.");
-      if (back) toast(back, "err");
-    };
-    toast(`${linkLabel(l)}: no longer ${p.name}'s`, "ok", { label: "Undo", onClick: undo });
-  }
-
-  return (
-    <section className="person-section person-links-section" hidden={searching && !links.length}>
-      <div className="person-section-head">
-        <h3 className="card-title">Links <span className="page-count">{links.length}</span></h3>
-        {links.length > 0 && (
-          <button type="button" className="btn-secondary" onClick={() => copyUrls(links, toast)}
-                  title="Their links' addresses, one per line, to paste into another app">
-            <Icon name="copy" size={14} />Copy URLs
-          </button>
-        )}
-      </div>
-      {all.length === 0 && <div className="empty">No link saved for them yet: a Linktree, a Patreon, their site, an interview…</div>}
-      {groups.map(([name, group]) => group.length > 0 && (
-        <div key={name} className="person-link-group">
-          <h4 className="link-group-title">{name}</h4>
-          <ul className="link-list">
-            {group.map((l, i) => edit.editing === l.id ? (
-              <li key={l.id} className="link-row is-editing">
-                <LinkForm link={l} busy={busy} submitLabel="Save" idPrefix={`person-link-${l.id}`}
-                          onCancel={edit.close} onDirty={edit.onDirty}
-                          onSubmit={async body => {
-                            const problem = await call(() => updateLink(l.id, body), "Could not save the link.");
-                            if (!problem) edit.close();
-                            return problem;
-                          }} />
-              </li>
-            ) : (
-              <LinkRow key={l.id} link={l} here={p.id} busy={busy} onRemove={untie}
-                       onUp={!searching && { ok: i > 0, run: () => move(group, i, -1) }}
-                       onDown={!searching && { ok: i < group.length - 1, run: () => move(group, i, 1) }}
-                       onEdit={x => edit.open(x.id)} onDelete={x => { setDlgError(null); setRemoving(x); }} />
-            ))}
-          </ul>
-        </div>
-      ))}
-      <div className="person-link-add" hidden={searching}>
-        <h4 className="link-group-title">Add a link</h4>
-        <LinkForm busy={busy} idPrefix="person-link-add" onDirty={onAddDirty} folded
-                  onSubmit={async body => {
-                    const problem = await call(() => createLink({ ...body, person: p.id }), "Could not add the link.");
-                    if (!problem) toast("Link added.");
-                    return problem;
-                  }} />
-      </div>
-      <ConfirmDialog
-        open={!!removing}
-        title="Delete this link?"
-        confirmLabel="Delete link"
-        danger
-        busy={busy}
-        error={dlgError}
-        onConfirm={remove}
-        onCancel={() => setRemoving(null)}
-      >
-        <p className="link-confirm">{removing?.title || removing?.label ? <>{removing.title || removing.label}<br /></> : null}<code>{removing?.url}</code></p>
-        {sharedWith.length > 0 && (
-          <p>It is {namesText(sharedWith.map(o => o.name))}&apos;s too: they lose it as well. Remove takes it from {p.name} only.</p>
-        )}
-      </ConfirmDialog>
-      <DiscardDialog open={edit.asking} onDiscard={edit.discard} onKeep={edit.keep}>
-        <p>The changes to the link you are editing are not saved.</p>
-      </DiscardDialog>
-    </section>
   );
 }
 

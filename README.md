@@ -566,18 +566,35 @@ every link it shows (a shop, a Patreon, a site, the profiles), so they stay
 when the page changes or goes. Import again later and only what is new is
 added; nothing you saved or edited is replaced or removed. See [docs/API.md](docs/API.md#links).
 
+**+ Add link** at the top of the page (or Alt+L, or a link dropped on any
+page) saves an address, to a person or to no one. Each row shows the link,
+a **Copy** button for its address and one **⋯** menu with everything else:
+Open, Open in (another browser), Edit, Assign… or Also link to…, Move to
+Downloads, and Delete. **Select** brings the checkboxes and a bar to copy
+the addresses of many links, assign them, move them or delete them at once.
+Kind, Site and Person fold behind **Filters**; **Sort** orders any tab
+newest first (the default), oldest first, or by site, A to Z, under a
+heading per site with its count.
+
 Three tabs sit over the list: **All links**, **Unsorted** (the links of no
-one yet, each with an Assign… to give it to a person) and **To download**.
-Sorting out Unsorted, mark a link **to download** (the download button on
-its row, or **Mark N to download** for a selection) when it points at
-something you want another app to download: FeedVault never downloads from
-Links, the mark is only your note. It is apart from the link's people, so a
-link can be both an artist's and to download; it stays in Unsorted until you
-assign it, and assigning keeps the mark. The To download tab lists the marked
-links with their count; clear a mark there (its row's button, or **Clear
-mark** for a selection) once downloaded and the link leaves the tab, with an
-Undo. **Sort** orders any tab newest first (the default), oldest first, or by
-site, A to Z, under a heading per site with its count.
+one yet, each with an Assign… to give it to a person) and **Downloads**.
+
+A **download** is a link to something you want another app to download: a
+set, a video, a file. It is a category of its own, apart from a creator's
+socials and other links, and FeedVault never downloads from it: it only
+keeps your note of what is **to download** and what is **downloaded**.
+Tick **Download** when you add a link (it is ticked already in the
+Downloads tab, and Import many… has the same box), or choose **Move to
+Downloads** in a link's ⋯ menu. The Downloads tab lists them all, whoever's
+they are: **To download** (the default; its count is on the tab),
+**Downloaded** or **All**, and **Anyone**, **With creator** or **No
+creator**. The check on a row marks it downloaded: it leaves To download,
+with an Undo, and shows dimmed under Downloaded, where the same check takes
+it back. A download of no one still shows in Unsorted until you assign it,
+which keeps it a download; All links never lists one. On a creator's page
+their downloads have a **Downloads** section of their own under Links,
+with the same two states and a **Copy URLs** for what is left to download,
+to paste into the other app.
 
 A link can open in another browser than the one showing FeedVault, in one of
 its profiles, or in a private window: set it in **Settings → Downloads →
@@ -585,18 +602,19 @@ More link settings → Open links in** (Firefox, Google Chrome, Chromium,
 Brave or Microsoft Edge, installed on this machine or as a Flatpak; the
 profiles are the browser's own: Firefox's names, the others' `Default`,
 `Profile 1`). A click on a link's title then starts that browser on it;
-Ctrl-click or a middle click still opens a tab here. Each link's **Open
-in…** button (the arrow out of a box, on its row) picks a browser, profile
-and private window for that link only, or this browser. FeedVault starts the
+Ctrl-click or a middle click still opens a tab here. Under **Open in**, each
+link's ⋯ menu lists every browser, profile and private window for that link
+only, and **Open** for a tab here. FeedVault starts the
 browser as you would from a terminal, on that one address and nothing else;
 if it cannot (the browser removed, a profile renamed), a message says why,
 with **Open here**. See [docs/API.md](docs/API.md#opening-a-link-elsewhere).
 
 To save the page you are reading in another tab, drag **Save to FeedVault**
-(under Add a link on the Links page) to your bookmarks bar. Clicked on any
+(the Links page's **More → Bookmarklet…**) to your bookmarks bar. Clicked on any
 page, this bookmarklet opens FeedVault's `/links/add` in a small window
 with that page's address and title filled in; choose a person (or no one)
-with the arrows or a click, press Enter, and the window closes. Nothing is
+with the arrows or a click (tick **Download** for something to download),
+press Enter, and the window closes. Nothing is
 saved until you choose (Enter alone does nothing at first), and the other
 site is never sent anything: the bookmarklet only opens the window, and the
 save is FeedVault's own page talking to FeedVault. The address and title
@@ -604,9 +622,10 @@ travel in the URL's fragment (`/links/add#url=…&title=…`), so they never
 reach FeedVault's request log. Each click opens its own window. If the
 browser blocks it, the page opens in the same tab instead (Back returns).
 
-To bring in many links at once, click **Import many…** under Add a link.
-Everything goes to **Unsorted**, to give to people from there; an address
-saved already is left as it is, and nothing is fetched.
+To bring in many links at once, choose **More → Import many…** on the Links
+page. Everything goes to **Unsorted**, to give to people from there (with
+**Download** ticked, to Downloads as well); an address saved already is
+left as it is, and nothing is fetched.
 
 - **Open tabs**: paste their addresses into the box, any number, one per
   line or with anything between them (`Title - https://…` lines and
