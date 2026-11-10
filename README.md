@@ -10,7 +10,7 @@ FeedVault does not download anything itself. It reads what
 [gallery-dl](https://github.com/mikf/gallery-dl) and [yt-dlp](https://github.com/yt-dlp/yt-dlp) write. A post whose files disappear stays in the index, marked missing.
 
 The **Review** page is for sorting: one post at a time, keep or trash it from
-the keyboard. **Re-review** (on a creator's Feed and page, and when a review is
+the keyboard. **Re-review** (on a creator's Feed, in a person's ⋯ menu, and when a review is
 done) goes through the same posts again, the kept ones too: they stay kept
 unless you trash them. Deleting moves files to `.feedvault-trash/` inside the media
 folder; only **Empty trash** in Settings → Library, and purging an entry
@@ -490,6 +490,21 @@ What was already in the archive is never new, whenever it was posted.
 **Mark seen** on a Creators card or a person's page does the same for that
 person (or that account, when it is linked to nobody) only.
 
+A person's page lists their **Profiles** in one list: an account and the
+source that syncs it are one row, with the preset it follows, where its sync
+stands (a failure in a few words: hover it, or open the row's details, for
+the whole message), **Copy** for the profile's address, **Sync** and a ⋯
+menu (the profile on its site, its feed, **Details**, its options, **Sync
+full history…**, **Don't sync**, **Move to creator…**, **Unlink**, **Remove
+source**). An account with several sources shows each on a line of its own
+under it; **Details** unfolds the account's id, its other names and former
+handles, and each source's tool, folder and last output. **Add profile**,
+under the list, takes a profile link or an Instagram name; **More ways to
+add** holds the rest: an account FeedVault has already indexed, the "Also
+them?" suggestions and the link-in-bio import. **Feed** is the page's one
+button: Review, Re-review, Storage, Stats and Trash for that person are in
+the ⋯ menu at the top, with Rename, Mute, Don't sync and Delete person.
+
 A person's page has an **About** box: a gender (Female, Male, Transgender,
 or any other you type), a country, and labels of your own ("cosplay",
 "travel"), kept apart from the posts' tags. Creators shows each person's
@@ -500,7 +515,7 @@ The **search box in the header** (`/` or Ctrl-K) searches the page you are
 on. On Creators it lists what matches in three parts: creators (by name or
 label), accounts (any handle, linked to someone or not, each a click from
 its posts and its person) and saved links (address, title or notes). On a
-person's page it narrows their accounts, sources and links, and counts
+person's page it narrows their profiles and links, and counts
 their posts that match, one click from the Feed. On Links it searches the
 links. Esc or the × goes back to the page as it was, and the search stays
 in the address, so a reload or Back keeps it. Anywhere else it searches

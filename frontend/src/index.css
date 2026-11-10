@@ -3630,10 +3630,82 @@ a.chip.platform-chip:hover { color: var(--accent-hover); border-color: rgba(var(
 .person-account-stats { flex-shrink: 0; }
 .person-add { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .person-add .creator-sub { white-space: normal; }
-/* A box of its own under the accounts, as "Add a link" is under the links. */
+/* Their profiles (components/PersonProfiles.jsx): one row per account
+   with its source. A row is a line (who, the preset, the sync's state,
+   Copy, Sync, ⋯), then what must be read at once (a rename to accept, a
+   script that would fail), an account's other sources on lines of their
+   own, and the details when asked for. The preset and the state keep one
+   width each, and the buttons one room, so they line up down the list. */
+.person-profile-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.person-profile {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  padding: 8px 8px 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+}
+.person-profile.is-profile-only { border-style: dashed; }
+.person-profile-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.person-profile-line > .platform-chip { min-width: 28px; justify-content: center; }
+.person-profile-line > .platform-icon { margin-inline: 6px; }
+.person-profile-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 180px; }
+.person-profile-id > .creator-sub { white-space: normal; }
+.person-profile-id > .creator-sub > span { white-space: nowrap; }   /* "newest 3d ago" wraps whole */
+:is(.person-profile, .person-profile-source):is(.is-nosync, .is-profile-only) :is(.person-profile-id > .creator-name, .person-profile-source-name) { color: var(--text-dim); }
+.person-profile-line .preset-select { flex: 0 0 170px; width: 170px; }
+.person-profile-state { display: flex; align-items: center; gap: 4px 10px; flex: 0 1 300px; min-width: 0; overflow: hidden; }
+.person-profile-state > .source-status { flex-shrink: 1; overflow: hidden; }
+/* A chip in the place of both (Don't sync, a profile only): it starts where the presets do. */
+.person-profile-mark { display: flex; align-items: center; flex: 0 1 480px; min-width: 0; }
+.person-profile-state > .source-status > .dim { white-space: nowrap; flex-shrink: 0; }
+.person-profile-state .source-message { max-width: none; min-width: 0; }
+.person-profile-state > .source-schedule { flex: none; }
+.person-profile-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; flex: none; min-width: 142px; }
+.person-profile-actions .del-btn { width: 28px; height: 28px; padding: 0; }
+.person-profile-actions > .source-sync { margin-inline: 4px; }
+/* An account's several sources (two tabs of an X profile), under its name. */
+.person-profile-sources { list-style: none; margin: 0; padding: 0 0 0 50px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.person-profile-source { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.person-profile-source-name { flex: 1 1 140px; min-width: 0; font-size: var(--fs-sm); color: var(--text); }
+.person-profile-notes { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding-left: 50px; font-size: var(--fs-sm); }
+.person-profile-source > .person-profile-notes { padding-left: 0; }
+.person-profile-notes .source-note { white-space: normal; max-width: none; }
+.person-profile-details {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  margin-left: 50px; padding: 8px 0 2px; border-top: 1px solid var(--border-soft);
+}
+.person-profile-details > .creator-sub { white-space: normal; overflow-wrap: anywhere; }
+.person-profile-detail { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: var(--fs-sm); }
+.person-profile-detail-title { font-weight: 600; color: var(--text-dim); overflow-wrap: anywhere; }
+.person-profile-detail-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.person-profile-detail-msg { color: var(--text-dim); overflow-wrap: anywhere; }
+.person-profile-detail-msg.is-err { color: #ffb3b5; }
+/* Under the list: the one way to add in sight, in a box of its own as
+   "Add a link" is; the other ways behind one quiet line. */
+.person-profile-add { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.person-profile-add[hidden], .person-profile-more[hidden] { display: none; }
+.person-profile-add > .source-add { align-self: stretch; }
+/* Wide enough to read its placeholder (over input[type="text"].page-filter). */
+.person-profile-add > .source-add input[type="text"].page-filter { flex: 1 1 320px; max-width: 460px; }
+.person-profile-add-title { font-size: var(--fs-sm); font-weight: 600; color: var(--text-dim); margin: 4px 0 -2px; }
+.person-profile-more-toggle { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-dim); }
+.person-profile-more-toggle:hover { color: var(--text); }
+.person-profile-more { align-self: stretch; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.person-profile-more > .suggestions { margin-bottom: 0; }
+.person-profile-more > .bio-import-fold, .person-profile-more > .bio-import { margin-top: 0; }
+@media (max-width: 760px) {
+  .person-profile-line { flex-wrap: wrap; }
+  .person-profile-id { flex-basis: calc(100% - 50px); }
+  .person-profile-line .preset-select { flex: 1 1 150px; }
+  .person-profile-state { flex: 1 1 100%; flex-wrap: wrap; }
+  .person-profile-mark { flex: 0 1 auto; }
+  .person-profile-actions { margin-left: auto; min-width: 0; }
+  .person-profile-sources, .person-profile-notes { padding-left: 0; }
+  .person-profile-details { margin-left: 0; }
+  .person-profile-source-name { flex-basis: 100%; }
+}
+/* A box of its own under the profiles, as "Add a link" is under the links. */
 .bio-import, .person-link-add { margin-top: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 10px; }
-/* Both folded until wanted: a button under the accounts, and one under the
-   links (the box and its sub-heading come with the open form). */
+/* Both folded until wanted: a button among the other ways to add a
+   profile, and one under the links (the box and its sub-heading come with
+   the open form). */
 .bio-import-fold { margin-top: 12px; }
 .person-link-add:has(> .link-form-open) { padding: 0; border: none; }
 /* The header's search on a person's page: what does not match is hidden,
@@ -4046,8 +4118,11 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-opt-line b { font-weight: 600; }
 .source-opt-line .dim { font-size: var(--fs-sm); color: var(--text-dim); }
 /* A choice's description, last on its line, stays beside it and wraps under
-   itself, however long: "new posts" kept its own on a line below (#149). */
-.source-opt-line > .dim:last-child { flex: 1 1 14em; min-width: 0; }
+   itself, however long: "new posts" kept its own on a line below (#149).
+   Its room is a min-width, not a flex-basis: with the basis, the date's
+   fieldset was sized as if "no limit" had wrapped (27px of nothing under
+   it, #235). */
+.source-opt-line > .dim:last-child { flex: 1 1 0; min-width: 14em; }
 /* Not used while a script runs instead of the tool's command (#149). */
 .source-opt.is-unused { opacity: 0.45; }
 .source-opt.is-unused .source-opt-line { cursor: default; }
@@ -4117,7 +4192,7 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-status .icon { color: var(--blue); }
 .source-message, .source-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 .source-message { color: #ffb3b5; }
-.source-setup { white-space: nowrap; }
+.source-setup { display: inline-flex; align-items: center; min-height: 24px; white-space: nowrap; }   /* a 24px target */
 .source-badge { flex-shrink: 0; }
 .source-sync { font-size: var(--fs-sm); padding: 6px 11px; flex-shrink: 0; }
 /* On a card the sync and schedule lines wrap inside their column: never under

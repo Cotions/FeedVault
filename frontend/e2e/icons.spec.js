@@ -31,7 +31,7 @@ test("Person: each account row has its platform's logo, named", async ({ page })
   await expect(page.locator("h2.page-title")).toBeVisible();
   await idle(page);
 
-  const own = page.locator(".person-accounts:not(.bio-import-list) > .person-account").first();
+  const own = page.locator(".person-profile").first();
   await expectBeforeName(logo(own, stressData().post.platform), own.locator(".creator-name"), own);
   await expect(own.locator("svg.platform-icon > title")).toHaveText(platformLabel(stressData().post.platform));
   await expect(own.locator(".platform-chip")).toHaveCount(0);

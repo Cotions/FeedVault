@@ -19,9 +19,9 @@ test("the Feed, Creators, Links and a person's page search themselves; any other
 test("the box's words: the Feed's for a page that sends it there, a person's name once known", () => {
   assert.equal(scopeText(null).label, "Search posts");
   const person = searchScope("/people/3");
-  assert.equal(scopeText(person, null).placeholder, "Search their accounts, links…");
-  assert.equal(scopeText(person, "Ada").placeholder, "Search Ada's accounts, links…");
-  assert.equal(scopeText(person, "Ada").label, "Search Ada's accounts, sources and links");
+  assert.equal(scopeText(person, null).placeholder, "Search their profiles, links…");
+  assert.equal(scopeText(person, "Ada").placeholder, "Search Ada's profiles, links…");
+  assert.equal(scopeText(person, "Ada").label, "Search Ada's profiles and links");
   assert.equal(scopeText(searchScope("/creators"), "Ada"), searchScope("/creators"));
 });
 

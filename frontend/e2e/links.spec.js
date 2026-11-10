@@ -3,7 +3,7 @@
 // neither does the test: it checks the anchors, it does not follow them.
 import {
   test, expect, openPage, idle, stressData, fakeBioImport, openBioImport, openAddLink, openFilters,
-  openMenu, menuItem, openLinkMenu, linkAct, openLinksAdd, selectLinks,
+  openMenu, menuItem, openLinkMenu, linkAct, openLinksAdd, selectLinks, openMoreWays,
 } from "./fixtures.js";
 import { STRESS_LINKS } from "./stress.js";
 
@@ -232,14 +232,16 @@ test("editing a link shows its whole notes", async ({ page }) => {
   await idle(page);
 });
 
-// A person's page, by Tab: out of Add an account (a picker whose open list
-// of every account scrolls) on to the folded link-in-bio import's button,
+// A person's page, by Tab: out of Add an account (under "More ways to add":
+// a picker whose open list of every account scrolls) on to the folded
+// link-in-bio import's button,
 // not to <body>: the open list was a Tab stop (Chromium's focusable
 // scrollers) that went as the field lost focus.
 test("Tab goes on from a person's Add an account picker", async ({ page }) => {
   await page.goto(`/people/${stressData().person}`);
   await expect(page.locator(".page-head .action-menu-btn")).toBeVisible();
   await idle(page);
+  await openMoreWays(page);
   const picker = page.getByRole("combobox", { name: "Add an account" });
   await picker.focus();
   await expect(page.locator(".person-add .picker-list")).toBeVisible();
@@ -250,7 +252,8 @@ test("Tab goes on from a person's Add an account picker", async ({ page }) => {
 });
 
 // A person's page opens with its link-in-bio import and its Add a link form
-// folded, each behind a button. A click opens it in place, focus in its
+// folded, each behind a button (the import's among the other ways to add a
+// profile, behind "More ways to add"). A click opens it in place, focus in its
 // first field (the import's link to Settings while the import is off, as
 // in this instance; its notice only shows then). Escape folds an empty
 // one, focus back on its button. A typed link asks before Cancel or Escape
@@ -261,6 +264,8 @@ test("a person's page folds its link-in-bio import and Add a link", async ({ pag
   await idle(page);
   const importButton = page.getByRole("button", { name: "Import from link-in-bio…" });
   const addButton = page.locator(".person-link-add").getByRole("button", { name: "Add link…" });
+  await expect(importButton).toBeHidden();
+  await openMoreWays(page);
   await expect(importButton).toBeVisible();
   await expect(addButton).toBeVisible();
   await expect(page.locator(".bio-import")).toHaveCount(0);

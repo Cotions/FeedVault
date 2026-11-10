@@ -98,7 +98,7 @@ test("Creators: the header search stays on the page, creators, accounts and link
   }
 });
 
-test("a person's page: the header search narrows their accounts, sources and links", async ({ page, request }) => {
+test("a person's page: the header search narrows their profiles and links", async ({ page, request }) => {
   const stamp = Date.now();
   const made = await setUp(request, stamp);
   const a = made.account;
@@ -116,14 +116,14 @@ test("a person's page: the header search narrows their accounts, sources and lin
     const name = made.person.name;
     await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
     const box = page.locator("input.header-search");
-    await expect(box).toHaveAttribute("placeholder", `Search ${name}'s accounts, links…`);
-    await expect(box).toHaveAccessibleName(`Search ${name}'s accounts, sources and links`);
+    await expect(box).toHaveAttribute("placeholder", `Search ${name}'s profiles, links…`);
+    await expect(box).toHaveAccessibleName(`Search ${name}'s profiles and links`);
 
     // Notes typed and not saved stay through a search.
     const notes = page.getByRole("textbox", { name: "Notes" });
     await notes.fill("typed, not saved");
 
-    // Their link only: the accounts and notes step aside.
+    // Their link only: the profiles and notes step aside.
     await box.fill(`e2e-search-${stamp}`);
     await expect(page).toHaveURL(`/people/${made.person.id}?q=e2e-search-${stamp}`);
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
@@ -140,13 +140,17 @@ test("a person's page: the header search narrows their accounts, sources and lin
     await expect(downloads.locator(".link-row")).toHaveCount(2);
     await expect(downloads.locator(".link-row.is-downloaded")).toHaveCount(1);
     await expect(downloads.getByRole("group", { name: "Show downloads" })).toHaveCount(0);
-    await expect(page.locator(".person-accounts")).toBeHidden();
+    const profiles = page.getByRole("region", { name: "Profiles", exact: true });
+    await expect(profiles).toBeHidden();
     await expect(notes).toBeHidden();
     await expect(page.locator(".person-search")).toContainText(/\d+ posts? of theirs/);
 
-    // Their account, by its handle: a word every one of these has.
+    // Their profile, by its handle: a word every one of these has. The
+    // ways to add one step aside while it searches.
     await box.fill(a.handle);
-    await expect(page.locator(".person-accounts .person-account")).toHaveCount(1);
+    await expect(profiles.locator(".person-profile")).toHaveCount(1);
+    await expect(profiles.locator(".page-count")).toHaveText("1 of 1");
+    await expect(profiles.locator(".person-profile-add")).toBeHidden();
     await expect(page.locator(".person-search").getByRole("link", { name: "Show in the Feed" })).toHaveAttribute(
       "href", `/?person=${made.person.id}&q=${encodeURIComponent(a.handle)}`);
 
