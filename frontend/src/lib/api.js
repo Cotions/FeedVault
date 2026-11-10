@@ -429,15 +429,15 @@ export function getSources() { return get("/api/sources"); }
 // or { ok: false, error } (a link that is not accepted, see docs/API.md "Link routing").
 export function resolveSource(url, opts, tool) { return get(`/api/sources/resolve${qs({ url, tool })}`, opts); }
 // { tool?, target (a profile link, or an Instagram name with tool "instaloader"; any site's profile
-//   link with tool "none": a profile only, no folder), folder?, person?, account?, options? } → { ok, source }
+//   link with tool "none": a profile only, no folder), folder?, person?, account?, preset? (a named
+//   preset's id; none: Default), options? (with a preset: download only) } → { ok, source }
 export function createSource(body) { return post("/api/sources", body); }
-// options: { download?, full_history?, session?, content?, media?, since?, first_posts?, script?, metadata?, schedule? }
-// (one changed is set on the source; one sent as it is stays as it was), reset?: [option keys] or true
-// (those follow its platform's download defaults again). ``pin``: every option sent is set as sent
-// (the Options dialog sends only the fields the user changed) → { ok, source }
-export function updateSource(id, options, reset, pin = false) {
-  return post(`/api/sources/${seg(id)}`, { options, ...(reset ? { reset } : {}), ...(pin ? { pin } : {}) });
-}
+// What a source follows (docs/API.md "Presets"), one of:
+//   { preset: id | null (Default), options?: { download?, full_history? } }: its own options go;
+//   { custom: true, options }: every option sent is its own from then on;
+//   { options: { download?, full_history? } }: those two are each source's, whatever it follows.
+// → { ok, source }; 409 while its sync is queued or running
+export function updateSource(id, body) { return post(`/api/sources/${seg(id)}`, body); }
 // The person a source is added to (an id), or null for none; one tied to an account takes it along
 // (docs/API.md "Sources") → { ok, source }
 export function setSourcePerson(id, person) { return post(`/api/sources/${seg(id)}`, { person }); }
@@ -448,14 +448,16 @@ export function giveSourceTool(id, options, folder) {
 }
 // Settings → Profile only: the platforms never downloaded unless a source says otherwise
 export function saveProfileOnlyPlatforms(platforms) { return post("/api/config", { profile_only_platforms: platforms }); }
-// One platform's download defaults ({ option: value }; {} for none) → { ok, config } or { ok: false, error }
+// One platform's Default preset ({ option: value }; {} for none) → { ok, config } or { ok: false, error }
 export function saveSourceDefaults(tool, platform, defaults) {
   return post("/api/config", { source_defaults: { [tool]: { [platform]: defaults } } });
 }
-// Every source of tool on platform that sets option itself follows the default → { ok, applied, skipped }
-export function applySourceDefault(tool, platform, option) {
-  return post("/api/source-defaults/apply", { tool, platform, option });
-}
+// A named preset of one tool and platform: { tool, platform, name, options? } → { ok, preset }
+export function createPreset(body) { return post("/api/presets", body); }
+// { name?, options? } → { ok, preset }
+export function updatePreset(id, body) { return post(`/api/presets/${seg(id)}`, body); }
+// The sources following it go back to Default → { ok, sources: how many }
+export function deletePreset(id) { return del(`/api/presets/${seg(id)}`); }
 // The folder, files and posts stay → { ok }; 409 while its sync is queued or running
 export function deleteSource(id) { return del(`/api/sources/${seg(id)}`); }
 // → { ok, job } or { ok: false, error } (already queued, cannot be synced)

@@ -2163,16 +2163,28 @@ code.profile-row-path:not(.dim) { color: var(--text-dim); }
 .metadata-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 22px; }
 .metadata-tool { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .metadata-tool legend { padding: 0; margin-bottom: 4px; font-size: var(--fs-sm); font-weight: 700; letter-spacing: 0; color: var(--muted); }
-/* Settings → Sync, Download defaults: a fold per platform and tool. */
-.defaults-list { display: flex; flex-direction: column; gap: 8px; }
-.defaults-block { border: 1px solid var(--border-soft); border-radius: 8px; padding: 0 12px; }
-.defaults-block > summary { display: flex; align-items: center; gap: 8px; padding: 10px 0; cursor: pointer; min-width: 0; }
-.defaults-block > summary .tool-chip { flex: none; }
-.defaults-count { margin-left: auto; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.defaults-body { padding: 4px 0 12px; display: flex; flex-direction: column; gap: 12px; }
-.defaults-own { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
-.defaults-own li { display: flex; flex-wrap: wrap; align-items: center; gap: 0 10px; }
-.defaults-own .btn-link { min-height: 26px; }
+/* Settings → Sync, Presets: a group per platform and tool, a row per
+   preset (name, what it downloads, who follows it, Edit); its form opens
+   under its row. */
+.preset-groups { display: flex; flex-direction: column; gap: 10px; }
+.preset-group { border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px 12px; min-width: 0; }
+.preset-group-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.preset-group-head .tool-chip { flex: none; }
+.preset-group-count { margin-left: auto; font-size: var(--fs-sm); white-space: nowrap; }
+.preset-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; }
+.preset-row { border-top: 1px solid var(--border-soft); min-width: 0; }
+.preset-row-head { display: flex; align-items: center; gap: 10px; min-height: 34px; min-width: 0; font-size: var(--fs-sm); }
+.preset-name { flex: 0 1 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-summary { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-count { flex: none; white-space: nowrap; }
+.preset-row .btn-link, .preset-new, .preset-unused { min-height: 26px; }
+.preset-new { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; }
+.preset-unused { margin-top: 10px; }
+.preset-editor { display: flex; flex-direction: column; gap: 12px; padding: 8px 0 12px; }
+.preset-editor .settings-actions { margin-top: 0; flex-wrap: wrap; }
+.preset-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--fs-sm); }
+.preset-name-label { font-weight: 700; color: var(--muted); }
+.preset-name-line .page-filter { flex: 0 1 280px; min-width: 0; }
 .slim-failed { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); }
 .slim-failed code { overflow-wrap: anywhere; }
 .scan-running { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
@@ -4051,24 +4063,15 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .source-row > .platform-chip, .person-account > .platform-chip { min-width: 28px; justify-content: center; }
 .source-row > .platform-icon, .person-account > .platform-icon { margin-inline: 6px; }
 .source-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
-.source-summary { font-size: var(--fs-sm); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-/* What it downloads, then whether it follows its platform's download
-   defaults: the summary is cut, the badge never. */
+/* What it follows: the preset select, compact; or the chip of one never
+   synced. */
 .source-summary-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.source-inherit { flex: none; font-size: var(--fs-xs); white-space: nowrap; }
-.source-inherit.is-set { padding: 0 6px; color: var(--blue); border-color: rgba(120, 170, 255, 0.4); }
-/* Beside a field's name in the options form: "default", or "set here",
-   the default and Reset (in normal case: the legend is uppercase). */
-.source-default {
-  margin-left: 8px; font-size: var(--fs-xs); font-weight: 400; letter-spacing: 0; text-transform: none;
-}
-.source-default.is-set { color: var(--blue); }
-.source-default .btn-link { margin-left: 6px; font-size: var(--fs-xs); }
-.source-inherits {
-  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px;
-  margin-bottom: 12px; font-size: var(--fs-sm);
-}
-.source-inherits .btn-link { min-height: 26px; }
+.preset-select { height: 28px; max-width: 100%; min-width: 0; padding-left: 10px; text-overflow: ellipsis; }
+.source-row .preset-select { max-width: 240px; }
+.source-resolved .preset-select { margin-left: auto; max-width: 260px; }
+/* A card's "Preset…": the select, then what it follows now. */
+.source-preset-pick { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.source-custom-note { margin: 0 0 12px; font-size: var(--fs-sm); }
 .source-schedule {
   display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); color: var(--text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
@@ -4228,11 +4231,11 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .nosync-chip, .state-chip { flex: none; gap: 4px; max-width: 100%; color: var(--muted); border-style: dashed; }
 .nosync-chip .icon, .state-chip .icon { flex: none; }
 .state-line { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
-.source-row.is-nosync .source-id > .creator-name, .source-row.is-nosync .source-summary { color: var(--text-dim); }
+.source-row.is-nosync .source-id > .creator-name { color: var(--text-dim); }
 .creator-sub.nosync-note { margin: 0 0 10px; white-space: normal; overflow: visible; }
 /* Profile only (#218): shown as theirs, never downloaded. Dimmed like a
-   source set to Don't sync; its Add-source toggle sits at the end of the
-   resolved line; the folder field of a profile given a downloader fills
+   source set to Don't sync; the link-in-bio import's toggle sits at the
+   end of its line; the folder field of a profile given a downloader fills
    what is left of its line. */
 .source-row.is-profile-only { border-style: dashed; }
 .source-row.is-profile-only .source-id > .creator-name { color: var(--text-dim); }
@@ -4448,9 +4451,8 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
   white-space: normal; max-width: 460px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
-/* The fold's rows: what needs a look reads first; which tool and "defaults"
-   are in the row's Options (and in titles). */
-.creators-manage .source-list :is(.tool-chip, .source-inherit.dim) { display: none; }
+/* The fold's rows: what needs a look reads first; which tool is in titles. */
+.creators-manage .source-list .tool-chip { display: none; }
 @media (max-width: 640px) {
   .creators-manage .source-row .source-status { gap: 4px 8px; }
 }

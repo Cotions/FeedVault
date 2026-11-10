@@ -187,7 +187,7 @@ export default function BioImport({ person, enabled, onAdded, onImported }) {
                     {a.status === "new" && !done && (
                       <label className="source-only-toggle"
                              title={a.tool === "none" ? "No downloader takes this site (Settings → Link routing): it can only be a profile"
-                               : "Shown as theirs, never downloaded; its Options can turn downloading on later"}>
+                               : "Shown as theirs, never downloaded; picking a preset on its row downloads it later"}>
                         <input type="checkbox" checked={profileOnly} disabled={a.tool === "none" || !!busy}
                                onChange={e => setOnly(m => ({ ...m, [key]: e.target.checked }))} />
                         Profile only

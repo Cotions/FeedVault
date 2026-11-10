@@ -19,7 +19,7 @@ import ActionMenu from "../components/ActionMenu";
 import StateChips from "../components/StateChips";
 import { useNoSync } from "../components/NoSync";
 import { useMute } from "../lib/useMute";
-import { AddSource, ProfileOnlyChip, RemoveSourceDialog, SourceOptionsDialog, SourceRow } from "../components/Sources";
+import { AddSource, ProfileOnlyChip, RemoveSourceDialog, SourceOptionsDialog, SourcePresetDialog, SourceRow } from "../components/Sources";
 import { sourceName, useSources } from "../lib/sources";
 import PageHeader from "../components/PageHeader";
 import PersonAbout from "../components/PersonAbout";
@@ -33,11 +33,14 @@ import { accountMatches, linkMatches, sourceMatches, useSearchName } from "../li
 /* A profile only source of theirs (#218) with no account of its own yet
    (none indexed, or a site no downloader takes): shown with the accounts,
    its platform, handle and profile link, marked "Profile only". Its ⋯ menu
-   opens the profile, says whether it downloads (Options), or removes it. */
+   opens the profile, downloads it (a preset to follow; a folder first for
+   a site no downloader takes), or removes it. */
 function ProfileRow({ source: s, onSaved, onRemove }) {
   const [editing, setEditing] = useState(false);
   const url = safeUrl(s.url);
   const name = sourceName(s);
+  const none = s.tool === "none";
+  const Dialog = none ? SourceOptionsDialog : SourcePresetDialog;
   return (
     <li className="person-account" data-source-id={s.id}>
       <PlatformIcon platform={s.platform} />
@@ -48,11 +51,12 @@ function ProfileRow({ source: s, onSaved, onRemove }) {
       </span>
       <ActionMenu label={`More for ${name}`} items={[
         url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(s.platform)} (opens the site)` },
-        { label: "Download options…", icon: "settings", onSelect: () => setEditing(true), title: "Whether this profile is downloaded" },
+        { label: none ? "Download options…" : "Preset…", icon: "settings", onSelect: () => setEditing(true),
+          title: none ? "Whether this profile is downloaded" : "Pick a preset to download this profile" },
         "separator",
         { label: "Remove", icon: "trash", danger: true, onSelect: () => onRemove(s), title: "No longer shown as theirs" },
       ]} />
-      {editing && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
+      {editing && <Dialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
     </li>
   );
 }

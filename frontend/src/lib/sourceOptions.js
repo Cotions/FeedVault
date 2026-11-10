@@ -1,6 +1,7 @@
 // What a source downloads (docs/API.md "What a source downloads"): the
-// names and one-line effects the form shows, the row's summary, and the
-// checks the form makes before the backend makes them again.
+// names and one-line effects the form shows, the preset a source follows,
+// its one-line summary, and the checks the form makes before the backend
+// makes them again.
 
 // Content kinds by platform: [label, effect]. The backend's choices say
 // which a source can have; a kind missing here shows its key.
@@ -100,95 +101,23 @@ export function today(now = new Date()) {
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
 }
 
-/* The form's state from a source's stored options (or the defaults):
-   { content: [kinds], media, since: "" | date, first: "new" | "full" | "last", count: "" | text, schedule,
-     script: "" | script id, session: null (the tool's, from Settings) | the source's own } */
+/* The form's state from a set of options (a source's, a preset's):
+   { content: [kinds], media, since: "" | date, first: "new" | "last", count: "" | text, schedule,
+     script: "" | script id, session: null (the tool's, from Settings) | its own, metadata: "" | mode }.
+   Full history is not in it: a one-off, asked from a source's ⋯ menu. */
 export function formOf(options, choices) {
   const o = options || {};
   return {
     content: o.content || choices?.content_default || [],
     media: o.media || "all",
     since: o.since || "",
-    first: o.first_posts ? "last" : o.full_history ? "full" : "new",
+    first: o.first_posts ? "last" : "new",
     count: o.first_posts ? String(o.first_posts) : "",
     schedule: o.schedule || "off",
     script: o.script || "",
     session: o.session || null,
     metadata: o.metadata || "",
   };
-}
-
-// The form's fields (docs/API.md "Download defaults": an option a source
-// does not set follows them), and the form keys each is made of.
-export const FIELDS = ["content", "media", "since", "first", "session", "script", "metadata", "schedule"];
-const FIELD_KEYS = { first: ["first", "count"] };
-const fieldValue = (form, f) => JSON.stringify((FIELD_KEYS[f] || [f]).map(k => {
-  const v = form[k];
-  return Array.isArray(v) ? [...v].sort() : v;
-}));
-
-/* Whether a form field differs from the one ``defaults`` (formOf of what
-   the source inherits) has: the source then sets it itself. */
-export const fieldOverridden = (form, defaults, f) => !!defaults && fieldValue(form, f) !== fieldValue(defaults, f);
-
-/* The form with field ``f`` back to its default (saved, it is inherited again). */
-export function resetField(form, defaults, f) {
-  const out = { ...form };
-  for (const k of FIELD_KEYS[f] || [f]) out[k] = defaults[k];
-  return out;
-}
-
-/* The fields of a form that differ from its defaults. */
-export const overriddenFields = (form, defaults) => FIELDS.filter(f => fieldOverridden(form, defaults, f));
-
-// The option keys each field saves (the others: their own name).
-const FIELD_OPTIONS = { first: ["full_history", "first_posts"] };
-export const fieldOptions = f => FIELD_OPTIONS[f] || [f];
-
-/* The fields a source sets itself, from its "overrides" (option keys). */
-export const fieldsOf = overrides => new Set(FIELDS.filter(f => fieldOptions(f).some(k => (overrides || []).includes(k))));
-
-/* Whether a source's form field is set on the source, once saved: it was
-   (``own``, fieldsOf its overrides) or it changed since the form opened
-   (``initial``), and it was not reset since (``resets``). A value equal
-   to the default can be set: it then stays when the default changes. */
-export const fieldOwn = (f, form, initial, own, resets) =>
-  !resets.has(f) && (own.has(f) || fieldValue(form, f) !== fieldValue(initial, f));
-
-/* What a source's form saves (POST /api/sources/<id>): ``options``, the
-   fields changed since it opened, and ``reset``, the option keys of those
-   it set and that were reset since; null when there is nothing. Any other
-   field is not sent: it stays set or inherited as it was, so a form opened
-   before a default changed does not pin the old default. */
-export function changesOf(form, initial, own, resets, choices, firstSync = true) {
-  const all = optionsOf(form, choices, firstSync);
-  const options = {};
-  for (const f of FIELDS) {
-    if (resets.has(f) || fieldValue(form, f) === fieldValue(initial, f)) continue;
-    for (const k of fieldOptions(f)) if (k in all) options[k] = all[k];
-  }
-  const reset = FIELDS.filter(f => resets.has(f) && own.has(f)).flatMap(fieldOptions);
-  if (!Object.keys(options).length && !reset.length) return null;
-  return reset.length ? { options, reset } : { options };
-}
-
-/* What a field's default is, for its "Default: …" line. ``setting``: the
-   tool's metadata setting, for a metadata default that follows it. */
-export function defaultText(f, defaults, platform, tool, setting) {
-  const d = defaults;
-  if (f === "content") return d.content.map(k => kindLabel(platform, k)).join(", ");
-  if (f === "media") return MEDIA.find(([v]) => v === d.media)?.[1] || d.media;
-  if (f === "since") return d.since ? `not older than ${d.since}` : "no limit";
-  if (f === "first") return d.first === "last" ? `only the last ${d.count} posts` : "new posts";
-  if (f === "session") {
-    const s = d.session;
-    if (!s) return "as in Settings";
-    return s.mode === "none" ? "no login" : s.mode === "cookies" ? `${s.browser}’s login` : `session of ${s.user}`;
-  }
-  if (f === "script") return d.script ? `script ${d.script}` : `${tool}’s own command`;
-  if (f === "metadata") return metadataLabel(d.metadata || setting || "full");
-  if (f === "schedule") return d.schedule;
-  return "";
 }
 
 /* The first problem with the form, or null. */
@@ -210,17 +139,21 @@ export function formError(form, choices, now = new Date()) {
   return null;
 }
 
-/* The options to send (POST /api/sources, POST /api/sources/<id>), from a
-   form formError passed. ``firstSync``: the first-sync choice is sent
-   (only last_posts is refused once a source has synced). */
+/* The options a form holds, to send (a preset's, a source's own with
+   ``custom``), from a form formError passed. ``firstSync``: the "last N"
+   choice is sent (refused once a source has synced). */
 export function optionsOf(form, choices, firstSync = true) {
   const out = { media: choices?.media ? form.media : "all", since: form.since || null, schedule: form.schedule,
                 script: form.script || null, session: form.session || null, metadata: form.metadata || null };
   if (choices?.content?.length) out.content = choices.content.filter(k => form.content.includes(k));
-  out.full_history = form.first === "full";
   if (firstSync) out.first_posts = form.first === "last" ? Number(form.count) : null;
   return out;
 }
+
+/* Whether two forms would save the same options (a box ticked off and on
+   again is no change). */
+export const sameOptions = (a, b, choices, firstSync = true) =>
+  JSON.stringify(optionsOf(a, choices, firstSync)) === JSON.stringify(optionsOf(b, choices, firstSync));
 
 /* The form after a content box was clicked. Stories last 24 h: turning
    them on makes an off schedule daily, as the backend does; the user can
@@ -246,19 +179,87 @@ export function needsLogin(form, choices, session) {
 export const scriptAnchor = id => `script-${String(id).replace(/[^a-z0-9_-]/gi, ".")}`;
 export const scriptHref = id => `/scripts#${scriptAnchor(id)}`;
 
-/* One line for a source's row: "posts, reels · images · since 2024-01-01",
-   or "script my-insta" when a script runs instead of its tool's command.
-   Only what differs from the defaults; "" when nothing does. */
+/* One line on a set of options, a source's ({ tool, platform, target,
+   options, choices }) or a preset's: "posts, reels · images only · since
+   2024-01-01 · daily", or "script my-insta" when a script runs instead of
+   the tool's command. Only what differs from the built-in choices (the
+   kinds always, where there are some: the platform's own when none is
+   set); "" when nothing does. */
 export function optionsSummary(s) {
   const o = s.options || {};
-  if (o.script) return `script ${o.script}`;
+  const content = o.content || (s.choices?.content?.length ? s.choices.content_default : null);
   const parts = [];
-  if (o.content) parts.push(o.content.map(k => kindLabel(s.platform, k)).join(", "));
-  if (o.media && o.media !== "all") parts.push(`${o.media} only`);
-  if (o.since) parts.push(`since ${o.since}`);
-  if (o.first_posts) parts.push(`first sync: last ${o.first_posts} posts${firstPostsEach(s.tool, o.content, s.platform, s.target)}`);
-  else if (o.full_history) parts.push("full history");
+  if (o.script) parts.push(`script ${o.script}`);
+  else {
+    if (content?.length) parts.push(content.map(k => kindLabel(s.platform, k)).join(", "));
+    if (o.media && o.media !== "all") parts.push(`${o.media} only`);
+    if (o.since) parts.push(`since ${o.since}`);
+    if (o.first_posts) parts.push(`first sync: last ${o.first_posts} posts${firstPostsEach(s.tool, content, s.platform, s.target)}`);
+    else if (o.full_history) parts.push("full history");
+    if (o.session) parts.push(o.session.mode === "none" ? "no login" : o.session.mode === "cookies" ? `${o.session.browser} login` : `session of ${o.session.user}`);
+    if (o.metadata) parts.push(`metadata ${o.metadata}`);
+  }
+  if (o.schedule && o.schedule !== "off") parts.push(o.schedule);
   return parts.join(" · ");
+}
+
+/* The preset select (docs/API.md "Presets"): what a source follows. Its
+   values: "" (Default), a named preset's id, PRESET_CUSTOM (its own
+   options) and PRESET_ONLY (profile only: never downloaded). */
+// A named preset's limits (sources.py PRESETS_MAX, PRESET_NAME_MAX).
+export const PRESETS_MAX = 20;
+export const PRESET_NAME_MAX = 40;
+export const PRESET_CUSTOM = "custom";
+export const PRESET_ONLY = "only";
+
+/* The select's value for a source. Profile only comes first: a source
+   that does not download keeps the preset it followed, unused. */
+export function presetValue(s) {
+  if (s.profile_only) return PRESET_ONLY;
+  return s.custom ? PRESET_CUSTOM : s.preset?.id || "";
+}
+
+/* What a source follows, in a word. */
+export function presetName(s) {
+  if (s.profile_only) return "Profile only";
+  return s.custom ? "Custom" : s.preset?.name || "Default";
+}
+
+/* Downloading turned on for a source that is profile only: "on" when its
+   platform is listed in Settings → Profile only, else back to "platform". */
+export const downloadOn = platformOnly => (platformOnly ? "on" : "platform");
+
+/* What picking ``value`` in a source's select saves (POST
+   /api/sources/<id>): a preset (its own options go), with downloading
+   turned on when it was profile only; or download off. null for
+   PRESET_CUSTOM: its dialog saves. */
+export function presetBody(s, value) {
+  if (value === PRESET_CUSTOM) return null;
+  if (value === PRESET_ONLY) return { options: { download: "off" } };
+  return { preset: value || null, ...(s.profile_only ? { options: { download: downloadOn(s.platform_profile_only) } } : {}) };
+}
+
+/* What a Custom form saves: every option as the form has it, the
+   source's own from then on; downloading turned on as presetBody does. */
+export function customBody(s, form, firstSync = true) {
+  return { custom: true, options: { ...optionsOf(form, s.choices, firstSync),
+                                    ...(s.profile_only ? { download: downloadOn(s.platform_profile_only) } : {}) } };
+}
+
+/* What puts a source back as it was before a pick (its toast's Undo):
+   the preset it followed, or its own options, and its Download. */
+export function restoreBody(s) {
+  const download = s.options?.download || "platform";
+  if (!s.custom) return { preset: s.preset?.id || null, options: { download } };
+  const firstSync = !s.synced || s.options.first_posts != null;
+  return { custom: true, options: { ...optionsOf(formOf(s.options, s.choices), s.choices, firstSync), download } };
+}
+
+/* The options and session a new source would have with ``value`` picked
+   (GET /api/sources/resolve): a named preset's, else Default's. */
+export function resolvedPreset(resolved, value) {
+  const p = (resolved.presets || []).find(x => x.id === value);
+  return p ? { options: p.options, session: p.session } : { options: resolved.defaults, session: resolved.session };
 }
 
 // "in 40 min", "in 3 h", "in 2 d"

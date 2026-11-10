@@ -1,10 +1,11 @@
-// Checks for lib/sourceOptions.js: the form's checks, the options it sends
-// and the row's summary. Run with `npm test`.
+// Checks for lib/sourceOptions.js: the form's checks, the options it sends,
+// the preset select's values and what a pick saves, and the one-line
+// summary. Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  changesOf, defaultText, fieldOverridden, fieldOwn, fieldsOf, formError, formOf, mediaEffect, metadataEffect, needsLogin, optionsOf, optionsSummary,
-  overriddenFields, resetField, scheduleShort, scheduleText, today, toggleKind,
+  PRESET_CUSTOM, PRESET_ONLY, customBody, formError, formOf, mediaEffect, metadataEffect, needsLogin, optionsOf, optionsSummary,
+  presetBody, presetName, presetValue, resolvedPreset, restoreBody, sameOptions, scheduleShort, scheduleText, today, toggleKind,
 } from "../src/lib/sourceOptions.js";
 
 const IG = { content: ["posts", "reels", "stories", "highlights", "tagged"], content_default: ["posts"],
@@ -17,6 +18,7 @@ test("defaults from no options", () => {
                                     schedule: "off", script: "", session: null, metadata: "" });
   assert.equal(formOf({ script: "my-insta" }, IG).script, "my-insta");
   assert.deepEqual(formOf({ first_posts: 50, full_history: false }, YT).first, "last");
+  assert.deepEqual(formOf({ full_history: true }, YT).first, "new");
 });
 
 test("the form refuses what the backend would", () => {
@@ -37,11 +39,12 @@ test("the form refuses what the backend would", () => {
 test("options sent", () => {
   const form = { content: ["stories", "posts"], media: "images", since: "2024-01-01", first: "new", count: "",
                  schedule: "daily" };
+  // Never full history: a one-off, asked from the source's ⋯ menu.
   assert.deepEqual(optionsOf(form, IG), { media: "images", since: "2024-01-01", content: ["posts", "stories"],
-                                           full_history: false, first_posts: null, schedule: "daily",
+                                           first_posts: null, schedule: "daily",
                                            script: null, session: null, metadata: null });
   assert.deepEqual(optionsOf({ ...form, first: "last", count: "20" }, YT),
-                   { media: "all", since: "2024-01-01", full_history: false, first_posts: 20, schedule: "daily",
+                   { media: "all", since: "2024-01-01", first_posts: 20, schedule: "daily",
                      script: null, session: null, metadata: null });
   assert.equal("first_posts" in optionsOf(form, YT, false), false);
   assert.equal(optionsOf({ ...form, script: "builtin:yt-dlp-channel" }, YT).script, "builtin:yt-dlp-channel");
@@ -81,7 +84,20 @@ test("summary", () => {
   assert.equal(optionsSummary({ tool: "gallery-dl", platform: "twitter",
                                 options: { content: ["media"], media: "all", first_posts: 30 } }),
                "media · first sync: last 30 posts");
-  assert.equal(optionsSummary({ platform: "youtube", options: { media: "all", full_history: false } }), "");
+  assert.equal(optionsSummary({ platform: "youtube", options: { media: "all", full_history: false, schedule: "off",
+                                                                 session: null, metadata: null } }), "");
+  // The kinds it does not set are the platform's own.
+  assert.equal(optionsSummary({ platform: "instagram", choices: IG, options: { content: null, media: "images" } }),
+               "posts · images only");
+  assert.equal(optionsSummary({ platform: "youtube", choices: YT, options: { content: null } }), "");
+  // A preset's line: its schedule, login and metadata files too; a script keeps its schedule.
+  assert.equal(optionsSummary({ platform: "instagram", options: { content: ["posts"], schedule: "daily", metadata: "slim",
+                                                                   session: { mode: "none" } } }),
+               "posts · no login · metadata slim · daily");
+  assert.equal(optionsSummary({ platform: "twitter", options: { session: { mode: "cookies", browser: "firefox" } } }),
+               "firefox login");
+  assert.equal(optionsSummary({ platform: "instagram", options: { script: "my-insta", schedule: "weekly" } }),
+               "script my-insta · weekly");
   // yt-dlp's --playlist-items is per tab on a channel's own page.
   for (const [target, each] of [["https://youtube.com/@somechannel", " of each tab"],
                                 ["https://youtube.com/@somechannel/shorts", ""],
@@ -124,22 +140,59 @@ test("schedule line", () => {
   assert.equal(scheduleShort({ schedule: { ...sch, next_at: 0 } }, now), "due");
 });
 
-test("fields set on a source against its download defaults", () => {
-  const defaults = formOf({ content: ["posts", "reels"], media: "videos", schedule: "daily" }, IG);
-  const form = { ...defaults, content: ["reels", "posts"], since: "2024-01-01", schedule: "weekly" };
-  // The order of the kinds is not a change.
-  assert.equal(fieldOverridden(form, defaults, "content"), false);
-  assert.deepEqual(overriddenFields(form, defaults), ["since", "schedule"]);
-  assert.deepEqual(overriddenFields(resetField(form, defaults, "since"), defaults), ["schedule"]);
-  // The last N posts is one field of two form values.
-  const last = { ...defaults, first: "last", count: "20" };
-  assert.deepEqual(overriddenFields(last, defaults), ["first"]);
-  assert.deepEqual(resetField(last, defaults, "first"), defaults);
-  // No defaults (a new source's form): nothing is marked.
-  assert.equal(fieldOverridden(form, null, "since"), false);
-  assert.equal(defaultText("since", defaults, "instagram", "instaloader"), "no limit");
-  assert.equal(defaultText("metadata", defaults, "instagram", "instaloader", "slim"), "slim");
-  assert.equal(defaultText("script", defaults, "instagram", "instaloader"), "instaloader’s own command");
+test("what a source follows, and what a pick saves", () => {
+  const src = { id: 1, tool: "instaloader", platform: "instagram", choices: IG, synced: true, preset: null, custom: false,
+                profile_only: false, platform_profile_only: false,
+                options: { content: ["posts"], media: "all", since: null, first_posts: null, schedule: "off", script: null,
+                           session: null, metadata: null, download: "platform", full_history: false } };
+  const named = { ...src, preset: { id: "ab12cd", name: "Images" } };
+  const own = { ...src, custom: true, options: { ...src.options, media: "images" } };
+  const only = { ...named, profile_only: true, options: { ...src.options, download: "off" } };
+  assert.deepEqual([src, named, own, only].map(presetValue), ["", "ab12cd", PRESET_CUSTOM, PRESET_ONLY]);
+  assert.deepEqual([src, named, own, only].map(presetName), ["Default", "Images", "Custom", "Profile only"]);
+  // A preset: its id, or null for Default; nothing else is sent, so its Download stays.
+  assert.deepEqual(presetBody(src, "ab12cd"), { preset: "ab12cd" });
+  assert.deepEqual(presetBody(named, ""), { preset: null });
+  // Custom… saves nothing by itself: its dialog does.
+  assert.equal(presetBody(src, PRESET_CUSTOM), null);
+  assert.deepEqual(presetBody(named, PRESET_ONLY), { options: { download: "off" } });
+  // From profile only, a preset downloads again: "on" where its platform is listed as profile only.
+  assert.deepEqual(presetBody(only, "ab12cd"), { preset: "ab12cd", options: { download: "platform" } });
+  assert.deepEqual(presetBody({ ...only, platform_profile_only: true }, ""), { preset: null, options: { download: "on" } });
+  // Custom: every option the form has, never full history; last N only before a first sync.
+  const form = { ...formOf(src.options, IG), media: "videos" };
+  assert.deepEqual(customBody(src, form, false), { custom: true, options: {
+    content: ["posts"], media: "videos", since: null, schedule: "off", script: null, session: null, metadata: null } });
+  assert.equal(customBody(src, form).options.first_posts, null);
+  assert.equal(customBody(only, form, false).options.download, "platform");
+  assert.equal("full_history" in customBody(src, form).options, false);
+  // Undo: the preset it followed, or its own options, and its Download.
+  assert.deepEqual(restoreBody(named), { preset: "ab12cd", options: { download: "platform" } });
+  assert.deepEqual(restoreBody(only), { preset: "ab12cd", options: { download: "off" } });
+  assert.deepEqual(restoreBody(own), { custom: true, options: { ...customBody(own, formOf(own.options, IG), false).options,
+                                                                download: "platform" } });
+});
+
+test("a form compared as it would be saved", () => {
+  const a = formOf({ content: ["posts", "reels"], media: "videos" }, IG);
+  // The order of the kinds is not a change, nor a count typed under "new posts".
+  assert.equal(sameOptions(a, { ...a, content: ["reels", "posts"] }, IG), true);
+  assert.equal(sameOptions(a, { ...a, count: "20" }, YT), true);
+  assert.equal(sameOptions(a, { ...a, first: "last", count: "20" }, YT), false);
+  assert.equal(sameOptions(a, { ...a, first: "last", count: "20" }, YT, false), true);
+  assert.equal(sameOptions(a, { ...a, schedule: "daily" }, IG), false);
+});
+
+test("a new source's preset: its options and the session they would use", () => {
+  const resolved = { defaults: { content: ["posts"] }, session: { mode: "none" },
+                     presets: [{ id: "ab12cd", name: "Stories", options: { content: ["posts", "stories"] },
+                                 session: { mode: "none" } }] };
+  assert.equal(resolvedPreset(resolved, "").options, resolved.defaults);
+  assert.equal(resolvedPreset(resolved, PRESET_CUSTOM).options, resolved.defaults);
+  const picked = resolvedPreset(resolved, "ab12cd");
+  assert.deepEqual(needsLogin(formOf(picked.options, IG), IG, picked.session), ["stories"]);
+  // The userscript's answer has no presets.
+  assert.equal(resolvedPreset({ defaults: {} }, "ab12cd").session, undefined);
 });
 
 test("metadata modes say what none loses", () => {
@@ -147,29 +200,4 @@ test("metadata modes say what none loses", () => {
   assert.match(metadataEffect("instaloader", "slim"), /slimmed/);
   assert.equal(formOf({ metadata: "none" }, IG).metadata, "none");
   assert.equal(optionsOf({ ...formOf(null, IG), metadata: "" }, IG).metadata, null);
-});
-
-test("a source's form saves only what changed, and resets only what was reset", () => {
-  // Media pinned to images; the default became images since: untouched, nothing is sent.
-  const opened = formOf({ media: "images", schedule: "off" }, IG);
-  const set = fieldsOf(["media"]);
-  assert.deepEqual([...set], ["media"]);
-  assert.equal(changesOf(opened, opened, set, new Set(), IG), null);
-  assert.equal(fieldOwn("media", opened, opened, set, new Set()), true);
-  // Another field changed: only it is sent; media stays set, unsent.
-  const daily = { ...opened, schedule: "daily" };
-  assert.deepEqual(changesOf(daily, opened, set, new Set(), IG), { options: { schedule: "daily" } });
-  assert.equal(fieldOwn("schedule", daily, opened, set, new Set()), true);
-  // Reset: media is sent as reset, not as a value.
-  const reset = new Set(["media"]);
-  assert.deepEqual(changesOf({ ...opened, media: "all" }, opened, set, reset, IG), { options: {}, reset: ["media"] });
-  assert.equal(fieldOwn("media", { ...opened, media: "all" }, opened, set, reset), false);
-  // A stale form (opened when the default was "all"): an untouched field is never sent.
-  const stale = formOf({ media: "all" }, IG);
-  assert.deepEqual(changesOf({ ...stale, since: "2024-01-01" }, stale, new Set(), new Set(), IG),
-                   { options: { since: "2024-01-01" } });
-  // The first-sync field saves both of its keys; last N only while it is the first sync.
-  const first = changesOf({ ...stale, first: "full" }, stale, new Set(), new Set(), YT, false);
-  assert.deepEqual(first, { options: { full_history: true } });
-  assert.deepEqual(fieldsOf(["first_posts"]), new Set(["first"]));
 });
