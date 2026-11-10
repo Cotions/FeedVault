@@ -11,9 +11,9 @@ import { pathToFileURL } from "node:url";
 
 export const SHARDS = [
   ["layout"],
-  ["states"],
+  ["states", "phone"],
   ["layout-zoom", "themes"],
-  ["desktop", "phone"],
+  ["desktop"],
 ];
 
 export function shardArgs(n) {
