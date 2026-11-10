@@ -12,7 +12,8 @@ import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 
    Props: open, title, children (body), confirmLabel, danger, busy, error,
           onConfirm, onCancel, initialFocus (a ref to focus instead of Cancel,
-          for a dialog whose body is a form), confirmDisabled */
+          for a dialog whose body is a form: it opens at its top),
+          confirmDisabled */
 export default function ConfirmDialog({
   open, title, children, confirmLabel = "Confirm", cancelLabel = "Cancel",
   danger = false, busy = false, error = null, onConfirm, onCancel, initialFocus, confirmDisabled = false,
@@ -26,7 +27,13 @@ export default function ConfirmDialog({
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement;
-    (initialFocus?.current || cancelRef.current)?.focus();
+    // A form's body (not one field of it) takes the focus without the box
+    // scrolling to it: a long one opens at its top, title in view (#235).
+    const first = initialFocus?.current || cancelRef.current;
+    if (first && first === initialFocus?.current && !first.matches("input, select, textarea, button")) {
+      first.focus({ preventScroll: true });
+      if (boxRef.current) boxRef.current.scrollTop = 0;
+    } else first?.focus();
     return () => restoreFocus(prev);
     // Once per opening; initialFocus is a ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps

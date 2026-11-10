@@ -70,14 +70,14 @@ browser from reading or changing the library; they are not a login.
   - `POST /api/saved`
   - `POST /api/save`
   - `GET /api/jobs/<id>`
-  - `GET /api/sources/resolve` (without `defaults`, `session` and
-    `metadata`)
-  - `POST /api/sources` (403 when it sets an `options.script`, or any
-    `options.session` but `{ "mode": "none" }`; the source gets no script
-    and no login as its own, see [Download defaults](#download-defaults))
-  - `GET /api/sources/<id>` (without `defaults`, `session`, `metadata` and
-    `script_warning`, and with `options.script` and `options.session`
-    `null`; `"dashboard_only": true` when its syncs only start from the
+  - `GET /api/sources/resolve` (without `defaults`, `session`,
+    `metadata` and `presets`)
+  - `POST /api/sources` (403 when it sets an `options.script`, any
+    `options.session` but `{ "mode": "none" }`, or a `preset`; the source
+    gets no script and no login as its own, see [Presets](#presets))
+  - `GET /api/sources/<id>` (without `defaults`, `session`, `metadata`,
+    `script_warning`, `preset`, `presets` and `custom`, and with
+    `options.script` and `options.session` `null`; `"dashboard_only": true` when its syncs only start from the
     dashboard: it runs a script or logs in)
   - `POST /api/sources/<id>/sync` (403 when the source runs a script, or
     its sync would use a login: cookies or a saved session)
@@ -226,8 +226,8 @@ A **full post** (`GET /api/posts/<platform>/<post_id>`) adds:
 | GET | `/api/unmatched` | `[{ "path", "size", "mtime", "reason", "dismissed" }]` (`dismissed`: an extra copy whose group is marked not a duplicate, see [Duplicates](#duplicates)) |
 | GET | `/api/scan` | scan status, see below |
 | POST | `/api/scan` | starts a rescan in the background; `{ "ok": true }`, or `{ "ok": false, "error": "already running" }` |
-| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "rating_colors": { "enabled": true, "bands": [{ "min": 1, "color": "#d9534f" }, …] }, "open_links": null, "source_defaults": [block, …], "profile_only_platforms": ["spotify"], "platforms": ["instagram", "spotify", "tiktok", …] }` (see [Download defaults](#download-defaults) and [Rating colors](#rating-colors); `platforms`: those Settings → Profile only offers, see [Profile only](#profile-only)) |
-| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "rating_colors": {…} }` (see [Rating colors](#rating-colors), `{ "open_links": {…} }` or `null` (see [Opening a link elsewhere](#opening-a-link-elsewhere)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (see [Download defaults](#download-defaults)), `{ "profile_only_platforms": ["spotify", …] }` (see [Profile only](#profile-only)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
+| GET | `/api/config` | `{ "media_roots": ["/abs/path"], "data_directory": "/abs", "profile": { "id": "default", "name": "Default" }, "version": "0.0.0-dev", "tools": { "yt-dlp": "/abs/yt-dlp" }, "instaloader": { "session": { "mode": "none" }, "pause": 60, "metadata": "full" }, "gallery-dl": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "yt-dlp": { "session": { "mode": "none" }, "pause": 30, "ignore_config": false, "metadata": "full" }, "youtube_max_seconds": 180, "routes": {…}, "link_labels": { "patreon.com": "Patreon" }, "check_updates": false, "schedules_paused": false, "desktop_notifications": false, "bio_import": false, "rating_colors": { "enabled": true, "bands": [{ "min": 1, "color": "#d9534f" }, …] }, "open_links": null, "source_defaults": [block, …], "profile_only_platforms": ["spotify"], "platforms": ["instagram", "spotify", "tiktok", …] }` (see [Presets](#presets) and [Rating colors](#rating-colors); `platforms`: those Settings → Profile only offers, see [Profile only](#profile-only)) |
+| POST | `/api/config` | body `{ "media_roots": [...] }` and/or `{ "tools": { "yt-dlp": "/abs/path" } }` and/or `{ "instaloader": {…} }`, `{ "gallery-dl": {…} }`, `{ "yt-dlp": {…} }`, `{ "youtube_max_seconds": 180 }`, `{ "routes": {…} }`, `{ "link_labels": {…} }` (see [Link labels](#link-labels)), `{ "check_updates": true }`, `{ "schedules_paused": true }` (see [Schedules](#schedules)), `{ "desktop_notifications": true }` (see [Notifications](#notifications)), `{ "bio_import": true }` (see [Link-in-bio import](#link-in-bio-import)), `{ "rating_colors": {…} }` (see [Rating colors](#rating-colors), `{ "open_links": {…} }` or `null` (see [Opening a link elsewhere](#opening-a-link-elsewhere)), `{ "source_defaults": { "gallery-dl": { "twitter": {…} } } }` (a platform's Default preset, see [Presets](#presets)), `{ "profile_only_platforms": ["spotify", …] }` (see [Profile only](#profile-only)); each tool's `metadata` (see [Metadata modes](#metadata-modes)); `{ "ok": true, "config": {…} }` or `{ "ok": false, "error": "…" }`; 403 from another site, as every route the userscript does not call (see [Security rules](#security-rules)). See [Tools](#tools), [Downloaders](#downloaders), [instaloader settings](#instaloader-settings), [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings) and [Link routing](#link-routing) |
 | GET | `/api/profiles` | `{ "active": "default", "profiles": [profile, …] }`, see [Profiles](#profiles) |
 | POST | `/api/profiles` | body `{ "name", "data_directory", "media_roots": [...] }` → `{ "ok": true, "profile": profile, "active", "profiles" }`: a new profile, not switched to; see [Profiles](#profiles) |
 | POST | `/api/profiles/<id>` | body `{ "name" }` → `{ "ok": true, "active", "profiles" }`: renames it |
@@ -266,8 +266,8 @@ jobs) and its own media roots (each with its own `.feedvault-trash`).
 Exactly one is active, and every other route of this file reads and writes
 the active one. The rest of the config is shared by all profiles: tool
 paths, the instaloader, gallery-dl and yt-dlp settings, link routing,
-`check_updates`, `desktop_notifications`, `bio_import`, the download defaults
-(`source_defaults`), `profile_only_platforms` and `schedules_paused` (one switch for all: only the active profile's schedules
+`check_updates`, `desktop_notifications`, `bio_import`, the presets
+(`source_defaults`, `source_presets`), `profile_only_platforms` and `schedules_paused` (one switch for all: only the active profile's schedules
 run anyway). So is the scripts folder.
 
 `config.json` keeps them as `"profiles": [{ "id", "name", "data_directory",
@@ -2170,6 +2170,7 @@ repairs a source left without its account by an older version.
   "person": { "id": 3, "name": "Some Body" },
   "options": { "full_history": false, "session": null, "content": ["posts", "reels"], "media": "all",
                "since": "2024-01-01", "first_posts": null, "script": null, "metadata": null, "schedule": "daily" },
+  "preset": null, "custom": true, "presets": [{ "id": "3f9a1c", "name": "Images only" }],
   "overrides": ["content", "since"],
   "defaults": { "full_history": false, "session": null, "content": null, "media": "all", "since": null,
                 "first_posts": null, "script": null, "metadata": null, "schedule": "daily" },
@@ -2216,19 +2217,26 @@ repairs a source left without its account by an older version.
   listed there (what `download` `"platform"` means for it); `needs_tool`:
   a source with tool `none` whose `download` says to download, which needs
   a tool and a folder first.
-- `options`: what its syncs use, option by option: the source's own value
-  when it sets one (`overrides` names those), else its platform's
-  [download default](#download-defaults), else the default below.
-  `defaults`: what it would have without any of its own (the form shows
-  them as "Default: …"). A source stores only its `overrides`.
+- `preset`: the named [preset](#presets) it follows, `{ "id", "name" }`,
+  or `null`: it follows its platform's Default, or (`custom` `true`) sets
+  options of its own. `presets`: the named ones of its tool and platform,
+  which it could follow instead.
+- `options`: what its syncs use, option by option: what the preset it
+  follows says (a named one over the built-in values below; Default the
+  same); for a Custom source its own value where it sets one (`overrides`
+  names those) over Default. `defaults`: what it would have without any
+  of its own. A source stores the preset it follows and its `overrides`.
   - `download`: `"platform"` (default): as its platform says (listed in
     `profile_only_platforms` or not); `"on"`: always downloaded; `"off"`:
-    never, [profile only](#profile-only). Not a download default.
+    never, [profile only](#profile-only). Each source's own, whatever
+    it follows: never part of a preset.
   - `full_history`: `false` (default): the first sync starts after the
     newest post FeedVault already has for the account, see below. `true`:
     the next sync walks the whole profile and downloads every post not in
     the folder yet (without `--fast-update`, the post, reels and tagged
     stamps dropped first); once it succeeds, it is set back to `false`.
+    Each source's own too, never part of a preset: the source's ⋯ menu
+    asks for it ("Sync full history…").
   - `session`: `null` to use the global setting (see
     [instaloader settings](#instaloader-settings) and
     [gallery-dl and yt-dlp settings](#gallery-dl-and-yt-dlp-settings)), or
@@ -2390,11 +2398,13 @@ repairs a source left without its account by an older version.
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/sources` | `{ "sources": [source, …], "suggestions": [suggestion, …] }`, sources by target |
-| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "no_sync": false, "choices": {…}, "defaults": {…}, "metadata": {…}, "session": { "mode": "none" }, "profile_only": false }` (`source`: the id of the source already there for it; `profile_only`: its platform is [profile only](#profile-only); `no_sync`: that source, or the account the profile's folder or handle belongs to, is set to [Don't sync](#dont-sync), so it can be neither added nor synced; `choices`: as a source's; `defaults`: the options a new source starts from, its platform's [download defaults](#download-defaults); `metadata`: as a source's; `session`: the one a new source uses). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted, with `"profile": { "tool": "none", "platform", "target" }` when only its host is not in the routing table (it can be added as a profile only). With `&tool=instaloader`, `url` is a profile name or `@name` instead; with `&tool=none`, any site's profile link, answered with `folder` `null` |
-| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "options": {…} }` → `{ "ok": true, "source": {…} }` (an option left out, or sent as its platform's default, is not stored: it follows the default; `"tool": "none"`: a [profile only](#profile-only) source of any site's profile link, no folder, `download` stored `"off"` unless its platform is listed; 400 with a `folder`, and 400 `{ "needs_tool": true }` for `download` `"on"`); 409 `no_sync` is not answered for a source that does not download; 409 `{ "ok": false, "error", "no_sync": true }` when its account (given, or found from its folder or handle) or its person is set to [Don't sync](#dont-sync), from the dashboard and another site alike; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, or an `options.session` other than `{ "mode": "none" }` (a [browser profile](#browser-profiles) included), set from another site (see [Security rules](#security-rules)) |
+| GET | `/api/sources/resolve?url=…` | what adding that link would make, shown before saving: `{ "ok": true, "tool": "yt-dlp", "platform": "tiktok", "target": "https://tiktok.com/@someone", "folder": "/archive/tiktok/someone", "source": null, "no_sync": false, "choices": {…}, "defaults": {…}, "metadata": {…}, "session": { "mode": "none" }, "profile_only": false }` (`source`: the id of the source already there for it; `profile_only`: its platform is [profile only](#profile-only); `no_sync`: that source, or the account the profile's folder or handle belongs to, is set to [Don't sync](#dont-sync), so it can be neither added nor synced; `choices`: as a source's; `defaults`: the options a new source starts from, its platform's Default [preset](#presets); `metadata`: as a source's; `session`: the one a new source uses; `presets`: `[{ "id", "name", "options", "session" }]`, the named presets it could follow instead, each with what this profile would download with it and the session that would use). `{ "ok": false, "error" }` (still a 200: it answers the question) for a link that is not accepted, with `"profile": { "tool": "none", "platform", "target" }` when only its host is not in the routing table (it can be added as a profile only). With `&tool=instaloader`, `url` is a profile name or `@name` instead; with `&tool=none`, any site's profile link, answered with `folder` `null` |
+| POST | `/api/sources` | body `{ "target": "…", "tool": "…", "folder": "/abs", "person": 3, "account": { "platform", "id" }, "preset": "3f9a1c", "options": {…} }` → `{ "ok": true, "source": {…} }` (`preset`: the named [preset](#presets) it follows, of its tool and platform (400 for another id; with it, `options` may hold `download` and `full_history` only); without one it follows Default, and an option left out, or sent as Default has it, is not stored; one sent with another value makes it Custom; `"tool": "none"`: a [profile only](#profile-only) source of any site's profile link, no folder, `download` stored `"off"` unless its platform is listed; 400 with a `folder`, and 400 `{ "needs_tool": true }` for `download` `"on"`); 409 `no_sync` is not answered for a source that does not download; 409 `{ "ok": false, "error", "no_sync": true }` when its account (given, or found from its folder or handle) or its person is set to [Don't sync](#dont-sync), from the dashboard and another site alike; 400 for an unknown `person`, for a `folder` that is not the account's own (a media root, a platform's folder, one holding other accounts' posts), and for an `options.script` that does not exist, is refused or runs another tool than the source's; 403 for an `options.script`, an `options.session` other than `{ "mode": "none" }` (a [browser profile](#browser-profiles) included), or a `preset`, set from another site (see [Security rules](#security-rules)) |
 | GET | `/api/sources/<id>` | source, or 404 |
-| POST | `/api/sources/<id>` | body `{ "options": {…}, "reset": true \| ["media", …] }` (an option sent with another value than it has now becomes its own, even one equal to its default; one sent as it is now, or not sent, stays as it was, set or inherited; `reset`: those options, or all with `true`, follow the defaults again, before `options` applies; never `download`, which `true` leaves as it is and a list may not name), and/or `"person": id \| null`: the person it is added to, or none. A source shows with its account's person first, so one tied to an account takes it along: linked to that person (taken from anyone else), or with `null` unlinked from the person it showed with (an account unlinked from someone set to [Don't sync](#dont-sync) keeps the switch); `person` alone is taken while its sync runs, and with `options` it is written only when they are. A source with tool `none` given `"folder": "/abs" | null` with `options.download` that downloads gets the tool the routing table gives its link (its handle for instaloader) and that folder (`null`: the default one), checked as `POST /api/sources` checks them (400 when its host is still not routed); `download` `"on"` without a `folder` is 400 `{ "needs_tool": true }` → `{ "ok": true, "source": {…} }`; 400 (`person` not an id, or no such person); 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent or reset; 403 from another site (see [Security rules](#security-rules)) |
-| POST | `/api/source-defaults/apply` | body `{ "tool": "gallery-dl", "platform": "twitter", "option": "media" }` → `{ "ok": true, "applied": 3, "skipped": 1 }`: every source of that tool and platform that sets that option itself stops doing so and follows the [download default](#download-defaults); those syncing now are skipped (but for `schedule`). 400 for another option than the defaults'; 403 from another site |
+| POST | `/api/sources/<id>` | what it follows, one of: `{ "preset": "3f9a1c" \| null }` (a named [preset](#presets) of its tool and platform, or `null` for Default: the options it set itself go; `options` beside it may hold `download` and `full_history` only; 400 for another id, or with `custom` or `reset`); `{ "custom": true, "options": {…} }` (Custom: every option becomes its own, as it has them now with those sent over them, and it follows no preset); or `{ "options": {…}, "reset": true \| ["media", …] }` (an option sent with another value than it has now becomes its own, even one equal to what it inherits; one sent as it is now, or not sent, stays as it was, set or inherited; any but `download` and `full_history` set on a source that follows a named preset makes it Custom; `reset`: those options, or all with `true`, are inherited again, before `options` applies; never `download`, which `true` leaves as it is and a list may not name), and/or `"person": id \| null`: the person it is added to, or none. A source shows with its account's person first, so one tied to an account takes it along: linked to that person (taken from anyone else), or with `null` unlinked from the person it showed with (an account unlinked from someone set to [Don't sync](#dont-sync) keeps the switch); `person` alone is taken while its sync runs, and with `options` it is written only when they are. A source with tool `none` given `"folder": "/abs" | null` with `options.download` that downloads gets the tool the routing table gives its link (its handle for instaloader) and that folder (`null`: the default one), checked as `POST /api/sources` checks them (400 when its host is still not routed); `download` `"on"` without a `folder` is 400 `{ "needs_tool": true }` → `{ "ok": true, "source": {…} }`; 400 (`person` not an id, or no such person); 400 `{ "ok": false, "error" }` naming what is refused; 409 while its sync is queued or running (its end sets `full_history` and `first_posts` back), unless only `schedule` is sent or reset; 403 from another site (see [Security rules](#security-rules)) |
+| POST | `/api/presets` | body `{ "tool": "gallery-dl", "platform": "twitter", "name": "Images only", "options": { "media": "images" } }` → `{ "ok": true, "preset": {…} }`: a new named [preset](#presets) of that tool and platform. 400 `{ "ok": false, "error" }` for a name that is empty, over 40 characters, taken on that platform or reserved (Default, Custom), an option refused, or a 21st preset of the pair; 403 from another site |
+| POST | `/api/presets/<id>` | body `{ "name": "…", "options": {…} }`, either or both (`options` replaces them all) → `{ "ok": true, "preset": {…} }`: the sources that follow it use them from their next sync. 400 as above; 404 for an unknown id; 403 from another site |
+| DELETE | `/api/presets/<id>` | → `{ "ok": true, "sources": 3 }`: the preset is gone and the `sources` that followed it follow Default again. 404 for an unknown id; 403 from another site |
 | DELETE | `/api/sources/<id>` | → `{ "ok": true }`: the source is forgotten; its folder, files and posts stay. 409 while its sync is queued or running; 403 from another site |
 | POST | `/api/sources/<id>/rename` | body `{ "to": "new.name" }` (the suggested name, as `health.rename.to`) → `{ "ok": true, "source": {…} }`: the target becomes `to` and the suggestion goes; the folder, its files and the posts stay where they are. 400 when there is no suggestion or `to` is not it; 409 while its sync is queued or running, or when another source of that tool has that target, or the source's target changed meanwhile; 403 from another site |
 | DELETE | `/api/sources/<id>/rename` | → `{ "ok": true, "source": {…} }`: the suggestion is forgotten (a later sync that reports it again brings it back); 403 from another site |
@@ -2821,8 +2831,8 @@ stored value that is not valid counts as the default (no flag).
 
 What each tool writes beside the media it downloads. One mode per tool in
 its settings (`"metadata"`, default `"full"`), and a source's own in its
-`options.metadata` (`null`: the tool's, or its platform's
-[download default](#download-defaults)). Saves follow the mode of the
+`options.metadata` (`null`: the tool's, unless the [preset](#presets)
+it follows says otherwise). Saves follow the mode of the
 folder they go to. A change applies to new downloads only: the files
 already there stay as they are (the "Slim existing metadata" job aside).
 
@@ -2874,63 +2884,115 @@ write them; a trashed post adds its yt-dlp line, and gallery-dl's entries
 from the staged metadata of a save), instaloader's stamps, the account a
 post belongs to, duplicates, the Trash and the save's gathering of files.
 
-### Download defaults
+### Presets
 
-The options a source does not set itself follow its platform's download
-defaults: one block per tool and platform (gallery-dl × twitter, bluesky,
-tiktok, instagram, …; instaloader × instagram; yt-dlp × youtube, tiktok,
-…), in config.json as `"source_defaults": { "gallery-dl": { "twitter": {
-"content": ["media"], "schedule": "daily" } } }`, only the options set.
-Set once, every source of that platform that does not set an option
-follows it from its next sync; one that does keeps its own. New sources
-start from them (the form shows them filled in), and those added without
-options (a person's profiles, a suggestion, the userscript) set nothing.
-An option a source sets stays set until it is reset (`reset` in `POST
-/api/sources/<id>`, or Reset and "Reset all to default" in its Options,
-where picking "Default" resets too), even when the default comes to
-equal it: a later default does not move it. Saving its Options writes
-only the options changed there: one sent as it is now stays set or
-inherited as it was, so a form opened before a default changed does not
-pin the old one.
+What a source downloads is a **preset**: a named set of options for one
+tool and platform (gallery-dl × twitter, bluesky, tiktok, instagram, …;
+instaloader × instagram; yt-dlp × youtube, tiktok, …). A source only
+says which one it follows. Presets are made and edited in Settings →
+Sync → Presets; a source picks one in the select on its row.
+
+- **Default**: every pair has one. It cannot be deleted or renamed, only
+  edited. In config.json as `"source_defaults": { "gallery-dl": {
+  "twitter": { "content": ["media"], "schedule": "daily" } } }`, only the
+  options set. New sources follow it, whatever adds them (the Add source
+  box, a person's profiles, a suggestion, the userscript, the link-in-bio
+  import), unless they are added with a `preset`.
+- **Named presets**: in config.json as `"source_presets": { "gallery-dl":
+  { "twitter": [{ "id": "3f9a1c", "name": "Images only", "options": {
+  "media": "images" } }] } }`, only the options set. `id`: 4 to 16 of
+  `[a-z0-9]`, made by the backend, unique in the config, never reused for
+  a rename. `name`: trimmed, whitespace collapsed, 1 to 40 characters,
+  unique per pair whatever the case, not `Default` or `Custom`. At most
+  20 per pair. A hand-edited entry that is not valid is skipped, a
+  hand-edited option that is not valid too.
+- **Custom**: a source with options of its own (`custom` `true`) follows
+  no named preset: its own options apply over Default, as they always
+  did. A source that set options before presets existed is Custom;
+  nothing is converted.
+
+The options are a source's but `download` and `full_history`, which stay
+each source's own whatever it follows (see [Sources](#sources)).
+
+What a sync uses, read again each time (a manual Sync, the scheduler, the
+API alike):
+
+1. The source follows a named preset: the preset's options over the
+   built-in values. **Not** over Default: a preset is whole in itself.
+2. Else: its own options (Custom) over Default over the built-in values.
+3. The id it follows names no preset of its tool and platform (deleted,
+   config.json edited, a restore from another machine): Default. Never
+   an error; the id stays stored, unused.
+
+Either way a preset's `content` applies only to sources whose link does
+not pick what is downloaded, and its `first_posts` only until a sync of
+the source has worked (ended `done`; a failed or cancelled first one
+leaves it) and never with `full_history`.
+
+A "last N" first sync ends with a date floor (see
+[What a source downloads](#what-a-source-downloads)). A Custom source
+keeps it as its own `since`. One that follows a preset keeps it beside
+its options instead (`floor` in its stored JSON; `first_pending` when
+that sync found none, so the preset's "last N" applies once more), and
+goes on following the preset: its `options.since` is the later of the
+preset's and that floor. A full history asked for drops the floor.
+
+Changing what a source follows (`POST /api/sources/<id>`):
+
+- `{ "preset": id | null }`: its own options go; `download` and
+  `full_history` stay.
+- `{ "custom": true, "options": {…} }`: it starts from what it has now
+  (the preset's values, its floor as `since`), with those sent over
+  them, all stored as its own; the preset is forgotten.
+- Deleting a preset (`DELETE /api/presets/<id>`): the sources that
+  followed it follow Default from their next sync; the answer says how
+  many.
+
+The preset a source follows is in `sources.json` with its other options,
+so a rebuilt index or a restore gets it back; restored where that preset
+does not exist, the source follows Default.
 
 But from another site (the userscript): a source added from there does
-not inherit a default `script`, nor any login: it gets `"script": null`
-and `"session": { "mode": "none" }` as its own, whatever the defaults or
-the tool's setting say then or later (the dashboard alone picks those,
+not inherit a `script` from Default, nor any login: it gets `"script":
+null` and `"session": { "mode": "none" }` as its own (so it reads as
+Custom), whatever Default or the tool's setting say then or later, and
+it cannot be added with a `preset` (the dashboard alone picks those,
 see [Security rules](#security-rules)).
 
 `GET /api/config` has `"source_defaults": [block, …]`, one per tool and
-platform the routing table routes to, a source has, or defaults are set
+platform the routing table routes to, a source has, or a preset is set
 for:
 
 ```json
 { "tool": "gallery-dl", "platform": "twitter", "choices": {…},
   "defaults": { "session": null, "content": ["media"], "media": "all", "since": null, "first_posts": null,
                 "script": null, "metadata": null, "schedule": "daily" },
-  "set": ["content", "schedule"], "sources": 41,
-  "overrides": { "session": 0, "content": 3, "media": 0, "since": 1, "first_posts": 0, "script": 0,
-                 "metadata": 0, "schedule": 2 } }
+  "set": ["content", "schedule"], "sources": 41, "default_sources": 30, "custom": 4,
+  "presets": [{ "id": "3f9a1c", "name": "Images only", "tool": "gallery-dl", "platform": "twitter",
+                "options": { "session": null, "content": null, "media": "images", "since": null,
+                             "first_posts": null, "script": null, "metadata": null, "schedule": "off" },
+                "set": ["media"], "sources": 7 }] }
 ```
 
-`choices` as a source's (for the platform's own page), `defaults` every
-option (the built-in value where none is set), `set` those set, `sources`
-how many sources it has, `overrides` how many of them set each option
-themselves (`POST /api/source-defaults/apply` makes them follow).
+`choices` as a source's (for the platform's own page). `defaults`: the
+Default preset, every option (the built-in value where none is set),
+`set` those set. `sources`: how many sources the pair has;
+`default_sources` of them follow Default, `custom` set their own, and
+each of `presets` (the named ones, as `POST /api/presets` answers them)
+says how many follow it.
 
 `POST /api/config` with `{ "source_defaults": { tool: { platform: {
-option: value } } } }` replaces the blocks sent (`null` or `{}` removes
-one); the options are a source's but `full_history` (a one-off), checked
-as a source's (a 200 `{ "ok": false, "error" }` for a value refused, a
+option: value } } } }` replaces the Default presets sent (`null` or `{}`
+removes one: built-in values again). A preset's options, Default's or a
+named one's, are checked as a source's (a 200 `{ "ok": false, "error" }`
+from `/api/config`, a 400 from `/api/presets`, for a value refused, a
 script that does not exist or runs another tool, or content that needs a
-login the tool's setting does not have). A value equal to the built-in one
-is not kept. A `first_posts` default applies until a sync of the source
-has worked (ended `done`; a failed or cancelled first one leaves it);
-a `content` one to sources whose link does not pick what is downloaded. A
-hand-edited value that is not valid is skipped.
+login the tool's setting does not have). A value equal to the built-in
+one is not kept.
 
-Stored options from before were every option: those equal to the built-in
-defaults then became inherited (migration 26), the others stay the
-source's own, so nothing changed until a default is set.
+Stored options from before download defaults were every option: those
+equal to the built-in defaults then became inherited (migration 26), the
+others stay the source's own.
 
 ### Account health
 

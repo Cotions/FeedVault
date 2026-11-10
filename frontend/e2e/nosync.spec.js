@@ -59,12 +59,13 @@ test("Don't sync: asked first, the source kept and marked, the filter, no overla
     // The dialog gives focus back to the ⋯ button it came from.
     await expect(page.getByRole("button", { name: head, exact: true })).toBeFocused();
 
-    // Kept, marked, no Sync, no Options, no Add source.
+    // Kept, marked, no Sync, no preset to pick, no Add source.
     const row = page.locator(`.source-row[data-source-id="${src.id}"]`);
     await expect(row.locator(".nosync-chip")).toBeVisible();
     await expect(row.getByRole("button", { name: /^Sync / })).toHaveCount(0);
+    await expect(row.getByRole("combobox")).toHaveCount(0);
     const rowMenu = await openMenu(page, row, /^More for /);
-    await expect(rowMenu.getByRole("menuitem", { name: "Options" })).toHaveCount(0);
+    await expect(rowMenu.getByRole("menuitem", { name: /^(Edit custom…|Sync full history…)$/ })).toHaveCount(0);
     await expect(rowMenu.getByRole("menuitem", { name: "Remove" })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(rowMenu).toHaveCount(0);

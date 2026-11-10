@@ -2,8 +2,10 @@
 // name), at 1024x768, 1280x800, 1440x900 and 1920x1080: a Spotify profile
 // (no downloader takes it) and an X source set to Download: never show with
 // the accounts, marked Profile only, never in Sources and never synced; Add
-// source offers "Add profile" for an unrouted link; the source's Options
-// say Download; Settings → Sync has the Profile only card. Sources are
+// source offers "Add profile" for an unrouted link and "Profile only" in
+// its preset select for a routed one; the Spotify profile's Download
+// options ask for a folder, the X one's Preset… downloads it again;
+// Settings → Sync has the Profile only card. Sources are
 // added to the throwaway instance and removed after; nothing is synced.
 import { test, expect, idle, checkLayout, dismissToasts, formatFindings, stressData, settle, menuItem } from "./fixtures.js";
 
@@ -78,6 +80,24 @@ test("Profile only: shown with the accounts, never synced, Add profile, Download
     await discard.getByRole("button", { name: "Discard" }).click();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
 
+    // One a downloader takes: Preset… says Profile only; a preset downloads it again.
+    const xRow = accounts.locator(`.person-account[data-source-id="${x.id}"]`);
+    await (await menuItem(page, xRow, /^More for /, "Preset…")).click();
+    const preset = page.getByRole("alertdialog", { name: /^Preset of / });
+    const pick = preset.getByRole("combobox", { name: /^Preset of / });
+    await expect(pick).toHaveValue("only");
+    await expect(pick).toBeFocused();
+    await idle(page);
+    await checkSizes(page, testInfo, "profile only, Preset", ".modal-overlay");
+    await pick.selectOption("");
+    await preset.getByRole("button", { name: "Save" }).click();
+    await expect(preset).toHaveCount(0);
+    const back = (await (await request.get(`/api/sources/${x.id}`, { headers: H })).json());
+    expect(back).toMatchObject({ profile_only: false, preset: null, custom: false, options: { download: "platform" } });
+    // It downloads: a source of theirs now, with the select on its row.
+    const sourceRow = page.locator(`.source-row[data-source-id="${x.id}"]`);
+    await expect(sourceRow.getByRole("combobox", { name: /^Preset of / })).toHaveValue("");
+
     // Add source: an unrouted profile link is offered as a profile.
     const field = page.getByRole("textbox", { name: "Profile link, or an Instagram name" });
     await field.fill("https://www.twitch.tv/e2e_profile_only");
@@ -85,7 +105,26 @@ test("Profile only: shown with the accounts, never synced, Add profile, Download
     await expect(page.locator(".source-add .profile-only-chip, .source-resolved .profile-only-chip").first()).toBeVisible();
     await idle(page);
     await checkSizes(page, testInfo, "Add profile");
-    await field.fill("");
+    // A routed one: one resolved line and the preset select, no options
+    // form; Profile only picked makes it "Add profile".
+    await field.fill("https://x.com/e2e_profile_only_add");
+    const line = page.locator(".source-add .source-resolved");
+    await expect(line).toContainText("x.com/e2e_profile_only_add");
+    await expect(line.locator(".source-folder")).toBeVisible();
+    const choose = line.getByRole("combobox", { name: "Preset" });
+    await expect(choose).toHaveValue("");
+    await expect(page.locator(".source-add .source-options")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add source" })).toBeEnabled();
+    await choose.selectOption("only");
+    await expect(line.locator(".source-folder")).toHaveCount(0);
+    await idle(page);
+    await checkSizes(page, testInfo, "Add source, a link resolved");
+    await page.getByRole("button", { name: "Add profile" }).click();
+    await expect(field).toHaveValue("");
+    const added = (await (await request.get("/api/sources", { headers: H })).json()).sources
+      .find(s => s.target === "https://x.com/e2e_profile_only_add");
+    made.push(added.id);
+    expect(added).toMatchObject({ profile_only: true, options: { download: "off" } });
 
     // Settings → Sync: a switch per platform.
     await page.goto("/settings#profile-only");

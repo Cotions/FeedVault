@@ -268,7 +268,7 @@ export default function Scripts() {
           Your own download commands (<code>.json</code>) and shell scripts (<code>.sh</code>), as files in
           {" "}<code className="script-path">{data?.dir || "…"}</code>. Create and edit them in a text editor:
           FeedVault only lists, shows and runs them, and never writes one. A source can sync with one instead of
-          its tool&rsquo;s command (its Options). Anyone who can reach FeedVault&rsquo;s port can run them: keep it
+          its tool&rsquo;s command (Command, in its preset). Anyone who can reach FeedVault&rsquo;s port can run them: keep it
           on 127.0.0.1.
         </p>
         {error && <div className="msg err" role="alert">{error.message}</div>}

@@ -1,7 +1,7 @@
-"""Download defaults per tool and platform (config ``source_defaults``): what
-a source inherits for each option it does not set itself, the API that
-edits them, resets a source's own choices and applies a default to every
-source (sources.py, app.py)."""
+"""The Default preset per tool and platform (config ``source_defaults``):
+what a source inherits for each option it does not set itself, the API
+that edits it and resets a source's own choices (sources.py, app.py). The
+named presets beside it: test_presets.py."""
 import json
 
 import pytest
@@ -218,27 +218,20 @@ def test_blocks_in_config(env, client):
     assert set(sources.DEFAULT_PAIRS) <= set(blocks)
     assert blocks[("gallery-dl", "instagram")]["choices"]["metadata"] == ["full", "none"]
     tw = blocks[("gallery-dl", "twitter")]
-    assert tw["sources"] == 2 and tw["overrides"]["media"] == 1 and tw["set"] == []
+    assert (tw["sources"], tw["default_sources"], tw["custom"]) == (2, 1, 1) and tw["set"] == []
+    assert tw["presets"] == [] and "overrides" not in tw
     assert tw["choices"]["content"] == ["timeline", "media", "tweets", "with_replies"]
     assert tw["defaults"] == {k: sources.BUILTIN[k] for k in sources.DEFAULT_KEYS}
     assert "full_history" not in tw["defaults"]
     assert blocks[("instaloader", "instagram")]["choices"]["metadata"] == ["full", "slim", "none"]
 
 
-def test_apply_to_all_sources(env, client):
-    a = add(client, X, options={"media": "videos"})
-    b = add(client, "https://x.com/other", options={"media": "images", "since": "2024-01-01"})
-    c = add(client, "https://x.com/third")
-    defaults(client, "gallery-dl", "twitter", {"media": "images"})
-    r = post(client, "/api/source-defaults/apply", {"tool": "gallery-dl", "platform": "twitter", "option": "media"})
-    assert (r["applied"], r["skipped"]) == (2, 0)
-    assert [get(client, f"/api/sources/{s['id']}")["overrides"] for s in (a, b, c)] == [[], ["since"], []]
-    assert stored(b["id"]) == {"v": 2, "since": "2024-01-01"}
-    r = post(client, "/api/source-defaults/apply", {"tool": "gallery-dl", "platform": "twitter", "option": "media"})
-    assert (r["applied"], r["skipped"]) == (0, 0)
-    for bad in [{"tool": "gallery-dl", "platform": "twitter", "option": "full_history"},
-                {"tool": "x", "platform": "twitter", "option": "media"}, {"tool": "gallery-dl", "option": "media"}]:
-        assert client.post("/api/source-defaults/apply", json=bad, headers=H).status_code == 400, bad
+def test_apply_to_all_sources_is_gone(env, client):
+    """A source picks a preset now (test_presets.py): nothing applies a
+    default to every source at once."""
+    r = client.post("/api/source-defaults/apply", json={"tool": "gallery-dl", "platform": "twitter",
+                                                        "option": "media"}, headers=H)
+    assert r.status_code in (404, 405)
 
 
 def test_first_posts_default_is_for_a_first_sync_only(env, client):
@@ -329,11 +322,11 @@ def test_another_site_gets_no_login_and_sees_no_defaults(env, client):
     defaults(client, "gallery-dl", "twitter", {"session": COOKIES, "media": "images"})
     r = client.get("/api/sources/resolve?url=https://x.com/someone", headers=FROM_X).get_json()
     assert r["ok"] and r["tool"] == "gallery-dl"
-    assert not {"defaults", "session", "metadata"} & set(r)
+    assert not {"defaults", "session", "metadata", "presets"} & set(r)
     r = client.post("/api/sources", json={"target": X}, headers=FROM_X)
     assert r.status_code == 200, r.get_json()
     s = r.get_json()["source"]
-    assert not {"defaults", "session", "metadata", "script_warning"} & set(s)
+    assert not {"defaults", "session", "metadata", "script_warning", "preset", "presets", "custom"} & set(s)
     assert s["options"]["session"] is None and s["options"]["script"] is None and s["dashboard_only"] is False
     assert stored(s["id"])["session"] == {"mode": "none"} and "script" in stored(s["id"])
     # The dashboard sees it all: no login, set on it; media inherited.

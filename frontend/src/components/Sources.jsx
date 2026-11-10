@@ -12,9 +12,9 @@ import { DOWNLOADS, ERRORS, SETUP_ERRORS, downloadWanted, sourceName } from "../
 import { healthBadge, lastGood, loginText } from "../lib/health";
 import { fmtAgo, fmtFullDate, fmtIn, fmtInt, platformLabel, safeUrl } from "../lib/fmt";
 import {
-  FIRST_POSTS_MAX, MEDIA, SCHEDULES, defaultText, fieldOverridden, firstPostsEach, formError, formOf, kindEffect, kindLabel,
-  FIELDS, changesOf, fieldOwn, fieldsOf, mediaEffect, metadataEffect, metadataLabel, needsLogin, resetField,
-  optionsOf, optionsSummary, scheduleShort, scheduleText, scriptHref, toggleKind, today,
+  FIRST_POSTS_MAX, MEDIA, PRESET_CUSTOM, PRESET_ONLY, SCHEDULES, customBody, downloadOn, firstPostsEach, formError, formOf,
+  kindEffect, kindLabel, mediaEffect, metadataEffect, metadataLabel, needsLogin, optionsSummary, presetBody, presetName,
+  presetValue, resolvedPreset, restoreBody, sameOptions, scheduleShort, scheduleText, scriptHref, toggleKind, today,
 } from "../lib/sourceOptions";
 import Icon from "./Icon";
 import ActionMenu from "./ActionMenu";
@@ -156,22 +156,20 @@ export function SourceHealth({ source: s, job, onSaved }) {
   );
 }
 
-// Option keys (docs/API.md "What a source downloads") as the form names them.
-const OPTION_NAMES = {
-  full_history: "full history", session: "login", content: "content", media: "media", since: "not older than",
-  first_posts: "last posts", script: "command", metadata: "metadata files", schedule: "schedule",
-};
-
-/* Whether a source follows its platform's download defaults, or sets
-   some options itself ("custom", which ones in its title). */
-export function InheritBadge({ source: s }) {
-  const own = s.overrides || [];
-  if (!own.length) return <span className="source-inherit dim" title="Every option follows Settings → Download defaults">defaults</span>;
+/* What a source follows (docs/API.md "Presets"), picked in one select:
+   Default, each named preset of its tool and platform, "Custom…" (its
+   own options, in a dialog) and, apart, "Profile only". ``presets``:
+   [{ id, name }]; ``custom``: whether Custom… is offered. */
+export function PresetSelect({ value, presets, onChange, label, title, disabled = false, custom = true, selectRef = null }) {
   return (
-    <span className="chip source-inherit is-set"
-          title={`Set on this source: ${own.map(k => OPTION_NAMES[k] || k).join(", ")}. The rest follow Settings → Download defaults.`}>
-      custom
-    </span>
+    <select ref={selectRef} className="sort-select preset-select" aria-label={label} title={title} value={value}
+            disabled={disabled} onChange={e => onChange(e.target.value)}>
+      <option value="">Default</option>
+      {(presets || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+      {custom && <option value={PRESET_CUSTOM}>Custom…</option>}
+      <option disabled>──────────</option>
+      <option value={PRESET_ONLY}>Profile only (never download)</option>
+    </select>
   );
 }
 
@@ -190,7 +188,7 @@ export function NotSyncedChip({ title = "Set to Don't sync: kept, never synced. 
    downloader takes its site (tool "none"). ``source``: says which. */
 export function ProfileOnlyChip({ source: s = null, title = null }) {
   const why = title || (s?.tool === "none" ? "No downloader takes this site: shown as theirs, never synced"
-    : s?.options?.download === "off" ? "Download: never (its Options): shown as theirs, never synced"
+    : s?.options?.download === "off" ? "Set to Profile only: shown as theirs, never synced"
       : "Its platform is profile only (Settings → Sync → Profile only): shown as theirs, never synced");
   return (
     <span className="chip nosync-chip profile-only-chip" title={why}>
@@ -199,23 +197,31 @@ export function ProfileOnlyChip({ source: s = null, title = null }) {
   );
 }
 
-/* One source: its profile, what it downloads, tool, folder, schedule, last
-   sync and Sync; its profile on the site, Options, its creator (link,
-   move, unlink) and Remove in its ⋯ menu. ``onSaved``: after its options
-   changed; ``onLinked``: after its person did (the people's cards move
-   too), else onSaved. One set to Don't sync is marked so and keeps its
-   creator and Remove only: no Options, no Sync, no schedule line (its
-   schedule waits for the switch to go off). One that is profile only
-   (#218) is marked so, dimmed, with no Sync and no sync state; its Options
-   say whether it downloads. */
+/* One source: its profile, the preset it follows (a select: picking one
+   saves at once, "Custom…" opens its own options, "Profile only" stops
+   its downloads), tool, folder, schedule, last sync and Sync; its profile
+   on the site, its custom options, a full-history sync, its creator
+   (link, move, unlink) and Remove in its ⋯ menu. ``onSaved``: after what
+   it follows changed; ``onLinked``: after its person did (the people's
+   cards move too), else onSaved. One set to Don't sync is marked so and
+   keeps its creator and Remove only: no preset, no Sync, no schedule line
+   (its schedule waits for the switch to go off). One that is profile only
+   (#218) is dimmed, with no Sync and no sync state: its select says so,
+   and picking a preset downloads it again. A profile no downloader takes
+   (tool "none") has the chip instead, and its folder in its ⋯ menu. */
 export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked = onSaved, flash = false }) {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [linking, setLinking] = useState(false);
+  const [history, setHistory] = useState(false);  // "Sync full history…" is asking
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
   const url = safeUrl(s.url);
+  const name = sourceName(s);
   const summary = optionsSummary(s);
   const off = !!s.no_sync;
   const only = !!s.profile_only;
+  const none = s.tool === "none";
   const quiet = off || only;                   // never synced: no sync state, no Sync
   const along = s.account ? "; its account goes with it" : "";
 
@@ -223,10 +229,55 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
     try {
       const r = await setSourcePerson(s.id, null);
       if (!r?.ok) { toast(r?.error || "Could not unlink.", "err"); return; }
-      toast(`${sourceName(s)} is no longer ${s.person.name}'s.`);
+      toast(`${name} is no longer ${s.person.name}'s.`);
       onLinked?.(r.source);
     } catch (err) {
       toast(err.message, "err");
+    }
+  }
+
+  // Back as it was before a pick, from its toast.
+  async function undo() {
+    try {
+      const r = await updateSource(s.id, restoreBody(s));
+      if (!r?.ok) { toast(r?.error || "Could not undo.", "err"); return; }
+      toast(`${name}: ${presetName(r.source)} again.`);
+      onSaved?.(r.source);
+    } catch (err) {
+      toast(err.message, "err");
+    }
+  }
+
+  // A pick saves at once; Custom… opens its options instead.
+  async function follow(value) {
+    if (value === PRESET_CUSTOM) { setEditing(true); return; }
+    setBusy(true);
+    try {
+      const r = await updateSource(s.id, presetBody(s, value));
+      if (!r?.ok) { toast(r?.error || "Could not save.", "err"); return; }
+      toast(value === PRESET_ONLY ? `${name} is profile only: shown as theirs, never downloaded.`
+        : `${name} follows ${presetName(r.source)}.`, "ok", { label: "Undo", onClick: undo });
+      onSaved?.(r.source);
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function fullHistory() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await updateSource(s.id, { options: { full_history: true } });
+      if (!r?.ok) { setError(r?.error || "Could not save."); return; }
+      setHistory(false);
+      onSaved?.(r.source);
+      onSync(r.source);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -235,32 +286,42 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
         data-source-id={s.id}>
       <PlatformIcon platform={s.platform} />
       <span className="source-id">
-        <span className="creator-name" title={sourceName(s)}>
-          {sourceName(s)}
+        <span className="creator-name" title={name}>
+          {name}
           {s.person && !s.account && <span className="creator-sub"> · first sync not done yet</span>}
         </span>
         <span className="source-summary-line">
           {off && <NotSyncedChip />}
-          {only && <ProfileOnlyChip source={s} />}
-          {!only && summary && <span className="source-summary" title={`What it downloads: ${summary}`}>{summary}</span>}
-          {!only && <InheritBadge source={s} />}
+          {none && only && <ProfileOnlyChip source={s} />}
+          {!off && !none && (
+            <PresetSelect value={presetValue(s)} presets={s.presets} onChange={follow} disabled={!!job || busy}
+                          label={`Preset of ${name}`}
+                          title={job ? "Its sync is queued or running"
+                            : only ? "Profile only: shown as theirs, never downloaded. Pick a preset to download it"
+                              : `${presetName(s)}: ${summary || "new posts"}`} />
+          )}
         </span>
         {s.needs_tool && (
-          <span className="source-note dim">No downloader yet: pick its folder in Options to download it.</span>
+          <span className="source-note dim">No downloader yet: pick its folder in ⋯ → Download options to download it.</span>
         )}
         {!quiet && <ScriptWarning source={s} />}
         {!quiet && <ScheduleLine source={s} />}
         {!quiet && <SourceHealth source={s} job={job} onSaved={onSaved} />}
         {s.folder && <code className="source-folder" title={s.folder}>{s.folder}</code>}
       </span>
-      {s.tool !== "none" && <ToolBadge tool={s.tool} />}
+      {!none && <ToolBadge tool={s.tool} />}
       {!quiet && <SourceStatus source={s} job={job} />}
       {job && <Link to="/jobs" className="btn-ghost">Log</Link>}
       {!quiet && <SyncButton source={s} job={job} onSync={onSync} />}
-      <ActionMenu label={`More for ${sourceName(s)}`} items={[
+      <ActionMenu label={`More for ${name}`} items={[
         url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(s.platform)} (opens the site)` },
-        !off && { label: "Options", icon: "settings", disabled: !!job, onSelect: () => setEditing(true),
-                  title: job ? "Its sync is queued or running" : only ? "Whether this profile is downloaded" : "What this source downloads" },
+        !off && none && { label: "Download options…", icon: "settings", onSelect: () => setEditing(true),
+                          title: "Whether this profile is downloaded" },
+        !off && !none && s.custom && { label: "Edit custom…", icon: "settings", disabled: !!job, onSelect: () => setEditing(true),
+                                       title: job ? "Its sync is queued or running" : "Its own options" },
+        !quiet && !none && { label: "Sync full history…", icon: "refresh", disabled: !!job,
+                             onSelect: () => { setError(null); setHistory(true); },
+                             title: job ? "Its sync is queued or running" : "Walk the whole profile once, not only its new posts" },
         { label: s.person ? "Move to creator…" : "Link to creator…", icon: "users", onSelect: () => setLinking(true),
           title: s.person ? `Show it with someone other than ${s.person.name}${along}` : `Show it with a person, one there is or a new one${along}` },
         s.person && { label: "Unlink from creator", icon: "close", onSelect: unlink,
@@ -271,56 +332,30 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
       ]} />
       {editing && !off && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
       {linking && <SourcePersonDialog source={s} onClose={() => setLinking(false)} onLinked={onLinked} />}
+      <ConfirmDialog open={history} title={`Sync ${name}'s full history?`} confirmLabel="Sync full history" busy={busy}
+                     error={error} onConfirm={fullHistory} onCancel={() => setHistory(false)}>
+        It walks the whole profile once: every post still there, not only the new ones. That takes longer, and a
+        site is more likely to slow it down. Later syncs fetch new posts only.
+      </ConfirmDialog>
     </li>
   );
 }
 
-/* Beside a field's name: "default" when it is what the source inherits
-   (Settings → Download defaults), else "set here", the default, and Reset.
-   ``own``: whether it is set (the source's form says), else whether it
-   differs from the default; ``onReset``: Reset, else the default's value. */
-function Inherit({ f, form, defaults, onChange, platform, tool, setting, own = null, onReset = null }) {
-  if (!defaults) return null;
-  if (!(own ? own(f) : fieldOverridden(form, defaults, f))) return <span className="source-default dim">default</span>;
-  return (
-    <span className="source-default is-set">
-      set here · default: {defaultText(f, defaults, platform, tool, setting)}
-      <button type="button" className="btn-link" onClick={() => (onReset ? onReset(f) : onChange(resetField(form, defaults, f)))}
-              title="Follow Settings → Download defaults for this">Reset</button>
-    </span>
-  );
-}
-
-/* What a source downloads, as far as its tool and platform let it choose:
-   content kinds, images or videos, a date floor and the first sync. Each
-   with what it does in one line. ``firstSync``: the source has not synced
-   yet (last N posts is for its first sync only). ``defaults``: the form of
-   what it inherits, to mark each field as default or set here (with a
-   Reset); none on a new source's form, which starts from them.
-   ``metadata``: {inherited, setting}, the modes for the Metadata files
-   choice. ``editor``: a platform's download defaults (Settings), which
-   have no full history (a one-off) and no "Default" of their own.
-   ``own``(field) and ``onReset``(field): a source's form, which knows
-   what the source sets (see Inherit); picking "Default" resets too. */
-export function SourceOptions({ tool, platform, target, choices, session, form, onChange, firstSync = true,
-                                defaults = null, metadata = null, editor = false, own = null, onReset = null }) {
+/* A set of download options, as far as the tool and platform let one
+   choose: content kinds, images or videos, a date floor, the first sync,
+   login, command, metadata files and schedule. Each with what it does in
+   one line. It is a preset's form (Settings → Presets) and a source's own
+   (Custom…). ``firstSync``: "only the last N posts" is offered (a preset,
+   or a source that has not synced yet). ``metadata``: { setting, ffmpeg },
+   for the Metadata files choice. */
+export function SourceOptions({ tool, platform, target, choices, session, form, onChange, firstSync = true, metadata = null }) {
   const id = useId();
   const each = firstPostsEach(tool, form.content, platform, target);
   const set = patch => onChange({ ...form, ...patch });
   const login = needsLogin(form, choices, session);
   const toggle = k => onChange(toggleKind(form, k));
-  const mark = f => <Inherit f={f} form={form} defaults={defaults} onChange={onChange} platform={platform} tool={tool}
-                             setting={metadata?.setting} own={own} onReset={onReset} />;
   const setting = metadata?.setting || "full";
-  // The Metadata files choice: what it inherits first ("Default (…)"),
-  // then what Settings → Sync says (null), then each mode.
   const modes = choices.metadata || [];
-  const metaFirst = defaults ? defaults.metadata : "";
-  const metaOptions = [
-    [metaFirst, defaults ? `Default (${metadataLabel(defaults.metadata || setting)})` : `as in Settings → Sync (${metadataLabel(setting)})`],
-    ...(metaFirst !== "" ? [["", `as in Settings → Sync (${metadataLabel(setting)})`]] : []),
-    ...modes.filter(m => m !== metaFirst).map(m => [m, metadataLabel(m)]),
-  ];
   // A script runs instead of the tool's command: the choices before the
   // picker are not used (its note says so), so they are dimmed and
   // disabled while one is picked; the schedule still is (#149). Download
@@ -333,7 +368,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
     <div className="source-options">
       {choices.content.length > 0 && (
         <fieldset {...(login.length ? { className: "source-opt" } : unused)}>
-          <legend>Download {mark("content")}</legend>
+          <legend>Download</legend>
           {choices.content.map(k => (
             <label key={k} className="source-opt-line">
               <input type="checkbox" checked={form.content.includes(k)} onChange={() => toggle(k)} />
@@ -351,7 +386,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
       )}
       {choices.media && (
         <fieldset {...unused}>
-          <legend>Media {mark("media")}</legend>
+          <legend>Media</legend>
           {MEDIA.map(([v, label]) => (
             <label key={v} className="source-opt-line">
               <input type="radio" name={`${id}-media`} checked={form.media === v} onChange={() => set({ media: v })} />
@@ -361,7 +396,7 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
         </fieldset>
       )}
       <fieldset {...unused}>
-        <legend>Not older than {mark("since")}</legend>
+        <legend>Not older than</legend>
         <label className="source-opt-line">
           <input type="date" min="1970-01-01" max={today()} value={form.since} aria-label="Not older than"
                  onChange={e => set({ since: e.target.value })} />
@@ -369,20 +404,14 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
           {form.since && <button type="button" className="btn-link" onClick={() => set({ since: "" })}>Clear</button>}
         </label>
       </fieldset>
-      <fieldset {...unused}>
-        <legend>{firstSync ? "First sync" : "Next sync"} {mark("first")}</legend>
-        <label className="source-opt-line">
-          <input type="radio" name={`${id}-first`} checked={form.first === "new"} onChange={() => set({ first: "new" })} />
-          <b>new posts</b>
-          <span className="dim">stops at the newest post FeedVault already has from this profile</span>
-        </label>
-        {!editor && (
+      {firstSync && choices.first_posts && (
+        <fieldset {...unused}>
+          <legend>First sync</legend>
           <label className="source-opt-line">
-            <input type="radio" name={`${id}-first`} checked={form.first === "full"} onChange={() => set({ first: "full" })} />
-            <b>full history</b><span className="dim">walks the whole profile, once</span>
+            <input type="radio" name={`${id}-first`} checked={form.first === "new"} onChange={() => set({ first: "new" })} />
+            <b>new posts</b>
+            <span className="dim">stops at the newest post FeedVault already has from the profile</span>
           </label>
-        )}
-        {firstSync && choices.first_posts && (
           <label className="source-opt-line">
             <input type="radio" name={`${id}-first`} checked={form.first === "last"}
                    onChange={() => set({ first: "last", count: form.count || "50" })} />
@@ -396,26 +425,26 @@ export function SourceOptions({ tool, platform, target, choices, session, form, 
               later syncs only fetch newer ones
             </span>
           </label>
-        )}
-      </fieldset>
-      <SessionPicker value={form.session} onChange={session => set({ session })} unused={unused} mark={mark("session")} />
-      <ScriptPicker tool={tool} value={form.script} onChange={script => set({ script })} mark={mark("script")} />
+        </fieldset>
+      )}
+      <SessionPicker value={form.session} onChange={session => set({ session })} unused={unused} />
+      <ScriptPicker tool={tool} value={form.script} onChange={script => set({ script })} />
       {modes.length > 1 && (
         <fieldset {...unused}>
-          <legend>Metadata files {mark("metadata")}</legend>
+          <legend>Metadata files</legend>
           <label className="source-opt-line">
             <select className="sort-select" aria-label="Metadata files a sync writes" value={form.metadata}
-                    onChange={e => (defaults && onReset && e.target.value === metaFirst
-                      ? onReset("metadata") : set({ metadata: e.target.value }))}>
-              {metaOptions.map(([v, label]) => <option key={v || "setting"} value={v}>{label}</option>)}
+                    onChange={e => set({ metadata: e.target.value })}>
+              <option value="">as in Settings → Sync ({metadataLabel(setting)})</option>
+              {modes.map(m => <option key={m} value={m}>{metadataLabel(m)}</option>)}
             </select>
             <span className="dim">{metadataEffect(tool, form.metadata || setting)}</span>
           </label>
-          {metadata?.ffmpeg === false && (form.metadata || (defaults?.metadata ?? "") || setting) === "none" && <NoFfmpeg />}
+          {metadata?.ffmpeg === false && (form.metadata || setting) === "none" && <NoFfmpeg />}
         </fieldset>
       )}
       <fieldset className="source-opt">
-        <legend>Schedule {mark("schedule")}</legend>
+        <legend>Schedule</legend>
         {SCHEDULES.map(([v, label, effect]) => (
           <label key={v} className="source-opt-line">
             <input type="radio" name={`${id}-schedule`} checked={form.schedule === v} onChange={() => set({ schedule: v })} />
@@ -438,22 +467,22 @@ export function NoFfmpeg() {
   );
 }
 
-/* The login a sync of this source uses: the tool's, from Settings → Sync
-   (null), or the source's own: none, or a browser's cookies, with the
+/* The login a sync uses: the tool's, from Settings → Sync (null), or the
+   preset's or source's own: none, or a browser's cookies, with the
    browser profile they come from. One made elsewhere (a saved instaloader
    session, through the API) stays as it is until another is picked. */
 const SESSION_EFFECT = {
   "": "the tool\u2019s, set in Settings \u2192 Sync",
   none: "public posts only, whatever Settings says",
-  cookies: "this source\u2019s own: the tool reads that browser\u2019s cookies itself",
-  login: "this source\u2019s own saved instaloader session",
+  cookies: "its own: the tool reads that browser\u2019s cookies itself",
+  login: "its own saved instaloader session",
 };
-function SessionPicker({ value, onChange, unused, mark = null }) {
+function SessionPicker({ value, onChange, unused }) {
   const mode = value?.mode || "";
   const pick = m => onChange(m === "" ? null : m === "cookies" ? cookiesSession("firefox", "") : m === "none" ? { mode: m } : value);
   return (
     <fieldset {...unused}>
-      <legend>Login {mark}</legend>
+      <legend>Login</legend>
       <label className="source-opt-line">
         <select className="sort-select" aria-label="Login a sync uses" value={mode} onChange={e => pick(e.target.value)}>
           <option value="">as in Settings</option>
@@ -487,7 +516,7 @@ function scriptLabel(sc) {
    listed apart and cannot be picked; one gone from disk, refused or running
    another tool stays shown when it is the current one, with why its syncs
    fail. */
-function ScriptPicker({ tool, value, onChange, mark = null }) {
+function ScriptPicker({ tool, value, onChange }) {
   const { data, error } = useApi(getScripts);
   const scripts = data?.scripts || [];
   const current = scripts.find(sc => sc.id === value);
@@ -505,7 +534,7 @@ function ScriptPicker({ tool, value, onChange, mark = null }) {
   );
   return (
     <fieldset className="source-opt">
-      <legend>Command {mark}</legend>
+      <legend>Command</legend>
       <label className="source-opt-line">
         <select className="sort-select script-pick" value={value} onChange={e => onChange(e.target.value)}
                 aria-label="Command a sync runs" disabled={!data && !value}>
@@ -532,7 +561,7 @@ function ScriptPicker({ tool, value, onChange, mark = null }) {
       {others.length > 0 && (
         <span className="dim script-pick-note">
           {others.length === 1 ? "1 script runs" : `${others.length} scripts run`} {otherTools.join(", ")}, not shown:
-          {" "}a sync of this source runs in {tool}&rsquo;s lock group, with its pause between syncs.
+          {" "}a sync runs in {tool}&rsquo;s lock group, with its pause between syncs.
         </span>
       )}
       {value && (
@@ -601,68 +630,97 @@ function useToolFor(s, wanted) {
   return wanted && s.tool === "none" ? answer : null;
 }
 
-/* Edit what a source downloads, and whether it does (Download). A profile
-   with no downloader (tool "none") has Download only: on, it asks for the
-   folder, and the routing table gives the tool. ``s.session``: the session
-   its sync would use, for the login hint. Last N stays open until a first
-   sync with it has worked. */
-export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
+/* A source's dialog: its own options (Custom…), or, for a profile no
+   downloader takes (tool "none"), whether it downloads. */
+export function SourceOptionsDialog({ source, onClose, onSaved }) {
+  const Dialog = source.tool === "none" ? ProfileDownloadDialog : CustomDialog;
+  return <Dialog source={source} onClose={onClose} onSaved={onSaved} />;
+}
+
+/* What a source follows, from a card's ⋯ menu (a card has no room for
+   its select): the same select, saved with Save; "Custom…" goes on to
+   its own options. */
+export function SourcePresetDialog({ source: s, onClose, onSaved }) {
   const toast = useToast();
-  const none = s.tool === "none";
-  const [download, setDownload] = useState(s.options.download || "platform");
-  const wanted = downloadWanted(download, s.platform_profile_only);
-  const given = useToolFor(s, none && wanted);
-  const [folder, setFolder] = useState("");
-  const [initial] = useState(() => formOf(s.options, s.choices));
-  const [form, setForm] = useState(initial);
-  // What it inherits, and what it sets itself: only a field changed here
-  // is saved as set (even to its default: it then stays when the default
-  // changes), only one reset as inherited; the others stay as they are.
-  const defaults = formOf(s.defaults, s.choices);
-  const [setBefore] = useState(() => fieldsOf(s.overrides));
-  const [resets, setResets] = useState(() => new Set());
-  const isOwn = f => fieldOwn(f, form, initial, setBefore, resets);
-  const own = FIELDS.filter(isOwn);
-  // A field changed again after its Reset is set again.
-  const change = next => {
-    const edited = FIELDS.filter(f => JSON.stringify(resetField({}, next, f)) !== JSON.stringify(resetField({}, form, f)));
-    if (edited.some(f => resets.has(f))) setResets(new Set([...resets].filter(f => !edited.includes(f))));
-    setForm(next);
-  };
-  const resetOne = f => {
-    setForm(resetField(form, defaults, f));
-    setResets(new Set([...resets, f]));
-  };
+  const [value, setValue] = useState(() => presetValue(s));
+  const [custom, setCustom] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const select = useRef(null);
+  const summary = optionsSummary(s);
+
+  async function save() {
+    if (value === PRESET_CUSTOM) { setCustom(true); return; }
+    if (value === presetValue(s)) { onClose(); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await updateSource(s.id, presetBody(s, value));
+      if (!r?.ok) { setError(r?.error || "Could not save."); return; }
+      toast(value === PRESET_ONLY ? `${sourceName(s)} is profile only: shown as theirs, never downloaded.`
+        : `${sourceName(s)} follows ${presetName(r.source)}.`);
+      onSaved?.(r.source);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (custom) return <SourceOptionsDialog source={s} onClose={onClose} onSaved={onSaved} />;
+  return (
+    <ConfirmDialog open title={`Preset of ${sourceName(s)}`} confirmLabel={value === PRESET_CUSTOM ? "Edit custom…" : "Save"}
+                   busy={busy} error={error} onConfirm={save} onCancel={onClose} initialFocus={select}>
+      <div className="source-preset-pick">
+        <PresetSelect value={value} presets={s.presets} onChange={v => { setValue(v); setError(null); }}
+                      label={`Preset of ${sourceName(s)}`} selectRef={select} />
+        <span className="dim">
+          Now {presetName(s)}{summary ? `: ${summary}` : ""}. Presets are made in{" "}
+          <Link to="/settings#presets" className="text-link">Settings → Presets</Link>.
+        </span>
+      </div>
+    </ConfirmDialog>
+  );
+}
+
+/* A source's own options (docs/API.md "Presets", Custom): a plain form of
+   what it downloads now; saved, every choice is its own and it follows no
+   preset. Opened from "Custom…" in its select, or "Edit custom…" in its ⋯
+   menu once it is. Saving one that was profile only downloads it again,
+   as picking a preset does. ``s.session``: the session its sync would
+   use, for the login hint. Last N stays open until a first sync with it
+   has worked. */
+function CustomDialog({ source: s, onClose, onSaved }) {
+  const toast = useToast();
   // Until a sync has worked (s.synced, sources.synced_ok): a failed first one leaves last N open.
   const firstSync = !s.synced || s.options.first_posts != null;
+  const [initial] = useState(() => formOf(s.options, s.choices));
+  const [form, setForm] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
   const problem = formError(form, s.choices);
   const focus = useRef(null);
   // Esc, Cancel or a click outside ask before changed choices go, as
   // every other form does since #125/#132 (#149). Compared as they would
   // be saved, so ticking a box off and on again is no change.
   const [asking, setAsking] = useState(false);
-  const changes = none ? null : changesOf(form, initial, setBefore, resets, s.choices, firstSync);
-  const downloadChanged = download !== (s.options.download || "platform");
-  const changed = !!changes || downloadChanged || (none && !!folder.trim());
-  const tooled = none && wanted;               // given a tool and a folder on Save
-  const blocked = tooled && !given?.ok;
+  const changed = !sameOptions(form, initial, s.choices, firstSync);
   const cancel = () => (changed ? setAsking(true) : onClose());
   // A link in it ("See Scripts", "Settings → Sync"), Back or Forward ask
   // the same before the app leaves the page with them (#153).
   const unsaved = useUnsaved(changed);
+  const followed = s.preset?.name || "Default";
 
   async function save() {
+    // Custom already, and nothing to change.
+    if (s.custom && !changed && !s.profile_only) { onClose(); return; }
     setBusy(true);
     setError(null);
     try {
-      const options = { ...(changes?.options || {}), ...(downloadChanged || tooled ? { download } : {}) };
-      const r = tooled ? await giveSourceTool(s.id, options, folder.trim() || null)
-        : changes || downloadChanged ? await updateSource(s.id, options, changes?.reset, true) : { ok: true, source: s };
+      const r = await updateSource(s.id, customBody(s, form, firstSync));
       if (!r?.ok) { setError(r?.error || "Could not save."); return; }
-      toast(tooled ? `${sourceName(s)} now downloads with ${r.source.tool}. Sync it to get its posts.`
-        : `${sourceName(s)}: options saved.`);
+      toast(`${sourceName(s)}: custom options saved.`);
       onSaved?.(r.source);
       onClose();
     } catch (err) {
@@ -676,18 +734,86 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
     <>
       <ConfirmDialog
         open
-        title={none ? `Download ${sourceName(s)}?` : `What ${sourceName(s)} downloads`}
+        title={`Custom options for ${sourceName(s)}`}
         confirmLabel="Save"
         busy={busy}
-        error={error || (none ? null : problem)}
-        confirmDisabled={none ? blocked : !!problem || needsLogin(form, s.choices, s.session).length > 0}
+        error={error || problem}
+        confirmDisabled={!!problem || needsLogin(form, s.choices, s.session).length > 0}
+        onConfirm={save}
+        onCancel={cancel}
+        initialFocus={focus}
+      >
+        <div ref={focus} tabIndex={-1}>
+          <p className="source-custom-note dim">
+            {s.custom ? "Its own options: no preset changes them."
+              : `As ${followed} has them now. Saved, they are its own: a change to ${followed} no longer reaches it.`}
+            {" "}Pick a preset on its row to follow one again.
+          </p>
+          <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
+                         onChange={setForm} firstSync={firstSync} metadata={s.metadata} />
+        </div>
+      </ConfirmDialog>
+      <DiscardDialog open={asking || unsaved.asking}
+                     onDiscard={unsaved.asking ? () => { unsaved.discard(); onClose(); } : onClose}
+                     onKeep={unsaved.asking ? unsaved.keep : () => setAsking(false)}>
+        The changed options for {sourceName(s)} are not saved.
+      </DiscardDialog>
+    </>
+  );
+}
+
+/* Whether a profile with no downloader (tool "none") downloads: on, it
+   asks for the folder, and the routing table gives the tool. */
+function ProfileDownloadDialog({ source: s, onClose, onSaved }) {
+  const toast = useToast();
+  const [download, setDownload] = useState(s.options.download || "platform");
+  const wanted = downloadWanted(download, s.platform_profile_only);
+  const given = useToolFor(s, wanted);
+  const [folder, setFolder] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const focus = useRef(null);
+  const [asking, setAsking] = useState(false);
+  const downloadChanged = download !== (s.options.download || "platform");
+  const changed = downloadChanged || !!folder.trim();
+  const blocked = wanted && !given?.ok;          // given a tool and a folder on Save
+  const cancel = () => (changed ? setAsking(true) : onClose());
+  const unsaved = useUnsaved(changed);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = wanted ? await giveSourceTool(s.id, { download }, folder.trim() || null)
+        : downloadChanged ? await updateSource(s.id, { options: { download }, pin: true }) : { ok: true, source: s };
+      if (!r?.ok) { setError(r?.error || "Could not save."); return; }
+      toast(wanted ? `${sourceName(s)} now downloads with ${r.source.tool}. Sync it to get its posts.`
+        : `${sourceName(s)}: saved.`);
+      onSaved?.(r.source);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <ConfirmDialog
+        open
+        title={`Download ${sourceName(s)}?`}
+        confirmLabel="Save"
+        busy={busy}
+        error={error}
+        confirmDisabled={blocked}
         onConfirm={save}
         onCancel={cancel}
         initialFocus={focus}
       >
         <div ref={focus} tabIndex={-1}>
           <DownloadPicker value={download} onChange={setDownload} platform={s.platform} platformOnly={!!s.platform_profile_only} />
-          {tooled && (
+          {wanted && (
             <fieldset className="source-opt source-give-tool">
               <legend>Folder</legend>
               {!given ? <span className="dim">Looking up its downloader…</span>
@@ -706,22 +832,6 @@ export function SourceOptionsDialog({ source: s, onClose, onSaved }) {
                 )}
             </fieldset>
           )}
-          {!none && <>
-          <div className="source-inherits" role="status">
-            <span className="dim">
-              {own.length ? `${own.length} choice${own.length === 1 ? "" : "s"} set here; the rest follow`
-                : "Every choice follows"}{" "}
-              <Link to="/settings#download-defaults" className="text-link">Download defaults</Link>
-              {" "}for {platformLabel(s.platform)} ({s.tool}).
-            </span>
-            <button type="button" className="btn-link" disabled={!own.length}
-                    onClick={() => { setForm(defaults); setResets(new Set(FIELDS)); }}
-                    title="Every choice back to its default; Save to keep it">Reset all to default</button>
-          </div>
-          <SourceOptions tool={s.tool} platform={s.platform} target={s.target} choices={s.choices} session={s.session} form={form}
-                         onChange={change} firstSync={firstSync} defaults={defaults} metadata={s.metadata}
-                         own={isOwn} onReset={resetOne} />
-          </>}
         </div>
       </ConfirmDialog>
       <DiscardDialog open={asking || unsaved.asking}
@@ -886,32 +996,34 @@ function useResolved(text) {
 }
 
 /* Paste a profile link (the tool comes from Settings → Link routing), or an
-   Instagram name. Before saving it shows the tool, platform and folder,
-   and what the source can download. "Profile only" (#218) adds it as
-   theirs, never downloaded: ticked to start with on a platform Settings
-   lists as profile only, and the only way for a site no downloader takes
-   (tool "none", "Add profile"). onDirty(bool) hears whether something is
-   typed and not added yet (false again when the form goes). */
+   Instagram name. Before saving, one line says what it is (platform,
+   profile, folder) and one select what it follows: Default to start with,
+   a named preset, "Custom…" (added on Default, then its options open), or
+   "Profile only" (#218: shown as theirs, never downloaded), picked to
+   start with on a platform Settings lists as profile only, and the only
+   way for a site no downloader takes (tool "none", "Add profile").
+   onDirty(bool) hears whether something is typed and not added yet (false
+   again when the form goes). */
 export function AddSource({ person = null, onAdded, onDirty }) {
   const toast = useToast();
   const [target, setTarget] = useState("");
-  const [forms,  setForms]  = useState({});      // the options picked, by tool and platform
-  const [only,   setOnly]   = useState(null);    // Profile only, as ticked (null: as its platform says)
+  const [pick,   setPick]   = useState(null);    // the select, as picked (null: as its platform says)
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState(null);
+  const [custom, setCustom] = useState(null);    // the source just added with Custom…: its options are open
   const text = target.trim();
   const resolved = useResolved(text);
   // No downloader takes the link's site: it can be added as a profile only.
   const profile = resolved?.ok === false ? resolved.profile || null : null;
-  const kind = resolved?.ok ? `${resolved.tool}:${resolved.platform}:${resolved.choices.content.join(",")}` : null;
-  const profileOnly = !!profile || (!!resolved?.ok && (only ?? !!resolved.profile_only));
-  // A new source starts from its platform's download defaults; what stays
-  // equal to them is not stored, so it follows them later.
+  const value = resolved?.ok ? pick ?? (resolved.profile_only ? PRESET_ONLY : "") : "";
+  const profileOnly = !!profile || (!!resolved?.ok && value === PRESET_ONLY);
   // Its account is set to Don't sync: no Add, nothing to choose (a profile only can be).
   const off = !!resolved?.ok && !!resolved.no_sync && !profileOnly;
-  const form = kind && !off && !profileOnly && (forms[kind] || formOf(resolved.defaults, resolved.choices));
-  const problem = form && formError(form, resolved.choices);
-  const login = form ? needsLogin(form, resolved.choices, resolved.session) : [];
+  const there = resolved?.ok && resolved.source != null;
+  // The kinds the preset picked downloads that need a login its sync lacks.
+  const picked = resolved?.ok && !profileOnly ? resolvedPreset(resolved, value) : null;
+  const login = picked ? needsLogin(formOf(picked.options, resolved.choices), resolved.choices, picked.session) : [];
+  const summary = picked ? optionsSummary({ ...resolved, options: picked.options }) : "";
 
   useEffect(() => {
     onDirty?.(!!text);
@@ -920,7 +1032,7 @@ export function AddSource({ person = null, onAdded, onDirty }) {
 
   async function add(e) {
     e.preventDefault();
-    if (!form && !profileOnly) return;
+    if (!resolved?.ok && !profile) return;
     setBusy(true);
     setError(null);
     try {
@@ -928,7 +1040,10 @@ export function AddSource({ person = null, onAdded, onDirty }) {
       const body = { target: text };
       if (profile) body.tool = "none";
       else if (profileOnly) { if (!resolved.profile_only) body.options = { download: "off" }; }
-      else body.options = { ...optionsOf(form, resolved.choices), ...(resolved.profile_only ? { download: "on" } : {}) };
+      else {
+        if (value && value !== PRESET_CUSTOM) body.preset = value;
+        if (resolved.profile_only) body.options = { download: downloadOn(true) };
+      }
       if (isHandle(text)) body.tool = "instaloader";
       if (person != null) body.person = person;
       const r = await createSource(body);
@@ -936,9 +1051,9 @@ export function AddSource({ person = null, onAdded, onDirty }) {
       toast(r.source.profile_only ? `${sourceName(r.source)} added as a profile only: shown as theirs, never downloaded.`
         : `${sourceName(r.source)} added. Sync it to download its posts.`);
       setTarget("");
-      setForms({});
-      setOnly(null);
+      setPick(null);
       onAdded?.(r.source);
+      if (value === PRESET_CUSTOM) setCustom(r.source);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -955,28 +1070,27 @@ export function AddSource({ person = null, onAdded, onDirty }) {
         aria-label="Profile link, or an Instagram name"
         maxLength={500}
         value={target}
-        onChange={e => { setTarget(e.target.value); setError(null); setOnly(null); }}
+        onChange={e => { setTarget(e.target.value); setError(null); setPick(null); }}
       />
       <button type="submit" className="btn-secondary"
-              disabled={busy || (profileOnly ? !profile && resolved?.source != null
-                : !form || off || resolved.source != null || !!problem || login.length > 0)}>
+              disabled={busy || (profile ? false : !resolved?.ok || there || off || login.length > 0)}>
         <Icon name="plus" size={13} />{profileOnly ? "Add profile" : "Add source"}
       </button>
       {resolved?.ok && (
-        <div className="source-resolved" role="status">
-          {!profileOnly && <ToolBadge tool={resolved.tool} />}
+        <div className="source-resolved" role="status" title={profileOnly ? undefined : `Synced with ${resolved.tool}`}>
           <PlatformIcon platform={resolved.platform} />
           <span className="source-resolved-target">{resolved.target.replace(/^https:\/\//, "")}</span>
           {!profileOnly && <><span className="dim">into</span>
             <code className="source-folder" title={resolved.folder}>{resolved.folder}</code></>}
-          {resolved.source != null && <span className="is-err">already a source</span>}
+          {there && <span className="is-err">already a source</span>}
           {off && <NotSyncedChip title="Its account is set to Don't sync: FeedVault does not download from it" />}
-          <label className="source-only-toggle"
-                 title={resolved.profile_only ? `${platformLabel(resolved.platform)} is profile only in Settings → Sync → Profile only; untick to download this one`
-                   : "Shown as theirs, never downloaded; its Options can turn downloading on later"}>
-            <input type="checkbox" checked={profileOnly} onChange={e => setOnly(e.target.checked)} />
-            Profile only
-          </label>
+          {!there && !off && (
+            <PresetSelect value={value} presets={resolved.presets} onChange={v => { setPick(v); setError(null); }}
+                          label="Preset" disabled={busy}
+                          title={profileOnly ? "Shown as theirs, never downloaded; pick a preset on its row to download it later"
+                            : value === PRESET_CUSTOM ? "Added on Default, then its own options open"
+                              : `${value ? "This preset" : "Default"}: ${summary || "new posts"}`} />
+          )}
         </div>
       )}
       {profile && (
@@ -991,14 +1105,16 @@ export function AddSource({ person = null, onAdded, onDirty }) {
           This account is set to Don&apos;t sync: no source can be added for it. Turn Don&apos;t sync off on its card or page first.
         </div>
       )}
-      {form && resolved.source == null && (
-        <SourceOptions tool={resolved.tool} platform={resolved.platform} target={resolved.target} choices={resolved.choices}
-                       session={resolved.session} form={form} metadata={resolved.metadata}
-                       onChange={f => { setForms(fs => ({ ...fs, [kind]: f })); setError(null); }} />
+      {login.length > 0 && !there && !off && (
+        <div className="msg err source-msg" role="alert">
+          {login.map(k => kindLabel(resolved.platform, k)).join(", ")} need a logged-in session: set one in{" "}
+          <Link to="/settings#sync" className="text-link">Settings → Sync</Link>, or pick another preset.
+        </div>
       )}
-      {(error || problem || (resolved?.ok === false && !profile)) && (
-        <div className="msg err source-msg" role="alert">{error || problem || resolved.error}</div>
+      {(error || (resolved?.ok === false && !profile)) && (
+        <div className="msg err source-msg" role="alert">{error || resolved.error}</div>
       )}
+      {custom && <SourceOptionsDialog source={custom} onClose={() => setCustom(null)} onSaved={onAdded} />}
     </form>
   );
 }

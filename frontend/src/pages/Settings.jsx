@@ -1,20 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { getConfig, saveConfig, browse, getTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders, saveSourceDefaults, applySourceDefault, saveProfileOnlyPlatforms } from "../lib/api";
+import { getConfig, saveConfig, browse, getTrash, startJob, saveToolPaths, saveInstaloaderSettings, saveSettings, cleanInfoJsonCookies, getDownloaders, checkDownloaders, saveSourceDefaults, createPreset, updatePreset, deletePreset, saveProfileOnlyPlatforms } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useScan } from "../lib/scan";
 import { useJobs, ENDED, SLIM_KIND, slimJobs } from "../lib/jobs";
 import { useToast } from "../lib/toast";
 import { JobLog } from "./Jobs";
 import { fmtAgo, fmtBytes, fmtFullDate, platformLabel, plural } from "../lib/fmt";
-import { formError, formOf, optionsOf } from "../lib/sourceOptions";
+import { PRESETS_MAX, PRESET_NAME_MAX, formError, formOf, optionsOf, optionsSummary, sameOptions } from "../lib/sourceOptions";
 import { MAX_LINK_LABEL, MAX_LINK_LABELS, linkSite } from "../lib/links";
 import { NoFfmpeg, SourceOptions, ToolBadge } from "../components/Sources";
 import PlatformIcon from "../components/PlatformIcon";
 import Icon from "../components/Icon";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DiscardDialog from "../components/DiscardDialog";
-import { useUnsaved } from "../lib/unsaved";
+import { useOneEdit, useUnsaved } from "../lib/unsaved";
 import AppearanceSettings from "../components/AppearanceSettings";
 import ProfileSettings from "../components/ProfileSettings";
 import BrowserPick from "../components/BrowserPick";
@@ -687,8 +687,8 @@ function ProfileOnlyCard({ listed, platforms, onSaved }) {
       <div className="card-title">Profile only</div>
       <p className="page-lede">
         A source on a platform ticked here is shown as theirs (on their page, with their accounts) and never
-        downloaded: no sync, scheduled or not, no folder. A source&rsquo;s own Download (its Options) can say always
-        or never instead. Already downloaded posts stay.
+        downloaded: no sync, scheduled or not, no folder. One source can differ: the select on its row
+        says Profile only, or a preset to download it anyway. Already downloaded posts stay.
       </p>
       <div className="profile-only-list">
         {all.map(platform => (
@@ -735,7 +735,7 @@ function SchedulesCard({ paused, onSaved }) {
     <div className="card">
       <div className="card-title">Schedules</div>
       <p className="page-lede">
-        A source can sync hourly, daily or weekly, set in its Options. One that failed waits longer each time, up to a day.
+        A source can sync hourly, daily or weekly, as its preset says. One that failed waits longer each time, up to a day.
       </p>
       <label className="dl-toggle">
         <input type="checkbox" checked={paused} disabled={busy} onChange={e => set(e.target.checked)} />
@@ -985,8 +985,8 @@ function MetadataCard({ current, ffmpeg = true, onSaved }) {
     <div className="card" id="slim-metadata">
       <div className="card-title">Metadata files</div>
       <p className="page-lede">
-        What each tool writes beside the media it downloads, for the sources that do not choose for themselves
-        (their Options, or <a href="#download-defaults" className="text-link">Download defaults</a>). It changes new
+        What each tool writes beside the media it downloads, unless a preset or a profile&rsquo;s custom options choose
+        otherwise (<a href="#presets" className="text-link">Presets</a>). It changes new
         downloads only: the files already there stay as they are.
       </p>
       <div className="metadata-modes">
@@ -1058,56 +1058,64 @@ function MetadataCard({ current, ffmpeg = true, onSaved }) {
   );
 }
 
-// The options of a source by name, for "Apply to all sources" (docs/API.md "Download defaults").
-const DEFAULT_NAMES = {
-  session: "Login", content: "Download", media: "Media", since: "Not older than", first_posts: "First sync",
-  script: "Command", metadata: "Metadata files", schedule: "Schedule",
-};
+/* A preset's one line: what it downloads. */
+const presetLine = (block, options) => optionsSummary({ ...block, options }) || "new posts";
 
-/* One platform's download defaults: the options form a source has (no
-   full history: a one-off), saved for every source of that tool and
-   platform that does not set an option itself; and per option, how many
-   sources do, with "Apply to all sources" to make them follow it. */
-function DefaultsBlock({ block, config, open, onToggle, onSaved, onDirty }) {
+/* One preset's form, in place under its row: its name (Default's is
+   fixed) and the options a source's Custom form has, then Save, Cancel
+   and, for a named one, Delete (asked first: the profiles that follow it
+   go back to Default). ``preset``: "default", a named preset, or null
+   for a new one, which starts as a copy of Default. onDirty(bool): the
+   card asks before another one opens, or Cancel closes this one
+   (onCancel), over unsaved edits. */
+function PresetEditor({ block, preset, config, onClose, onCancel, onSaved, onDirty, onPageDirty }) {
   const { tool, platform, choices } = block;
-  const name = `Download defaults: ${platformLabel(platform)} (${tool})`;
-  const saved = formOf(block.defaults, choices);
+  const isDefault = preset === "default";
+  const named = preset && !isDefault ? preset : null;
+  const where = `${platformLabel(platform)} (${tool})`;
+  const [saved] = useState(() => formOf(named ? named.options : block.defaults, choices));
   const [form, setForm] = useState(saved);
+  const [name, setName] = useState(named?.name || "");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
-  const [applying, setApplying] = useState(null);   // the option "Apply to all sources" asks about
+  const [deleting, setDeleting] = useState(false);
   const [dlgErr, setDlgErr] = useState(null);
   const toast = useToast();
-  const sent = f => { const rest = optionsOf(f, choices); delete rest.full_history; return rest; };
-  const dirty = JSON.stringify(sent(form)) !== JSON.stringify(sent(saved));
-  useReportDirty(onDirty, name, dirty);
+  const dirty = !sameOptions(form, saved, choices) || name.trim() !== (named?.name || "");
+  useReportDirty(onPageDirty, `Preset: ${named?.name || (isDefault ? "Default" : "new")}, ${where}`, dirty);
+  useEffect(() => { onDirty(dirty); }, [onDirty, dirty]);
+  useEffect(() => () => onDirty(false), [onDirty]);
   const problem = formError(form, choices);
   const session = (config[tool] || {}).session;
-  const own = Object.entries(block.overrides).filter(([, n]) => n > 0);
+  const unnamed = !isDefault && !name.trim();
 
   async function save() {
     setBusy(true);
     setMsg(null);
     try {
-      const r = await saveSourceDefaults(tool, platform, sent(form));
-      if (r?.ok) onSaved();
-      else setMsg({ ok: false, text: r?.error || "Save failed." });
+      const options = optionsOf(form, choices);
+      const r = isDefault ? await saveSourceDefaults(tool, platform, options)
+        : named ? await updatePreset(named.id, { name: name.trim(), options })
+          : await createPreset({ tool, platform, name: name.trim(), options });
+      if (!r?.ok) { setMsg(r?.error || "Save failed."); return; }
+      toast(`${isDefault ? "Default" : name.trim()}: preset saved for ${where}.`);
+      onClose();
+      onSaved();
     } catch (err) {
-      setMsg({ ok: false, text: err.message });
+      setMsg(err.message);
     } finally {
       setBusy(false);
     }
   }
 
-  async function apply() {
+  async function remove() {
     setBusy(true);
     setDlgErr(null);
     try {
-      const r = await applySourceDefault(tool, platform, applying);
-      if (!r?.ok) { setDlgErr(r?.error || "Could not apply it."); return; }
-      toast(`${plural(r.applied, "source")} now follow${r.applied === 1 ? "s" : ""} the default ${DEFAULT_NAMES[applying].toLowerCase()}`
-        + (r.skipped ? `; ${plural(r.skipped, "syncing now")} left as ${r.skipped === 1 ? "it is" : "they are"}.` : "."));
-      setApplying(null);
+      const r = await deletePreset(named.id);
+      if (!r?.ok) { setDlgErr(r?.error || "Could not delete it."); return; }
+      toast(`Preset ${named.name} deleted${r.sources ? `: ${plural(r.sources, "profile")} back on Default` : ""}.`);
+      onClose();
       onSaved();
     } catch (err) {
       setDlgErr(err.message);
@@ -1117,94 +1125,131 @@ function DefaultsBlock({ block, config, open, onToggle, onSaved, onDirty }) {
   }
 
   return (
-    <details className="defaults-block" data-defaults={`${tool}:${platform}`} open={open}
-             onToggle={e => onToggle(e.currentTarget.open)}>
-      <summary>
-        <PlatformIcon platform={platform} />
-        <b>{platformLabel(platform)}</b>
-        <ToolBadge tool={tool} />
-        <span className="dim defaults-count">
-          {plural(block.sources, "source")}
-          {block.set.length ? ` · ${plural(block.set.length, "default")} set` : " · built-in defaults"}
-        </span>
-      </summary>
-      <div className="defaults-body">
-        <SourceOptions tool={tool} platform={platform} target={null} choices={choices} session={session} form={form}
-                       onChange={f => { setForm(f); setMsg(null); }} editor metadata={{ setting: config[tool]?.metadata }} />
-        {own.length > 0 && (
-          <ul className="defaults-own">
-            {own.map(([k, n]) => (
-              <li key={k}>
-                <span>{DEFAULT_NAMES[k]}: {plural(n, "source")} set{n === 1 ? "s" : ""} its own</span>
-                <button type="button" className="btn-link" disabled={busy || dirty}
-                        title={dirty ? "Save the defaults first" : "Remove their own choice: they follow this default"}
-                        onClick={() => { setDlgErr(null); setApplying(k); }}>Apply to all sources…</button>
-              </li>
-            ))}
-          </ul>
+    <div className="preset-editor">
+      <div className="preset-name-line">
+        <span className="preset-name-label">Name</span>
+        {isDefault ? <><b>Default</b><span className="dim">new profiles start on it</span></> : (
+          <input type="text" className="page-filter" aria-label="Preset name" maxLength={PRESET_NAME_MAX} value={name}
+                 placeholder="Images only, Weekly…" autoFocus={!named} onChange={e => { setName(e.target.value); setMsg(null); }} />
         )}
-        <div className="settings-actions">
-          <button type="button" className="btn-primary" disabled={busy || !dirty || !!problem} onClick={save}>
-            {busy ? "Saving…" : "Save"}
-          </button>
-          <button type="button" className="btn-ghost" disabled={busy || !dirty} onClick={() => setForm(saved)}>Undo</button>
-        </div>
-        {(problem || msg) && <div className={`msg ${msg?.ok ? "ok" : "err"}`} role="alert">{problem || msg.text}</div>}
       </div>
-      <ConfirmDialog
-        open={!!applying}
-        busy={busy}
-        error={dlgErr}
-        title={applying ? `Apply the default ${DEFAULT_NAMES[applying].toLowerCase()} to ${plural(block.overrides[applying], "source")}?` : ""}
-        confirmLabel={applying ? `Apply to ${plural(block.overrides[applying], "source")}` : "Apply"}
-        onConfirm={apply}
-        onCancel={() => setApplying(null)}
-      >
-        {applying && (
-          <p>
-            {plural(block.overrides[applying], `${platformLabel(platform)} source`)} synced with {tool}{" "}
-            {block.overrides[applying] === 1 ? "has" : "have"} {DEFAULT_NAMES[applying].toLowerCase()} set on{" "}
-            {block.overrides[applying] === 1 ? "itself" : "themselves"}. Their own choice is removed: from their next
-            sync they follow this default, and any change to it. A source syncing right now keeps its own.
-          </p>
-        )}
+      <SourceOptions tool={tool} platform={platform} target={null} choices={choices} session={session} form={form}
+                     onChange={f => { setForm(f); setMsg(null); }} metadata={{ setting: config[tool]?.metadata }} />
+      <div className="settings-actions">
+        <button type="button" className="btn-primary" disabled={busy || unnamed || !!problem || (!!preset && !dirty)} onClick={save}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button type="button" className="btn-ghost" disabled={busy} onClick={onCancel}>Cancel</button>
+        {named && <>
+          <div className="page-head-spacer" />
+          <button type="button" className="btn-danger-soft" disabled={busy} onClick={() => { setDlgErr(null); setDeleting(true); }}>
+            <Icon name="trash" size={13} />Delete…
+          </button>
+        </>}
+      </div>
+      {(problem || msg) && <div className="msg err" role="alert">{problem || msg}</div>}
+      <ConfirmDialog open={deleting} danger busy={busy} error={dlgErr} title={`Delete the preset ${named?.name}?`}
+                     confirmLabel="Delete preset" onConfirm={remove} onCancel={() => setDeleting(false)}>
+        {named?.sources ? `${plural(named.sources, "profile")} of ${where} follow${named.sources === 1 ? "s" : ""} it: `
+          + `${named.sources === 1 ? "it goes" : "they go"} back to Default.` : "No profile follows it."}
       </ConfirmDialog>
-    </details>
+    </div>
   );
 }
 
-/* Settings → Sync: the options a new source starts from, per platform and
-   tool, and that every source not setting an option itself follows. */
-function DownloadDefaultsCard({ blocks, config, onSaved, onDirty }) {
+/* One platform's presets: Default, then the named ones, each a row with
+   what it downloads, how many profiles follow it and Edit; and New preset. */
+function PresetGroup({ block, config, edit, onSaved, onDirty }) {
+  const { tool, platform } = block;
+  const key = `${tool}:${platform}`;
+  const where = `${platformLabel(platform)} (${tool})`;
+  const rows = [{ id: "default", name: "Default", options: block.defaults, sources: block.default_sources, preset: "default" },
+                ...block.presets.map(p => ({ ...p, preset: p }))];
+  const editor = preset => (
+    <PresetEditor block={block} preset={preset} config={config} onClose={edit.close} onCancel={() => edit.open(null)}
+                  onSaved={onSaved} onDirty={edit.onDirty} onPageDirty={onDirty} />
+  );
+  const full = block.presets.length >= PRESETS_MAX;
+  return (
+    <section className="preset-group" data-presets={key} aria-label={`Presets of ${where}`}>
+      <div className="preset-group-head">
+        <PlatformIcon platform={platform} />
+        <b>{platformLabel(platform)}</b>
+        <ToolBadge tool={tool} />
+        <span className="dim preset-group-count">
+          {plural(block.sources, "profile")}{block.custom > 0 && ` · ${block.custom} custom`}
+        </span>
+      </div>
+      <ul className="preset-list">
+        {rows.map(r => {
+          const line = presetLine(block, r.options);
+          const open = edit.editing === `${key}:${r.id}`;
+          return (
+            <li key={r.id} className={`preset-row${open ? " is-open" : ""}`} data-preset={r.id}>
+              <span className="preset-row-head">
+                <b className="preset-name" title={r.name}>{r.name}</b>
+                <span className="dim preset-summary" title={line}>{line}</span>
+                <span className="dim preset-count">{plural(r.sources, "profile")}</span>
+                <button type="button" className="btn-link" aria-expanded={open} aria-label={`Edit ${r.name}, ${where}`}
+                        onClick={() => edit.open(open ? null : `${key}:${r.id}`)}>Edit</button>
+              </span>
+              {open && editor(r.preset)}
+            </li>
+          );
+        })}
+      </ul>
+      {edit.editing === `${key}:new` ? editor(null) : (
+        <button type="button" className="btn-link preset-new" disabled={full} aria-label={`New preset, ${where}`}
+                title={full ? `${PRESETS_MAX} presets at most per platform` : `Starts as a copy of Default`}
+                onClick={() => edit.open(`${key}:new`)}>
+          <Icon name="plus" size={12} />New preset
+        </button>
+      )}
+    </section>
+  );
+}
+
+/* Settings → Sync: the presets a profile can follow, per platform and
+   tool (docs/API.md "Presets"). Each has a Default, which new profiles
+   start on (added one by one, from a person, a suggestion or the
+   userscript), and the named ones made here; a profile picks one on its
+   row. One opens for editing at a time. The platforms nobody uses yet
+   (no profile, no preset, a built-in Default) wait behind "Show unused"
+   (#237). */
+function PresetsCard({ blocks, config, onSaved, onDirty }) {
   const ref = useRef(null);
   const location = useLocation();
-  // Which folds are open: kept here, as a saved block is drawn anew.
-  const [opened, setOpened] = useState(() => new Set());
-  const toggle = (id, open) => setOpened(s => {
-    if (s.has(id) === open) return s;
-    const next = new Set(s);
-    if (open) next.add(id);
-    else next.delete(id);
-    return next;
-  });
+  const edit = useOneEdit();
+  const [unused, setUnused] = useState(false);
   useEffect(() => {
-    if (location.hash === "#download-defaults") ref.current?.scrollIntoView({ block: "start" });
+    if (location.hash === "#presets" || location.hash === "#download-defaults") ref.current?.scrollIntoView({ block: "start" });
   }, [location.hash, location.key]);
+  const used = b => b.sources > 0 || b.presets.length > 0 || b.set.length > 0;
+  const rest = blocks.filter(b => !used(b)).length;
+  const shown = blocks.filter(b => unused || used(b) || edit.editing?.startsWith(`${b.tool}:${b.platform}:`));
   return (
-    <div className="card" id="download-defaults" ref={ref}>
-      <div className="card-title">Download defaults</div>
+    <div className="card" id="presets" ref={ref}>
+      {/* The card's old name, still linked to. */}
+      <span id="download-defaults" />
+      <div className="card-title">Presets</div>
       <p className="page-lede">
-        What a source downloads when it does not choose for itself. Set a platform once: every source of it that
-        does not set an option in its own Options follows it from its next sync, and new sources (added one by one,
-        from a person, a suggestion or the userscript) start from it. An option a source sets stays its own.
+        What a profile downloads. Each platform has a Default, which new profiles start on; make others beside it and
+        pick one on a profile&rsquo;s row. A change reaches every profile that follows the preset from its next sync.
       </p>
-      <div className="defaults-list">
-        {blocks.map(b => (
-          <DefaultsBlock key={`${b.tool}:${b.platform}:${JSON.stringify(b.defaults)}`} block={b} config={config}
-                         open={opened.has(`${b.tool}:${b.platform}`)} onToggle={o => toggle(`${b.tool}:${b.platform}`, o)}
-                         onSaved={onSaved} onDirty={onDirty} />
+      <div className="preset-groups">
+        {shown.map(b => (
+          <PresetGroup key={`${b.tool}:${b.platform}`} block={b} config={config} edit={edit} onSaved={onSaved} onDirty={onDirty} />
         ))}
+        {!shown.length && <div className="empty">No profile yet. Show the unused platforms to set their presets first.</div>}
       </div>
+      {rest > 0 && (
+        <button type="button" className="btn-link preset-unused" aria-expanded={unused} onClick={() => setUnused(!unused)}>
+          {unused ? `Hide unused (${rest})` : `Show unused (${rest})`}
+        </button>
+      )}
+      <DiscardDialog open={edit.asking} onDiscard={edit.discard} onKeep={edit.keep}>
+        The preset being edited has unsaved changes.
+      </DiscardDialog>
     </div>
   );
 }
@@ -1716,7 +1761,7 @@ const TABS = [
   { id: "about",      label: "About",      icon: "info" },
 ];
 // Cards linked to from elsewhere (/settings#downloaders), and their tab.
-const ANCHORS = { "rating-colors": "appearance", downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "open-links": "downloads", "download-defaults": "sync", "slim-metadata": "sync",
+const ANCHORS = { "rating-colors": "appearance", downloaders: "downloads", "bio-import": "downloads", "link-labels": "downloads", "open-links": "downloads", presets: "sync", "download-defaults": "sync", "slim-metadata": "sync",
   "profile-only": "sync" };
 
 function tabOf(hash) {
@@ -1725,7 +1770,7 @@ function tabOf(hash) {
 }
 
 /* Cards changed once and then left alone, folded under one line
-   (#ui-declutter). A link to a card inside (#download-defaults) opens it
+   (#ui-declutter). A link to a card inside (#slim-metadata) opens it
    first: a layout effect, so before the card's own effect scrolls to it. */
 /* A tool's login, in a word, for its fold's summary. */
 function loginSum(session) {
@@ -1820,6 +1865,7 @@ export default function Settings() {
                 </SettingsMore>
               </div>
               <div className="settings-group" hidden={tab !== "sync"}>
+                <PresetsCard blocks={config.source_defaults || []} config={config} onSaved={reload} onDirty={onDirty} />
                 <SchedulesCard paused={config.schedules_paused === true} onSaved={reload} />
                 <DesktopCard on={config.desktop_notifications === true} onSaved={reload} />
                 {/* Each tool's login and pace, folded: set once, read rarely. */}
@@ -1832,12 +1878,10 @@ export default function Settings() {
                                  saved={config[t] || {}} maxSeconds={config.youtube_max_seconds} onSaved={reload} {...note(t)} onDirty={onDirty} />
                   </SettingsMore>
                 ))}
-                <SettingsMore title="More sync settings" sum="profile-only platforms, metadata files, download defaults">
+                <SettingsMore title="More sync settings" sum="profile-only platforms, metadata files">
                   <ProfileOnlyCard listed={config.profile_only_platforms || []} platforms={config.platforms || []} onSaved={reload} />
                   <MetadataCard current={Object.fromEntries(["instaloader", "gallery-dl", "yt-dlp"].map(t => [t, config[t]?.metadata]))}
                                 ffmpeg={config.ffmpeg !== false} onSaved={reload} />
-                  <DownloadDefaultsCard blocks={config.source_defaults || []}
-                                        config={config} onSaved={reload} onDirty={onDirty} />
                 </SettingsMore>
               </div>
               <div className="settings-group" hidden={tab !== "appearance"}>

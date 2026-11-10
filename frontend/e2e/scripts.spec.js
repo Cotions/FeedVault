@@ -98,7 +98,7 @@ test("the script picker groups scripts by what they run and hides other tools' (
     const row = page.locator(`.source-row[data-source-id="${id}"]`);
     await expect(row).toBeVisible();
     await expect(row.locator(".source-script-warn")).toHaveCount(0);   // greet can run
-    await (await menuItem(page, row, /^More for /, "Options")).click();
+    await (await menuItem(page, row, /^More for /, "Edit custom…")).click();
     const pick = page.getByRole("combobox", { name: "Command a sync runs" });
     await expect(pick).toHaveValue("greet");
     const groups = await pick.locator("optgroup").evaluateAll(gs => gs.map(g => ({
@@ -278,14 +278,15 @@ const fieldset = (dialog, legend) => dialog.locator("fieldset.source-opt", { has
 
 // #149: with a script as the command, the tool's choices are not used:
 // dimmed and disabled, the schedule still live. Changed choices are not
-// dropped by Esc or Cancel without asking. "new posts" keeps its
-// description beside it, as "full history" does.
-test("a source's Options: a script disables the tool's choices, and changes are not dropped unasked (#149)", async ({ page, request }) => {
+// dropped by Esc or Cancel without asking. A source with a script of its
+// own is Custom: its options open from "Edit custom…" in its ⋯ menu.
+// Full history is not one of them: it is asked for from that menu.
+test("a source's custom options: a script disables the tool's choices, and changes are not dropped unasked (#149)", async ({ page, request }) => {
   await withScriptSource(request, async ({ id }) => {
     await page.goto("/creators");
     const row = page.locator(`.source-row[data-source-id="${id}"]`);
-    await (await menuItem(page, row, /^More for /, "Options")).click();
-    const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
+    await (await menuItem(page, row, /^More for /, "Edit custom…")).click();
+    const dialog = page.getByRole("alertdialog", { name: /^Custom options for / });
     const pick = dialog.getByRole("combobox", { name: "Command a sync runs" });
     await expect(pick).toHaveValue("greet");
     for (const legend of ["Download", "Media", "Not older than", "First sync"]) {
@@ -302,19 +303,12 @@ test("a source's Options: a script disables the tool's choices, and changes are 
 
     // The tool's own command: its choices come back.
     await pick.selectOption("");
-    for (const legend of ["Download", "Not older than", "First sync"]) {
+    for (const legend of ["Download", "Not older than"]) {
       await expect(fieldset(dialog, legend).locator("input").first(), legend).toBeEnabled();
     }
-
-    // "new posts" and "full history": each description on its choice's line.
-    const first = fieldset(dialog, "First sync");
-    for (const name of ["new posts", "full history"]) {
-      const line = first.locator(".source-opt-line", { has: page.locator(`b:text-is("${name}")`) });
-      const b = await line.locator("b").first().boundingBox();
-      const d = await line.locator(".dim").boundingBox();
-      expect(d.y,`${name}: its description starts on its line`).toBeLessThan(b.y + b.height);
-      expect(d.x, `${name}: beside it`).toBeGreaterThan(b.x + b.width);
-    }
+    // No full history in the form, nor a choice of whether it downloads.
+    await expect(dialog.getByRole("radio", { name: /full history/i })).toHaveCount(0);
+    await expect(dialog.getByRole("group", { name: "Download this profile" })).toHaveCount(0);
 
     // Changed: Esc asks, Keep editing keeps the change.
     await page.keyboard.press("Escape");
@@ -331,7 +325,7 @@ test("a source's Options: a script disables the tool's choices, and changes are 
     const { sources } = await (await request.get("/api/sources", { headers: H })).json();
     expect(sources.find(s => s.id === id).options.script).toBe("greet");
     // Unchanged: Esc closes at once.
-    await (await menuItem(page, row, /^More for /, "Options")).click();
+    await (await menuItem(page, row, /^More for /, "Edit custom…")).click();
     await expect(pick).toHaveValue("greet");
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
@@ -340,19 +334,19 @@ test("a source's Options: a script disables the tool's choices, and changes are 
   });
 });
 
-// #153: a link inside the Options dialog ("See Scripts" here) dropped
+// #153: a link inside a source's options dialog ("See Scripts" here) dropped
 // changed choices without asking. It asks as Esc and Cancel do: Keep
 // editing stays in the dialog, focus back on the link; Discard goes on,
 // nothing saved. Unchanged, the link just goes.
-test("a source's Options: a link inside it asks before dropping changed choices (#153)", async ({ page, request }) => {
+test("a source's custom options: a link inside it asks before dropping changed choices (#153)", async ({ page, request }) => {
   await withScriptSource(request, async ({ id }) => {
     const optionsNow = async () =>
       (await (await request.get("/api/sources", { headers: H })).json()).sources.find(s => s.id === id).options;
     const before = await optionsNow();
     await page.goto("/creators");
     const row = page.locator(`.source-row[data-source-id="${id}"]`);
-    await (await menuItem(page, row, /^More for /, "Options")).click();
-    const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
+    await (await menuItem(page, row, /^More for /, "Edit custom…")).click();
+    const dialog = page.getByRole("alertdialog", { name: /^Custom options for / });
     const link = dialog.getByRole("link", { name: "Scripts", exact: true });
     const schedule = fieldset(dialog, "Schedule").getByRole("radio");
     await expect(schedule.first()).toBeChecked();
@@ -386,7 +380,7 @@ test("a source's Options: a link inside it asks before dropping changed choices 
     await page.goto("/creators");
     const typed = page.getByRole("textbox", { name: "Profile link, or an Instagram name" });
     await typed.fill(`https://x.com/e2e_options_${id}`);
-    await (await menuItem(page, row, /^More for /, "Options")).click();
+    await (await menuItem(page, row, /^More for /, "Edit custom…")).click();
     await expect(schedule.first()).toBeChecked();
     await link.click();
     await expect(discard).toContainText("The new source is not added yet.");
@@ -398,7 +392,7 @@ test("a source's Options: a link inside it asks before dropping changed choices 
     await typed.fill("");
 
     // Unchanged, nothing else typed: the link goes at once.
-    await (await menuItem(page, row, /^More for /, "Options")).click();
+    await (await menuItem(page, row, /^More for /, "Edit custom…")).click();
     await link.click();
     await expect(page).toHaveURL(/\/scripts#script-greet$/);
     await expect(discard).toHaveCount(0);

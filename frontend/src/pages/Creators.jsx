@@ -24,11 +24,11 @@ import StateChips from "../components/StateChips";
 import { useNoSync } from "../components/NoSync";
 import { useMute } from "../lib/useMute";
 import {
-  AddSource, RemoveSourceDialog, ScheduleLine, ScriptWarning, SourceOptionsDialog, SourceRow, SourceStatus,
+  AddSource, RemoveSourceDialog, ScheduleLine, ScriptWarning, SourcePresetDialog, SourceRow, SourceStatus,
   SyncAllBar, SyncButton,
 } from "../components/Sources";
 import { sourceName, useSources, useSyncAll } from "../lib/sources";
-import { optionsSummary } from "../lib/sourceOptions";
+import { optionsSummary, presetName } from "../lib/sourceOptions";
 import { healthBadge, warnings } from "../lib/health";
 import PageHeader from "../components/PageHeader";
 import { useUnsaved } from "../lib/unsaved";
@@ -66,7 +66,7 @@ function freeName(name, people) {
 
 /* A card's sources: which one to show (syncing, else a failed one, else
    the latest sync), its job, and those not syncing already. One set to
-   Don't sync never runs: no status, Sync, Options or warning for it; nor
+   Don't sync never runs: no status, Sync, preset or warning for it; nor
    does a profile only one (#218). */
 function cardSync(all, jobOf) {
   const sources = (all || []).filter(s => !s.no_sync && !s.profile_only);
@@ -271,20 +271,20 @@ function PersonCard({ person: p, index, settled, portrait, selectMode, selected,
   );
 }
 
-// An account card's Options, in its ⋯ menu: its source's, or one item per
-// source when it has several. Off while that source's sync is queued or
-// running (its end would undo what changes now).
-function optionsItems(sync, onEdit) {
+// What an account card's source follows, in its ⋯ menu: "Preset…", or
+// one item per source when it has several. Off while that source's sync
+// is queued or running (its end would undo what changes now).
+function presetItems(sync, onEdit) {
   if (!sync) return [];
   const label = s => `${sourceName(s)} (${s.tool})`;
-  return sync.sources.map(s => {
+  return sync.sources.filter(s => s.tool !== "none").map(s => {
     const idle = sync.idle.includes(s);
     const summary = optionsSummary(s);
     return {
-      label: sync.sources.length === 1 ? "Options" : `Options of ${label(s)}`,
+      label: sync.sources.length === 1 ? "Preset…" : `Preset of ${label(s)}…`,
       icon: "settings",
       disabled: !idle,
-      title: idle ? `What ${sourceName(s)} downloads with ${s.tool}${summary ? `: ${summary}` : ""}` : `${label(s)}: its sync is queued or running`,
+      title: idle ? `${sourceName(s)} follows ${presetName(s)}${summary ? `: ${summary}` : ""}` : `${label(s)}: its sync is queued or running`,
       onSelect: () => onEdit(s),
     };
   });
@@ -330,14 +330,14 @@ function AccountCard({ account: a, index, settled, query, selectMode, selected, 
       )}
       {!selectMode && (
         // One quick action in sight, Sync (when it has a source); Review,
-        // Options, Make creator (a person of its own, in one click) and the
+        // Preset, Make creator (a person of its own, in one click) and the
         // switches in its ⋯ menu, so the card stays one row.
         <span className="card-actions">
           <CardSyncButton sync={sync} onSync={onSync} />
           <ActionMenu label={`More for ${name}`} items={[
             known && { label: "Review", icon: "review", to: `/review?${new URLSearchParams({ platform: a.platform, author: a.id })}`,
                        title: `Review ${name}'s unreviewed posts` },
-            ...optionsItems(sync, onEdit),
+            ...presetItems(sync, onEdit),
             known && { label: "Make creator", icon: "userPlus", onSelect: onMake, title: `Make ${name} a creator: a person of its own` },
             seenItem(fresh, name, onSeen),
             "separator",
@@ -534,7 +534,7 @@ export default function Creators() {
   const sources = useSources();
   const syncAll = useSyncAll();
   const [removing, setRemoving] = useState(null);           // the source to remove
-  const [editing,  setEditing]  = useState(null);           // the source whose options are open
+  const [editing,  setEditing]  = useState(null);           // the source whose preset is asked
   const [addAll,   setAddAll]   = useState(null);           // { error } while that dialog is open
   const [newSource, setNewSource] = useState(false);         // the new source's field has something typed
   // A typed source is asked about before the app leaves the page; the
@@ -1015,7 +1015,7 @@ export default function Creators() {
         )}
 
         <RemoveSourceDialog source={removing} onRemove={sources.remove} onClose={() => setRemoving(null)} />
-        {editing && <SourceOptionsDialog source={editing} onClose={() => setEditing(null)} onSaved={sources.reload} />}
+        {editing && <SourcePresetDialog source={editing} onClose={() => setEditing(null)} onSaved={sources.reload} />}
 
         <ConfirmDialog
           open={!!addAll}

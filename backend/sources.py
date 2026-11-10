@@ -30,6 +30,7 @@ Nothing here runs a tool: sync.py builds the job from a stored source.
 import json
 import os
 import re
+import secrets
 from datetime import date
 from urllib.parse import urlsplit
 
@@ -389,8 +390,8 @@ DOWNLOAD = ("platform", "on", "off")
 # schedule wins over the one content's stories would pick.
 OPTION_KEYS = ("download", "full_history", "session", "content", "media", "since", "first_posts", "script",
                "metadata", "schedule")
-# What a platform's download defaults (Settings → Download defaults) can
-# set: every option but full history, which is a one-off, and download,
+# What a preset (Settings → Presets; a platform's Default and its named
+# ones) can set: every option but full history, which is a one-off, and download,
 # which Settings → Profile only sets per platform.
 DEFAULT_KEYS = OPTION_KEYS[2:]
 # A script's id (scripts.py): a file's name without its suffix, or a built-in's.
@@ -548,30 +549,47 @@ def clean_options(value, base=None, tool="instaloader", platform="instagram", ta
 
 
 # ---------------------------------------------------------------------------
-# Download defaults and what a source inherits
+# Presets: what a source follows
 # ---------------------------------------------------------------------------
 #
-# config ``source_defaults``: {tool: {platform: {option: value}}}, set in
-# Settings → Download defaults. A source stores only its overrides: the
-# options it sets itself, as {"v": 2, option: value, ...} (OVERRIDES). Any
-# other option is inherited: its platform's default when there is one,
-# else BUILTIN. So a default changed in Settings reaches every source that
-# does not set that option, at its next sync. Options as stored before
-# (every key, no "v") are read as overrides of what differs from BUILTIN.
+# A source picks a preset of its tool and platform; presets are made in
+# Settings → Presets. Each pair always has the Default one: config
+# ``source_defaults``: {tool: {platform: {option: value}}}. The named ones
+# are beside it, ``source_presets``: {tool: {platform: [{id, name,
+# options}]}}. A source stores which it follows and what it sets itself, as
+# {"v": 2, "preset": id, option: value, ...} (OVERRIDES):
+#
+# - a named preset ("preset", one there is): the preset's options over
+#   BUILTIN, never over Default; of its own it keeps only ``download`` and
+#   ``full_history``;
+# - Default (no "preset", or one that is gone, and no option of its own):
+#   Default's options over BUILTIN;
+# - Custom (options of its own, no preset): its own over Default's.
+#
+# So a preset changed in Settings reaches every source that follows it, at
+# its next sync. Options as stored before (every key, no "v") are read as
+# overrides of what differs from BUILTIN.
 
 OVERRIDES = 2                                  # "v" of a source's options as stored now
 _PLATFORM_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
+# Per source, never a preset's: whether it downloads, and the one-off full history.
+OWN_KEYS = ("download", "full_history")
+# Beside a source's options, what is not one: the preset it follows, and what
+# its first sync left when its "last N" came from a preset (first_synced):
+# "floor", the day nothing older is downloaded from, or "first_pending",
+# when that sync found no such day and "last N" is for the next one too.
+STATE_KEYS = ("preset", "floor", "first_pending")
+PRESETS_MAX = 20                               # named presets per tool and platform
+PRESET_NAME_MAX = 40
+# The names the two choices that are no named preset show under.
+PRESET_RESERVED = ("default", "custom", "custom…", "custom...")
+_PRESET_ID_RE = re.compile(r"[a-z0-9]{4,16}")
 
 
-def defaults_of(cfg, tool, platform):
-    """The download defaults set for ``tool`` on ``platform`` ({option:
-    value}, only those set), each checked again (config.json can be edited
-    by hand): one that is malformed is left out."""
-    block = ((cfg or {}).get("source_defaults") or {})
-    block = block.get(tool) if isinstance(block, dict) else None
-    block = block.get(platform) if isinstance(block, dict) else None
-    if not isinstance(block, dict):
-        return {}
+def _checked(block, tool, platform):
+    """The options of a preset's block as config.json has it ({option:
+    value}), each checked again (it can be edited by hand): one that is
+    malformed is left out."""
     out, where = {}, {"tool": tool, "platform": platform, "target": None, "defaults": True}
     for key in DEFAULT_KEYS:
         got = clean_options({key: block[key]}, **where, stories_daily=False) if key in block else None
@@ -580,8 +598,209 @@ def defaults_of(cfg, tool, platform):
     return out
 
 
+def defaults_of(cfg, tool, platform, memo=None):
+    """The Default preset of ``tool`` on ``platform`` ({option: value},
+    only those set), each checked again (_checked). ``memo``: a dict a
+    caller going through many sources passes to each call."""
+    key = ("defaults", tool, platform)
+    if memo is not None and key in memo:
+        return memo[key]
+    block = ((cfg or {}).get("source_defaults") or {})
+    block = block.get(tool) if isinstance(block, dict) else None
+    block = block.get(platform) if isinstance(block, dict) else None
+    out = _checked(block, tool, platform) if isinstance(block, dict) else {}
+    if memo is not None:
+        memo[key] = out
+    return out
+
+
+def clean_preset_name(value):
+    """A preset's name as kept (trimmed, spaces collapsed), or None."""
+    if not isinstance(value, str):
+        return None
+    name = " ".join(value.split())
+    if not name or len(name) > PRESET_NAME_MAX or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return None
+    return name
+
+
+def _preset_lists(cfg):
+    """config ``source_presets`` as far as it is shaped: {(tool, platform): list}."""
+    stored = (cfg or {}).get("source_presets")
+    out = {}
+    for tool, platforms in (stored.items() if isinstance(stored, dict) else ()):
+        if tool not in TOOLS or not isinstance(platforms, dict):
+            continue
+        for platform, found in platforms.items():
+            if isinstance(platform, str) and _PLATFORM_RE.fullmatch(platform) and isinstance(found, list) \
+                    and (tool != "instaloader" or platform == PLATFORM[tool]):
+                out[(tool, platform)] = found
+    return out
+
+
+def presets_of(cfg, tool, platform, memo=None):
+    """The named presets of ``tool`` on ``platform``, in the order made:
+    [{id, name, options (only those set)}], each checked again (config.json
+    can be edited by hand): one with no proper id or name, or an id seen
+    already, is left out, as is any past PRESETS_MAX. ``memo``: as
+    defaults_of's."""
+    key = ("presets", tool, platform)
+    if memo is not None and key in memo:
+        return memo[key]
+    out, seen = [], set()
+    for p in _preset_lists(cfg).get((tool, platform), ()):
+        if len(out) >= PRESETS_MAX:
+            break
+        if not isinstance(p, dict):
+            continue
+        pid, name = p.get("id"), clean_preset_name(p.get("name"))
+        if not isinstance(pid, str) or not _PRESET_ID_RE.fullmatch(pid) or pid in seen or name is None:
+            continue
+        seen.add(pid)
+        options = p.get("options")
+        out.append({"id": pid, "name": name, "options": _checked(options if isinstance(options, dict) else {},
+                                                                  tool, platform)})
+    if memo is not None:
+        memo[key] = out
+    return out
+
+
+def find_preset(cfg, pid):
+    """(tool, platform, preset) of the named preset with id ``pid``, else None."""
+    if not isinstance(pid, str):
+        return None
+    for tool, platform in _preset_lists(cfg):
+        for p in presets_of(cfg, tool, platform):
+            if p["id"] == pid:
+                return tool, platform, p
+    return None
+
+
+def preset_public(tool, platform, preset):
+    """A named preset as the API gives it: its options are BUILTIN with
+    its own over them, ``set`` names those."""
+    return {"id": preset["id"], "name": preset["name"], "tool": tool, "platform": platform,
+            "options": {**{k: BUILTIN[k] for k in DEFAULT_KEYS}, **preset["options"]}, "set": sorted(preset["options"])}
+
+
+def _clean_block(block, tool, platform):
+    """What a preset's options sent to the API ({option: value}) keep, or
+    (None, error): each checked as a source's, for what its tool can do on
+    its platform; one equal to BUILTIN is not kept."""
+    if not isinstance(block, dict):
+        return None, "send { option: value }"
+    if set(block) - set(DEFAULT_KEYS):
+        return None, f"a preset's options are {', '.join(DEFAULT_KEYS)}"
+    options, error = parse_options(block, tool=tool, platform=platform, stories_daily=False, defaults=True)
+    if error:
+        return None, error
+    return {k: options[k] for k in DEFAULT_KEYS if k in block and options[k] != BUILTIN[k]}, None
+
+
+def _preset_pair(tool, platform):
+    """Why ``tool`` on ``platform`` can have no preset, else None."""
+    if tool not in TOOLS:
+        return f"tool must be one of: {', '.join(TOOLS)}"
+    if not isinstance(platform, str) or not _PLATFORM_RE.fullmatch(platform) \
+            or (tool == "instaloader" and platform != PLATFORM[tool]):
+        return f"{tool}: not a platform it downloads from: {str(platform)[:64]}"
+    return None
+
+
+def _preset_name(cfg, tool, platform, value, exclude=None):
+    """(name, None) for a preset of the pair named ``value``, or (None,
+    error): 1 to PRESET_NAME_MAX characters, not Default's or Custom's, and
+    not another preset's of the pair (``exclude``: its own id)."""
+    name = clean_preset_name(value)
+    if name is None:
+        return None, f"name must be 1 to {PRESET_NAME_MAX} characters"
+    if name.casefold() in PRESET_RESERVED:
+        return None, f"{name} is not a name a preset can have"
+    if any(p["id"] != exclude and p["name"].casefold() == name.casefold() for p in presets_of(cfg, tool, platform)):
+        return None, f"there is already a preset named {name} for {platform} ({tool})"
+    return name, None
+
+
+def _with_presets(cfg, tool, platform, presets):
+    """config ``source_presets`` with the pair's list replaced (an empty
+    one removed); the other pairs stay as config.json has them."""
+    stored = cfg.get("source_presets")
+    out = {t: dict(p) for t, p in stored.items() if isinstance(p, dict)} if isinstance(stored, dict) else {}
+    if presets:
+        out.setdefault(tool, {})[platform] = presets
+    else:
+        out.get(tool, {}).pop(platform, None)
+    return {t: p for t, p in out.items() if p}
+
+
+def add_preset(cfg, tool, platform, name, options):
+    """A new named preset: (config ``source_presets`` with it, the preset),
+    or (None, error). ``options``: {option: value}, None for none (BUILTIN).
+    Its id is new in the whole config."""
+    error = _preset_pair(tool, platform)
+    if error:
+        return None, error
+    name, error = _preset_name(cfg, tool, platform, name)
+    if error:
+        return None, error
+    kept, error = _clean_block({} if options is None else options, tool, platform)
+    if error:
+        return None, f"{tool} {platform}: {error}"
+    there = presets_of(cfg, tool, platform)
+    if len(there) >= PRESETS_MAX:
+        return None, f"{platform} ({tool}) has {PRESETS_MAX} presets already: delete one first"
+    taken = {p["id"] for pair in _preset_lists(cfg) for p in presets_of(cfg, *pair)}
+    pid = secrets.token_hex(3)
+    while pid in taken:
+        pid = secrets.token_hex(3)
+    preset = {"id": pid, "name": name, "options": kept}
+    return _with_presets(cfg, tool, platform, [*there, preset]), preset
+
+
+def change_preset(cfg, pid, name=None, options=None):
+    """A named preset renamed and/or with other options (each None: as it
+    is): (config ``source_presets`` with it, (tool, platform, preset)), or
+    (None, error); (None, None) when there is none with that id."""
+    found = find_preset(cfg, pid)
+    if found is None:
+        return None, None
+    tool, platform, preset = found
+    if name is not None:
+        name, error = _preset_name(cfg, tool, platform, name, exclude=pid)
+        if error:
+            return None, error
+    if options is not None:
+        options, error = _clean_block(options, tool, platform)
+        if error:
+            return None, f"{tool} {platform}: {error}"
+    new = {"id": pid, "name": preset["name"] if name is None else name,
+           "options": preset["options"] if options is None else options}
+    return _with_presets(cfg, tool, platform, [new if p["id"] == pid else p
+                                               for p in presets_of(cfg, tool, platform)]), (tool, platform, new)
+
+
+def remove_preset(cfg, pid):
+    """config ``source_presets`` without the named preset ``pid``, or None
+    when there is none. The sources that follow it read as Default from
+    then on (_resolve); unfollow() takes its id off them."""
+    found = find_preset(cfg, pid)
+    if found is None:
+        return None
+    tool, platform, _ = found
+    return _with_presets(cfg, tool, platform, [p for p in presets_of(cfg, tool, platform) if p["id"] != pid])
+
+
+def unfollow(conn, pid):
+    """Take a deleted preset's id off the sources that stored it: they
+    follow Default. Returns how many."""
+    with conn:
+        return conn.execute(
+            "UPDATE sources SET options = json_remove(options, '$.preset') WHERE json_valid(options) "
+            "AND json_type(options) = 'object' AND json_extract(options, '$.preset') = ?", (pid,)).rowcount
+
+
 def clean_defaults(value, current=None):
-    """The download defaults from POST /api/config ({tool: {platform:
+    """The Default presets from POST /api/config ({tool: {platform:
     {option: value}}}), merged over ``current`` per tool and platform (a
     platform sent replaces its block; null or {} removes it), or (None,
     error). An option equal to BUILTIN is not kept: no default."""
@@ -598,14 +817,9 @@ def clean_defaults(value, current=None):
             if block is None or block == {}:
                 out.get(tool, {}).pop(platform, None)
                 continue
-            if not isinstance(block, dict):
-                return None, f"{tool} {platform}: send {{ option: value }}"
-            if set(block) - set(DEFAULT_KEYS):
-                return None, f"{tool} {platform}: defaults are {', '.join(DEFAULT_KEYS)}"
-            options, error = parse_options(block, tool=tool, platform=platform, stories_daily=False, defaults=True)
+            kept, error = _clean_block(block, tool, platform)
             if error:
                 return None, f"{tool} {platform}: {error}"
-            kept = {k: options[k] for k in DEFAULT_KEYS if k in block and options[k] != BUILTIN[k]}
             if kept:
                 out.setdefault(tool, {})[platform] = kept
             else:
@@ -614,9 +828,10 @@ def clean_defaults(value, current=None):
 
 
 def _stored(src):
-    """The overrides a source row stores, as stored (unchecked): {option:
-    value}. Options stored before overrides (no "v") keep what differs from
-    BUILTIN; anything else is inherited."""
+    """What a source row stores, as stored (unchecked): its overrides
+    ({option: value}) and, beside them, STATE_KEYS (the preset it follows,
+    what its first sync left). Options stored before overrides (no "v")
+    keep what differs from BUILTIN; anything else is inherited."""
     try:
         stored = json.loads(src["options"] or "{}")
     except (TypeError, ValueError):
@@ -624,7 +839,7 @@ def _stored(src):
     if not isinstance(stored, dict):
         return {}
     if stored.get("v") == OVERRIDES:
-        return {k: v for k, v in stored.items() if k in OPTION_KEYS}
+        return {k: v for k, v in stored.items() if k in OPTION_KEYS or k in STATE_KEYS}
     return {k: v for k, v in stored.items() if k in OPTION_KEYS and v != BUILTIN[k]}
 
 
@@ -641,52 +856,90 @@ def synced_ok(src):
     return health.public(result, src["last_sync_at"], 0)["ok_at"] is not None
 
 
-def _resolve(src, stored, cfg):
-    """(options, overridden keys): ``stored`` (a row's overrides) over its
-    platform's defaults over BUILTIN, option by option, each checked again:
-    a malformed value is skipped. Of the defaults, only what the source can
+def _resolve(src, stored, cfg, memo=None):
+    """(options, overridden keys, preset): what a source with ``stored``
+    (_stored) downloads, option by option, each checked again (a malformed
+    value is skipped), and the named preset it follows ({id, name,
+    options}; None for Default or Custom). Following a named preset: its
+    options over BUILTIN, the source's own being only OWN_KEYS. Else its
+    own over Default's over BUILTIN. Of a preset, only what the source can
     have: its kinds (none when its link picks), and "last N" only before
-    its first sync (it is for that one) and never with full history."""
-    where = {"tool": src["tool"], "platform": src["platform"], "target": src["target"]}
+    its first sync (it is for that one; or again, "first_pending") and
+    never with full history. Its floor ("floor"), when it sets no date
+    itself, is the least its date can be. ``memo``: as defaults_of's."""
+    tool, platform = src["tool"], src["platform"]
+    where = {"tool": tool, "platform": platform, "target": src["target"]}
     out = clean_options(None, **where)
-    defaults = defaults_of(cfg, src["tool"], src["platform"])
+    pid = stored.get("preset")
+    # An id with no preset behind it (deleted, a hand-edited file): Default.
+    preset = next((p for p in presets_of(cfg, tool, platform, memo) if p["id"] == pid), None) \
+        if isinstance(pid, str) else None
+    base = preset["options"] if preset else defaults_of(cfg, tool, platform, memo)
     can = choices(**where)
     overridden = []
     for key in OPTION_KEYS:
-        if key in stored:
+        if key in stored and (preset is None or key in OWN_KEYS):
             got = clean_options({key: stored[key]}, out, **where, stories_daily=False)
             if got is not None:
                 out = got
                 overridden.append(key)
                 continue
-        if key not in defaults:
+        if key not in base:
             continue
         if key == "content" and not can["content"]:
             continue
-        if key == "first_posts" and (synced_ok(src) or out["full_history"]):
+        if key == "first_posts" and (out["full_history"]
+                                     or (stored.get("first_pending") is not True and synced_ok(src))):
             continue
-        out = clean_options({key: defaults[key]}, out, **where, stories_daily=False) or out
-    return out, overridden
+        out = clean_options({key: base[key]}, out, **where, stories_daily=False) or out
+    floor = _since(stored.get("floor"))
+    if floor and "since" not in overridden and (out["since"] is None or floor > out["since"]):
+        out = {**out, "since": floor}
+    return out, overridden, preset
 
 
 def stored_options(src, cfg=None):
-    """A stored source's options as its syncs use them: its overrides, else
-    its platform's defaults (``cfg``: the config, read when not given),
-    else BUILTIN; each checked again one by one, a malformed value skipped
-    (sources.json can be edited by hand). A source stored without a
-    schedule has the default one: its stories do not pick one."""
+    """A stored source's options as its syncs use them (_resolve): the
+    preset it follows, else its overrides over Default (``cfg``: the
+    config, read when not given), else BUILTIN; each checked again one by
+    one, a malformed value skipped (sources.json can be edited by hand).
+    A source stored without a schedule has its preset's: its stories do
+    not pick one."""
     return _resolve(src, _stored(src), cfg if cfg is not None else config.load())[0]
 
 
-def inherited(src, cfg=None):
+def _state(stored):
+    return {k: v for k, v in stored.items() if k in STATE_KEYS}
+
+
+def inherited(src, cfg=None, memo=None):
     """What a source's options would be with no overrides: what each
-    option it does not set follows."""
-    return _resolve(src, {}, cfg if cfg is not None else config.load())[0]
+    option it does not set follows (the preset it follows, else Default)."""
+    return _resolve(src, _state(_stored(src)), cfg if cfg is not None else config.load(), memo)[0]
 
 
 def overridden(src, cfg=None):
     """The options a source sets itself (valid ones), in OPTION_KEYS order."""
     return _resolve(src, _stored(src), cfg if cfg is not None else config.load())[1]
+
+
+def is_custom(overrides, preset):
+    """Whether a source with those overrides (_resolve's), following
+    ``preset``, is Custom: it follows no named preset and sets an option a
+    preset has (not only OWN_KEYS)."""
+    return preset is None and any(k not in OWN_KEYS for k in overrides)
+
+
+def following(src, pid, cfg, own=None):
+    """The options ``src`` (a row, or new_row) would have following the
+    preset ``pid`` (None: Default) with no option of its own but OWN_KEYS,
+    as stored or as ``own`` ({download, full_history}, checked) has them. A
+    full history asked for drops its floor (it is to walk everything)."""
+    stored = _stored(src)
+    kept = {**{k: v for k, v in stored.items() if k in OWN_KEYS or k in ("floor", "first_pending")}, **(own or {})}
+    if kept.get("full_history") is True:
+        kept.pop("floor", None)
+    return _resolve(src, {**kept, **({"preset": pid} if pid else {})}, cfg)[0]
 
 
 def overrides_of(options, base):
@@ -700,13 +953,14 @@ DEFAULT_PAIRS = (("instaloader", "instagram"), ("gallery-dl", "twitter"), ("gall
 
 
 def default_blocks(conn, cfg):
-    """The (tool, platform) pairs Settings shows download defaults for: those
-    the routing table routes to, those of a source, those with defaults
-    set; each with its choices and its defaults (BUILTIN with the
-    defaults over it), and how many sources set each option themselves."""
+    """The (tool, platform) pairs Settings → Presets shows: those the
+    routing table routes to, those of a source, those with a preset set;
+    each with its choices, its Default preset (BUILTIN with what it sets
+    over it), its named presets, and how many sources follow each or are
+    Custom."""
     table = routes(cfg)
     # Those a link can be routed to either way (Settings → Link routing)
-    # are always there, so a platform's defaults can be set before it is.
+    # are always there, so a platform's presets can be made before it is.
     pairs = set(DEFAULT_PAIRS)
     pairs |= {(tool, PLATFORM.get(tool) or platform_of(host)) for host, tool in table.items()}
     rows = conn.execute("SELECT * FROM sources").fetchall()
@@ -714,21 +968,26 @@ def default_blocks(conn, cfg):
     stored = (cfg.get("source_defaults") or {}) if isinstance(cfg.get("source_defaults"), dict) else {}
     pairs |= {(t, p) for t, ps in stored.items() if t in TOOLS and isinstance(ps, dict) for p in ps
               if isinstance(p, str) and _PLATFORM_RE.fullmatch(p)}
-    counts = {}
+    pairs |= set(_preset_lists(cfg))
+    memo, counts = {}, {}                      # counts: (tool, platform, preset id | None | "custom") -> sources
     for r in rows:
-        for key in overridden(r, cfg):
-            k = (r["tool"], r["platform"], key)
-            counts[k] = counts.get(k, 0) + 1
+        _, own, preset = _resolve(r, _stored(r), cfg, memo)
+        k = (r["tool"], r["platform"], "custom" if is_custom(own, preset) else preset and preset["id"])
+        counts[k] = counts.get(k, 0) + 1
     out = []
     for tool, platform in sorted(pairs, key=lambda p: (TOOLS.index(p[0]), p[1])):
         if tool == "instaloader" and platform != PLATFORM[tool]:
             continue
-        set_ = defaults_of(cfg, tool, platform)
+        set_ = defaults_of(cfg, tool, platform, memo)
         out.append({"tool": tool, "platform": platform,
                     "choices": choices(tool, platform, None, defaults=True),
                     "defaults": {**{k: BUILTIN[k] for k in DEFAULT_KEYS}, **set_}, "set": sorted(set_),
                     "sources": sum(1 for r in rows if (r["tool"], r["platform"]) == (tool, platform)),
-                    "overrides": {k: counts.get((tool, platform, k), 0) for k in DEFAULT_KEYS}})
+                    # How many follow Default, set their own (Custom), or follow each named preset.
+                    "default_sources": counts.get((tool, platform, None), 0),
+                    "custom": counts.get((tool, platform, "custom"), 0),
+                    "presets": [{**preset_public(tool, platform, p), "sources": counts.get((tool, platform, p["id"]), 0)}
+                                for p in presets_of(cfg, tool, platform, memo)]})
     return out
 
 
@@ -923,7 +1182,7 @@ def _public(conn, row, accounts, active, cfg=None, flags=None, cache=None):
     result = last_result(row)
     job = active.get(row["id"])
     cfg = cfg if cfg is not None else config.load()
-    options, overrides = _resolve(row, _stored(row), cfg)
+    options, overrides, preset = _resolve(row, _stored(row), cfg, cache)
     only = profile_only(row, cfg, options)
     return {
         "id": row["id"], "tool": row["tool"], "platform": row["platform"], "target": row["target"],
@@ -932,10 +1191,15 @@ def _public(conn, row, accounts, active, cfg=None, flags=None, cache=None):
         "account": {"platform": key[0], "id": key[1]} if key else None,
         "person": person,
         "options": options,
+        # The named preset it follows (null: Default, or Custom), whether
+        # it is Custom, and the named ones it can follow instead.
+        "preset": {"id": preset["id"], "name": preset["name"]} if preset else None,
+        "custom": is_custom(overrides, preset),
+        "presets": [{"id": p["id"], "name": p["name"]} for p in presets_of(cfg, row["tool"], row["platform"], cache)],
         # The options it sets itself; any other follows "defaults": what
-        # it inherits (its platform's download defaults, else BUILTIN).
+        # it inherits (the preset it follows, else Default, else BUILTIN).
         "overrides": overrides,
-        "defaults": inherited(row, cfg),
+        "defaults": inherited(row, cfg, cache),
         "choices": choices(row["tool"], row["platform"], row["target"]),
         "created_at": row["created_at"], "last_sync_at": row["last_sync_at"],
         "last_job_id": row["last_job_id"],
@@ -1192,7 +1456,7 @@ def suggestions(conn, roots):
 # Changes (the caller notes userdata)
 # ---------------------------------------------------------------------------
 
-def create(conn, roots, tool, target, folder, person_id, account, options, now, table=None, pin=()):
+def create(conn, roots, tool, target, folder, person_id, account, options, now, table=None, pin=(), preset=None):
     """A new source. ``target``: checked (check_target). ``folder``: an
     existing folder inside a media root, or None for resolve()'s default.
     ``account``: (platform, id) of an indexed account, else found from the
@@ -1200,8 +1464,11 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
     update: what equals its platform's defaults is inherited), or None:
     everything inherited. ``pin``: options set on it even when equal to
     what it inherits (one another site created has no script or login,
-    whatever the defaults say later). ``tool`` NONE: a profile-only
-    source of any site (``target`` a normalized link), no folder (create_profile)."""
+    whatever the defaults say later). ``preset``: the id of the named
+    preset it follows (one of its tool and platform: the caller checked);
+    of ``options`` (following()'s) only OWN_KEYS are then its own.
+    ``tool`` NONE: a profile-only source of any site (``target`` a
+    normalized link), no folder (create_profile)."""
     if tool == NONE:
         return create_profile(conn, target, person_id, account, options, now, table)
     if tool not in TOOLS:
@@ -1219,9 +1486,13 @@ def create(conn, roots, tool, target, folder, person_id, account, options, now, 
         refused = _not_synced_target(conn, key, person_id)
         if refused:
             raise NotSynced(refused)
-    base = inherited(new_row(tool, platform, target))
-    stored = overrides_of(options, base) if options is not None else {"v": OVERRIDES}
-    stored.update({k: options[k] for k in pin if options is not None})
+    if preset is not None:
+        stored = {"v": OVERRIDES, "preset": preset,
+                  **{k: options[k] for k in OWN_KEYS if options is not None and options[k] != BUILTIN[k]}}
+    else:
+        base = inherited(new_row(tool, platform, target))
+        stored = overrides_of(options, base) if options is not None else {"v": OVERRIDES}
+        stored.update({k: options[k] for k in pin if options is not None})
     with conn:
         sid = conn.execute(
             "INSERT INTO sources(person_id, platform, author_id, tool, target, folder, options, created_at) "
@@ -1514,7 +1785,9 @@ def update(conn, sid, options, keys=None, cfg=None):
                          (json.dumps(overrides_of(options, base)), sid))
             return
         # Options stored before overrides are rewritten whole first.
-        whole = overrides_of({**_resolve(src, _stored(src), cfg)[0], **{k: options[k] for k in keys}}, base)
+        stored = _stored(src)
+        whole = {**overrides_of({**_resolve(src, stored, cfg)[0], **{k: options[k] for k in keys}}, base),
+                 **_state(stored)}
         kept = [k for k in keys if options[k] != base[k]]
         gone = [k for k in keys if options[k] == base[k]]
         paths = [a for k in kept for a in (f"$.{k}", json.dumps(options[k]))]
@@ -1527,37 +1800,109 @@ def update(conn, sid, options, keys=None, cfg=None):
 
 
 def write(conn, sid, pin, drop=()):
-    """What a source's form saves: ``pin`` ({option: value}, those the
-    user changed) become its overrides, even one equal to what it inherits
+    """What a change to a source saves: ``pin`` ({option: value}, those
+    that changed) become its overrides, even one equal to what it inherits
     now, so a later default does not move it; ``drop`` (those reset) are
-    inherited again. Any other stays as it was, set or inherited: a form
-    opened before a default changed does not pin the old one. In one
+    inherited again. Any other stays as it was, set or inherited. A full
+    history asked for drops its floor: it is to walk everything. In one
     statement over what is stored, as update() with ``keys``."""
     src = row(conn, sid)
     if src is None:
         return
     drop = [k for k in drop if k not in pin]
+    gone = [*drop, *(["floor"] if pin.get("full_history") is True else [])]
     # Options stored before overrides are rewritten whole first.
-    whole = {"v": OVERRIDES, **{k: v for k, v in _stored(src).items() if k not in drop}, **pin}
+    whole = {"v": OVERRIDES, **{k: v for k, v in _stored(src).items() if k not in gone}, **pin}
     paths = [a for k, v in pin.items() for a in (f"$.{k}", json.dumps(v))]
     with conn:
         conn.execute(
             "UPDATE sources SET options = CASE WHEN json_valid(options) AND json_type(options) = 'object' "
             "AND json_extract(options, '$.v') = ? "
-            f"THEN json_set(json_remove(options{', ?' * len(drop)}){', ?, json(?)' * len(pin)}) "
+            f"THEN json_set(json_remove(options{', ?' * len(gone)}){', ?, json(?)' * len(pin)}) "
             "ELSE ? END WHERE id = ?",
-            (OVERRIDES, *(f"$.{k}" for k in drop), *paths, json.dumps(whole), sid))
+            (OVERRIDES, *(f"$.{k}" for k in gone), *paths, json.dumps(whole), sid))
 
 
 def reset(conn, sid, keys=None):
     """Drop a source's overrides of ``keys`` (None: all of them): it
-    inherits those options again."""
+    inherits those options again. The preset it follows stays."""
     src = row(conn, sid)
     if src is None:
         return
-    left = {k: v for k, v in _stored(src).items() if keys is not None and k not in keys}
+    left = {k: v for k, v in _stored(src).items() if k in STATE_KEYS or (keys is not None and k not in keys)}
     with conn:
         conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps({"v": OVERRIDES, **left}), sid))
+
+
+def set_preset(conn, sid, pid, options):
+    """A source follows a preset from now on (``pid``: a named one's id;
+    None: Default): the options it set itself go. Whether it downloads and
+    a full history asked for stay its own, as ``options`` (following()'s)
+    has them; what its first sync left stays too, but its floor when a
+    full history is asked for. The caller refuses while its sync is queued
+    or running (its end writes its options)."""
+    src = row(conn, sid)
+    if src is None:
+        return
+    left = {k: v for k, v in _stored(src).items() if k in ("floor", "first_pending")}
+    if options["full_history"]:
+        left.pop("floor", None)
+    new = {"v": OVERRIDES, **({"preset": pid} if pid else {}),
+           **{k: options[k] for k in OWN_KEYS if options[k] != BUILTIN[k]}, **left}
+    with conn:
+        conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps(new), sid))
+
+
+def customize(conn, sid, options):
+    """A source becomes Custom: every option a preset has is its own from
+    now on, as ``options`` has them (what it had, with what the form
+    changed), so no preset moves it; it follows none. Its floor is in them
+    (its date), so it is no longer kept apart. The caller refuses while
+    its sync is queued or running."""
+    new = {"v": OVERRIDES, **{k: options[k] for k in OWN_KEYS if options[k] != BUILTIN[k]},
+           **{k: options[k] for k in DEFAULT_KEYS}}
+    with conn:
+        conn.execute("UPDATE sources SET options = ? WHERE id = ?", (json.dumps(new), sid))
+
+
+def first_synced(conn, sid, options, floor, cfg=None):
+    """After a sync that worked with full history or "last N" (``options``:
+    as the run had them; ``floor``: the day of the oldest post a "last N"
+    got, or None): once is enough for full history, and "last N" ends with
+    a floor, or stays for the next run when there is none to stop it.
+
+    A Custom source keeps both in its own options (its date becomes the
+    floor, or the later of the two). One that follows a preset keeps its
+    floor beside its options ("floor"; "first_pending" with none), so it
+    goes on following the preset. In one statement over what is stored
+    (update with ``keys``, or this one), so a schedule changed meanwhile
+    is not undone."""
+    src = row(conn, sid)
+    if src is None:
+        return
+    cfg = cfg if cfg is not None else config.load()
+    stored = _stored(src)
+    _, own, preset = _resolve(src, stored, cfg)
+    if is_custom(own, preset):
+        since = max(filter(None, (floor, options["since"])), default=None)
+        update(conn, sid, {**options, "full_history": False, "since": since,
+                           "first_posts": options["first_posts"] if floor is None else None},
+               keys=("full_history", "since", "first_posts"), cfg=cfg)
+        return
+    pending = floor is None and bool(options["first_posts"])
+    floor = max(filter(None, (floor, _since(stored.get("floor")))), default=None)
+    state = {**({"floor": floor} if floor else {}), **({"first_pending": True} if pending else {})}
+    # Options stored before overrides are rewritten whole first.
+    whole = {"v": OVERRIDES, **{k: v for k, v in stored.items()
+                                if k not in ("full_history", "floor", "first_pending")}, **state}
+    paths = [a for k, v in state.items() for a in (f"$.{k}", json.dumps(v))]
+    with conn:
+        conn.execute(
+            "UPDATE sources SET options = CASE WHEN json_valid(options) AND json_type(options) = 'object' "
+            "AND json_extract(options, '$.v') = ? "
+            f"THEN json_set(json_remove(options, '$.full_history', '$.floor', '$.first_pending')"
+            f"{', ?, json(?)' * len(state)}) ELSE ? END WHERE id = ?",
+            (OVERRIDES, *paths, json.dumps(whole), sid))
 
 
 def set_person(conn, sid, pid, now):

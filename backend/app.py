@@ -1099,7 +1099,7 @@ def create_person():
         # (all or nothing) takes nobody's account away from them.
         try:
             for r in profiles:
-                # Nothing set: they follow their platform's download defaults.
+                # Nothing set: they follow their platform's Default preset.
                 made.append(sources.create(conn, cfg["media_roots"], r["tool"], r["target"], None, p["id"], None,
                                            None, now, table))
             # A profile whose account is indexed already: that account is
@@ -1964,10 +1964,11 @@ def _with_session(s, cfg=None):
 
 
 # Another site (the userscript) reads a source to show its button: never
-# what it inherits (the download defaults), nor which script or login its
-# syncs use (a browser profile, an account name). "dashboard_only": its
-# syncs only start from the dashboard (a script, or a login: sync_source).
-FOREIGN_HIDDEN = ("defaults", "session", "metadata", "script_warning")
+# what it inherits nor which preset it follows (Settings → Presets), nor
+# which script or login its syncs use (a browser profile, an account
+# name). "dashboard_only": its syncs only start from the dashboard (a
+# script, or a login: sync_source).
+FOREIGN_HIDDEN = ("defaults", "session", "metadata", "script_warning", "preset", "presets", "custom")
 
 
 def _foreign_source(s):
@@ -2025,8 +2026,9 @@ def resolve_source():
         return jsonify(out)
     conn = db.connect()
     folder = (sources.inside_root(r["folder"], cfg["media_roots"]) or r["folder"]) if r["folder"] else None
-    # What a new source would start from: its platform's download defaults.
-    defaults = sources.inherited(sources.new_row(r["tool"], r["platform"], r["target"]), cfg)
+    # What a new source would start from: its platform's Default preset.
+    new = sources.new_row(r["tool"], r["platform"], r["target"])
+    defaults = sources.inherited(new, cfg)
     sid = sources.existing(conn, r["tool"], r["target"], folder, r["platform"])
     # Its account (or the source there already) is set to Don't sync: no Add, no Sync.
     off = sources.not_synced(conn, sources.row(conn, sid)) if sid is not None \
@@ -2037,9 +2039,16 @@ def resolve_source():
            "profile_only": r["tool"] == sources.NONE or not sources.wants_download(r["platform"], defaults, cfg),
            "choices": sources.choices(r["tool"], r["platform"], r["target"])}
     if _foreign_origin():
-        return jsonify(out)       # not the defaults, nor the session they use (_foreign_source)
+        return jsonify(out)       # not the presets, nor the session they use (_foreign_source)
+    # The named presets it could follow instead, each with what this
+    # profile would download with it and the session that would use.
+    named = []
+    for p in sources.presets_of(cfg, r["tool"], r["platform"]):
+        options = sources.following(new, p["id"], cfg)
+        named.append({"id": p["id"], "name": p["name"], "options": options,
+                      "session": sync.session_of(r["tool"], options, cfg)})
     return jsonify({**out, "defaults": defaults, "metadata": _metadata_info(r["tool"], defaults, defaults, cfg),
-                    "session": sync.session_of(r["tool"], defaults, cfg)})
+                    "session": sync.session_of(r["tool"], defaults, cfg), "presets": named})
 
 
 def _metadata_info(tool, options, defaults, cfg=None):
@@ -2124,23 +2133,34 @@ def create_source():
     if tool == sources.NONE and isinstance(body.get("options"), dict) and body["options"].get("download") == "on":
         return jsonify({"ok": False, "error": "a profile with no downloader cannot download: leave tool out "
                                               "so the routing table picks one", "needs_tool": True}), 400
-    # Over what it inherits (its platform's download defaults): an option
-    # not sent, or sent as it would be anyway, follows them.
-    base = sources.inherited(sources.new_row(tool, platform, target), cfg)
-    # A script, or a login, is the dashboard's to pick: from another site a
-    # new source does not inherit them either. It runs the tool's own
-    # command, with no login (set on it: not the tool's session setting).
-    if _foreign_origin():
-        base = {**base, "script": None, "session": {"mode": "none"}}
-    options, error = sources.parse_options(body.get("options"), base=base, tool=tool, platform=platform,
-                                           target=target)
+    # "preset": the named preset it follows (null, or left out: Default).
+    preset = body.get("preset")
+    if preset is not None:
+        # A preset can carry a script or a login: the dashboard's to pick.
+        if _foreign_origin():
+            return jsonify({"ok": False, "error": FOREIGN_REFUSED}), 403
+        if not any(p["id"] == preset for p in sources.presets_of(cfg, tool, platform)):
+            return jsonify({"ok": False, "error": f"no such preset for {platform} ({tool})"}), 400
+        options, error = _following(sources.new_row(tool, platform, target), preset, body.get("options"), cfg)
+    else:
+        # Over what it inherits (its platform's Default preset): an option
+        # not sent, or sent as it would be anyway, follows it.
+        base = sources.inherited(sources.new_row(tool, platform, target), cfg)
+        # A script, or a login, is the dashboard's to pick: from another site a
+        # new source does not inherit them either. It runs the tool's own
+        # command, with no login (set on it: not the tool's session setting).
+        if _foreign_origin():
+            base = {**base, "script": None, "session": {"mode": "none"}}
+        options, error = sources.parse_options(body.get("options"), base=base, tool=tool, platform=platform,
+                                               target=target)
     error = error or sources.login_refused(options, platform, sync.session_of(tool, options, cfg))
     if error:
         return jsonify({"ok": False, "error": error}), 400
     conn = db.connect()
     try:
         sid = sources.create(conn, cfg["media_roots"], tool, target, folder, person, account, options,
-                             int(time.time()), table, pin=("script", "session") if _foreign_origin() else ())
+                             int(time.time()), table, pin=("script", "session") if _foreign_origin() else (),
+                             preset=preset)
     except sources.NotSynced as e:
         return jsonify({"ok": False, "error": str(e), "no_sync": True}), 409
     except sources.Refused as e:
@@ -2149,6 +2169,23 @@ def create_source():
     _untie_own_links(conn, owner and owner["id"], cfg)
     userdata.changed("sources")
     return jsonify({"ok": True, "source": _source_or_404(sid)})
+
+
+PRESET_OPTIONS = ("with a preset, options can only be download and full_history: what a preset downloads is "
+                  "set in Settings → Presets")
+
+
+def _following(row, preset, sent, cfg):
+    """(options, None) of a source (``row``, or sources.new_row) that is
+    to follow ``preset`` (a named one's id, checked; None: Default) with
+    the ``sent`` options of its own (only download and full_history can
+    be), or (None, error)."""
+    if isinstance(sent, dict) and set(sent) - set(sources.OWN_KEYS):
+        return None, PRESET_OPTIONS
+    own, error = sources.parse_options(sent, tool=row["tool"], platform=row["platform"], target=row["target"])
+    if error:
+        return None, error
+    return sources.following(row, preset, cfg, {k: own[k] for k in sent or ()}), None
 
 
 @app.get("/api/sources/<int:sid>")
@@ -2167,10 +2204,21 @@ def update_source(sid):
     if s is None:
         return jsonify({"ok": False, "error": "no such source"}), 404
     # "reset": the options it stops setting itself (true: all of them), so
-    # they follow its platform's download defaults again; before "options".
+    # they follow its preset again; before "options".
     reset = body.get("reset")
     if body.get("pin") not in (None, True, False):
         return jsonify({"ok": False, "error": "pin must be true or false"}), 400
+    # "custom": it follows no preset from now on: every option is its own,
+    # as it has them now with those sent over them.
+    if body.get("custom") not in (None, True, False):
+        return jsonify({"ok": False, "error": "custom must be true or false"}), 400
+    custom = body.get("custom") is True
+    # "preset": the preset it follows from now on (a named one's id, or
+    # null for Default); the options it set itself go.
+    follows = "preset" in body
+    if follows and (custom or reset):
+        return jsonify({"ok": False, "error": "send a preset to follow, or options of its own (custom, reset), "
+                                              "not both"}), 400
     # Download (#218) is never reset: it has no default to follow (its
     # "platform" is a choice of its own), and a reset must not make a source
     # the user set to never download syncable again.
@@ -2187,14 +2235,14 @@ def update_source(sid):
             return jsonify({"ok": False, "error": "person must be a person id or null"}), 400
         if not people.exists(conn, person):
             return jsonify({"ok": False, "error": "no such person"}), 400
-    if "person" in body and body.get("options") is None and not reset:
+    if "person" in body and body.get("options") is None and not reset and not follows and not custom:
         _set_source_person(conn, sid, person)
         return jsonify({"ok": True, "source": _source_or_404(sid)})
-    if body.get("options") is None and reset:
+    if body.get("options") is None and (reset or follows or custom):
         body["options"] = {}
     if not isinstance(body.get("options"), dict):
         return jsonify({"ok": False, "error": f"send options: {{ {', '.join(sources.OPTION_KEYS)} }}"}), 400
-    if sid in _sources_active() and (set(body["options"]) | set(reset or ())) - {"schedule"}:
+    if sid in _sources_active() and (follows or custom or (set(body["options"]) | set(reset or ())) - {"schedule"}):
         # The sync's end clears full history and last N: it would clear the new
         # ones. It reads the options again at the end, so a schedule can change.
         return jsonify({"ok": False, "error": "its sync is queued or running; wait for it to end"}), 409
@@ -2204,30 +2252,52 @@ def update_source(sid):
     if s["tool"] == sources.NONE and sent.get("download") == "on":
         return jsonify({"ok": False, "error": sources.profile_only_error(conn, sources.row(conn, sid)),
                         "needs_tool": True}), 400
-    # What it has with those reset: the value it inherits (sources.update
-    # then stores none for them, as for any option equal to it).
-    base = {**s["options"], **{k: s["defaults"][k] for k in reset or ()}}
-    refused = _script_refused(sent, s["tool"]) if sent.get("script") != s["options"]["script"] else None
-    if refused:
-        return jsonify({"ok": False, "error": refused[0]}), refused[1]
-    options, error = sources.parse_options(sent, base=base, tool=s["tool"], platform=s["platform"],
-                                           target=s["target"])
-    # Last N stays open while a first sync with it has not worked yet.
-    if not error and sent.get("first_posts") not in (None, s["options"]["first_posts"]) \
-            and sources.synced_ok(sources.row(conn, sid)) and s["options"]["first_posts"] is None:
-        error = "only the last posts is for a source's first sync, and this one has synced already"
-    error = error or sources.login_refused(options, s["platform"], sync.session_of(s["tool"], options))
-    if error:
-        return jsonify({"ok": False, "error": error}), 400
-    # Only what changes is written: an option sent as it is now (the form
-    # sends what it shows) keeps being set or inherited, as it was; one
-    # changed is set, even to what it inherits now; one reset is inherited.
-    # With "pin" (the dashboard's Options, which sends only the fields the
-    # user changed), every option sent is set as sent: a pick equal to a
-    # default that moved after the form opened is the user's all the same.
-    pinned = sent if body.get("pin") is True else {}
-    changed = {k: options[k] for k in sources.OPTION_KEYS if options[k] != base[k] or k in pinned}
-    sources.write(conn, sid, changed, [k for k in reset or () if k not in changed])
+    if follows:
+        preset = body["preset"]
+        if preset is not None and not any(p["id"] == preset for p in s["presets"]):
+            return jsonify({"ok": False, "error": f"no such preset for {s['platform']} ({s['tool']})"}), 400
+        cfg = config.load()
+        options, error = _following(sources.row(conn, sid), preset, sent, cfg)
+        error = error or sources.login_refused(options, s["platform"], sync.session_of(s["tool"], options, cfg))
+        if error:
+            return jsonify({"ok": False, "error": error}), 400
+        sources.set_preset(conn, sid, preset, options)
+    else:
+        # What it has with those reset: the value it inherits (sources.update
+        # then stores none for them, as for any option equal to it).
+        base = {**s["options"], **{k: s["defaults"][k] for k in reset or ()}}
+        # A full history asked for alone: "last N" is not for it. One from
+        # its preset no longer applies (sources._resolve); its own goes.
+        if sent.get("full_history") is True and "first_posts" not in sent:
+            if "first_posts" in s["overrides"]:
+                sent = {**sent, "first_posts": None}
+            else:
+                base = {**base, "first_posts": None}
+        refused = _script_refused(sent, s["tool"]) if sent.get("script") != s["options"]["script"] else None
+        if refused:
+            return jsonify({"ok": False, "error": refused[0]}), refused[1]
+        options, error = sources.parse_options(sent, base=base, tool=s["tool"], platform=s["platform"],
+                                               target=s["target"])
+        # Last N stays open while a first sync with it has not worked yet.
+        if not error and sent.get("first_posts") not in (None, s["options"]["first_posts"]) \
+                and sources.synced_ok(sources.row(conn, sid)) and s["options"]["first_posts"] is None:
+            error = "only the last posts is for a source's first sync, and this one has synced already"
+        error = error or sources.login_refused(options, s["platform"], sync.session_of(s["tool"], options))
+        if error:
+            return jsonify({"ok": False, "error": error}), 400
+        # Only what changes is written: an option sent as it is now keeps
+        # being set or inherited, as it was; one changed is set, even to
+        # what it inherits now; one reset is inherited. With "pin", every
+        # option sent is set as sent: a pick equal to a default that moved
+        # meanwhile is the user's all the same.
+        pinned = sent if body.get("pin") is True else {}
+        changed = {k: options[k] for k in sources.OPTION_KEYS if options[k] != base[k] or k in pinned}
+        # An option of a preset set on a source that follows a named one,
+        # or "custom": it is Custom from now on, every option its own.
+        if custom or (s["preset"] and any(k not in sources.OWN_KEYS for k in changed)):
+            sources.customize(conn, sid, options)
+        else:
+            sources.write(conn, sid, changed, [k for k in reset or () if k not in changed])
     if options["schedule"] != s["options"]["schedule"] or options["download"] != s["options"]["download"]:
         scheduler.forget(sid)
     # A new schedule or session: a source the scheduler stopped is tried again.
@@ -2300,36 +2370,87 @@ def _set_source_person(conn, sid, pid):
     userdata.changed("sources")
 
 
-@app.post("/api/source-defaults/apply")
-def apply_source_default():
-    """Settings → Download defaults, "Apply to all sources": every source of
-    ``tool`` on ``platform`` that sets ``option`` itself stops doing so and
-    follows the default. Not those syncing now (their sync's end writes
-    their options): they are counted as skipped."""
-    body = _body()
-    tool, platform, key = body.get("tool"), body.get("platform"), body.get("option")
-    if tool not in sources.TOOLS or not isinstance(platform, str) or key not in sources.DEFAULT_KEYS:
-        return jsonify({"ok": False, "error": "send { tool, platform, option }, option one of: "
-                                              f"{', '.join(sources.DEFAULT_KEYS)}"}), 400
-    conn, cfg, active = db.connect(), config.load(), _sources_active()
-    rows = [r for r in conn.execute("SELECT * FROM sources WHERE tool = ? AND platform = ? ORDER BY id",
-                                    (tool, platform)).fetchall() if key in sources.overridden(r, cfg)]
-    done, skipped = [], []
-    for r in rows:
-        if r["id"] in active and key != "schedule":
-            skipped.append(r["id"])
-            continue
-        before = sources.stored_options(r, cfg)
-        sources.reset(conn, r["id"], [key])
-        after = sources.stored_options(sources.row(conn, r["id"]), cfg)
-        if before["schedule"] != after["schedule"]:
+# ---------------------------------------------------------------------------
+# Presets (sources.py "Presets: what a source follows"): the named ones.
+# Default's is POST /api/config "source_defaults". The dashboard's alone:
+# _origin_guard refuses another site.
+# ---------------------------------------------------------------------------
+
+def _options_moved(before, cfg):
+    """After a preset changed (``before``: the config as it was): as for a
+    source's own options, a schedule or session a source gets from it that
+    changed, and the scheduler tries a source it stopped again. Returns
+    the ids of those."""
+    conn, resumed = db.connect(), []
+    for r in conn.execute("SELECT * FROM sources").fetchall():
+        old, new = sources.stored_options(r, before), sources.stored_options(r, cfg)
+        if old["schedule"] != new["schedule"]:
             scheduler.forget(r["id"])
-        if before["schedule"] != after["schedule"] or before["session"] != after["session"]:
+        if old["schedule"] != new["schedule"] or old["session"] != new["session"]:
             sources.resume(conn, r["id"])
-        done.append(r["id"])
-    if done:
+            resumed.append(r["id"])
+    return resumed
+
+
+@app.post("/api/presets")
+def create_preset():
+    """A new named preset of a tool on a platform."""
+    body = _body()
+    tool, platform = body.get("tool"), body.get("platform")
+    # One read-modify-write at a time, as POST /api/config.
+    with config.editing:
+        cfg = config.load()
+        value, preset = sources.add_preset(cfg, tool, platform, body.get("name"), body.get("options"))
+        error = preset if value is None else _block_refused(tool, platform, preset["options"], cfg)
+        if error:
+            return jsonify({"ok": False, "error": error}), 400
+        cfg["source_presets"] = value
+        config.save(cfg)
+    return jsonify({"ok": True, "preset": sources.preset_public(tool, platform, preset)})
+
+
+@app.post("/api/presets/<pid>")
+def update_preset(pid):
+    """Rename a named preset and/or replace its options: the sources that
+    follow it use them from their next sync."""
+    body = _body()
+    if body.get("name") is None and body.get("options") is None:
+        return jsonify({"ok": False, "error": "send a name and/or options: { option: value }"}), 400
+    with config.editing:
+        cfg = config.load()
+        value, found = sources.change_preset(cfg, pid, body.get("name"), body.get("options"))
+        if value is None and found is None:
+            return jsonify({"ok": False, "error": "no such preset"}), 404
+        error = found if value is None else None
+        if not error and body.get("options") is not None:
+            error = _block_refused(found[0], found[1], found[2]["options"], cfg)
+        if error:
+            return jsonify({"ok": False, "error": error}), 400
+        before = dict(cfg)
+        cfg["source_presets"] = value
+        config.save(cfg)
+    if _options_moved(before, cfg):
         userdata.changed("sources")
-    return jsonify({"ok": True, "applied": len(done), "skipped": len(skipped)})
+    return jsonify({"ok": True, "preset": sources.preset_public(*found)})
+
+
+@app.delete("/api/presets/<pid>")
+def delete_preset(pid):
+    """Delete a named preset: the sources that follow it go back to
+    Default (``sources``: how many)."""
+    with config.editing:
+        cfg = config.load()
+        value = sources.remove_preset(cfg, pid)
+        if value is None:
+            return jsonify({"ok": False, "error": "no such preset"}), 404
+        before = dict(cfg)
+        cfg["source_presets"] = value
+        config.save(cfg)
+    resumed = _options_moved(before, cfg)
+    n = sources.unfollow(db.connect(), pid)
+    if n or resumed:
+        userdata.changed("sources")
+    return jsonify({"ok": True, "sources": n})
 
 
 @app.post("/api/sources/<int:sid>/rename")
@@ -2459,7 +2580,7 @@ def _public_config(cfg):
             "open_links": openlink.setting(cfg),
             # yt-dlp's metadata mode none embeds with it (sync.yt_dlp_mode).
             "ffmpeg": thumbs.have_ffmpeg(),
-            # Settings → Download defaults: one block per tool and platform.
+            # Settings → Presets: one block per tool and platform.
             "source_defaults": sources.default_blocks(db.connect(), cfg)}
 
 
@@ -2478,21 +2599,27 @@ def set_config():
         return _set_config(body)
 
 
+def _block_refused(tool, platform, block, cfg):
+    """Why a preset's options (``block``, cleaned) cannot be, beyond their
+    shape: a script that cannot run for the tool, a kind that needs a
+    login the tool's session is not. Else None."""
+    if "script" in block:
+        refused = _script_refused(block, tool)
+        if refused:
+            return f"{tool} {platform}: {refused[0]}"
+    options = sources.clean_options(block, tool=tool, platform=platform, stories_daily=False, defaults=True)
+    error = sources.login_refused(options, platform, sync.session_of(tool, options, cfg))
+    return f"{tool} {platform}: {error}" if error else None
+
+
 def _defaults_refused(sent, defaults, cfg):
-    """Why download defaults sent (``sent``, cleaned: ``defaults``) cannot
-    be, beyond their shape: a script that cannot run for the tool, a kind
-    that needs a login the tool's session is not. Else None."""
+    """_block_refused for each Default preset sent (``sent``, cleaned:
+    ``defaults``), else None."""
     for tool, platforms in sent.items():
         for platform in (platforms or {}):
-            block = (defaults.get(tool) or {}).get(platform) or {}
-            if "script" in block:
-                refused = _script_refused(block, tool)
-                if refused:
-                    return f"{tool} {platform}: {refused[0]}"
-            options = sources.clean_options(block, tool=tool, platform=platform, stories_daily=False, defaults=True)
-            error = sources.login_refused(options, platform, sync.session_of(tool, options, cfg))
+            error = _block_refused(tool, platform, (defaults.get(tool) or {}).get(platform) or {}, cfg)
             if error:
-                return f"{tool} {platform}: {error}"
+                return error
     return None
 
 
@@ -2616,16 +2743,7 @@ def _set_config(body):
         for (sid,) in db.connect().execute("SELECT id FROM sources").fetchall():
             scheduler.forget(sid)
     if "source_defaults" in changes:
-        # As for a source's own: a schedule or session it inherits that
-        # changed, and the scheduler tries a source it stopped again.
-        conn = db.connect()
-        for r in conn.execute("SELECT * FROM sources").fetchall():
-            old, new = sources.stored_options(r, before), sources.stored_options(r, cfg)
-            if old["schedule"] != new["schedule"]:
-                scheduler.forget(r["id"])
-            if old["schedule"] != new["schedule"] or old["session"] != new["session"]:
-                sources.resume(conn, r["id"])
-                resumed.append([r["id"]])
+        resumed.append(_options_moved(before, cfg))
     if any(resumed):
         userdata.changed("sources")
     if changed:
