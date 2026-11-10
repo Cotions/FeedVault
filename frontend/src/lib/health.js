@@ -20,6 +20,26 @@ export function healthBadge(h) {
   return { label, tone };
 }
 
+/* A failed sync in a few words, said after its badge on a row (#235:
+   "private", then "needs browser cookies"): what to do about it, never the
+   whole sentence, which is the row's title and in its details. "" when the
+   badge says it all. ``r``: the source's last_result. */
+export function failureHint(r) {
+  if (r?.state !== "failed") return "";
+  const message = r.message || "";
+  switch (r.error) {
+    case "private":
+      return /no cookies in use/.test(message) ? "needs browser cookies"
+        : /no login in use/.test(message) ? "login must follow it" : "login has no access";
+    case "login_required": return "needs a login";
+    case "rate_limited": return "try again later";
+    case "not_found": return "renamed or gone";
+    case "missing": return "install it in Settings";
+    case "setup": return "install incomplete";
+    default: return "";
+  }
+}
+
 /* "last good sync 3h ago", "no sync has worked yet", or "" before any. */
 export function lastGood(h, now = Date.now()) {
   if (!h?.result) return "";

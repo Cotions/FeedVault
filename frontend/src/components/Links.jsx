@@ -185,6 +185,19 @@ export function DownloadCheck({ checked, onChange, disabled = false }) {
   );
 }
 
+/* A row's Copy (a link, a profile on a person's page): its address on the
+   clipboard, and a toast that says so, or why not (lib/links.js copyUrl).
+   ``label`` names the row in the button's name. */
+export function CopyAddress({ url, label }) {
+  const toast = useToast();
+  return (
+    <button type="button" className="del-btn link-copy" onClick={() => copyUrl({ url }, toast)}
+            aria-label={`Copy the address of ${label}`} title="Copy the address">
+      <Icon name="copy" size={14} />
+    </button>
+  );
+}
+
 /* One link: its title (else its site's label, else its address) opening
    the site in a new tab, the address under it when the title is not it
    (so the site is read once, #236), its people (``showPerson``; on a
@@ -356,10 +369,7 @@ export function LinkRow({
         </span>
       )}
       <span className="link-row-actions">
-        <button type="button" className="del-btn link-copy" onClick={() => copyUrl(l, toast)}
-                aria-label={`Copy the address of ${label}`} title="Copy the address">
-          <Icon name="copy" size={14} />
-        </button>
+        <CopyAddress url={l.url} label={label} />
         {assignHere && (
           <button type="button" className="btn-secondary link-assign" disabled={busy} aria-expanded={!!children}
                   onClick={() => onAssign(l)} aria-label={`Assign ${label} to a person`} title="Give it to a person">

@@ -2,7 +2,7 @@
 // Creators warning. Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { healthBadge, lastGood, loginText, warnings } from "../src/lib/health.js";
+import { failureHint, healthBadge, lastGood, loginText, warnings } from "../src/lib/health.js";
 import { scheduleShort, scheduleText } from "../src/lib/sourceOptions.js";
 
 const NOW = Date.UTC(2026, 9, 2, 12);
@@ -19,6 +19,26 @@ test("a badge for each state but ok", () => {
   assert.deepEqual(healthBadge({ state: "private" }), { label: "private", tone: "failed" });
   assert.deepEqual(healthBadge({ state: "error" }), { label: "failed", tone: "failed" });
   assert.deepEqual(healthBadge({ state: "something new" }), { label: "failed", tone: "failed" });
+});
+
+// #235: the row says a failure in a few words; the sentence is its title.
+test("a failed sync's hint is a few words, by error", () => {
+  const failed = (error, message = "") => ({ state: "failed", error, message });
+  assert.equal(failureHint(null), "");
+  assert.equal(failureHint({ state: "done", message: "3 new posts" }), "");
+  assert.equal(failureHint(failed("private", "Private profile and no cookies in use: choose a browser's cookies with access "
+    + "for this source, or set them in Settings → Sync")), "needs browser cookies");
+  assert.equal(failureHint(failed("private", "Private profile and no login in use: choose one that follows it for this source, "
+    + "or set one in Settings → Sync")), "login must follow it");
+  assert.equal(failureHint(failed("private", "Private profile: the cookies in use do not have access to it")),
+    "login has no access");
+  assert.equal(failureHint(failed("login_required")), "needs a login");
+  assert.equal(failureHint(failed("rate_limited")), "try again later");
+  assert.equal(failureHint(failed("not_found")), "renamed or gone");
+  assert.equal(failureHint(failed("generic", "instaloader failed")), "");
+  for (const error of ["private", "login_required", "rate_limited", "not_found", "missing", "setup"]) {
+    assert.ok(failureHint(failed(error)).length <= 24, error);
+  }
 });
 
 test("last good sync", () => {

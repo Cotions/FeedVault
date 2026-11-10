@@ -9,7 +9,7 @@ import { useApi } from "../lib/useApi";
 import { useToast } from "../lib/toast";
 import { useJobs } from "../lib/jobs";
 import { DOWNLOADS, ERRORS, SETUP_ERRORS, downloadWanted, sourceName } from "../lib/sources";
-import { healthBadge, lastGood, loginText } from "../lib/health";
+import { failureHint, healthBadge, lastGood, loginText } from "../lib/health";
 import { fmtAgo, fmtFullDate, fmtIn, fmtInt, platformLabel, safeUrl } from "../lib/fmt";
 import {
   FIRST_POSTS_MAX, MEDIA, PRESET_CUSTOM, PRESET_ONLY, SCHEDULES, customBody, downloadOn, firstPostsEach, formError, formOf,
@@ -28,8 +28,13 @@ import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 import PersonPicker from "./PersonPicker";
 
 /* Where a source stands: its sync now (queued, waiting out the pause,
-   running), else how its last one went. */
-export function SourceStatus({ source: s, job, compact = false }) {
+   running), else how its last one went. A failure is its badge and a few
+   words (lib/health.js failureHint, #235), never the sentence: that is the
+   title, and in a profile's details. ``compact`` (a card, a profile's row):
+   the badge and when; ``hint``: the few words too. ``prompted``: its row
+   asks "Now called X?" itself (RenamePrompt), so a rename is not said a
+   second time here (#235). */
+export function SourceStatus({ source: s, job, compact = false, hint = !compact, prompted = !compact }) {
   if (job) {
     return (
       <span className="source-status">
@@ -44,19 +49,28 @@ export function SourceStatus({ source: s, job, compact = false }) {
   const failed = r.state === "failed";
   const title = [r.message, r.line, s.last_sync_at && fmtFullDate(s.last_sync_at)].filter(Boolean).join("\n");
   // The account's state (health), else (an old result) the error's badge.
-  const badge = healthBadge(s.health) || (failed ? { label: ERRORS[r.error] || "failed", tone: "failed" } : null);
+  const asked = prompted && !!s.health?.rename && s.health.state === "renamed";
+  const badge = asked ? null : healthBadge(s.health) || (failed ? { label: ERRORS[r.error] || "failed", tone: "failed" } : null);
+  const stopped = r.state === "cancelled" || r.state === "interrupted";
+  const note = !compact && !asked && r.state === "done" ? r.message : "";
+  const short = failed && hint ? failureHint(r) || r.message : "";
+  // A private profile synced with no session: the sentence said where to set one.
+  const noSession = failed && r.error === "private" && /no (?:cookies|login) in use/.test(r.message || "");
   return (
     <span className="source-status" title={title}>
       {badge && <span className={`chip job-state-${badge.tone} source-badge`}>{badge.label}</span>}
-      {(r.state === "cancelled" || r.state === "interrupted") && <span className="chip job-state-interrupted source-badge">{r.state}</span>}
-      {!compact && r.state === "done" && <span className="source-note">{r.message}</span>}
-      {!compact && failed && <span className="source-message">{r.message}</span>}
-      {!compact && failed && (SETUP_ERRORS.has(r.error) || r.outdated) && (
-        r.error === "login_required" && !r.outdated
+      {stopped && <span className="chip job-state-interrupted source-badge">{r.state}</span>}
+      {note && <span className="source-note">{note}</span>}
+      {short && <span className="source-message">{short}</span>}
+      {!compact && failed && (SETUP_ERRORS.has(r.error) || r.outdated || noSession) && (
+        (r.error === "login_required" || noSession) && !r.outdated
           ? <Link to="/settings#sync" className="text-link source-setup">Settings → Sync</Link>
           : <Link to="/settings#downloaders" className="text-link source-setup">Settings → Downloaders</Link>
       )}
-      {s.last_sync_at && <span className="dim">{compact ? "synced " : " · "}{fmtAgo(s.last_sync_at)}</span>}
+      {/* On a compact row a failure's few words take the time's place (it is in the title). */}
+      {s.last_sync_at && !(compact && short) && (
+        <span className="dim">{compact || !(badge || stopped || note || short) ? "synced " : " · "}{fmtAgo(s.last_sync_at)}</span>
+      )}
     </span>
   );
 }
@@ -103,19 +117,13 @@ export function ScheduleLine({ source: s, compact = false }) {
   );
 }
 
-/* How its account is doing (docs/API.md "Account health"): the last good
-   sync, the output line behind a bad state (untrusted text, already
-   scrubbed: shown as text only), the session the last sync used, and a
-   new name its tool reported, to accept (the target changes, never the
-   folder) or dismiss. */
-export function SourceHealth({ source: s, job, onSaved }) {
+/* A new name a source's tool reported: "Now called X?", to accept (the
+   target changes, never the folder) or dismiss. Nothing without one. */
+export function RenamePrompt({ source: s, job, onSaved }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const h = s.health;
-  if (!h?.result) return null;
-  const good = lastGood(h);
-  const login = loginText(h);
-  const rename = h.rename;
+  const rename = s.health?.rename;
+  if (!rename) return null;
 
   async function answer(accept) {
     setBusy(true);
@@ -133,6 +141,30 @@ export function SourceHealth({ source: s, job, onSaved }) {
   }
 
   return (
+    <span className="source-rename" role="status">
+      <span>Now called <b>{s.tool === "instaloader" ? `@${rename.to}` : rename.to}</b>?</span>
+      {/* Together: never Dismiss alone on a line (#139). */}
+      <span className="source-rename-actions">
+        <button type="button" className="btn-link" disabled={busy || !!job}
+                title={job ? "Wait for its sync to end" : `Sync @${rename.to} from now on; the folder and its files stay as they are`}
+                onClick={() => answer(true)}>Accept</button>
+        <button type="button" className="btn-link" disabled={busy} onClick={() => answer(false)}>Dismiss</button>
+      </span>
+    </span>
+  );
+}
+
+/* How its account is doing (docs/API.md "Account health"): the last good
+   sync, the output line behind a bad state (untrusted text, already
+   scrubbed: shown as text only), the session the last sync used, and the
+   rename prompt (``prompt``: false where the row shows it apart, a
+   profile's details). */
+export function SourceHealth({ source: s, job, onSaved, prompt = true }) {
+  const h = s.health;
+  if (!h?.result) return null;
+  const good = lastGood(h);
+  const login = loginText(h);
+  return (
     <span className="source-health">
       <span className="source-health-head">
         {good && <span className={h.ok_at ? undefined : "is-err"} title={h.ok_at ? fmtFullDate(h.ok_at) : undefined}>{good}</span>}
@@ -140,18 +172,7 @@ export function SourceHealth({ source: s, job, onSaved }) {
         {login && <span title="From the last sync's output">{login}</span>}
       </span>
       {h.line && <code className="source-health-line" title={h.line}>{h.line}</code>}
-      {rename && (
-        <span className="source-rename" role="status">
-          <span>Now called <b>{s.tool === "instaloader" ? `@${rename.to}` : rename.to}</b>?</span>
-          {/* Together: never Dismiss alone on a line (#139). */}
-          <span className="source-rename-actions">
-            <button type="button" className="btn-link" disabled={busy || !!job}
-                    title={job ? "Wait for its sync to end" : `Sync @${rename.to} from now on; the folder and its files stay as they are`}
-                    onClick={() => answer(true)}>Accept</button>
-            <button type="button" className="btn-link" disabled={busy} onClick={() => answer(false)}>Dismiss</button>
-          </span>
-        </span>
-      )}
+      {prompt && <RenamePrompt source={s} job={job} onSaved={onSaved} />}
     </span>
   );
 }
@@ -197,28 +218,26 @@ export function ProfileOnlyChip({ source: s = null, title = null }) {
   );
 }
 
-/* One source: its profile, the preset it follows (a select: picking one
-   saves at once, "Custom…" opens its own options, "Profile only" stops
-   its downloads), tool, folder, schedule, last sync and Sync; its profile
-   on the site, its custom options, a full-history sync, its creator
-   (link, move, unlink) and Remove in its ⋯ menu. ``onSaved``: after what
-   it follows changed; ``onLinked``: after its person did (the people's
-   cards move too), else onSaved. One set to Don't sync is marked so and
-   keeps its creator and Remove only: no preset, no Sync, no schedule line
-   (its schedule waits for the switch to go off). One that is profile only
-   (#218) is dimmed, with no Sync and no sync state: its select says so,
-   and picking a preset downloads it again. A profile no downloader takes
-   (tool "none") has the chip instead, and its folder in its ⋯ menu. */
-export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked = onSaved, flash = false }) {
+/* What a source's row does, shared by SourceRow and a person's Profiles
+   (components/PersonProfiles.jsx): a pick in its preset select (``follow``:
+   saved at once, with Undo in its toast; "Custom…" opens its own options),
+   its ⋯ menu's ``items`` by name (each false where it does not apply: open,
+   options, custom, preset (a profile only's, where a row shows its chip
+   and no select), history, move, unlink) and the ``dialogs`` they open,
+   to render in the row. ``onSaved``: after what it follows changed;
+   ``onLinked``: after its person did (the people's cards move too), else
+   onSaved. */
+// eslint-disable-next-line react-refresh/only-export-components -- a hook, beside the dialogs it opens
+export function useSourceActions({ source: s, job, onSync, onSaved, onLinked = onSaved }) {
   const toast = useToast();
   const [editing, setEditing] = useState(false);
+  const [presetting, setPresetting] = useState(false);
   const [linking, setLinking] = useState(false);
   const [history, setHistory] = useState(false);  // "Sync full history…" is asking
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const url = safeUrl(s.url);
   const name = sourceName(s);
-  const summary = optionsSummary(s);
   const off = !!s.no_sync;
   const only = !!s.profile_only;
   const none = s.tool === "none";
@@ -281,6 +300,64 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
     }
   }
 
+  const items = {
+    open: url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(s.platform)} (opens the site)` },
+    options: !off && none && { label: "Download options…", icon: "settings", onSelect: () => setEditing(true),
+                               title: "Whether this profile is downloaded" },
+    custom: !off && !none && s.custom && { label: "Edit custom…", icon: "settings", disabled: !!job, onSelect: () => setEditing(true),
+                                           title: job ? "Its sync is queued or running" : "Its own options" },
+    preset: !off && !none && only && { label: "Preset…", icon: "settings", onSelect: () => setPresetting(true),
+                                       title: "Profile only: shown as theirs, never downloaded. Pick a preset to download it" },
+    history: !quiet && !none && { label: "Sync full history…", icon: "refresh", disabled: !!job,
+                                  onSelect: () => { setError(null); setHistory(true); },
+                                  title: job ? "Its sync is queued or running" : "Walk the whole profile once, not only its new posts" },
+    move: { label: s.person ? "Move to creator…" : "Link to creator…", icon: "users", onSelect: () => setLinking(true),
+            title: s.person ? `Show it with someone other than ${s.person.name}${along}` : `Show it with a person, one there is or a new one${along}` },
+    unlink: s.person && { label: "Unlink from creator", icon: "close", onSelect: unlink,
+                          title: `Back to the sources linked to nobody${s.account ? `; its account leaves ${s.person.name} too` : ""}. No post or file is touched` },
+  };
+  const dialogs = (
+    <>
+      {editing && !off && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
+      {presetting && !off && <SourcePresetDialog source={s} onClose={() => setPresetting(false)} onSaved={onSaved} />}
+      {linking && <SourcePersonDialog source={s} onClose={() => setLinking(false)} onLinked={onLinked} />}
+      <ConfirmDialog open={history} title={`Sync ${name}'s full history?`} confirmLabel="Sync full history" busy={busy}
+                     error={error} onConfirm={fullHistory} onCancel={() => setHistory(false)}>
+        It walks the whole profile once: every post still there, not only the new ones. That takes longer, and a
+        site is more likely to slow it down. Later syncs fetch new posts only.
+      </ConfirmDialog>
+    </>
+  );
+  return { name, off, only, none, quiet, busy, follow, items, dialogs };
+}
+
+/* A source's preset select, as its row shows it: what it follows now in
+   its title, off while it syncs or saves. ``act``: its useSourceActions. */
+export function SourcePreset({ source: s, job, act }) {
+  const summary = optionsSummary(s);
+  return (
+    <PresetSelect value={presetValue(s)} presets={s.presets} onChange={act.follow} disabled={!!job || act.busy}
+                  label={`Preset of ${act.name}`}
+                  title={job ? "Its sync is queued or running"
+                    : act.only ? "Profile only: shown as theirs, never downloaded. Pick a preset to download it"
+                      : `${presetName(s)}: ${summary || "new posts"}`} />
+  );
+}
+
+/* One source: its profile, the preset it follows (a select: picking one
+   saves at once, "Custom…" opens its own options, "Profile only" stops
+   its downloads), tool, folder, schedule, last sync and Sync; its profile
+   on the site, its custom options, a full-history sync, its creator
+   (link, move, unlink) and Remove in its ⋯ menu (useSourceActions). One
+   set to Don't sync is marked so and keeps its creator and Remove only:
+   no preset, no Sync, no schedule line (its schedule waits for the switch
+   to go off). One that is profile only (#218) is dimmed, with no Sync and
+   no sync state: its select says so, and picking a preset downloads it
+   again. A profile no downloader takes (tool "none") has the chip
+   instead, and its folder in its ⋯ menu. */
+export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked = onSaved, flash = false }) {
+  const act = useSourceActions({ source: s, job, onSync, onSaved, onLinked });
+  const { name, off, only, none, quiet, items } = act;
   return (
     <li className={`source-row${flash ? " is-flash" : ""}${off ? " is-nosync" : ""}${only ? " is-profile-only" : ""}`}
         data-source-id={s.id}>
@@ -293,13 +370,7 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
         <span className="source-summary-line">
           {off && <NotSyncedChip />}
           {none && only && <ProfileOnlyChip source={s} />}
-          {!off && !none && (
-            <PresetSelect value={presetValue(s)} presets={s.presets} onChange={follow} disabled={!!job || busy}
-                          label={`Preset of ${name}`}
-                          title={job ? "Its sync is queued or running"
-                            : only ? "Profile only: shown as theirs, never downloaded. Pick a preset to download it"
-                              : `${presetName(s)}: ${summary || "new posts"}`} />
-          )}
+          {!off && !none && <SourcePreset source={s} job={job} act={act} />}
         </span>
         {s.needs_tool && (
           <span className="source-note dim">No downloader yet: pick its folder in ⋯ → Download options to download it.</span>
@@ -314,29 +385,12 @@ export function SourceRow({ source: s, job, onSync, onRemove, onSaved, onLinked 
       {job && <Link to="/jobs" className="btn-ghost">Log</Link>}
       {!quiet && <SyncButton source={s} job={job} onSync={onSync} />}
       <ActionMenu label={`More for ${name}`} items={[
-        url && { label: "Open profile", icon: "external", href: url, title: `Profile on ${platformLabel(s.platform)} (opens the site)` },
-        !off && none && { label: "Download options…", icon: "settings", onSelect: () => setEditing(true),
-                          title: "Whether this profile is downloaded" },
-        !off && !none && s.custom && { label: "Edit custom…", icon: "settings", disabled: !!job, onSelect: () => setEditing(true),
-                                       title: job ? "Its sync is queued or running" : "Its own options" },
-        !quiet && !none && { label: "Sync full history…", icon: "refresh", disabled: !!job,
-                             onSelect: () => { setError(null); setHistory(true); },
-                             title: job ? "Its sync is queued or running" : "Walk the whole profile once, not only its new posts" },
-        { label: s.person ? "Move to creator…" : "Link to creator…", icon: "users", onSelect: () => setLinking(true),
-          title: s.person ? `Show it with someone other than ${s.person.name}${along}` : `Show it with a person, one there is or a new one${along}` },
-        s.person && { label: "Unlink from creator", icon: "close", onSelect: unlink,
-                      title: `Back to the sources linked to nobody${s.account ? `; its account leaves ${s.person.name} too` : ""}. No post or file is touched` },
+        items.open, items.options, items.custom, items.history, items.move, items.unlink,
         "separator",
         { label: "Remove", icon: "trash", danger: true, disabled: !!job, onSelect: () => onRemove(s),
           title: job ? "Cancel its sync first" : "Forget this source; files and posts stay" },
       ]} />
-      {editing && !off && <SourceOptionsDialog source={s} onClose={() => setEditing(false)} onSaved={onSaved} />}
-      {linking && <SourcePersonDialog source={s} onClose={() => setLinking(false)} onLinked={onLinked} />}
-      <ConfirmDialog open={history} title={`Sync ${name}'s full history?`} confirmLabel="Sync full history" busy={busy}
-                     error={error} onConfirm={fullHistory} onCancel={() => setHistory(false)}>
-        It walks the whole profile once: every post still there, not only the new ones. That takes longer, and a
-        site is more likely to slow it down. Later syncs fetch new posts only.
-      </ConfirmDialog>
+      {act.dialogs}
     </li>
   );
 }
@@ -1003,8 +1057,9 @@ function useResolved(text) {
    start with on a platform Settings lists as profile only, and the only
    way for a site no downloader takes (tool "none", "Add profile").
    onDirty(bool) hears whether something is typed and not added yet (false
-   again when the form goes). */
-export function AddSource({ person = null, onAdded, onDirty }) {
+   again when the form goes). ``profile`` (a person's page, whose box is
+   headed "Add profile"): the button is "Add" whatever is added. */
+export function AddSource({ person = null, onAdded, onDirty, profile: asProfile = false }) {
   const toast = useToast();
   const [target, setTarget] = useState("");
   const [pick,   setPick]   = useState(null);    // the select, as picked (null: as its platform says)
@@ -1072,9 +1127,9 @@ export function AddSource({ person = null, onAdded, onDirty }) {
         value={target}
         onChange={e => { setTarget(e.target.value); setError(null); setPick(null); }}
       />
-      <button type="submit" className="btn-secondary"
+      <button type="submit" className="btn-secondary" aria-label={asProfile ? "Add profile" : undefined}
               disabled={busy || (profile ? false : !resolved?.ok || there || off || login.length > 0)}>
-        <Icon name="plus" size={13} />{profileOnly ? "Add profile" : "Add source"}
+        <Icon name="plus" size={13} />{asProfile ? "Add" : profileOnly ? "Add profile" : "Add source"}
       </button>
       {resolved?.ok && (
         <div className="source-resolved" role="status" title={profileOnly ? undefined : `Synced with ${resolved.tool}`}>
