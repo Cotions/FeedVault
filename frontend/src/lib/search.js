@@ -4,7 +4,7 @@ import { linkLabel } from "./links.js";
 
 /* The header's search box searches the page it is on, when that page has
    something to search (as ChannelVault's does): Creators (people, accounts
-   and links), a person's page (their accounts, sources, links and posts) and
+   and links), a person's page (their profiles, links and posts) and
    Links. Each keeps the search in its own `?q=`, so reload and Back restore
    it. Anywhere else the box searches the Feed, as it always did: typing
    there opens the Feed with `?q=`.
@@ -24,7 +24,7 @@ const SCOPES = [
   [/^\/$/, FEED_SCOPE],
   [/^\/creators$/, { placeholder: "Search creators, accounts, links…", label: "Search creators, accounts and links" }],
   [/^\/links$/, { placeholder: "Search links…", label: "Search links" }],
-  [/^\/people\/[^/]+$/, { person: true, placeholder: "Search their accounts, links…", label: "Search this person's accounts, sources and links" }],
+  [/^\/people\/[^/]+$/, { person: true, placeholder: "Search their profiles, links…", label: "Search this person's profiles and links" }],
 ];
 
 export function searchScope(pathname) {
@@ -35,7 +35,7 @@ export function searchScope(pathname) {
 export function scopeText(scope, name) {
   if (!scope) return FEED_SCOPE;
   if (scope.person && name) {
-    return { placeholder: `Search ${name}'s accounts, links…`, label: `Search ${name}'s accounts, sources and links` };
+    return { placeholder: `Search ${name}'s profiles, links…`, label: `Search ${name}'s profiles and links` };
   }
   return scope;
 }
