@@ -321,10 +321,10 @@ test("a person's page asks before dropping a half-filled new link or source (#13
     await openAddLink(page);
     await expect(url).toHaveValue("");
 
-    // A new source typed: the same.
+    // A new profile typed: the same.
     await source.fill(`https://x.com/e2e_person_${stamp}`);
     await nav(page, "/links");
-    await expect(dialog).toContainText(`Not saved for E2E adds ${stamp}: the new source.`);
+    await expect(dialog).toContainText(`Not saved for E2E adds ${stamp}: the new profile.`);
     await dialog.getByRole("button", { name: "Keep editing" }).click();
     await expect(page).toHaveURL(new RegExp(`/people/${pid}$`));
     await expect(source).toHaveValue(`https://x.com/e2e_person_${stamp}`);
@@ -342,7 +342,7 @@ test("a person's page asks before dropping a half-filled new link or source (#13
     await expect(url).toHaveValue("");
     await expect(page.locator(".person-links-section .link-row")).toHaveCount(1);
     await source.fill(`https://x.com/e2e_person_${stamp}`);
-    const add = page.getByRole("button", { name: "Add source" });
+    const add = page.getByRole("button", { name: "Add profile" });
     await expect(add).toBeEnabled();
     await add.click();
     await expect(source).toHaveValue("");

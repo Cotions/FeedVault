@@ -55,7 +55,7 @@ async function open(page, name) {
 const VIEWS = [
   ...PAGES.map(p => ({ name: p.name, open: page => open(page, p.name) })),
   { name: "Post", open: page => openUrl(page, postUrl(), ".post-page-head") },
-  // Accounts, the link-in-bio import, Sources, Links: the head's ⋯ menu
+  // Profiles and what adds one, Links: the head's ⋯ menu
   // shows with the page, and quiet() waits for what loads after (Mute's state).
   { name: "Person", open: page => openUrl(page, personUrl(), ".page-head .action-menu-btn") },
 ];

@@ -1,9 +1,9 @@
 // Desktop: profile-only sources (#218) on the stress person (its 60-character
 // name), at 1024x768, 1280x800, 1440x900 and 1920x1080: a Spotify profile
-// (no downloader takes it) and an X source set to Download: never show with
-// the accounts, marked Profile only, never in Sources and never synced; Add
-// source offers "Add profile" for an unrouted link and "Profile only" in
-// its preset select for a routed one; the Spotify profile's Download
+// (no downloader takes it) and an X source set to Download: never show among
+// their profiles, marked Profile only, with no preset to pick on the row and
+// never synced; Add profile takes an unrouted link as a profile only and
+// offers "Profile only" in its preset select for a routed one; the Spotify profile's Download
 // options ask for a folder, the X one's Preset… downloads it again;
 // Settings → Sync has the Profile only card. Sources are
 // added to the throwaway instance and removed after; nothing is synced.
@@ -52,20 +52,22 @@ test("Profile only: shown with the accounts, never synced, Add profile, Download
     expect(sync.status()).toBe(409);
     expect((await sync.json()).profile_only).toBe(true);
 
-    // The person page: both with the accounts, marked; neither in Sources.
+    // The person page: both among the profiles, marked, with no preset to
+    // pick on the row and no Sync.
     await page.goto(`/people/${S.person}`);
-    const accounts = page.locator(".person-accounts").first();
+    const accounts = page.locator(".person-profile-list");
     for (const s of [spotify, x]) {
-      const row = accounts.locator(`.person-account[data-source-id="${s.id}"]`);
+      const row = accounts.locator(`.person-profile[data-source-id="${s.id}"]`);
       await expect(row).toBeVisible();
       await expect(row.locator(".profile-only-chip")).toBeVisible();
-      await expect(page.locator(`.source-row[data-source-id="${s.id}"]`)).toHaveCount(0);
+      await expect(row.getByRole("combobox")).toHaveCount(0);
+      await expect(row.getByRole("button", { name: /^Sync / })).toHaveCount(0);
     }
     await idle(page);
     await checkSizes(page, testInfo, "person, profile only accounts");
 
     // Its Options: Download only, for a profile no downloader takes.
-    const row = accounts.locator(`.person-account[data-source-id="${spotify.id}"]`);
+    const row = accounts.locator(`.person-profile[data-source-id="${spotify.id}"]`);
     await (await menuItem(page, row, /^More for /, "Download options…")).click();
     const dialog = page.getByRole("alertdialog", { name: /^Download / });
     await expect(dialog.getByRole("group", { name: "Download this profile" })).toBeVisible();
@@ -81,7 +83,7 @@ test("Profile only: shown with the accounts, never synced, Add profile, Download
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
 
     // One a downloader takes: Preset… says Profile only; a preset downloads it again.
-    const xRow = accounts.locator(`.person-account[data-source-id="${x.id}"]`);
+    const xRow = accounts.locator(`.person-profile[data-source-id="${x.id}"]`);
     await (await menuItem(page, xRow, /^More for /, "Preset…")).click();
     const preset = page.getByRole("alertdialog", { name: /^Preset of / });
     const pick = preset.getByRole("combobox", { name: /^Preset of / });
@@ -94,11 +96,12 @@ test("Profile only: shown with the accounts, never synced, Add profile, Download
     await expect(preset).toHaveCount(0);
     const back = (await (await request.get(`/api/sources/${x.id}`, { headers: H })).json());
     expect(back).toMatchObject({ profile_only: false, preset: null, custom: false, options: { download: "platform" } });
-    // It downloads: a source of theirs now, with the select on its row.
-    const sourceRow = page.locator(`.source-row[data-source-id="${x.id}"]`);
-    await expect(sourceRow.getByRole("combobox", { name: /^Preset of / })).toHaveValue("");
+    // It downloads: the select and Sync on its row now, no chip.
+    await expect(xRow.getByRole("combobox", { name: /^Preset of / })).toHaveValue("");
+    await expect(xRow.getByRole("button", { name: /^Sync / })).toBeVisible();
+    await expect(xRow.locator(".profile-only-chip")).toHaveCount(0);
 
-    // Add source: an unrouted profile link is offered as a profile.
+    // Add profile: an unrouted profile link is offered as a profile only.
     const field = page.getByRole("textbox", { name: "Profile link, or an Instagram name" });
     await field.fill("https://www.twitch.tv/e2e_profile_only");
     await expect(page.getByRole("button", { name: "Add profile" })).toBeEnabled();
@@ -106,7 +109,7 @@ test("Profile only: shown with the accounts, never synced, Add profile, Download
     await idle(page);
     await checkSizes(page, testInfo, "Add profile");
     // A routed one: one resolved line and the preset select, no options
-    // form; Profile only picked makes it "Add profile".
+    // form; Profile only picked drops its folder.
     await field.fill("https://x.com/e2e_profile_only_add");
     const line = page.locator(".source-add .source-resolved");
     await expect(line).toContainText("x.com/e2e_profile_only_add");
@@ -114,11 +117,11 @@ test("Profile only: shown with the accounts, never synced, Add profile, Download
     const choose = line.getByRole("combobox", { name: "Preset" });
     await expect(choose).toHaveValue("");
     await expect(page.locator(".source-add .source-options")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Add source" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Add profile" })).toBeEnabled();
     await choose.selectOption("only");
     await expect(line.locator(".source-folder")).toHaveCount(0);
     await idle(page);
-    await checkSizes(page, testInfo, "Add source, a link resolved");
+    await checkSizes(page, testInfo, "Add profile, a link resolved");
     await page.getByRole("button", { name: "Add profile" }).click();
     await expect(field).toHaveValue("");
     const added = (await (await request.get("/api/sources", { headers: H })).json()).sources

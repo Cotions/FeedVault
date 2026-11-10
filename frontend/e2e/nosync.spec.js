@@ -43,7 +43,7 @@ test("Don't sync: asked first, the source kept and marked, the filter, no overla
     // The person page: the switch (in the head's ⋯ menu) asks first, with
     // how many sources stop.
     await page.goto(`/people/${S.person}`);
-    await expect(page.locator(`.source-row[data-source-id="${src.id}"]`)).toBeVisible();
+    await expect(page.locator(`.person-profile[data-source-id="${src.id}"]`)).toBeVisible();
     await expect(page.locator(".person-new .nosync-chip"), "no marker while it syncs").toHaveCount(0);
     await idle(page);
     const head = `More for ${person.name}`;
@@ -59,8 +59,8 @@ test("Don't sync: asked first, the source kept and marked, the filter, no overla
     // The dialog gives focus back to the ⋯ button it came from.
     await expect(page.getByRole("button", { name: head, exact: true })).toBeFocused();
 
-    // Kept, marked, no Sync, no preset to pick, no Add source.
-    const row = page.locator(`.source-row[data-source-id="${src.id}"]`);
+    // Kept, marked, no Sync, no preset to pick, no profile to add.
+    const row = page.locator(`.person-profile[data-source-id="${src.id}"]`);
     await expect(row.locator(".nosync-chip")).toBeVisible();
     await expect(row.getByRole("button", { name: /^Sync / })).toHaveCount(0);
     await expect(row.getByRole("combobox")).toHaveCount(0);
@@ -75,7 +75,7 @@ test("Don't sync: asked first, the source kept and marked, the filter, no overla
     await expect(await menuItem(page, page, head, "Sync again")).toBeVisible();
     await page.keyboard.press("Escape");
     // An account of theirs: turned off on the person only, its item's title says who.
-    const account = page.locator(".person-account").first();
+    const account = page.locator(".person-profile").first();
     const own = await menuItem(page, account, /^More for @/, "Sync again");
     await expect(own).toHaveAttribute("aria-disabled", "true");
     expect(await own.getAttribute("title")).toContain(`${person.name} is set to Don't sync`);

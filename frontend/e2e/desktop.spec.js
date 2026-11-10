@@ -237,12 +237,15 @@ test("Review: re-review goes through a creator's kept posts too and leaves them 
     await expect(kept).toHaveCount(0);
     await idle(page);
 
-    // The Feed of the creator, and a person's page, link to it.
+    // The Feed of the creator links to it, and a person's page from its ⋯ menu.
     await page.goto(`/?${scope}`);
     await expect(page.getByRole("link", { name: "Re-review", exact: true })).toHaveAttribute("href", `/review?${scope}&again=1`);
     await idle(page);
     await page.goto(`/people/${S.person}`);
-    await expect(page.getByRole("link", { name: "Re-review", exact: true })).toHaveAttribute("href", `/review?person=${S.person}&again=1`);
+    await expect(page.getByRole("link", { name: "Re-review", exact: true }), "not a button of the page").toHaveCount(0);
+    const again = await menuItem(page, page.locator(".page-head"), /^More for /, "Re-review");
+    await expect(again).toHaveAttribute("href", `/review?person=${S.person}&again=1`);
+    await page.keyboard.press("Escape");
     await idle(page);
   } finally {
     await decide(posts.filter(p => !was.includes(p.id)).map(p => p.id), null);
@@ -381,7 +384,8 @@ test("Person: link-in-bio import lists the accounts and Add uses the usual calls
 // opens Creators on that source, scrolled into view and lit for a moment.
 // The demo's fake tools fail them: mossy.trails is rate limited (an
 // account card), demo.hidden is a private TikTok synced with no cookies
-// (a row of its own, whose message points to Settings → Sync).
+// (a row of its own: a few words after its badge, the sentence in its
+// title, and a link to Settings → Sync, #235).
 const H = { "X-FeedVault": "1" };
 
 async function failedSync(page, target) {
@@ -402,7 +406,7 @@ test("a failed sync's notification lands on its source, highlighted", async ({ p
   const cases = [
     { target: "mossy.trails", lit: ".creator-card.is-flash", name: "@mossy.trails" },
     { target: "https://tiktok.com/@demo.hidden", lit: ".source-row.is-flash", name: "demo.hidden",
-      message: /^Private profile and no cookies in use: .*Settings → Sync$/ },
+      message: "needs browser cookies", title: /^Private profile and no cookies in use: .*Settings → Sync/ },
   ];
   for (const c of cases) c.id = await failedSync(page, c.target);
 
@@ -417,7 +421,11 @@ test("a failed sync's notification lands on its source, highlighted", async ({ p
     await expect(lit).toHaveCount(1);
     await expect(lit).toContainText(c.name);
     await expect(lit).toBeInViewport();
-    if (c.message) await expect(lit.locator(".source-message")).toHaveText(c.message);
+    if (c.message) {
+      await expect(lit.locator(".source-message")).toHaveText(c.message);
+      await expect(lit.locator(".source-status")).toHaveAttribute("title", c.title);
+      await expect(lit.locator(".source-status").getByRole("link", { name: "Settings → Sync" })).toHaveAttribute("href", "/settings#sync");
+    }
     // Lit for a moment, then ?source= goes: the same entry can point at it again.
     await expect(page.locator(".is-flash")).toHaveCount(0, { timeout: 6_000 });
     await expect(page).toHaveURL(/\/creators$/);

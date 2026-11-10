@@ -1152,9 +1152,21 @@ export const BIO_ACCOUNTS = [
     account: null, person: { id: 1, name: "Somebody Else With A Long Name" }, source: null },
 ];
 
-// A person's page folds its link-in-bio import and its Add a link form
-// behind a button each: these open one (the page loaded) and return its box.
+// A person's page folds the other ways to add a profile (an indexed
+// account, the "Also them?" suggestions, the link-in-bio import) behind
+// "More ways to add" under its Profiles: this opens it (the page loaded),
+// once, and returns the fold.
+export async function openMoreWays(page) {
+  const toggle = page.getByRole("button", { name: /^More ways to add/ });
+  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
+  const fold = page.locator(".person-profile-more");
+  await expect(fold).toBeVisible();
+  return fold;
+}
+// Its link-in-bio import (in that fold) and its Add a link form are behind
+// a button each: these open one and return its box.
 export async function openBioImport(page) {
+  await openMoreWays(page);
   await page.getByRole("button", { name: "Import from link-in-bio…" }).click();
   const box = page.locator(".bio-import");
   await expect(box).toBeVisible();

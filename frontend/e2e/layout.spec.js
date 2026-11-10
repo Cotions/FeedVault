@@ -264,7 +264,7 @@ const DIALOGS = [
     scope: ".action-menu",
   },
   {
-    // The stress person's (a 60-character name): Rename, Mute, Don't sync, Delete person.
+    // The stress person's (a 60-character name): Review … Trash, Rename, Mute, Don't sync, Delete person.
     name: "Person › The head's ⋯ menu",
     open: async page => {
       await openUrl(page, `/people/${S.person}`, pg => pg.locator("h2.page-title"));
@@ -388,11 +388,12 @@ test("every page's title is in the same place", async ({ page }, testInfo) => {
 // source, two links with a long title, address, notes and name), at
 // 1280x800, 1440x900 and 1920x1080:
 //  - The muted marker (the person reported muted) is on the line of
-//    Feed … Trash, at the right edge of the sections, where Mute was.
+//    Feed, at the right edge of the sections, where Mute was.
 //  - Every section after the first is set apart by a rule, below the one
-//    before it; the empty Sources says so in a line, not a 48px gap.
-//  - The link-in-bio import, opened, is a box inside Accounts, as wide as
-//    the opened Add a link box, and both have the same sub-heading style.
+//    before it.
+//  - The link-in-bio import, opened (under "More ways to add"), is a box
+//    inside Profiles, as wide as the opened Add a link box, and both have
+//    the sub-heading style of "Add profile".
 //  - Add a link's title field and its buttons (Add link, Cancel) end at the
 //    same x (a person's page).
 //  - A long person name on the Links page ends in an ellipsis inside its chip.
@@ -423,35 +424,33 @@ test("the person page and the Links page line up", async ({ page }, testInfo) =>
       const mute = box(document.querySelector(".person-new .state-chip"));
       const sections = [...document.querySelectorAll(".person-section")];
       // About comes first, beside the portrait at the top of the card.
-      const accounts = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Accounts"));
+      const accounts = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Profiles"));
       const style = e => getComputedStyle(e);
       const bio = document.querySelector(".bio-import"), add = document.querySelector(".person-link-add");
-      const sourcesEmpty = sections.find(x => x.querySelector(".card-title")?.textContent.startsWith("Sources"))?.querySelector(".empty");
       const title = box(add.querySelector(".link-form-title input")), button = box(add.querySelector(".link-form-actions > :last-child"));
       return {
         nav: nav.top + nav.height / 2, mute: mute.top + mute.height / 2, muteRight: mute.right, sectionRight: box(accounts).right,
         rules: sections.slice(1).map((x, i) => ({ border: parseFloat(style(x).borderTopWidth), top: box(x).top, above: box(sections[i]).bottom })),
         bioInAccounts: accounts.contains(bio), bio: box(bio), add: box(add),
         dashed: [style(bio).borderTopStyle, style(add).borderTopStyle],
-        heads: [...document.querySelectorAll(".bio-import-title, .link-group-title")].map(h => `${style(h).fontSize} ${style(h).fontWeight} ${style(h).color}`),
-        empty: sourcesEmpty ? box(sourcesEmpty).height : null,
+        heads: [...document.querySelectorAll(".person-profile-add-title, .bio-import-title, .link-group-title")].map(h => `${style(h).fontSize} ${style(h).fontWeight} ${style(h).color}`),
+        headCount: document.querySelectorAll(".person-profile-add-title").length,
         titleRight: title.right, buttonRight: button.right,
       };
     });
-    if (!near(m.nav, m.mute, 2)) problems.push(`${at}: the muted marker is centred at y=${m.mute}, the Feed … Trash line at y=${m.nav}`);
+    if (!near(m.nav, m.mute, 2)) problems.push(`${at}: the muted marker is centred at y=${m.mute}, the Feed button at y=${m.nav}`);
     if (!near(m.muteRight, m.sectionRight)) problems.push(`${at}: the muted marker ends at x=${m.muteRight}, the sections at x=${m.sectionRight}`);
     m.rules.forEach((r, i) => {
       if (r.border < 1) problems.push(`${at}: section ${i + 2} has no rule above it`);
       if (r.top < r.above - 0.5) problems.push(`${at}: section ${i + 2} (top ${r.top}) overlaps the one before it (bottom ${r.above})`);
     });
-    if (!m.bioInAccounts) problems.push(`${at}: the link-in-bio import is not inside Accounts`);
+    if (!m.bioInAccounts) problems.push(`${at}: the link-in-bio import is not inside Profiles`);
     if (!near(m.bio.left, m.add.left) || !near(m.bio.right, m.add.right)) {
       problems.push(`${at}: the import box spans x=${m.bio.left}…${m.bio.right}, Add a link x=${m.add.left}…${m.add.right}`);
     }
     if (m.dashed.some(d => d !== "dashed")) problems.push(`${at}: the import and Add a link boxes are ${m.dashed.join(" and ")}, not dashed`);
     if (new Set(m.heads).size !== 1) problems.push(`${at}: the sub-headings differ: ${[...new Set(m.heads)].join(" | ")}`);
-    if (m.empty == null) problems.push(`${at}: the stress person's Sources has no empty state`);
-    else if (m.empty > 60) problems.push(`${at}: the empty Sources is ${m.empty}px tall`);
+    if (m.headCount !== 1) problems.push(`${at}: ${m.headCount} "Add profile" sub-headings, not one`);
     if (!near(m.titleRight, m.buttonRight)) problems.push(`${at}: Add a link's title ends at x=${m.titleRight}, its last button (Cancel) at x=${m.buttonRight}`);
   }
 

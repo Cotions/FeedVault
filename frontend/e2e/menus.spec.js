@@ -10,7 +10,7 @@
 // the tests and deleted after; every switch is turned off again.
 import {
   test, expect, openPage, idle, menuItem, openMenu, checkLayout, dismissToasts, formatFindings, settle,
-  fakeOpenLinks, openLinkMenu,
+  fakeOpenLinks, openLinkMenu, openMoreWays,
 } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
@@ -237,7 +237,9 @@ test("a person's ⋯ menu: Rename gives focus back to it, Delete person still as
     await expect(head.getByRole("button", { name: /Delete person/ })).toHaveCount(0);
     const more = page.getByRole("button", { name: `More for ${name}`, exact: true });
     const menu = await openMenu(page, page, `More for ${name}`);
-    await expect(menu.getByRole("menuitem")).toHaveText(["Rename", "Mute", "Don't sync", "Delete person"]);
+    // The person's pages first (their shortcuts left the hero for here), then what changes them.
+    await expect(menu.getByRole("menuitem")).toHaveText(["Review", "Re-review", "Storage", "Stats", "Trash",
+      "Rename", "Mute", "Don't sync", "Delete person"]);
     await expect(menu.getByRole("menuitem", { name: "Delete person" })).toHaveClass(/is-danger/);
     const at = await placement(menu);
     expect(at.inside && at.onTop, `in the window, on top: ${JSON.stringify(at.box)}`).toBe(true);
@@ -250,8 +252,11 @@ test("a person's ⋯ menu: Rename gives focus back to it, Delete person still as
     await page.keyboard.press("Escape");
     await expect(field).toHaveCount(0);
     await expect(more).toBeFocused();
-    // By the keyboard: Enter opens the menu, Enter on Rename.
+    // By the keyboard: Enter opens the menu on its first item, the arrows
+    // go down to Rename (past the five shortcuts), Enter picks it.
     await page.keyboard.press("Enter");
+    await expect(page.getByRole("menuitem", { name: "Review", exact: true })).toBeFocused();
+    for (let i = 0; i < 5; i += 1) await page.keyboard.press("ArrowDown");
     await expect(page.getByRole("menuitem", { name: "Rename" })).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(field).toBeFocused();
@@ -317,7 +322,7 @@ test("a source's creator: Link to creator…, Move, Unlink, and the person page'
 
     // Their page lists it; Move to a new creator, made by name in the dialog.
     await page.goto(`/people/${person.id}`);
-    const mine = page.locator(`.source-row[data-source-id="${src.id}"]`);
+    const mine = page.locator(`.person-profile[data-source-id="${src.id}"]`);
     await expect(mine).toBeVisible();
     await idle(page);
     await (await menuItem(page, mine, label, "Move to creator…")).click();
@@ -332,21 +337,23 @@ test("a source's creator: Link to creator…, Move, Unlink, and the person page'
 
     // Unlinked from there: loose again.
     await page.goto(`/people/${moved.id}`);
-    const theirs = page.locator(`.source-row[data-source-id="${src.id}"]`);
+    const theirs = page.locator(`.person-profile[data-source-id="${src.id}"]`);
     await expect(theirs).toBeVisible();
     await idle(page);
-    await (await menuItem(page, theirs, label, "Unlink from creator")).click();
+    await (await menuItem(page, theirs, label, "Unlink")).click();
     await expect(theirs).toHaveCount(0);
     expect(await personOf()).toBeNull();
 
-    // A person's Add an account lists a loose source that never synced, and links it.
+    // A person's Add an account (under "More ways to add") lists a loose
+    // source that never synced, and links it.
     await page.goto(`/people/${person.id}`);
+    await openMoreWays(page);
     const add = page.getByRole("combobox", { name: "Add an account" });
     await add.click();
     await add.fill(handle);
     await expect(page.getByRole("option", { name: new RegExp(handle) })).toContainText("not synced yet");
     await page.keyboard.press("Enter");
-    await expect(page.locator(`.source-row[data-source-id="${src.id}"]`)).toBeVisible();
+    await expect(page.locator(`.person-profile[data-source-id="${src.id}"]`)).toBeVisible();
     expect((await personOf())?.id).toBe(person.id);
   } finally {
     await request.delete(`/api/sources/${src.id}`, { headers: H });
