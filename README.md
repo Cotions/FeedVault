@@ -381,7 +381,7 @@ A profile's source that runs a script, or one whose sync logs in (browser
 cookies, an instaloader session), is only synced from the dashboard: Sync now
 says so and links there. One set to Don't sync in FeedVault offers neither Add
 profile nor Sync now. A source Add profile adds downloads without a login,
-whatever your download defaults or tool settings say.
+whatever your presets or tool settings say.
 
 On a person's link-in-bio page (linktr.ee, beacons.ai, lnk.bio, solo.to,
 campsite.bio, linkin.bio, allmylinks.com, link.me), the bubble's **Save
@@ -435,38 +435,37 @@ you restore it).
 
 For Instagram, only new posts are fetched: FeedVault keeps instaloader's `--latest-stamps` file in
 its data directory, and a first sync starts after the newest post already
-indexed (pick "full history" to fetch everything). **Creators** offers your
+indexed (**Sync full history…** in the source's ⋯ menu fetches everything). **Creators** offers your
 existing instaloader folders as sources to confirm, and **Sync all** runs
 every source one after another with a pause between them.
 
-Each source has **options** for what it downloads, shown when you add it and
-under **Options** later, as far as its tool and platform allow: which parts
-of the profile (Instagram posts, reels, stories, highlights, tagged posts; an
-X profile's timeline, Media, Posts or Replies tab; and so on), images only or
-videos only, nothing older than a date, and for gallery-dl and yt-dlp a first
-sync that fetches only the last N posts. Stories, highlights and tagged posts
-need an Instagram login (**Settings → Sync**). The source shows a summary
-such as "posts, reels · since 2024-01-01".
+What a source downloads is a **preset**: one select on its row. **Settings →
+Sync → Presets** holds them, per site and tool (X with gallery-dl, Instagram
+with instaloader, YouTube with yt-dlp, …): **Default**, which every new
+source follows, and the ones you make with **New preset** ("Images only",
+"Weekly", …). A preset says, as far as its tool and platform allow: which
+parts of the profile (Instagram posts, reels, stories, highlights, tagged
+posts; an X profile's timeline, Media, Posts or Replies tab; and so on),
+images only or videos only, nothing older than a date, for gallery-dl and
+yt-dlp a first sync that fetches only the last N posts, the login, the
+metadata files, a script and the schedule. Stories, highlights and tagged
+posts need an Instagram login (**Settings → Sync**). Each preset shows a
+summary such as "posts, reels · since 2024-01-01" and how many profiles
+follow it.
 
-**Settings → Sync → Download defaults** holds those options once per site and
-tool (X with gallery-dl, Instagram with instaloader, YouTube with yt-dlp, …).
-Every source follows them for each option it does not set itself, so setting
-X once changes the next sync of every X source you have not customised. A
-source's Options shows each field as "default" or "set here" with a Reset, and
-"Reset all to default"; the source list marks the ones with options of their
-own as "custom". New sources start from the defaults, and an option you leave
-as it is keeps following them. An option you change on a source stays its
-own, even when a default later comes to equal it, until you Reset it.
-"Apply to all sources" next to a default makes
-the sources that set that option themselves follow it too (it asks first, with
-how many).
+Editing a preset changes the next sync of every source that follows it.
+Deleting one sends its sources back to Default (it asks first, with how
+many). Adding a source is the link, then the same select. For the one
+profile that fits no preset, **Custom…** in the select opens a form of its
+own options; **Profile only** keeps the profile without downloading it. A
+source's **⋯ → Sync full history…** walks the whole profile once.
 
 **Settings → Sync → Metadata files** picks, per tool, what is written beside
 the media: **full** (the tool's own metadata files, as before), **slim**
 (instaloader only: its files slimmed to what FeedVault reads) or **none** (no
 files beside the media: posts are read from their names, which then carry the
 post's id and date; yt-dlp embeds the title, description, chapters and
-thumbnail in the video, read back with ffprobe). A source's Options can pick
+thumbnail in the video, read back with ffprobe). A preset can pick
 its own. yt-dlp needs ffmpeg for none: without it, its syncs write the files
 (full) and say so in their log. With none, captions, hashtags and counts are
 not kept (see
@@ -544,8 +543,8 @@ rewrites the files of each sync without them, and **Settings → Sync → YouTub
 and TikTok sync** can do the same for info JSONs written before.
 
 With several browser profiles (one per account, say), **Browser profile**
-next to the browser picks whose cookies a sync uses; a source can have its
-own in its sync options. "Default" leaves the choice to the tool, as
+next to the browser picks whose cookies a sync uses; a preset can pick
+its own. "Default" leaves the choice to the tool, as
 before. For Firefox the list is the profile names of its `profiles.ini`
 (what `about:profiles` shows); FeedVault looks the folder up there and
 gives it to the tool (`--cookies-from-browser firefox:<folder>`,
@@ -660,8 +659,8 @@ history). The folder is read again each time, so an edit counts at once.
 **Copy template** on a built-in (instaloader profile, saved posts, one post,
 stories and highlights; gallery-dl profile media, one link; yt-dlp one
 video, a channel) shows the file to create and its content, with copy
-buttons. A source's **Options → Command** picks a script its Sync (and its
-schedule) runs instead of the tool's own command; a script that is missing
+buttons. A preset's **Command** picks a script the Sync (and the
+schedule) of its sources runs instead of the tool's own command; a script that is missing
 or refused fails that sync with the reason, never running the built-in one.
 
 A file is refused, with the reason shown, and never run when it is a
