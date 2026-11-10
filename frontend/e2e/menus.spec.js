@@ -2,13 +2,15 @@
 // card's or a row's secondary actions. Opened and closed with the mouse and
 // the keyboard (the ARIA menu button pattern), focus given back to the ⋯
 // button, the menu in the window and on top of every card (the top layer),
-// turned upward near the bottom of the window; the Muted and Not synced
+// turned upward near the bottom of the window (a long one that fits
+// neither way stays whole in it); the Muted and Not synced
 // markers that show what its switches are set to; the person page's
 // Rename, from its menu, giving focus back to it; a source's creator, set
 // from its menu and from the person page. People and a source are made for
 // the tests and deleted after; every switch is turned off again.
 import {
   test, expect, openPage, idle, menuItem, openMenu, checkLayout, dismissToasts, formatFindings, settle,
+  fakeOpenLinks, openLinkMenu,
 } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
@@ -143,6 +145,29 @@ test("a ⋯ menu near the bottom of the window turns upward", async ({ page }) =
   expect(at.inside, `in the window: ${JSON.stringify(at.box)}`).toBe(true);
   expect(at.onTop, "on top where it shows").toBe(true);
   expect(at.box.bottom, "above the button").toBeLessThanOrEqual(b.y);
+  await page.keyboard.press("Escape");
+  await expect(button).toBeFocused();
+  await idle(page);
+});
+
+// A link row's one menu is long once browsers are installed (Open, the Open
+// in group, the row's actions): from a row in the middle of the window it
+// fits neither under its button nor over it, and still shows whole.
+test("a link row's long ⋯ menu stays whole in the window", async ({ page }) => {
+  await fakeOpenLinks(page);
+  await openPage(page, { name: "Links", path: "/links" });
+  const row = page.locator(".link-list > .link-row").first();
+  await row.evaluate(el => window.scrollBy(0, el.getBoundingClientRect().top - innerHeight / 2));
+  const button = row.locator(".link-menu .action-menu-btn");
+  const menu = await openLinkMenu(page, row);
+  const at = await placement(menu);
+  expect(at.inside, `in the window: ${JSON.stringify(at.box)}`).toBe(true);
+  expect(at.onTop, "on top where it shows").toBe(true);
+  await expect(menu.locator(".action-menu-head")).toHaveText("Open in");
+  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeInViewport({ ratio: 1 });
+  // End goes to its last item, Delete; Escape gives focus back to the button.
+  await page.keyboard.press("End");
+  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(button).toBeFocused();
   await idle(page);

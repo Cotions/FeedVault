@@ -12,11 +12,15 @@ A link is only text. FeedVault never fetches it, for a title, a favicon or
 anything else: no network here. Whether a link is a social profile ("social")
 or anything else ("other") is read from its host on every read, never stored.
 
-A link may be marked "to download" (``download_at``: when, NULL for not
-marked): the user's note that another app should download what it points
-at. FeedVault never does, nor reads the mark for anything but the Links
-page's To download tab; it is apart from the link's people (a link may be
-both someone's and to download), and giving a link to someone keeps it.
+A link may be tagged a download (``download_at``: when, NULL for not one):
+the user's note that another app should download what it points at.
+FeedVault never does, nor reads the tag for anything but where the link is
+listed: a download is a category of its own, apart from a person's socials
+and other links (the Links page's Downloads tab, a person's Downloads). It
+is apart from the link's people too (a download may be someone's or no
+one's), and giving a link to someone keeps it. A download is "to download"
+until the user says it is done (``downloaded_at``: when, NULL for not yet),
+"downloaded" from then on; a link that is not a download has neither.
 """
 import ipaddress
 import re
@@ -31,6 +35,14 @@ MAX_IDS = 5000                  # links per reorder
 MAX_PEOPLE = 100                # people one body gives a link
 MAX_RECENT = 50                 # people per recent_people
 SORTS = ("newest", "oldest", "site")    # listing's orders, the first the default
+# listing's ``download``: only the downloads still to do, those done, both,
+# or only the links that are not downloads. None: every link.
+DOWNLOADS = {
+    "todo": "l.download_at IS NOT NULL AND l.downloaded_at IS NULL",
+    "done": "l.download_at IS NOT NULL AND l.downloaded_at IS NOT NULL",
+    "all": "l.download_at IS NOT NULL",
+    "none": "l.download_at IS NULL",
+}
 
 # The hosts (as site() gives them) that make a link "social". The only
 # source of truth for it: the API, the filters and the page's groups all
@@ -179,12 +191,13 @@ def clean_notes(value):
 # Reads
 # ---------------------------------------------------------------------------
 
-_SELECT = ("SELECT l.id, l.url, l.title, l.notes, l.created_at, l.download_at, {position} AS position "
-           "FROM links l")
+_SELECT = ("SELECT l.id, l.url, l.title, l.notes, l.created_at, l.download_at, l.downloaded_at, "
+           "{position} AS position FROM links l")
 # A person's links: each with its place among theirs.
 _THEIRS = _SELECT.format(position="lp.position") + " JOIN link_people lp ON lp.link_id = l.id AND lp.person_id = ?"
 _ANY = _SELECT.format(position="NULL")
 _NO_ONE = "NOT EXISTS (SELECT 1 FROM link_people x WHERE x.link_id = l.id)"
+_SOMEONE = "EXISTS (SELECT 1 FROM link_people x WHERE x.link_id = l.id)"
 
 
 def _people(conn, ids):
@@ -209,6 +222,7 @@ def _link(row, people):
         "id": row["id"], "url": row["url"], "title": row["title"], "notes": row["notes"],
         "site": s, "kind": _kind_of(s), "people": people.get(row["id"], []),
         "position": row["position"], "created_at": row["created_at"], "download_at": row["download_at"],
+        "downloaded_at": row["downloaded_at"],
     }
 
 
@@ -235,22 +249,29 @@ def _sorted(rows, sort):
     return rows
 
 
-def listing(conn, person=None, no_person=False, kind_=None, site_=None, q=None, q_sites=(), download=False,
-            sort="newest"):
+def listing(conn, person=None, no_person=False, kind_=None, site_=None, q=None, q_sites=(), download=None,
+            sort="newest", any_person=False):
     """{"links": the links that match, in ``sort``'s order (_sorted: newest
     first by default; a person's, any link they are one of the people of,
     in their order unless another sort is asked for; ``position`` their
     place among them, else None), "sites": [{"site", "count"}] over every
-    link, for a filter}.
-    ``download``: only the links marked to download (the Links page's To
-    download tab), whoever's they are.
+    link of the ``download`` asked for, for a filter and the count the
+    list is "N of"}.
+    ``download`` (a DOWNLOADS key, or None for every link): only the
+    downloads still to do ("todo"), done ("done") or both ("all": the Links
+    page's Downloads tab), whoever's they are, or only the links that are
+    not downloads ("none": its All links tab).
+    ``no_person``: only the links of no one; ``any_person``: only those of
+    someone, whoever (the Downloads tab's With creator).
     ``q_sites``: the sites whose label holds ``q`` (linklabels.matching): a
     link with no title on one of them matches too, by the label it shows."""
     where, args, select = [], [], _ANY
-    if download:
-        where.append("l.download_at IS NOT NULL")
+    if download is not None:
+        where.append(DOWNLOADS[download])
     if no_person:
         where.append(_NO_ONE)
+    elif any_person:
+        where.append(_SOMEONE)
     elif person is not None:
         select, args = _THEIRS, [person]
     untitled = [*where, "l.title = ''"], list(args)
@@ -276,9 +297,10 @@ def listing(conn, person=None, no_person=False, kind_=None, site_=None, q=None, 
     out = _links(conn, rows)
     if person is not None and not no_person and sort == "newest":
         out = _order(out)
-    # The sites of every link: the rows just read when nothing narrowed them.
+    # The sites of every link (of that ``download``): the rows just read when nothing narrowed them.
     narrowed = where or select is not _ANY or kind_ is not None or site_ is not None
-    every = (site(url) for (url,) in conn.execute("SELECT url FROM links")) if narrowed else (x["site"] for x in out)
+    scope = f" WHERE {DOWNLOADS[download]}" if download is not None else ""
+    every = (site(url) for (url,) in conn.execute(f"SELECT l.url FROM links l{scope}")) if narrowed else (x["site"] for x in out)
     counts = {}
     for s in every:
         counts[s] = counts.get(s, 0) + 1
@@ -381,14 +403,15 @@ def _untie(conn, lid, pid):
     return conn.execute("DELETE FROM link_people WHERE link_id = ? AND person_id = ?", (lid, pid)).rowcount > 0
 
 
-def create(conn, url, title, notes, pids, now):
+def create(conn, url, title, notes, pids, now, download=False):
     """A new link (``url`` cleaned and not saved yet), last in the order of
-    each of ``pids`` (people's ids; none: a link of no one). NoSuchPerson
-    when one is gone, and nothing is saved."""
+    each of ``pids`` (people's ids; none: a link of no one); ``download``:
+    saved as a download, to do. NoSuchPerson when one is gone, and nothing
+    is saved."""
     with _write(conn):
         _people_exist(conn, pids)
-        lid = conn.execute("INSERT INTO links(url, title, notes, created_at) VALUES (?, ?, ?, ?)",
-                           (url, title, notes, now)).lastrowid
+        lid = conn.execute("INSERT INTO links(url, title, notes, created_at, download_at) VALUES (?, ?, ?, ?, ?)",
+                           (url, title, notes, now, now if download else None)).lastrowid
         for pid in dict.fromkeys(pids):
             _tie(conn, lid, pid, now)
     return get(conn, lid)
@@ -403,7 +426,7 @@ def spelling(url):
             parts.fragment)
 
 
-def keep(conn, pid, found, now, limit):
+def keep(conn, pid, found, now, limit, download=False):
     """Save the links a person does not have yet, from ``found`` ([(url,
     title)], each cleaned, no URL twice): last in their order, in the order
     given, in one transaction with the write lock taken first (as assign).
@@ -421,6 +444,8 @@ def keep(conn, pid, found, now, limit):
     An item may carry two more: (url, title, at, notes): a new link is
     saved with ``at`` as its created_at (in place of ``now``; None: now)
     and those notes (the Links page's import of bookmarks, linkimport.py).
+    ``download``: each new link is saved as a download, to do (tagged at
+    ``now``); one saved already stays what it was, as the rest of it.
 
     {"saved", "already" (this person's; with no person, any link saved
     already), "shared" (saved already, not theirs: now theirs too), "over"
@@ -452,8 +477,8 @@ def keep(conn, pid, found, now, limit):
             elif out["saved"] >= limit:
                 out["over"] += 1
             else:
-                lid = conn.execute("INSERT INTO links(url, title, notes, created_at) VALUES (?, ?, ?, ?)",
-                                   (url, title, notes, at)).lastrowid
+                lid = conn.execute("INSERT INTO links(url, title, notes, created_at, download_at) "
+                                   "VALUES (?, ?, ?, ?, ?)", (url, title, notes, at, now if download else None)).lastrowid
                 if pid is not None:
                     _tie(conn, lid, pid, now)
                 out["saved"] += 1
@@ -490,11 +515,12 @@ def _give(conn, lid, pids, now):
     return True
 
 
-def update(conn, lid, url=None, title=None, notes=None, pids=_UNSET, now=None, download=None):
+def update(conn, lid, url=None, title=None, notes=None, pids=_UNSET, now=None, download=None, downloaded=None):
     """Change what is given; new people (a list of ids) as _give;
-    ``download`` True or False marks the link to download at ``now`` or
-    clears its mark (_mark). NoSuchPerson when one is gone, and nothing is
-    changed."""
+    ``download`` True or False tags the link a download at ``now`` or
+    clears the tag (_mark); ``downloaded`` True or False says it is
+    downloaded, or to download again (_done), after ``download``.
+    NoSuchPerson when one is gone, and nothing is changed."""
     with _write(conn):
         if pids is not _UNSET:
             _people_exist(conn, pids)
@@ -505,6 +531,8 @@ def update(conn, lid, url=None, title=None, notes=None, pids=_UNSET, now=None, d
             _give(conn, lid, pids, now)
         if download is not None:
             _mark(conn, lid, download, now)
+        if downloaded is not None:
+            _done(conn, lid, downloaded, now)
     return get(conn, lid)
 
 
@@ -628,27 +656,50 @@ def unsorted(conn):
 
 
 def to_download(conn):
-    """How many links are marked to download: the Links page's To download."""
-    return conn.execute("SELECT COUNT(*) FROM links WHERE download_at IS NOT NULL").fetchone()[0]
+    """How many downloads are still to do (not the downloaded ones): the
+    count on the Links page's Downloads tab."""
+    return conn.execute(f"SELECT COUNT(*) FROM links l WHERE {DOWNLOADS['todo']}").fetchone()[0]
 
 
 def _mark(conn, lid, on, now):
-    """Inside a transaction: the link marked to download at ``now`` (``on``),
-    or its mark cleared. A link marked already keeps when it was marked.
-    Whether it changed."""
+    """Inside a transaction: the link tagged a download at ``now`` (``on``),
+    to do, or the tag cleared, and with it whether it was downloaded. A
+    download already keeps when it was tagged, and its state. Whether it
+    changed."""
     if on:
         sql, args = "UPDATE links SET download_at = ? WHERE id = ? AND download_at IS NULL", (now, lid)
     else:
-        sql, args = "UPDATE links SET download_at = NULL WHERE id = ? AND download_at IS NOT NULL", (lid,)
+        sql, args = ("UPDATE links SET download_at = NULL, downloaded_at = NULL "
+                     "WHERE id = ? AND (download_at IS NOT NULL OR downloaded_at IS NOT NULL)"), (lid,)
     return conn.execute(sql, args).rowcount > 0
 
 
-def mark_download(conn, ids, on, now, all_or_none=True):
-    """Mark these links to download (``on``), or clear their mark, in one
-    transaction (_batch), each as _mark: their people are not touched. All
-    or none, as assign; without ``all_or_none`` (an Undo), ids no link has
-    are passed over. (the ids whose mark changed, or None; missing)."""
-    return _batch(conn, ids, lambda lid: _mark(conn, lid, on, now), all_or_none=all_or_none)
+def _done(conn, lid, on, now):
+    """Inside a transaction: the download said downloaded at ``now``
+    (``on``), or to download again. A link that is not a download becomes
+    one, downloaded, with ``on`` (what was fetched without being noted
+    first); without it, it stays what it is. One downloaded already keeps
+    when it was. Whether it changed."""
+    if on:
+        sql, args = ("UPDATE links SET download_at = COALESCE(download_at, ?), downloaded_at = ? "
+                     "WHERE id = ? AND downloaded_at IS NULL"), (now, now, lid)
+    else:
+        sql, args = "UPDATE links SET downloaded_at = NULL WHERE id = ? AND downloaded_at IS NOT NULL", (lid,)
+    return conn.execute(sql, args).rowcount > 0
+
+
+def mark_download(conn, ids, on, now, all_or_none=True, downloaded=None):
+    """Tag these links downloads (``on`` True), or clear the tag (False;
+    None: left as it is), then say them ``downloaded`` (True) or to
+    download again (False; None: left), in one transaction (_batch), each
+    as _mark and _done: their people are not touched. All or none, as
+    assign; without ``all_or_none`` (an Undo), ids no link has are passed
+    over. (the ids something changed for, or None; missing)."""
+    def each(lid):
+        tagged = on is not None and _mark(conn, lid, on, now)
+        said = downloaded is not None and _done(conn, lid, downloaded, now)
+        return tagged or said
+    return _batch(conn, ids, each, all_or_none=all_or_none)
 
 
 def reorder(conn, pid, ids):
@@ -706,9 +757,10 @@ def restore_row(row):
     is [{"name", "position", "tied_at"}], each name once, a row that is not
     one left out. A file from before a link had several people has
     ``person`` (a name, or None for no one), ``position`` and ``tied_at``
-    instead: read as one person. ``download_at`` (when it was marked to
-    download) is a time, else None: not marked (a file from before the
-    mark has none)."""
+    instead: read as one person. ``download_at`` (when it was tagged a
+    download) is a time, else None: not one (a file from before the tag has
+    none). ``downloaded_at`` (when it was said downloaded) likewise, and
+    None on a link that is not a download: it has no state."""
     url = clean_url(row.get("url"))
     title, notes = clean_title(row.get("title")), clean_notes(row.get("notes"))
     if url is None or title is None or notes is None:
@@ -723,21 +775,23 @@ def restore_row(row):
         seen.add(name)
         # No tied_at (a file from before it was kept): from created_at, as restore puts it back.
         people.append({"name": name, "position": _place(p.get("position")), "tied_at": _when(p.get("tied_at"))})
-    return {**row, "url": url, "title": title, "notes": notes, "people": people,
-            "download_at": _when(row.get("download_at"))}
+    tagged = _when(row.get("download_at"))
+    return {**row, "url": url, "title": title, "notes": notes, "people": people, "download_at": tagged,
+            "downloaded_at": None if tagged is None else _when(row.get("downloaded_at"))}
 
 
 def export_rows(conn):
     """links.json's rows, by URL: (url, title, notes, people, created_at,
-    download_at, id), ``people`` as restore_row reads them, by name."""
+    download_at, downloaded_at, id), ``people`` as restore_row reads them,
+    by name."""
     ties = {}
     for lid, name, position, tied_at in conn.execute(
             "SELECT lp.link_id, p.name, lp.position, lp.tied_at FROM link_people lp "
             "JOIN people p ON p.id = lp.person_id ORDER BY p.name, p.id"):
         ties.setdefault(lid, []).append({"name": name, "position": position, "tied_at": tied_at})
-    return [(url, title, notes, ties.get(lid, []), created_at, download_at, lid)
-            for lid, url, title, notes, created_at, download_at in
-            conn.execute("SELECT id, url, title, notes, created_at, download_at FROM links ORDER BY url")]
+    return [(url, title, notes, ties.get(lid, []), created_at, download_at, downloaded_at, lid)
+            for lid, url, title, notes, created_at, download_at, downloaded_at in
+            conn.execute("SELECT id, url, title, notes, created_at, download_at, downloaded_at FROM links ORDER BY url")]
 
 
 def restore(conn, row):
@@ -745,18 +799,20 @@ def restore(conn, row):
     transaction: the link under its id (userdata._with_ids), and each of
     its people by name (one missing from people.json is created again). A
     URL put back already (two rows of a hand-edited or older file that
-    clean to one) gets this row's people too, and its mark to download when
-    it has none; its title and notes stay."""
+    clean to one) gets this row's people too, and its download tag (with
+    whether it was downloaded) when it has none; its title and notes stay."""
     created = _when(row.get("created_at")) or 0
     marked = _when(row.get("download_at"))
-    conn.execute("INSERT OR IGNORE INTO links(id, url, title, notes, created_at, download_at) "
-                 "VALUES (?, ?, ?, ?, ?, ?)",
-                 (row.get("id"), row["url"], row.get("title") or "", row.get("notes") or "", created, marked))
+    done = None if marked is None else _when(row.get("downloaded_at"))
+    conn.execute("INSERT OR IGNORE INTO links(id, url, title, notes, created_at, download_at, downloaded_at) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (row.get("id"), row["url"], row.get("title") or "", row.get("notes") or "", created, marked, done))
     lid = find(conn, row["url"])
     if lid is None:                            # its id taken by another URL: not put back
         return
     if marked is not None:
-        conn.execute("UPDATE links SET download_at = ? WHERE id = ? AND download_at IS NULL", (marked, lid))
+        conn.execute("UPDATE links SET download_at = ?, downloaded_at = ? WHERE id = ? AND download_at IS NULL",
+                     (marked, done, lid))
     for p in row.get("people") or ():
         conn.execute("INSERT OR IGNORE INTO people(name, created_at) VALUES (?, ?)", (p["name"], created))
         conn.execute("INSERT OR IGNORE INTO link_people(link_id, person_id, position, tied_at) "

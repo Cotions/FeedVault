@@ -2,22 +2,24 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { createLink, createPerson, getPeople, getRecentLinkPeople } from "../lib/api";
-import { MAX_NOTES, MAX_TITLE, MAX_URL, externalUrl, withScheme } from "../lib/links";
+import { MAX_NOTES, MAX_TITLE, MAX_URL, UNSORTED_PATH, externalUrl, withScheme } from "../lib/links";
 import { NO_PERSON, personPath } from "../lib/people";
 import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 import Icon from "./Icon";
 import PersonPicker from "./PersonPicker";
-
-export const UNSORTED_PATH = "/links?person=none";
+import { DownloadCheck } from "./Links";
 
 /* Save a link in a few keys (#165): its address, an optional title and
    notes, and who it goes to (PersonPicker: no one, a recent person,
    anyone found by name or alias, or a new person by the name typed, made
    before the link is saved). Enter in the address, title or person field saves
    to the highlighted choice. A URL saved already says whose it is, with a
-   link there, instead of failing silently.
+   link there, instead of failing silently. Its "Download" checkbox saves
+   it as a download, to do (with another app: FeedVault never downloads
+   it), with or without a person.
 
-   Props: url and title (to start with), clipboard (read the clipboard for
+   Props: url and title (to start with), download (the checkbox, to start
+   with), clipboard (read the clipboard for
    an address when ``url`` is empty), onSaved(link, created: the person
    made for it, or undefined), onLeave() (a link in
    the form was followed, or Cancel), onCancel() (Cancel, when it is not
@@ -25,11 +27,12 @@ export const UNSORTED_PATH = "/links?person=none";
    closes on it), confirm (the address came from another page: Enter saves
    only once a person, or no one, has been chosen, so a key pressed by
    accident as the window opens saves nothing) */
-export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipboard = false, onSaved, onLeave, onCancel = onLeave,
-                               escape = true, confirm = false }) {
+export function QuickAddForm({ url: startUrl = "", title: startTitle = "", download: startDownload = false, clipboard = false,
+                               onSaved, onLeave, onCancel = onLeave, escape = true, confirm = false }) {
   const [url,    setUrl]    = useState(startUrl);
   const [title,  setTitle]  = useState(startTitle);
   const [notes,  setNotes]  = useState("");
+  const [download, setDownload] = useState(startDownload);
   const [active, setActive] = useState(NO_PERSON);
   const [people, setPeople] = useState(null);
   const [recent, setRecent] = useState(null);
@@ -93,7 +96,7 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
         setPeople(ps => [...(ps || []), person]);
         setActive(opt);
       }
-      const r = await createLink({ url: sent, title, notes, person: person ? person.id : null });
+      const r = await createLink({ url: sent, title, notes, person: person ? person.id : null, ...(download ? { download: true } : {}) });
       if (r?.ok) { onSaved(r.link, created); return; }
       if (r?.link) setTaken(r.link);
       else setError(r?.error || "Could not save the link.");
@@ -104,7 +107,7 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
     }
   }
 
-  const to = active?.person ? active.person.name : active?.create ? `new person ${active.create}` : "Unsorted";
+  const to = active?.person ? active.person.name : active?.create ? `new person ${active.create}` : download ? "Downloads" : "Unsorted";
   return (
     <form className="quick-add" onSubmit={e => { e.preventDefault(); save(active); }} aria-busy={busy}
           onKeyDown={e => {
@@ -146,10 +149,12 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
           Already saved{taken.people?.length ? <>, tied to {taken.people.map((p, i) => (
             <span key={p.id}>{i > 0 && (i === taken.people.length - 1 ? " and " : ", ")}<Link to={personPath(p.id)} onClick={onLeave}>{p.name}</Link></span>
           ))}</>
+            : taken.download_at != null ? <>, in <Link to={`/links?download=${taken.downloaded_at != null ? "done" : "todo"}`} onClick={onLeave}>Downloads</Link></>
             : <>, in <Link to={UNSORTED_PATH} onClick={onLeave}>Unsorted</Link></>}.
         </div>
       )}
       {error && <div className="msg err" role="alert">{error}</div>}
+      <DownloadCheck checked={download} onChange={setDownload} />
       <div className="modal-actions quick-add-actions">
         <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
         <button type="submit" className="btn-primary quick-add-save" aria-disabled={busy || undefined} title={`Save to ${to}`}>
@@ -163,8 +168,8 @@ export function QuickAddForm({ url: startUrl = "", title: startTitle = "", clipb
 /* QuickAddForm in a dialog over any page: Escape or a click beside it
    closes it, Tab stays inside, and focus goes back where it was.
 
-   Props: url, clipboard (as QuickAddForm), onSaved(link, created), onClose */
-export default function QuickAddLink({ url, clipboard, onSaved, onClose }) {
+   Props: url, download, clipboard (as QuickAddForm), onSaved(link, created), onClose */
+export default function QuickAddLink({ url, download = false, clipboard, onSaved, onClose }) {
   const boxRef = useRef(null);
   const titleId = useId();
 
@@ -196,7 +201,7 @@ export default function QuickAddLink({ url, clipboard, onSaved, onClose }) {
     >
       <div ref={boxRef} className="modal quick-add-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <h2 id={titleId} className="modal-title"><Icon name="link" size={16} />Add a link</h2>
-        <QuickAddForm url={url} clipboard={clipboard} onSaved={onSaved} onLeave={onClose} />
+        <QuickAddForm url={url} download={download} clipboard={clipboard} onSaved={onSaved} onLeave={onClose} />
       </div>
     </div>,
     document.body,

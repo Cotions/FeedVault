@@ -801,6 +801,16 @@ def _migrate_33(conn):
         ) WITHOUT ROWID""")
 
 
+def _migrate_34(conn):
+    """A download link has two states (links.py): to download, and
+    downloaded, "so we know what was downloaded". ``downloaded_at``: when the
+    user said it was, NULL for not yet (and on a link that is not a
+    download: ``download_at`` NULL). Every link marked to download so far
+    stays to do. FeedVault still never downloads from a link. User data,
+    exported with the link in links.json."""
+    conn.execute("ALTER TABLE links ADD COLUMN downloaded_at INTEGER")
+
+
 # Ordered: MIGRATIONS[i] takes a database from version i to version i + 1.
 # Append only; never edit one that has shipped.
 MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migrate_6, _migrate_7, _migrate_8,
@@ -808,7 +818,7 @@ MIGRATIONS = [_migrate_1, _migrate_2, _migrate_3, _migrate_4, _migrate_5, _migra
               _migrate_13, _migrate_14, _migrate_15, _migrate_16, _migrate_17, _migrate_18,
               _migrate_19, _migrate_20, _migrate_21, _migrate_22, _migrate_23, _migrate_24, _migrate_25,
               _migrate_26, _migrate_27, _migrate_28, _migrate_29, _migrate_30, _migrate_31,
-              _migrate_32, _migrate_33]
+              _migrate_32, _migrate_33, _migrate_34]
 
 BACKUPS_KEPT = 3
 

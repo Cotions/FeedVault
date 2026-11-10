@@ -247,7 +247,7 @@ async function main() {
       `/api/tags`,
       `/api/collections`,
       `/api/collections/${coll.id}?offset=0&limit=60`,
-      `/api/links`,
+      `/api/links?download=none`,
       `/api/unmatched`,
       `/api/jobs`,
       `/api/sources`,
@@ -338,7 +338,7 @@ async function main() {
       const api = {
         storage: (await call(base, "GET", "/api/storage")).json,
         unmatched: (await call(base, "GET", "/api/unmatched")).json,
-        links: (await call(base, "GET", "/api/links")).json,
+        links: (await call(base, "GET", "/api/links?download=none")).json,   // All links: no download
         people, authors,
       };
       for (const list of LISTS) {

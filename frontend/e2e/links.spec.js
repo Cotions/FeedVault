@@ -1,7 +1,10 @@
 // Desktop, 1440x900: saved links, on the Links page and on a person's
 // page. Addresses are invented (.example); FeedVault never opens them, and
 // neither does the test: it checks the anchors, it does not follow them.
-import { test, expect, openPage, idle, stressData, fakeBioImport, openBioImport, openAddLink } from "./fixtures.js";
+import {
+  test, expect, openPage, idle, stressData, fakeBioImport, openBioImport, openAddLink, openFilters,
+  openMenu, menuItem, openLinkMenu, linkAct, openLinksAdd, selectLinks,
+} from "./fixtures.js";
 import { STRESS_LINKS } from "./stress.js";
 
 const H = { "X-FeedVault": "1" };
@@ -18,18 +21,23 @@ async function expectSafeAnchor(row, url) {
 test("Links page: add, edit and delete a link", async ({ page }) => {
   const url = `https://e2e.example/links-page-${Date.now()}`;
   await openPage(page, { name: "Links", path: "/links" });
-  const form = page.locator(".links-add .link-form");
-  await form.getByLabel("Address").fill(`  ${url}  `);
-  await form.getByLabel("Title").fill("E2E link");
-  await form.getByRole("button", { name: "Add link" }).click();
+  // One "+ Add link" in the page's head: the app's quick-add dialog (#236).
+  const add = await openLinksAdd(page);
+  await add.getByLabel("Address").fill(`  ${url}  `);
+  await add.getByLabel("Title").fill("E2E link");
+  await expect(add.getByRole("checkbox", { name: "Download" })).not.toBeChecked();
+  await add.getByRole("button", { name: "Save to Unsorted" }).click();
+  await expect(add).toBeHidden();
   const row = page.locator(".link-row", { hasText: "E2E link" });
   await expect(row).toHaveCount(1);
-  await expect(row.locator(".link-site")).toHaveText("e2e.example");
+  await expect(row.locator(".link-url")).toHaveText(url);     // the site once: in the address under the title
   await expect(row.locator(".link-kind")).toHaveText("Other");
   await expectSafeAnchor(row, url);
-  await expect(form.getByLabel("Address")).toHaveValue("");
+  // A row: Copy and one ⋯ menu, nothing else.
+  await expect(row.locator(".link-row-actions button")).toHaveCount(2);
+  await expect(row.getByRole("button", { name: "Copy the address of E2E link" })).toBeVisible();
 
-  await row.getByRole("button", { name: "Edit E2E link" }).click();
+  await linkAct(page, row, "Edit");
   const edit = page.locator(".link-row.is-editing");
   await edit.getByLabel("Title").fill("E2E link, edited");
   await edit.getByRole("button", { name: "Save" }).click();
@@ -37,7 +45,7 @@ test("Links page: add, edit and delete a link", async ({ page }) => {
   await expect(edited).toHaveCount(1);
   await expectSafeAnchor(edited, url);
 
-  await edited.getByRole("button", { name: "Delete E2E link, edited" }).click();
+  await linkAct(page, edited, "Delete");
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText(url);
   await dialog.getByRole("button", { name: "Delete link" }).click();
@@ -68,21 +76,26 @@ test("a person's Links: add, reorder, edit and delete", async ({ page }) => {
     const titles = section.locator(".link-row .link-row-title");
     // No title: its site's own name (FeedVault does not sync patreon.com, linklabels.py).
     await expect(titles).toHaveText(["Patreon.com", "First", "Second"]);
-    await expect(section.locator(".link-group-title")).toHaveText(["Socials", "Other", "Add a link"]);
+    await expect(section.locator(".link-group-title")).toHaveText(["Socials", "Other"]);
+    // The first of its group: no way up; the last: none down.
+    const menu = await openLinkMenu(page, section.locator(".link-row", { hasText: "First" }));
+    await expect(menu.getByRole("menuitem", { name: "Move up" })).toBeDisabled();
+    await expect(menu.getByRole("menuitem", { name: "Move down" })).toBeEnabled();
+    await page.keyboard.press("Escape");
 
-    await section.getByRole("button", { name: "Move Second up" }).click();
+    await linkAct(page, section.locator(".link-row", { hasText: "Second" }), "Move up");
     await expect(titles).toHaveText(["Patreon.com", "Second", "First"]);
     await page.reload();
     await expect(titles).toHaveText(["Patreon.com", "Second", "First"]);
 
-    await section.getByRole("button", { name: "Edit First" }).click();
+    await linkAct(page, section.locator(".link-row", { hasText: "First" }), "Edit");
     const edit = section.locator(".link-row.is-editing");
     await edit.getByLabel("Title").fill("First, edited");
     await edit.getByRole("button", { name: "Save" }).click();
     await expect(titles).toHaveText(["Patreon.com", "Second", "First, edited"]);
     await expectSafeAnchor(section.locator(".link-row", { hasText: "First, edited" }), `https://e2e-${stamp}.example/one`);
 
-    await section.getByRole("button", { name: "Delete Second" }).click();
+    await linkAct(page, section.locator(".link-row", { hasText: "Second" }), "Delete");
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete link" }).click();
     await expect(titles).toHaveText(["Patreon.com", "First, edited"]);
     await idle(page);
@@ -119,12 +132,12 @@ test("a link-in-bio import shows the links it saved in the person's Links", asyn
 
     const titles = section.locator(".link-row .link-row-title");
     await expect(titles).toHaveText(["Linktr.ee", "My Patreon", "<img src=x onerror=alert(1)>"]);
-    await expect(section.locator(".link-group-title:visible")).toHaveText(["Socials", "Other"]);   // Add a link folded
+    await expect(section.locator(".link-group-title:visible")).toHaveText(["Socials", "Other"]);
     expect(await section.locator("img").count(), "a label is text, never markup").toBe(0);
     for (const [i, link] of found.entries()) await expectSafeAnchor(section.locator(".link-row").nth(i), link.url);
 
     // Again, the page unchanged: nothing new, and what the user made of a link stays.
-    await section.getByRole("button", { name: "Edit My Patreon" }).click();
+    await linkAct(page, section.locator(".link-row", { hasText: "My Patreon" }), "Edit");
     const edit = section.locator(".link-row.is-editing");
     await edit.getByLabel("Title").fill("Patreon, mine");
     await edit.getByRole("button", { name: "Save" }).click();
@@ -181,7 +194,7 @@ test("Link labels: a rule names the untitled links of its site", async ({ page }
     await expect(titles).toHaveText([`Titled ${stamp}`, `Patreon ${stamp}`]);
     const named = rows.filter({ hasText: `Patreon ${stamp}` });
     await expect(named.locator(".link-url")).toHaveText(`https://www.patreon.com/e2e-label-${stamp}`);
-    await expect(named.getByRole("button", { name: `Edit www.patreon.com/e2e-label-${stamp}` })).toBeVisible();
+    await expect(named.getByRole("button", { name: `More for www.patreon.com/e2e-label-${stamp}` })).toBeVisible();
     // A search finds it by the label it shows.
     await page.goto(`/links?q=${encodeURIComponent(`patreon ${stamp}`)}`);
     await expect(titles).toHaveText([`Patreon ${stamp}`]);
@@ -208,7 +221,7 @@ test("editing a link shows its whole notes", async ({ page }) => {
   const stress = STRESS_LINKS.find(l => l.notes);
   await openPage(page, { name: "Links", path: "/links" });
   const row = page.locator(".link-row", { has: page.locator(`a[href="${stress.url}"]`) });
-  await row.getByRole("button", { name: /^Edit / }).click();
+  await linkAct(page, row, "Edit");
   const notes = page.locator(".link-row.is-editing").getByLabel("Notes");
   await expect(notes).toHaveValue(stress.notes);
   const m = await notes.evaluate(t => ({ client: t.clientHeight, scroll: t.scrollHeight }));
@@ -253,7 +266,6 @@ test("a person's page folds its link-in-bio import and Add a link", async ({ pag
   await expect(page.locator(".bio-import")).toHaveCount(0);
   await expect(page.getByText("Off: FeedVault fetches no page unless you allow it.")).toHaveCount(0);
   await expect(page.locator(".person-link-add .link-form")).toHaveCount(0);
-  await expect(page.locator(".person-link-add .link-group-title")).toBeHidden();
 
   // The import: opened, its notice and its link to Settings, focused; Escape folds it.
   const box = await openBioImport(page);
@@ -271,7 +283,6 @@ test("a person's page folds its link-in-bio import and Add a link", async ({ pag
   const form = await openAddLink(page);
   const address = form.getByLabel("Address");
   await expect(address).toBeFocused();
-  await expect(page.locator(".person-link-add .link-group-title")).toHaveText("Add a link");
   await page.keyboard.press("Escape");
   await expect(form).toHaveCount(0);
   await expect(addButton).toBeFocused();
@@ -317,7 +328,11 @@ test("Links: the count follows the filters, which a reload and Back keep", async
     const filters = page.locator(".links-filters");
     const rows = page.locator(".link-list > li");
 
+    // Kind, Site and Person fold behind Filters, which counts the ones on.
+    await expect(filters.getByLabel("Site")).toBeHidden();
+    await openFilters(page);
     await filters.getByLabel("Site").selectOption(host);
+    await expect(filters.locator(".filters-toggle .chip")).toHaveText("1");
     await expect(page).toHaveURL(`/links?site=${host}`);
     await expect(rows).toHaveCount(2);
     await expect(count).toHaveText(`2 of ${total}`);
@@ -363,7 +378,8 @@ test("Links: a filter change asks before dropping a link's unsaved edits", async
     const dialog = page.getByRole("alertdialog");
     const kind = page.locator(".links-filters").getByLabel("Kind");
     const search = page.getByRole("textbox", { name: "Search links" });
-    await page.getByRole("button", { name: `Edit ${host}/a` }).click();
+    await openFilters(page);
+    await linkAct(page, rows.first(), "Edit");
     const editing = page.locator(".link-row.is-editing");
     await editing.getByLabel("Title").fill("typed, not saved");
 
@@ -438,7 +454,7 @@ test("Links: an edit to a saved address lights the link that has it", async ({ p
     await page.goto(`/links?q=${encodeURIComponent(`${host}/b`)}`);
     await expect(page.locator(".link-list > li")).toHaveCount(1);
     await idle(page);
-    await page.getByRole("button", { name: `Edit ${host}/b` }).click();
+    await linkAct(page, page.locator(".link-row"), "Edit");
     const editing = page.locator(".link-row.is-editing");
     await editing.getByLabel("Address").fill(`https://${host}/a`);
     await editing.getByRole("button", { name: "Save" }).click();
@@ -460,13 +476,12 @@ test("Links: an address with no scheme is added as https://", async ({ page, req
   const host = `e2e-scheme-${Date.now()}.example`;
   try {
     await openPage(page, { name: "Links", path: "/links" });
-    const form = page.locator(".links-add .link-form");
-    await form.getByLabel("Address").fill(`${host}/x`);
-    await form.getByRole("button", { name: "Add link" }).click();
+    const add = await openLinksAdd(page);
+    await add.getByLabel("Address").fill(`${host}/x`);
+    await add.getByLabel("Address").press("Enter");
+    await expect(add).toBeHidden();
     const row = page.locator(".link-row", { has: page.locator(`a[href="https://${host}/x"]`) });
     await expect(row).toHaveCount(1);
-    await expect(form.getByRole("alert")).toHaveCount(0);
-    await expect(form.getByLabel("Address")).toHaveValue("");
     await idle(page);
   } finally {
     const { links } = await (await request.get(`/api/links?q=${host}`, { headers: H })).json();
@@ -720,9 +735,9 @@ test("quick-add: a drag that starts in the page is left to the page", async ({ p
 
 test("quick-add: text dragged into a text field is left to the field; plain words open nothing", async ({ page }) => {
   await openPage(page, { name: "Links", path: "/links" });
-  const notes = page.locator(".links-add .link-form").getByLabel("Notes");
-  // Over and onto the notes field: not taken (the browser types it there), no overlay, even for a link.
-  const taken = await notes.evaluate(el => {
+  const field = page.getByRole("textbox", { name: "Search links" });
+  // Over and onto a text field: not taken (the browser types it there), no overlay, even for a link.
+  const taken = await field.evaluate(el => {
     const out = [];
     for (const [type, text] of [["text/plain", "some words"], ["text/uri-list", "https://a.example/"]]) {
       const dt = new DataTransfer();
@@ -812,7 +827,7 @@ test("Unsorted: the tab, and the nav's count that follows saves, deletes and ass
     await expect(rows.locator(".link-person")).toHaveCount(0);
 
     // A delete, a quick-add to no one: the count follows at once, not on the next poll.
-    await page.getByRole("button", { name: `Delete ${host}/a` }).click();
+    await linkAct(page, rows.filter({ hasText: `${host}/a` }), "Delete");
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete link" }).click();
     await expect(badge).toHaveText(String(before - 1));
     await page.getByRole("banner").getByRole("button", { name: "Add a link" }).click();
@@ -901,9 +916,12 @@ test("Links: select with shift-click, copy the URLs, assign them all, delete", a
     await idle(page);
     const shown = [...urls].reverse();
 
+    // Checkboxes come with the head's Select, not before; with nothing chosen the bar's actions wait.
+    await expect(rows.getByRole("checkbox")).toHaveCount(0);
+    const bar = await selectLinks(page);
+    await expect(bar.getByRole("button", { name: "Copy URLs" })).toBeDisabled();
     await rows.nth(0).getByRole("checkbox").click();
     await rows.nth(2).getByRole("checkbox").click({ modifiers: ["Shift"] });
-    const bar = page.getByRole("toolbar", { name: "Selection" });
     await expect(bar.locator(".select-count")).toHaveText("3 selected");
     await expect(rows.nth(1).getByRole("checkbox")).toBeChecked();
     await expect(rows.nth(3).getByRole("checkbox")).not.toBeChecked();
@@ -912,7 +930,7 @@ test("Links: select with shift-click, copy the URLs, assign them all, delete", a
     await expect(page.locator(".toast", { hasText: "Copied 3 links" })).toBeVisible();
     expect(await copied(page)).toEqual([shown.slice(0, 3).join("\n")]);
 
-    await bar.getByRole("button", { name: "Assign 3 to…" }).click();
+    await bar.getByRole("button", { name: "Assign to…" }).click();
     const dialog = page.getByRole("dialog", { name: "Assign 3 links to…" });
     const picker = dialog.getByRole("combobox", { name: "Person" });
     await expect(picker).toBeFocused();
@@ -934,8 +952,9 @@ test("Links: select with shift-click, copy the URLs, assign them all, delete", a
     // Delete from the selection, through the confirm dialog.
     await page.goto(`/links?q=${host}`);
     await expect(rows).toHaveCount(4);
+    await selectLinks(page);
     await rows.nth(3).getByRole("checkbox").click();
-    await bar.getByRole("button", { name: "Delete 1…" }).click();
+    await bar.getByRole("button", { name: "Delete…" }).click();
     const confirm = page.getByRole("alertdialog");
     await expect(confirm).toContainText("Delete 1 link?");
     await confirm.getByRole("button", { name: "Delete 1 link" }).click();
@@ -967,6 +986,7 @@ test("Links: a shift range holds after a row comes in; Undo gives each link back
     await idle(page);
 
     // The anchor is c; a quick-add then puts d on top. The shift range is still c to a.
+    const bar = await selectLinks(page);
     await rows.nth(0).getByRole("checkbox").click();
     await page.getByRole("banner").getByRole("button", { name: "Add a link" }).click();
     const add = page.getByRole("dialog", { name: "Add a link" });
@@ -976,12 +996,11 @@ test("Links: a shift range holds after a row comes in; Undo gives each link back
     await expect(rows).toHaveCount(4);
     await expect(rows.nth(1).getByRole("checkbox")).toBeChecked();   // c, moved down one
     await rows.nth(3).getByRole("checkbox").click({ modifiers: ["Shift"] });
-    const bar = page.getByRole("toolbar", { name: "Selection" });
     await expect(bar.locator(".select-count")).toHaveText("3 selected");
     await expect(rows.nth(0).getByRole("checkbox")).not.toBeChecked();
 
     // c and a had no one, b had Q: all to P.
-    await bar.getByRole("button", { name: "Assign 3 to…" }).click();
+    await bar.getByRole("button", { name: "Assign to…" }).click();
     const dialog = page.getByRole("dialog", { name: "Assign 3 links to…" });
     await dialog.getByRole("combobox", { name: "Person" }).fill(`E2E P ${stamp}`);
     await dialog.getByRole("combobox", { name: "Person" }).press("Enter");
@@ -1159,6 +1178,13 @@ test("/links/add: a link dropped beside the fields leaves the page as it is", as
 test("the bookmarklet opens /links/add in a popup that closes after the save; blocked, it opens in the tab", async ({ page, request }) => {
   const stamp = Date.now();
   await openPage(page, { name: "Links", path: "/links" });
+  // Behind the head's More (#236): shown when asked for, hidden again by its ×.
+  const strip = page.locator(".links-bookmarklet");
+  await expect(strip).toHaveCount(0);
+  await (await menuItem(page, page.locator(".page-head"), "More", "Bookmarklet…")).click();
+  await strip.getByRole("button", { name: "Hide the bookmarklet" }).click();
+  await expect(strip).toHaveCount(0);
+  await (await menuItem(page, page.locator(".page-head"), "More", "Bookmarklet…")).click();
   const mark = page.getByRole("link", { name: "Save to FeedVault" });
   const origin = new URL(page.url()).origin;
   await expect(mark).toHaveAttribute("href", /^javascript:/);
@@ -1225,8 +1251,8 @@ test("the bookmarklet opens /links/add in a popup that closes after the save; bl
   }
 });
 
-// #215: a band's account is the band's and each member's. Also link… adds a
-// person and keeps the others; the edit form takes one off and adds one; a
+// #215: a band's account is the band's and each member's. Also link to…
+// (its row's menu) adds a person and keeps the others; the edit form takes one off and adds one; a
 // person's page shows the others, Remove takes it from them only.
 test("Links: a link shared by two people, on both, each one removable alone", async ({ page, request }) => {
   const stamp = Date.now();
@@ -1243,10 +1269,8 @@ test("Links: a link shared by two people, on both, each one removable alone", as
     await expect(row.locator(".link-person")).toHaveText([band]);
     await idle(page);
 
-    // Also link…: the member's too, the band's kept.
-    await row.getByRole("checkbox").click();
-    const bar = page.getByRole("toolbar", { name: "Selection" });
-    await bar.getByRole("button", { name: "Also link 1 to…" }).click();
+    // Also link to…: the member's too, the band's kept.
+    await linkAct(page, row, "Also link to…");
     const dialog = page.getByRole("dialog", { name: "Also link 1 link to…" });
     const picker = dialog.getByRole("combobox", { name: "Person" });
     await picker.fill(member);
@@ -1262,14 +1286,14 @@ test("Links: a link shared by two people, on both, each one removable alone", as
     }
 
     // The edit form: a chip each; × takes the member off, the picker adds them back.
-    await row.getByRole("button", { name: "Edit Shared account" }).click();
+    await linkAct(page, row, "Edit");
     const edit = page.locator(".link-row.is-editing");
     await expect(edit.locator(".link-form-people .tag-chip-name")).toHaveText([band, member]);
     await edit.getByRole("button", { name: `Remove ${member}` }).click();
     await edit.getByRole("button", { name: "Save" }).click();
     await expect(edit).toHaveCount(0);
     expect(await people()).toEqual([band]);
-    await row.getByRole("button", { name: "Edit Shared account" }).click();
+    await linkAct(page, row, "Edit");
     const add = edit.getByRole("combobox", { name: "Add a person" });
     await add.fill(member);
     await add.press("Enter");
@@ -1282,7 +1306,7 @@ test("Links: a link shared by two people, on both, each one removable alone", as
     await page.goto(`/people/${mid}`);
     const theirs = page.locator(".person-links-section .link-row", { hasText: "Shared account" });
     await expect(theirs.locator(".link-person")).toHaveText([band]);
-    await theirs.getByRole("button", { name: "Remove Shared account from them" }).click();
+    await linkAct(page, theirs, "Remove from this creator");
     const toast = page.locator(".toast", { hasText: `Shared account: no longer ${member}'s` });
     await expect(toast).toBeVisible();
     await expect(theirs).toHaveCount(0);
@@ -1293,8 +1317,7 @@ test("Links: a link shared by two people, on both, each one removable alone", as
 
     // Delete on the band's page says the member loses it too.
     await page.goto(`/people/${bid}`);
-    await page.locator(".person-links-section .link-row", { hasText: "Shared account" })
-      .getByRole("button", { name: "Delete Shared account" }).click();
+    await linkAct(page, page.locator(".person-links-section .link-row", { hasText: "Shared account" }), "Delete");
     const confirm = page.getByRole("alertdialog");
     await expect(confirm).toContainText(`It is ${member}'s too`);
     await confirm.getByRole("button", { name: "Cancel" }).click();
@@ -1306,20 +1329,23 @@ test("Links: a link shared by two people, on both, each one removable alone", as
   }
 });
 
-/* ── To download and Sort (sorting Unsorted out) ── */
+/* ── Downloads and Sort ── */
 
 async function downloadCount(request) {
   return (await (await request.get("/api/jobs", { headers: H })).json()).download_links;
 }
 
-// A link of no one is to download, an artist's, or both: the mark is apart
-// from its people, it stays in Unsorted until assigned, and the To
-// download tab lists it until its mark is cleared (with an Undo).
-test("To download: marked in Unsorted, kept by an assign, cleared from its tab with Undo", async ({ page, request }) => {
+// A download is a category of its own, apart from a link's people: moved
+// there from Unsorted (it stays in the queue until assigned, and says "To
+// download"), listed by the Downloads tab whoever's it is, never by All
+// links. There a row's check marks it downloaded: it leaves To download
+// with an Undo, and the tab counts what is still to do.
+test("Downloads: moved from Unsorted, kept by an assign; marked downloaded with Undo; never in All links", async ({ page, request }) => {
   const stamp = Date.now();
   const host = `e2e-download-${stamp}.example`;
   const name = `E2E artist ${stamp}`;
   const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  const link = x => linkByUrl(request, `https://${host}/${x}`);
   try {
     await makeLinks(request, ["a", "b", "c"].map(x => `https://${host}/${x}`));
     const before = await downloadCount(request);
@@ -1327,70 +1353,218 @@ test("To download: marked in Unsorted, kept by an assign, cleared from its tab w
     const rows = page.locator(".link-list > li");
     await expect(rows).toHaveCount(3);                      // newest first: c, b, a
     await idle(page);
-    const tab = page.locator(".links-tabs").getByRole("button", { name: /^To download/ });
+    const tab = page.getByRole("group", { name: "Show", exact: true }).getByRole("button", { name: /^Downloads/ });
+    const counted = n => (n ? `Downloads${n}` : "Downloads");
 
-    // One row's button: marked, it stays in Unsorted, says so, and the tab counts it.
-    await page.getByRole("button", { name: `Mark ${host}/b to download` }).click();
-    const clearB = page.getByRole("button", { name: `Clear the download mark of ${host}/b` });
-    await expect(clearB).toBeFocused();
+    // One row's menu: moved, it stays in Unsorted, says so, and the tab counts it.
+    await linkAct(page, rows.nth(1), "Move to Downloads");
+    await expect(page.locator(".toast", { hasText: `${host}/b: moved to Downloads` })).toBeVisible();
     await expect(rows).toHaveCount(3);
     await expect(rows.nth(1).locator(".link-dl-mark")).toHaveText("To download");
     await expect(rows.locator(".link-dl-mark")).toHaveCount(1);
-    await expect(tab).toHaveText(`To download${before + 1}`);
+    await expect(rows.nth(1).locator(".link-kind")).toHaveCount(0);    // not a social nor an other link any more
+    await expect(tab).toHaveText(counted(before + 1));
 
-    // The selection: the others marked too; they stay, selected, to be assigned next.
+    // The selection: the others moved too; they stay, selected, to be assigned next.
+    const bar = await selectLinks(page);
     await rows.nth(0).getByRole("checkbox").click();
     await rows.nth(2).getByRole("checkbox").click();
-    const bar = page.getByRole("toolbar", { name: "Selection" });
-    await bar.getByRole("button", { name: "Mark 2 to download" }).click();
-    await expect(page.locator(".toast", { hasText: "2 links marked to download" })).toBeVisible();
+    await bar.getByRole("button", { name: "Move to Downloads" }).click();
+    await expect(page.locator(".toast", { hasText: "2 links moved to Downloads" })).toBeVisible();
     await expect(rows.locator(".link-dl-mark")).toHaveCount(3);
     await expect(bar.locator(".select-count")).toHaveText("2 selected");
-    await expect(bar.getByRole("button", { name: "Mark 2 to download" })).toBeDisabled();
-    await expect(tab).toHaveText(`To download${before + 3}`);
-    await bar.getByRole("button", { name: "Clear", exact: true }).click();
+    await expect(bar.getByRole("button", { name: "Move to Downloads" })).toBeDisabled();
+    await expect(tab).toHaveText(counted(before + 3));
+    await page.locator(".page-head .select-toggle").click();
+    await expect(bar).toHaveCount(0);
 
-    // Assigned, b leaves Unsorted and keeps its mark.
+    // Assigned, b leaves Unsorted and stays a download.
     await page.getByRole("button", { name: `Assign ${host}/b to a person` }).click();
     const picker = page.getByRole("combobox", { name: `Assign ${host}/b to` });
     await picker.fill(name);
     await picker.press("Enter");
     await expect(rows).toHaveCount(2);
-    expect((await linkByUrl(request, `https://${host}/b`)).download_at).not.toBeNull();
+    expect((await link("b")).download_at).not.toBeNull();
 
-    // The tab: every marked link, whoever's, in the address.
+    // The tab: what is still to download, whoever's, in the address; no chip says what the tab does.
     await tab.click();
-    await expect(page).toHaveURL(/\/links\?(?=.*download=1)(?!.*person=)/);
+    await expect(page).toHaveURL(/\/links\?(?=.*download=todo)(?!.*person=)/);
     await expect(tab).toHaveAttribute("aria-pressed", "true");
     await expect(rows).toHaveCount(3);
     await expect(rows.nth(1).locator(".link-person")).toHaveText([name]);
+    await expect(rows.locator(".link-dl-mark")).toHaveCount(0);
+    const shown = page.getByRole("group", { name: "Downloads shown" });
+    const whose = page.getByRole("group", { name: "Whose" });
+    await expect(shown.getByRole("button", { name: "To download" })).toHaveAttribute("aria-pressed", "true");
+    await whose.getByRole("button", { name: "With creator" }).click();
+    await expect(page).toHaveURL(/person=any/);
+    await expect(rows.locator(".link-row-title")).toHaveText([`${host}/b`]);
+    await whose.getByRole("button", { name: "No creator" }).click();
+    await expect(rows.locator(".link-row-title")).toHaveText([`${host}/c`, `${host}/a`]);
+    await whose.getByRole("button", { name: "Anyone" }).click();
+    await expect(page).not.toHaveURL(/person=/);
+    await expect(rows).toHaveCount(3);
 
-    // Cleared there, a link leaves the tab; focus goes on to the next one's button; Undo brings it back.
-    await page.getByRole("button", { name: `Clear the download mark of ${host}/c` }).click();
+    // A row's check: downloaded, it leaves To download; focus goes on to the next one's check; Undo brings it back.
+    await page.getByRole("button", { name: `Mark ${host}/c downloaded` }).click();
     await expect(rows).toHaveCount(2);
-    const toast = page.locator(".toast", { hasText: `${host}/c: download mark cleared` });
+    const toast = page.locator(".toast", { hasText: `${host}/c: downloaded` });
     await expect(toast).toBeVisible();
-    await expect(clearB).toBeFocused();
-    await expect(tab).toHaveText(`To download${before + 2}`);
-    expect((await linkByUrl(request, `https://${host}/c`)).download_at).toBeNull();
+    await expect(page.getByRole("button", { name: `Mark ${host}/b downloaded` })).toBeFocused();
+    await expect(tab).toHaveText(counted(before + 2));
+    expect(await link("c")).toMatchObject({ download_at: expect.any(Number), downloaded_at: expect.any(Number) });
     await toast.getByRole("button", { name: "Undo" }).click();
     await expect(rows).toHaveCount(3);
-    await expect(tab).toHaveText(`To download${before + 3}`);
+    await expect(tab).toHaveText(counted(before + 3));
+    expect((await link("c")).downloaded_at).toBeNull();
 
-    // The selection's Clear mark: all of them leave, with an Undo.
-    await rows.nth(0).getByRole("checkbox").click();
+    // Downloaded: its own list, dimmed, and the check takes it back.
+    await page.getByRole("button", { name: `Mark ${host}/c downloaded` }).click();
+    await expect(rows).toHaveCount(2);
+    await shown.getByRole("button", { name: "Downloaded" }).click();
+    await expect(page).toHaveURL(/download=done/);
+    await expect(rows.locator(".link-row-title")).toHaveText([`${host}/c`]);
+    await expect(rows.first()).toHaveClass(/is-downloaded/);
+    await expect(rows.first().locator(".link-dl-mark")).toHaveText("Downloaded");
+    await expect(page.getByRole("button", { name: `Mark ${host}/c to download` })).toHaveAttribute("aria-pressed", "true");
+    await shown.getByRole("button", { name: "All", exact: true }).click();
+    await expect(page).toHaveURL(/download=all/);
+    await expect(rows).toHaveCount(3);
+
+    // Not a download (a row's menu): it leaves Downloads, with an Undo.
+    await linkAct(page, rows.nth(2), "Not a download");
+    await expect(rows).toHaveCount(2);
+    const out = page.locator(".toast", { hasText: `${host}/a: not a download any more` });
+    await expect(out).toBeVisible();
+    expect((await link("a")).download_at).toBeNull();
+    await out.getByRole("button", { name: "Undo" }).click();
+    await expect(rows).toHaveCount(3);
+
+    // The selection: marked downloaded here (they stay in All); the rarer changes are in the bar's ⋯.
+    await selectLinks(page);
     await bar.getByRole("button", { name: "Select all loaded (3)" }).click();
-    await bar.getByRole("button", { name: "Clear mark" }).click();
+    await bar.getByRole("button", { name: "Mark downloaded" }).click();
+    await expect(page.locator(".toast", { hasText: "2 links marked downloaded" })).toBeVisible();   // c was already
+    await expect(rows.locator(".link-dl-mark.is-done")).toHaveCount(3);
+    await expect(tab).toHaveText(counted(before));
+    const more = await openMenu(page, bar, "More for the selection");
+    await expect(more.getByRole("menuitem")).toHaveText(["Also link to…", "Move to Downloads", "Mark to download", "Not a download"]);
+    await more.getByRole("menuitem", { name: "Not a download" }).click();
     await expect(rows).toHaveCount(0);
     await expect(page.locator(".card .empty")).toHaveText("No link matches.");
-    const cleared = page.locator(".toast", { hasText: "3 links: download mark cleared" });
+    const cleared = page.locator(".toast", { hasText: "3 links moved out of Downloads" });
     await expect(cleared).toBeVisible();
-    await expect(tab).toHaveText(before ? `To download${before}` : "To download");
     await cleared.getByRole("button", { name: "Undo" }).click();
     await expect(rows).toHaveCount(3);
+    expect(await link("b")).toMatchObject({ download_at: expect.any(Number), downloaded_at: expect.any(Number) });
+
+    // All links never lists a download.
+    await page.goto(`/links?q=${host}`);
+    await expect(page.locator(".card .empty")).toHaveText("No link matches.");
     await idle(page);
   } finally {
     await cleanUp(request, host, pid);
+  }
+});
+
+// A link is added as a download with the form's Download box, ticked
+// already in the Downloads tab. A creator's downloads are a block of their
+// own under their Links (socials and others only), behind To download |
+// Downloaded; every row copies its address.
+test("Downloads: added with the Download box; a creator's Downloads block, apart from their Links", async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = `e2e-dl-creator-${stamp}.example`;
+  const social = `https://www.patreon.com/e2e-dl-${stamp}`;
+  const name = `E2E downloader ${stamp}`;
+  const pid = (await (await request.post("/api/people", { headers: H, data: { name } })).json()).person.id;
+  try {
+    await request.post("/api/links", { headers: H, data: { url: social, person: pid } });
+    await stubClipboardWrites(page);
+    await page.goto("/links?download=todo");
+    await expect(page.getByRole("group", { name: "Downloads shown" })).toBeVisible();
+    await idle(page);
+
+    // To no one: saved to Downloads, and listed at once.
+    let add = await openLinksAdd(page);
+    await expect(add.getByRole("checkbox", { name: "Download" })).toBeChecked();
+    await expect(add.getByRole("button", { name: "Save to Downloads" })).toBeVisible();
+    await add.getByLabel("Address").fill(`https://${host}/one`);
+    await add.getByLabel("Address").press("Enter");
+    await expect(add).toBeHidden();
+    const saved = page.locator(".toast", { hasText: "Link saved to Downloads" });
+    await expect(saved.getByRole("link", { name: "Show" })).toHaveAttribute("href", "/links?download=todo");
+    await expect(page.locator(`.link-row a[href="https://${host}/one"]`)).toHaveCount(1);
+    expect(await linkByUrl(request, `https://${host}/one`)).toMatchObject({ download_at: expect.any(Number), downloaded_at: null, people: [] });
+
+    // To a creator: theirs, and a download.
+    add = await openLinksAdd(page);
+    await add.getByLabel("Address").fill(`https://${host}/two`);
+    await add.getByLabel("Title").fill("Second set");
+    const picker = add.getByRole("combobox", { name: "Person" });
+    await picker.fill(name);
+    await picker.press("Enter");
+    await expect(add).toBeHidden();
+    await expect(page.locator(".toast", { hasText: `Download saved to ${name}` })).toBeVisible();
+
+    // Their page: Links has the social only; Downloads, right after, the download.
+    await page.goto(`/people/${pid}`);
+    const links = page.locator(".person-links-section");
+    const downloads = page.locator(".person-downloads-section");
+    await expect(links.locator(".link-row-title")).toHaveText(["Patreon.com"]);
+    await expect(links.locator(".link-group-title")).toHaveText(["Socials"]);
+    const rows = downloads.locator(".link-row");
+    await expect(rows.locator(".link-row-title")).toHaveText(["Second set"]);
+    const states = downloads.getByRole("group", { name: "Show downloads" });
+    await expect(states.getByRole("button")).toHaveText(["To download1", "Downloaded0"]);
+    await idle(page);
+
+    // Copy on a row, Copy URLs for what is to download.
+    await downloads.getByRole("button", { name: "Copy the address of Second set" }).click();
+    await expect(page.locator(".toast", { hasText: /^Copied$/ })).toBeVisible();
+    expect((await copied(page)).at(-1)).toBe(`https://${host}/two`);
+    await downloads.getByRole("button", { name: "Copy URLs" }).click();
+    await expect(page.locator(".toast", { hasText: "Copied 1 link" })).toBeVisible();
+
+    // The social, moved to Downloads from its menu: out of Links; back with Not a download.
+    await linkAct(page, links.locator(".link-row"), "Move to Downloads");
+    await expect(page.locator(".toast", { hasText: "Patreon.com: moved to Downloads" })).toBeVisible();
+    await expect(links.locator(".link-row")).toHaveCount(0);
+    await expect(rows).toHaveCount(2);
+    await linkAct(page, rows.filter({ hasText: "Patreon.com" }), "Not a download");
+    await expect(links.locator(".link-row-title")).toHaveText(["Patreon.com"]);
+    await expect(rows).toHaveCount(1);
+
+    // The check: downloaded, it moves to the other list; Undo brings it back.
+    await downloads.getByRole("button", { name: "Mark Second set downloaded" }).click();
+    const done = page.locator(".toast", { hasText: "Second set: downloaded" });
+    await expect(done).toBeVisible();
+    await expect(downloads.locator(".empty")).toHaveText("Nothing left to download.");
+    await expect(states.getByRole("button")).toHaveText(["To download0", "Downloaded1"]);
+    await expect(downloads.getByRole("button", { name: "Copy URLs" })).toHaveCount(0);
+    await states.getByRole("button", { name: /^Downloaded/ }).click();
+    await expect(rows).toHaveClass(/is-downloaded/);
+    await expect(rows.locator(".link-dl-mark")).toHaveText("Downloaded");
+    await done.getByRole("button", { name: "Undo" }).click();
+    await expect(downloads.locator(".empty")).toHaveText("Nothing downloaded yet.");
+    await states.getByRole("button", { name: /^To download/ }).click();
+    await expect(rows).toHaveCount(1);
+
+    // Their folded Add link: unticked here; ticked, the link goes to their Downloads.
+    const form = await openAddLink(page);
+    const box = form.getByRole("checkbox", { name: "Download" });
+    await expect(box).not.toBeChecked();
+    await form.getByLabel("Address").fill(`https://${host}/three`);
+    await form.getByLabel("Title").fill("Third set");
+    await box.check();
+    await form.getByRole("button", { name: "Add link" }).click();
+    await expect(page.locator(".toast", { hasText: "Link added to Downloads." })).toBeVisible();
+    await expect(rows.locator(".link-row-title")).toHaveText(["Second set", "Third set"]);
+    await expect(links.locator(".link-row")).toHaveCount(1);
+    await idle(page);
+  } finally {
+    await cleanUp(request, host, pid);
+    const left = await linkByUrl(request, social);
+    if (left) await request.delete(`/api/links/${left.id}`, { headers: H });
   }
 });
 
@@ -1421,9 +1595,9 @@ test("Links: sort by site shows a heading per site; oldest first; the sort stays
 
     // A shift range from a's link to b's last: three links, no heading in it.
     const rows = page.locator(".link-list > .link-row");
+    const bar = await selectLinks(page);
     await rows.nth(0).getByRole("checkbox").click();
     await rows.nth(2).getByRole("checkbox").click({ modifiers: ["Shift"] });
-    const bar = page.getByRole("toolbar", { name: "Selection" });
     await expect(bar.locator(".select-count")).toHaveText("3 selected");
     await bar.getByRole("button", { name: "Clear", exact: true }).click();
 

@@ -1819,9 +1819,11 @@ there and missing from `people.json` is created again, and a row whose URL
 is not `http://` or `https://` is skipped. A file from before several
 people (a row with `"person": "<name>"` or `null`, `position`, `tied_at`)
 is still read; two rows whose URL is one once cleaned become one link with
-both rows' people (and the mark to download either had). Each row has its
-`download_at` too (`null`: not marked); one that is not a time, or a file
-from before the mark, puts the link back unmarked.
+both rows' people (and a download when either was). Each row has its
+`download_at` and `downloaded_at` too (`null`: not a download, not
+downloaded); one that is not a time, or a file from before either, puts
+the link back without it, and a `downloaded_at` on a row with no
+`download_at` is dropped (only a download is downloaded).
 
 FeedVault never fetches a saved link: no title, preview or icon is looked
 up, and nothing leaves the machine. (The [link-in-bio
@@ -1840,7 +1842,7 @@ A **link**:
 { "id": 12, "url": "https://www.patreon.com/somebody", "title": "Patreon", "notes": "",
   "site": "patreon.com", "kind": "social", "label": "Patreon",
   "people": [{ "id": 3, "name": "Some Body" }, { "id": 5, "name": "The Band" }],
-  "position": 2, "created_at": 1727500000, "download_at": null }
+  "position": 2, "created_at": 1727500000, "download_at": null, "downloaded_at": null }
 ```
 
 - `url`: stored cleaned, and saved once. Only `http` and `https`, with a
@@ -1891,25 +1893,36 @@ A **link**:
   Each person has the link at their own place among their links.
   `position`: that place for the person a list is for (`?person=`, a
   person's page), else `null`.
-- `download_at`: when the link was marked **to download**, or `null`. The
-  user's note, while sorting links out (the Links page's To download tab),
-  that another app should download what it points at: FeedVault never
-  downloads from a link, nor reads the mark for anything else. It is apart
-  from the link's people: giving a link to someone (or to no one) keeps it,
-  and marking one does not touch its people. Marking a link marked already
-  keeps its time.
+- `download_at`: when the link was made a **download**, or `null` for a
+  link that is not one. A download is a category of its own, apart from
+  the `social` and `other` links (its `kind` is still read from its URL):
+  the user's note that another app should download what it points at.
+  FeedVault never downloads from a link, nor reads the two fields for
+  anything else. It is apart from the link's people: giving a link to
+  someone (or to no one) keeps it, and changing it does not touch its
+  people. A download made one again keeps its time.
+- `downloaded_at`: when a download was said **downloaded**, or `null`
+  while it is still **to download**. Never set on a link that is not a
+  download: clearing `download_at` clears it too. So a link is in one of
+  three states: not a download (both `null`), to download (`download_at`
+  only), downloaded (both). In the dashboard the Links page's **All
+  links** tab lists the first, its **Downloads** tab the other two (To
+  download, Downloaded, or both; anyone's, with a creator, or with none),
+  **Unsorted** every link of no one, downloads too; a person's page shows
+  their downloads in a Downloads section of their own, apart from their
+  Links.
 
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/api/links?person=&kind=&site=&q=&download=&sort=` | `{ "links": [link, …], "sites": [{ "site": "patreon.com", "count": 4 }, …] }`, see below |
-| POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3 }` or `"people": [3, 5]` in place of `person` (all but `url` may be omitted; `person` `null` or `people` `[]` for no one; from another site, the userscript's "Add this page", `url` and `title` only, else a 403) → `{ "ok": true, "link": {…} }` |
-| POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person`, `people`, `download` (`person`: that one person in place of any other, `null` unties it from everyone; `people`: exactly those, `[]` for no one; `download`: `true` marks it to download, `false` clears the mark, anything else a 400; none of them is a 400) → `{ "ok": true, "link": {…} }` |
+| POST | `/api/links` | body `{ "url": "…", "title": "…", "notes": "…", "person": 3, "download": false }` or `"people": [3, 5]` in place of `person` (all but `url` may be omitted; `person` `null` or `people` `[]` for no one; `download` `true` saves it as a download, to do, anything but a boolean is a 400; from another site, the userscript's "Add this page", `url` and `title` only, else a 403) → `{ "ok": true, "link": {…} }` |
+| POST | `/api/links/<id>` | body any of `url`, `title`, `notes`, `person`, `people`, `download`, `downloaded` (`person`: that one person in place of any other, `null` unties it from everyone; `people`: exactly those, `[]` for no one; `download`: `true` makes it a download, to do (one already keeps its time and its state), `false` makes it a plain link again, not downloaded either; `downloaded`: `true` says it is downloaded (a link that is not a download becomes one, downloaded), `false` that it is to download again (a link that is not a download stays one); either anything but a boolean, or `download` `false` with `downloaded` `true`, is a 400; none of them is a 400) → `{ "ok": true, "link": {…} }` |
 | DELETE | `/api/links/<id>` | → `{ "ok": true }` |
 | POST | `/api/links/assign` | body `{ "ids": [12, 9], "person": 3 }` or `"people": [3, 5]` (1 to 5000 ids; `person` `null` or `people` `[]` unties them; optional `if_person`) → `{ "ok": true, "moved": 2, "skipped": [], "links": [link, …] }`, see below |
 | POST | `/api/links/add-person` | body `{ "ids": [12, 9], "person": 5 }` (1 to 5000 ids) → `{ "ok": true, "added": [12], "links": [link, …] }`, see below |
 | POST | `/api/links/remove-person` | body `{ "ids": [12, 9], "person": 5 }` (1 to 5000 ids) → `{ "ok": true, "removed": [12], "links": [link, …] }`, see below |
-| POST | `/api/links/to-download` | body `{ "ids": [12, 9], "download": true }` (1 to 5000 ids; `false` clears the mark; optional `skip_missing`) → `{ "ok": true, "changed": [12], "missing": [], "links": [link, …] }`, see below |
-| POST | `/api/links/import-many` | body `{ "text": "…" }` (pasted addresses, or a bookmarks file read as text) → `{ "ok": true, "saved": 42, "already": 3, "skipped": 1, "over": 0 }`, see below |
+| POST | `/api/links/to-download` | body `{ "ids": [12, 9], "download": true }` and/or `"downloaded": true` (1 to 5000 ids; each as in `POST /api/links/<id>`; optional `skip_missing`) → `{ "ok": true, "changed": [12], "missing": [], "links": [link, …] }`, see below |
+| POST | `/api/links/import-many` | body `{ "text": "…", "download": false }` (pasted addresses, or a bookmarks file read as text; `download` `true`: the new ones are downloads, to do) → `{ "ok": true, "saved": 42, "already": 3, "skipped": 1, "over": 0 }`, see below |
 | POST | `/api/links/delete` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "deleted": 2 }`; ids no link has are passed over |
 | POST | `/api/people/<id>/links/order` | body `{ "ids": [12, 9] }` (1 to 5000 ids) → `{ "ok": true, "links": [link, …] }`, the person's links in their new order |
 | GET | `/api/people/recent-links?limit=10` | `{ "people": [{ "id": 3, "name": "Some Body", "at": 1727500000 }, …] }`: the people most recently given a link, latest first, see below |
@@ -1920,17 +1933,22 @@ A **link**:
   400); `site` matches `site` exactly; `q` (at most 200 characters) matches
   any part of the URL, title or notes, without regard to (ASCII) case, and
   a link with no title whose site's rule label (see [Link labels](#link-labels))
-  holds it, without regard to case. `download=1` lists only the links
-  marked to download (with `person=none`: those of no one; `0` or none:
-  every link; anything else is a 400).
+  holds it, without regard to case. `person=any` lists the links of
+  someone, whoever. `download` lists by the link's download state: `todo`
+  the downloads still to do, `done` the downloaded ones, `all` both,
+  `none` the links that are not downloads; left out, every link. `1` is
+  still read as `todo` and `0` as left out (what it took before the two
+  states); anything else is a 400. It combines with `person` (`todo` with
+  `none`: the downloads to do that are no one's).
   `sort` is `newest` (the default: newest first, or with `person` that
   person's order), `oldest` (oldest saved first, with `person` too), or
   `site`: by `site`, A to Z, the newest first within each site (the page
   shows a heading over each); anything else is a 400. Two links saved in
   the same second keep the order they were saved in. A person's page
   (`GET /api/people/<id>`) is never sorted by it.
-  `sites` counts every link by site, whatever the filters, for a site
-  picker, most links first.
+  `sites` counts every link of that `download` (every link when it is
+  left out) by site, whatever the other filters, for a site picker and
+  the page's "N of M", most links first.
 - A URL saved already (once cleaned) is a 409
   `{ "ok": false, "error": "that link is saved already", "id": 12, "link": {…} }`
   with the saved link's id and the link itself (its `people` say whose it
@@ -1958,7 +1976,7 @@ A **link**:
   the others, and ids no link has, are passed over and listed in `skipped`
   (no 404). Without it `skipped` is `[]`. The batch holds the database's
   write lock from the check to the end.
-- `/api/links/add-person` (the Links page's "Also link N to…") gives every
+- `/api/links/add-person` (the Links page's "Also link to…") gives every
   link listed to one more person, in one transaction: last in their order,
   in the order of `ids`, `tied_at` now; their other people keep them.
   `added` are the ids that were not theirs yet (a link theirs already is
@@ -1971,6 +1989,7 @@ A **link**:
 - `/api/links/import-many` (the Links page's **Import many…**) saves many
   links at once to no one (Unsorted), insert-only: an address saved already,
   in any spelling (http or https, `www.`, a last slash), is left as it is
+  (with `download` `true` too: it does not become a download)
   and counted in `already`, as is one listed twice in the text. `text` is
   read as one of: a browser's bookmarks exported to HTML (the Netscape
   bookmark file of Firefox's "Export Bookmarks to HTML" and Chrome's or
@@ -1990,18 +2009,25 @@ A **link**:
   Nothing is fetched.
 - The links tied to no one (`?person=none`, the Links page's **Unsorted**)
   are counted in `unsorted_links` of `GET /api/jobs`, for the sidebar's badge;
-  the links marked to download (`?download=1`, its **To download** tab) in
-  `download_links`, for that tab's count.
-- `/api/links/to-download` marks every link listed to download (`"download":
-  true`, `download_at` now; one marked already keeps its time) or clears
-  their mark (`false`), in one transaction; their people are not touched.
-  `changed` are the ids whose mark changed; `links` are the links listed
-  that still exist, as they are now. An id no link has is a 404 `{ "ok":
-  false, "error": "no such link", "missing": [7] }`, and nothing changes;
-  with `"skip_missing": true` (the page's Undo) those are passed over and
-  listed in `missing`. `download` must be `true` or `false`.
+  the downloads still to do (`?download=todo`, its **Downloads** tab) in
+  `download_links`, for that tab's count: a downloaded one is not counted.
+- `/api/links/to-download` changes every link listed, in one transaction,
+  as `POST /api/links/<id>` does one: `"download": true` makes them
+  downloads (`download_at` now; one already keeps its time and its state),
+  `false` plain links again; `"downloaded": true` says them downloaded
+  (`downloaded_at` now; one downloaded already keeps its time; one that
+  is not a download becomes one), `false` to download again. Both may be
+  sent (the page's Undo puts back the two a link had); neither, or
+  `download` `false` with `downloaded` `true`, is a 400. Their people are
+  not touched. `changed` are the ids something changed for; `links` are
+  the links listed that still exist, as they are now. An id no link has
+  is a 404 `{ "ok": false, "error": "no such link", "missing": [7] }`,
+  and nothing changes; with `"skip_missing": true` (the page's Undo)
+  those are passed over and listed in `missing`.
 - A person's links (`GET /api/people/<id>`, `/links/order`) come socials
-  first, then the others, each in the person's order. A new link, or one
+  first, then the others, each in the person's order; their downloads are
+  in the same list (each link has its `download_at` and `downloaded_at`),
+  which the page shows apart. A new link, or one
   given to another person, goes last in that person's order; one taken
   from a person loses its place among theirs (its other people's places
   do not change).
@@ -2105,9 +2131,9 @@ A setting a hand edit broke reads as `null`.
 
 In the dashboard (Settings → Downloads → More link settings → **Open links
 in**), a left click on a link's title opens it there when a default is
-set; a middle click or Ctrl/Cmd-click still opens a tab here. Each link row
-has an **Open in…** menu: this browser, then each installed browser and
-profile, each in a normal and a private window.
+set; a middle click or Ctrl/Cmd-click still opens a tab here. Each link
+row's ⋯ menu has **Open** (a tab here) and, under **Open in**, each
+installed browser and profile, in a normal and a private window.
 
 ## Sources
 

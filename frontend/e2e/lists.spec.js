@@ -5,7 +5,7 @@
 // anything: a windowed list (lib/windowing.js) renders the rows near the
 // viewport, and keeps search, keyboard focus, unsaved edits and the links
 // to one row working.
-import { test, expect, openPage, idle } from "./fixtures.js";
+import { test, expect, openPage, idle, linkAct } from "./fixtures.js";
 
 // The rows a page may render at once: the viewport's and the overscan's,
 // far below the thousands listed.
@@ -158,12 +158,12 @@ test.describe("Storage, 2,000 creators", () => {
 
 test.describe("Links, 2,000 links", () => {
   const N = 2000;
-  let ids = [];
+  let ids = [], last = null;
   test.beforeEach(async ({ page }) => {
-    await page.route(url => url.pathname === "/api/links", async route => {
+    await page.route(url => /^\/api\/links(\/9\d+)?$/.test(url.pathname), async route => {
       if (route.request().method() === "POST") {
-        // Saved already: the last link, far below the viewport.
-        return route.fulfill({ json: { ok: false, error: "that link is saved already", id: ids[N - 1] } });
+        // An edit to an address saved already: the last link's, far below the viewport.
+        return route.fulfill({ json: { ok: false, error: "that link is saved already", id: ids[N - 1], link: last } });
       }
       const res = await route.fetch();
       const body = await res.json();
@@ -173,6 +173,7 @@ test.describe("Links, 2,000 links", () => {
         notes: i % 7 ? "" : `Notes of big link ${i}`, person: null,
       }));
       ids = extra.map(l => l.id);
+      last = extra[N - 1];
       await route.fulfill({ response: res, json: { ...body, links: [...extra, ...body.links] } });
     });
   });
@@ -185,23 +186,21 @@ test.describe("Links, 2,000 links", () => {
 
     // An edit with unsaved text, scrolled far away and back: still there.
     const row = page.locator(".link-row", { hasText: "Big link 3" }).first();
-    await row.getByRole("button", { name: /^Edit/ }).click();
-    const title = page.locator(".link-row.is-editing").getByLabel("Title");
+    await linkAct(page, row, "Edit");
+    const editing = page.locator(".link-row.is-editing");
+    const title = editing.getByLabel("Title");
     await title.fill("Edited, not saved");
-    // Focus out of the list (the add form's Title is hidden until its Address has text): the edit, not focus, is what keeps the row.
-    await page.locator(".links-add .link-form").getByLabel("Address").focus();
+    // Focus out of the list (the header's search): the edit, not focus, is what keeps the row.
+    await page.getByRole("textbox", { name: "Search links" }).focus();
     await scrollToBottom(page);
     await expect(page.locator(".link-row", { hasText: "Big link 1999" })).toBeInViewport();
     expect(await rows.count()).toBeLessThan(MAX_ROWS);
     await page.evaluate(() => window.scrollTo(0, 0));
     await expect(title).toHaveValue("Edited, not saved");
-    await page.locator(".link-row.is-editing").getByRole("button", { name: "Cancel" }).click();
-    await expect(page.locator(".link-row.is-editing")).toHaveCount(0);
 
-    // Adding a link saved already lights it: the last one, brought into view.
-    const form = page.locator(".links-add .link-form");
-    await form.getByLabel("Address").fill("https://big-1999.example/");
-    await form.getByRole("button", { name: "Add link" }).click();
+    // Saved with an address another link has: that one is lit, the last, brought into view.
+    await editing.getByLabel("Address").fill("https://big-1999.example/");
+    await editing.getByRole("button", { name: "Save" }).click();
     const lit = page.locator(".link-row.is-flash");
     await expect(lit).toContainText("Big link 1999");
     await expect(lit).toBeInViewport();

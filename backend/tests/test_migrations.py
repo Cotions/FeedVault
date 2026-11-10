@@ -433,7 +433,7 @@ def test_links_get_their_people_table(tmp_path, monkeypatch, capsys):
     assert version(path)[0] == len(db.MIGRATIONS) >= 30
     conn = sqlite3.connect(path)
     assert [r[1] for r in conn.execute("PRAGMA table_info(links)")] == [
-        "id", "url", "title", "notes", "created_at", "download_at"]                # download_at: 32's
+        "id", "url", "title", "notes", "created_at", "download_at", "downloaded_at"]   # 32's, then 34's
     assert conn.execute("SELECT id, url, title, notes, created_at FROM links ORDER BY id").fetchall() == [
         (1, "https://linktr.ee/alice", "Linktree", "n", 10), (2, "https://alice.example", "", "", 11),
         (3, "https://bob.example", "Bob", "", 12), (4, "https://loose.example", "", "to sort", 13)]
@@ -554,9 +554,9 @@ def test_links_json_from_before_30_restores_into_the_new_tables(tmp_path, monkey
     userdata.export(conn, "links", str(data))
     assert json.loads(old.read_text())["rows"] == [
         {"url": "https://a.example", "title": "A", "notes": "", "people": [{"name": "Alice", "position": 2, "tied_at": 7}],
-         "created_at": 5, "download_at": None, "id": 3},
+         "created_at": 5, "download_at": None, "downloaded_at": None, "id": 3},
         {"url": "https://b.example", "title": "", "notes": "n", "people": [], "created_at": 6, "download_at": None,
-         "id": 4},
+         "downloaded_at": None, "id": 4},
     ]
 
 
@@ -611,9 +611,31 @@ def test_links_get_a_mark_to_download(tmp_path, monkeypatch):
     db.migrate(path)
     assert version(path)[0] == len(db.MIGRATIONS) >= 32
     conn = sqlite3.connect(path)
-    assert [r[1] for r in conn.execute("PRAGMA table_info(links)")][-1] == "download_at"
+    assert [r[1] for r in conn.execute("PRAGMA table_info(links)")][-2:] == ["download_at", "downloaded_at"]   # 34's last
     assert conn.execute("SELECT id, url, title, notes, created_at FROM links ORDER BY id").fetchall() == before
     assert conn.execute("SELECT COUNT(*) FROM links WHERE download_at IS NOT NULL").fetchone()[0] == 0
     assert ties(conn) == [("https://alice.example", "Alice", 1, 10)]
     conn.execute("UPDATE links SET download_at = 99 WHERE id = 2")
     assert conn.execute("SELECT url FROM links WHERE download_at IS NOT NULL").fetchall() == [("https://loose.example",)]
+
+
+def test_download_links_get_a_downloaded_state(tmp_path, monkeypatch):
+    """Migration 34: links gain ``downloaded_at``; a link marked to download
+    before it stays to do, nothing else of a link changes."""
+    path = links_at_27(tmp_path, monkeypatch, [
+        ("https://alice.example", "A", "n", 1, 1, 10, 10),
+        ("https://loose.example", "", "", None, None, 11, None),
+    ])
+    migrate_to(path, monkeypatch, 33)
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE links SET download_at = 99 WHERE url = 'https://loose.example'")
+    conn.commit()
+    before = conn.execute("SELECT id, url, title, notes, created_at, download_at FROM links ORDER BY id").fetchall()
+    conn.close()
+    db.migrate(path)
+    assert version(path)[0] == len(db.MIGRATIONS) >= 34
+    conn = sqlite3.connect(path)
+    assert conn.execute("SELECT id, url, title, notes, created_at, download_at FROM links ORDER BY id").fetchall() == before
+    assert conn.execute("SELECT url, download_at, downloaded_at FROM links ORDER BY id").fetchall() == [
+        ("https://alice.example", None, None), ("https://loose.example", 99, None)]
+    assert ties(conn) == [("https://alice.example", "Alice", 1, 10)]

@@ -136,7 +136,7 @@ def test_site_and_kind(url, site, kind):
 
 def test_kind_is_never_stored(env):
     cols = [r[1] for r in db.connect().execute("PRAGMA table_info(links)")]
-    assert cols == ["id", "url", "title", "notes", "created_at", "download_at"]
+    assert cols == ["id", "url", "title", "notes", "created_at", "download_at", "downloaded_at"]
     cols = [r[1] for r in db.connect().execute("PRAGMA table_info(link_people)")]
     assert cols == ["link_id", "person_id", "position", "tied_at"]
 
@@ -944,12 +944,12 @@ def test_userdata_round_trip_by_person_name(env, client):
     assert rows == [
         {"url": "https://alice.example", "title": "", "notes": "",
          "people": [{"name": "Alice", "position": 1, "tied_at": rows[0]["created_at"]}],
-         "created_at": rows[0]["created_at"], "download_at": None, "id": 2},
+         "created_at": rows[0]["created_at"], "download_at": None, "downloaded_at": None, "id": 2},
         {"url": "https://news.example/a", "title": "An article", "notes": "", "people": [],
-         "created_at": rows[1]["created_at"], "download_at": None, "id": 3},
+         "created_at": rows[1]["created_at"], "download_at": None, "downloaded_at": None, "id": 3},
         {"url": "https://www.patreon.com/alice", "title": "Patreon", "notes": "tiers",
          "people": [{"name": "Alice", "position": 2, "tied_at": rows[2]["created_at"]}],
-         "created_at": rows[2]["created_at"], "download_at": None, "id": 1},
+         "created_at": rows[2]["created_at"], "download_at": None, "downloaded_at": None, "id": 1},
     ]
 
     # A rebuilt index: each link gets its id back, the person is found again by name.
@@ -1147,6 +1147,223 @@ def test_restore_reads_a_mark_as_the_api_would(env):
     assert dict(conn.execute("SELECT url, download_at FROM links")) == {
         "https://old.example": None, "https://yes.example": 9, "https://text.example": None,
         "https://bool.example": None, "https://neg.example": None, "https://two.example": 12}
+
+
+# ---------------------------------------------------------------------------
+# Downloads: to download, then downloaded (migration 34: downloaded_at)
+# ---------------------------------------------------------------------------
+
+def state(lid):
+    """(download_at, downloaded_at) as stored."""
+    return tuple(db.connect().execute("SELECT download_at, downloaded_at FROM links WHERE id = ?", (lid,)).fetchone())
+
+
+def test_migration_34_adds_downloaded_at_and_keeps_the_marks(tmp_path):
+    conn = sqlite3.connect(str(tmp_path / "old.db"))
+    for migrate in db.MIGRATIONS[:33]:
+        migrate(conn)
+    conn.execute("INSERT INTO links(url, created_at, download_at) VALUES ('https://a.example', 1, 7)")
+    conn.execute("INSERT INTO links(url, created_at) VALUES ('https://b.example', 2)")
+    assert "downloaded_at" not in [r[1] for r in conn.execute("PRAGMA table_info(links)")]
+    db.MIGRATIONS[33](conn)
+    assert db.MIGRATIONS[33] is db._migrate_34
+    # What was marked to download is still to do; nothing is downloaded yet.
+    assert conn.execute("SELECT url, download_at, downloaded_at FROM links ORDER BY id").fetchall() == [
+        ("https://a.example", 7, None), ("https://b.example", None, None)]
+
+
+def test_a_download_is_to_do_then_downloaded(client, clock, no_network):
+    lid = add(client, "https://a.example")["link"]["id"]
+    assert (get(client, "/api/links")["links"][0]["downloaded_at"], state(lid)) == (None, (None, None))
+    # Not a download: "to download again" changes nothing.
+    assert post(client, f"/api/links/{lid}", {"downloaded": False})["link"]["download_at"] is None
+    clock[0] += 10
+    r = post(client, f"/api/links/{lid}", {"download": True})["link"]
+    assert (r["download_at"], r["downloaded_at"]) == (1_000_010, None)
+    clock[0] += 10
+    r = post(client, f"/api/links/{lid}", {"downloaded": True})["link"]
+    assert (r["download_at"], r["downloaded_at"]) == (1_000_010, 1_000_020)
+    # Said again: when it was first said stays. Tagged again: still downloaded.
+    clock[0] += 10
+    post(client, f"/api/links/{lid}", {"downloaded": True})
+    post(client, f"/api/links/{lid}", {"download": True})
+    assert state(lid) == (1_000_010, 1_000_020)
+    # To download again, then not a download at all: both go.
+    assert post(client, f"/api/links/{lid}", {"downloaded": False})["link"]["downloaded_at"] is None
+    assert state(lid) == (1_000_010, None)
+    post(client, f"/api/links/{lid}", {"downloaded": True})
+    r = post(client, f"/api/links/{lid}", {"download": False})["link"]
+    assert (r["download_at"], r["downloaded_at"]) == (None, None)
+    # downloaded true on a link that is not a download: it becomes one, downloaded.
+    clock[0] += 10
+    r = post(client, f"/api/links/{lid}", {"downloaded": True})["link"]
+    assert (r["download_at"], r["downloaded_at"]) == (1_000_040, 1_000_040)
+    # Both in one body: tagged and to do; the contradiction is refused, as anything but true or false.
+    post(client, f"/api/links/{lid}", {"download": False})
+    r = post(client, f"/api/links/{lid}", {"download": True, "downloaded": False})["link"]
+    assert (r["download_at"], r["downloaded_at"]) == (1_000_040, None)
+    assert "not with download false" in post(client, f"/api/links/{lid}", {"download": False, "downloaded": True},
+                                             400)["error"]
+    for bad in ("yes", 1, None, []):
+        assert "downloaded must be" in post(client, f"/api/links/{lid}", {"downloaded": bad}, 400)["error"]
+    assert state(lid) == (1_000_040, None)
+
+
+def test_download_filters_and_the_count(client, clock):
+    alice = person(client, "Alice")
+    made = {}
+    for name, who in (("plain", None), ("todo", None), ("done", None), ("hers", alice), ("hersdone", alice),
+                      ("hersplain", alice)):
+        clock[0] += 1
+        made[name] = add(client, f"https://{name}.example", person=who)["link"]["id"]
+    post(client, "/api/links/to-download", {"ids": [made["todo"], made["hers"]], "download": True})
+    post(client, "/api/links/to-download", {"ids": [made["done"], made["hersdone"]], "downloaded": True})
+    u = lambda *names: [f"https://{n}.example" for n in names]
+    assert urls(client, "?download=todo") == urls(client, "?download=1") == u("hers", "todo")
+    assert urls(client, "?download=done") == u("hersdone", "done")
+    assert urls(client, "?download=all") == u("hersdone", "hers", "done", "todo")
+    # Not a download: the All links tab leaves the others out.
+    assert urls(client, "?download=none") == u("hersplain", "plain")
+    assert urls(client, "?download=0") == urls(client) == u("hersplain", "hersdone", "hers", "done", "todo", "plain")
+    # With a creator, without (Unsorted keeps its downloads), or one creator's.
+    assert urls(client, "?download=all&person=any") == u("hersdone", "hers")
+    assert urls(client, "?download=all&person=none") == u("done", "todo")
+    assert urls(client, "?download=todo&person=none") == u("todo")
+    assert urls(client, f"?download=done&person={alice}") == u("hersdone")
+    assert urls(client, "?person=none") == u("done", "todo", "plain")
+    assert urls(client, "?person=any") == u("hersplain", "hersdone", "hers")
+    assert urls(client, "?download=none&person=any&q=hers") == u("hersplain")
+    # The sites counted are those of the `download` asked for (the tab's "N of"), whatever else narrows.
+    total = lambda query: sum(x["count"] for x in get(client, f"/api/links{query}")["sites"])
+    assert total("") == total("?person=none") == 6
+    assert total("?download=none") == total("?download=none&person=any&q=hers") == 2
+    assert total("?download=todo") == total("?download=todo&person=none") == 2
+    assert total("?download=all") == 4 and total("?download=done&q=nothing") == 2
+    # The tab's count: what is still to do, never the downloaded ones.
+    assert downloads(client) == 2
+    post(client, f"/api/links/{made['todo']}", {"downloaded": True})
+    assert downloads(client) == 1
+    post(client, f"/api/links/{made['done']}", {"downloaded": False})
+    assert downloads(client) == 2
+    for bad in ("yes", "2", "TODO"):
+        assert "download must be todo" in get(client, f"/api/links?download={bad}", 400)["error"]
+    # A person's page gets one list, each link with both fields, in their order.
+    theirs = get(client, f"/api/people/{alice}")["links"]
+    assert [(x["url"], x["download_at"] is not None, x["downloaded_at"] is not None) for x in theirs] == [
+        ("https://hers.example", True, False), ("https://hersdone.example", True, True),
+        ("https://hersplain.example", False, False)]
+
+
+def test_mark_many_downloaded(client, clock, monkeypatch):
+    a, b, c = (add(client, f"https://{n}.example")["link"]["id"] for n in "abc")
+    post(client, "/api/links/to-download", {"ids": [a], "download": True})
+    seen = []
+    monkeypatch.setattr(userdata, "changed", seen.append)
+    clock[0] += 5
+    # a was to do, b was not a download: both downloaded now; ``changed`` for the Undo.
+    r = post(client, "/api/links/to-download", {"ids": [a, b], "downloaded": True})
+    assert (r["changed"], r["missing"]) == ([a, b], [])
+    assert [(x["id"], x["download_at"], x["downloaded_at"]) for x in r["links"]] == [
+        (a, 1_000_000, 1_000_005), (b, 1_000_005, 1_000_005)]
+    assert post(client, "/api/links/to-download", {"ids": [a, b], "downloaded": True})["changed"] == []
+    # To download again: only the downloaded ones change; c is not a download and stays so.
+    r = post(client, "/api/links/to-download", {"ids": [a, c], "downloaded": False})
+    assert r["changed"] == [a] and state(a) == (1_000_000, None) and state(c) == (None, None)
+    # Both marks in one call: tagged and downloaded, or tagged and to do.
+    r = post(client, "/api/links/to-download", {"ids": [c, a], "download": True, "downloaded": True})
+    assert r["changed"] == [c, a] and state(c) == (1_000_005, 1_000_005)
+    # Not a download: the state goes with the tag.
+    r = post(client, "/api/links/to-download", {"ids": [a, b, c], "download": False})
+    assert r["changed"] == [a, b, c] and [state(i) for i in (a, b, c)] == [(None, None)] * 3
+    # All or none, and the Undo's skip_missing.
+    r = post(client, "/api/links/to-download", {"ids": [a, c + 50], "downloaded": True}, 404)
+    assert r == {"ok": False, "error": "no such link", "missing": [c + 50]} and state(a) == (None, None)
+    r = post(client, "/api/links/to-download", {"ids": [a, c + 50], "downloaded": True, "skip_missing": True})
+    assert (r["changed"], r["missing"]) == ([a], [c + 50])
+    assert seen == ["links"] * 5                                 # only when something changed
+    for body in ({"ids": [a], "downloaded": "1"}, {"ids": [a], "download": False, "downloaded": True},
+                 {"ids": [a], "skip_missing": True}, {"ids": [], "downloaded": True}):
+        assert post(client, "/api/links/to-download", body, 400)["ok"] is False
+
+
+def test_create_a_link_as_a_download(client, clock):
+    alice = person(client, "Alice")
+    clock[0] += 3
+    r = add(client, "https://a.example", download=True)["link"]
+    assert (r["download_at"], r["downloaded_at"], r["people"]) == (1_000_003, None, [])
+    r = add(client, "https://b.example", download=True, person=alice)["link"]
+    assert r["download_at"] == 1_000_003 and names_of(r) == ["Alice"]
+    assert add(client, "https://c.example", download=False)["link"]["download_at"] is None
+    assert add(client, "https://d.example")["link"]["download_at"] is None
+    for bad in ("yes", 1, None):
+        assert "download must be" in add(client, "https://e.example", 400, download=bad)["error"]
+    assert urls(client, "?download=todo") == ["https://b.example", "https://a.example"] and downloads(client) == 2
+    # In Unsorted too, to be given to a creator; never among a creator's plain links.
+    assert "https://a.example" in urls(client, "?person=none")
+    assert urls(client, f"?person={alice}&download=none") == []
+
+
+def test_import_many_as_downloads(client, clock):
+    add(client, "https://old.example")
+    clock[0] += 9
+    r = post(client, "/api/links/import-many", {"text": "https://old.example https://a.example https://b.example",
+                                                "download": True})
+    assert (r["saved"], r["already"]) == (2, 1)
+    got = {x["url"]: (x["download_at"], x["downloaded_at"]) for x in get(client, "/api/links")["links"]}
+    # Insert-only: the one saved already stays what it was.
+    assert got == {"https://old.example": (None, None), "https://a.example": (1_000_009, None),
+                   "https://b.example": (1_000_009, None)}
+    assert downloads(client) == 2 and urls(client, "?person=none&download=todo") == ["https://b.example",
+                                                                                     "https://a.example"]
+    post(client, "/api/links/import-many", {"text": "https://c.example", "download": False})
+    post(client, "/api/links/import-many", {"text": "https://d.example"})
+    assert downloads(client) == 2
+    for bad in ("yes", 1, None):
+        assert post(client, "/api/links/import-many", {"text": "https://e.example", "download": bad}, 400)["ok"] is False
+
+
+def test_downloaded_survives_a_restore(env, client, clock):
+    data = str(env["tmp"] / "data")
+    a = add(client, "https://a.example", person=person(client, "Alice"))["link"]["id"]
+    b = add(client, "https://b.example", download=True)["link"]["id"]
+    add(client, "https://c.example")
+    clock[0] += 7
+    post(client, "/api/links/to-download", {"ids": [a], "downloaded": True})
+    conn = db.connect()
+    for name in ("people", "links"):
+        userdata.export(conn, name, data)
+    with open(userdata.path(data, "links")) as f:
+        assert {r["url"]: (r["download_at"], r["downloaded_at"]) for r in json.load(f)["rows"]} == {
+            "https://a.example": (1_000_007, 1_000_007), "https://b.example": (1_000_000, None),
+            "https://c.example": (None, None)}
+    with conn:
+        conn.execute("DELETE FROM links")
+    assert userdata.load(conn, "links", data) == 3
+    assert [state(i) for i in (a, b)] == [(1_000_007, 1_000_007), (1_000_000, None)]
+    assert urls(client, "?download=done") == ["https://a.example"] and downloads(client) == 1
+
+
+def test_restore_reads_downloaded_as_the_api_would(env):
+    """A hand-edited file, or one from before the two states: downloaded_at
+    is a time on a download, else nothing; a link that is not a download
+    has no state; two rows of one URL keep the tag and state either had."""
+    data = str(env["tmp"] / "data")
+    (env["tmp"] / "data" / "userdata").mkdir(parents=True, exist_ok=True)
+    with open(userdata.path(data, "links"), "w") as f:
+        json.dump({"version": 1, "rows": [
+            {"url": "https://old.example", "download_at": 9},
+            {"url": "https://done.example", "download_at": 9, "downloaded_at": 11},
+            {"url": "https://orphan.example", "downloaded_at": 11},
+            {"url": "https://text.example", "download_at": 9, "downloaded_at": "yes"},
+            {"url": "https://bool.example", "download_at": 9, "downloaded_at": True},
+            {"url": "https://two.example/?utm_source=x", "created_at": 5},
+            {"url": "https://two.example", "created_at": 6, "download_at": 12, "downloaded_at": 13},
+        ]}, f)
+    conn = db.connect()
+    assert userdata.load(conn, "links", data) == 6
+    assert {u: (d, done) for u, d, done in conn.execute("SELECT url, download_at, downloaded_at FROM links")} == {
+        "https://old.example": (9, None), "https://done.example": (9, 11), "https://orphan.example": (None, None),
+        "https://text.example": (9, None), "https://bool.example": (9, None), "https://two.example": (12, 13)}
 
 
 # ---------------------------------------------------------------------------
