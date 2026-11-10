@@ -249,7 +249,7 @@ const DIALOGS = [
     scope: ".notif-panel",
   },
   {
-    // An account card's ⋯ menu (Review, Options, Make creator, the
+    // An account card's ⋯ menu (Review, Preset…, Make creator, the
     // switches), in the top layer over the cards around it.
     name: "Creators › An account's ⋯ menu",
     open: async page => {

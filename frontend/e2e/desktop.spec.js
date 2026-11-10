@@ -778,11 +778,11 @@ test("Browser profile: picked in Settings and on a source, a missing one stays s
     await page.goto("/creators");
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
 
-    // A source's own: its Options, under Login.
+    // A source's own: Custom… in its preset select, under Login.
     names = ["cotions", "default", "test", "TRND"];
     const row = page.locator(`.source-row[data-source-id="${made.source.id}"]`);
-    await (await menuItem(page, row, /^More for /, "Options")).click();
-    const dialog = page.getByRole("alertdialog", { name: /downloads$/ });
+    await row.getByRole("combobox", { name: /^Preset of / }).selectOption("custom");
+    const dialog = page.getByRole("alertdialog", { name: /^Custom options for / });
     const login = dialog.getByRole("combobox", { name: "Login a sync uses" });
     await expect(login).toHaveValue("");
     await expect(dialog.getByRole("combobox", { name: "Browser profile" })).toHaveCount(0);
@@ -796,7 +796,9 @@ test("Browser profile: picked in Settings and on a source, a missing one stays s
     const { sources } = await (await request.get("/api/sources", { headers: H })).json();
     expect(sources.find(s => s.id === made.source.id).options.session)
       .toEqual({ mode: "cookies", browser: "firefox", profile: "TRND" });
-    await (await menuItem(page, row, /^More for /, "Options")).click();
+    // Custom now: its options are in its ⋯ menu.
+    await expect(row.getByRole("combobox", { name: /^Preset of / })).toHaveValue("custom");
+    await (await menuItem(page, row, /^More for /, "Edit custom…")).click();
     await expect(login).toHaveValue("cookies");
     await expect(own).toHaveValue("TRND");
     await login.selectOption("");
@@ -877,7 +879,7 @@ test("Creators: an account's Make creator makes it a person, and the page stays"
   expect(a).toBeTruthy();
   try {
     await openPage(page, { name: "Creators", path: "/creators" });
-    // In the card's ⋯ menu ("More for @handle"), with Review, Options and the switches.
+    // In the card's ⋯ menu ("More for @handle"), with Review, Preset… and the switches.
     const label = `More for @${a.handle}`;
     const card = page.locator(".creator-card").filter({ has: page.getByRole("button", { name: label, exact: true }) });
     await (await menuItem(page, card, label, "Make creator")).click();
