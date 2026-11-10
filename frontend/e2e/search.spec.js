@@ -2,7 +2,7 @@
 // (lib/search.js). On Creators it stays there and lists the creators,
 // accounts and links that match, in that order; on a person's page it
 // narrows their accounts, sources and links; elsewhere it opens the Feed.
-import { test, expect, openPage, idle } from "./fixtures.js";
+import { test, expect, openPage, idle, openLinkMenu } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -56,7 +56,9 @@ test("Creators: the header search stays on the page, creators, accounts and link
     const row = section("Links").locator(".link-row", { hasText: made.link.url });
     await expect(row.locator("a.link-row-title")).toHaveAttribute("href", made.link.url);
     await expect(row.locator("a.link-person")).toHaveAttribute("href", `/people/${made.person.id}`);
-    await expect(row.getByRole("button")).toHaveCount(0);
+    // Read only: its Copy, and no menu (no other browser to open it in here).
+    await expect(row.getByRole("button")).toHaveCount(1);
+    await expect(row.getByRole("button", { name: /^Copy the address of / })).toBeVisible();
     // Not the page's own parts while it searches.
     await expect(page.getByRole("region", { name: "Sources" })).toBeHidden();
     await expect(page.locator(".creator-filters")).toHaveCount(0);
@@ -101,6 +103,14 @@ test("a person's page: the header search narrows their accounts, sources and lin
   const made = await setUp(request, stamp);
   const a = made.account;
   await request.post(`/api/people/${made.person.id}/accounts`, { headers: H, data: { add: [{ platform: a.platform, id: a.id }] } });
+  // Two downloads of theirs, one downloaded, and one the search will not match.
+  const extra = [];
+  for (const [path, more] of [["set-one", { download: true }], ["set-two", { downloaded: true }], ["other", { download: true }]]) {
+    const host = path === "other" ? `e2e-other-${stamp}.example` : `e2e-search-${stamp}.example`;
+    const r = await (await request.post("/api/links", { headers: H, data: { url: `https://${host}/${path}`, person: made.person.id, download: true } })).json();
+    if (more.downloaded) await request.post(`/api/links/${r.link.id}`, { headers: H, data: more });
+    extra.push(r.link.id);
+  }
   try {
     await page.goto(`/people/${made.person.id}`);
     const name = made.person.name;
@@ -119,7 +129,17 @@ test("a person's page: the header search narrows their accounts, sources and lin
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     const links = page.locator(".person-links-section");
     await expect(links.locator(".link-row")).toHaveCount(1);
-    await expect(links.getByRole("button", { name: /Move/ })).toHaveCount(0);
+    // Not moved while searched: their places are among all of them.
+    const menu = await openLinkMenu(page, links.locator(".link-row"));
+    await expect(menu.getByRole("menuitem", { name: "Edit" })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: /^Move (up|down)$/ })).toHaveCount(0);
+    await menu.getByRole("menuitem", { name: "Edit" }).click();
+    await links.locator(".link-row.is-editing").getByRole("button", { name: "Cancel" }).click();
+    // Their Downloads too: the ones that match, to do and downloaded together, with no switch.
+    const downloads = page.locator(".person-downloads-section");
+    await expect(downloads.locator(".link-row")).toHaveCount(2);
+    await expect(downloads.locator(".link-row.is-downloaded")).toHaveCount(1);
+    await expect(downloads.getByRole("group", { name: "Show downloads" })).toHaveCount(0);
     await expect(page.locator(".person-accounts")).toBeHidden();
     await expect(notes).toBeHidden();
     await expect(page.locator(".person-search")).toContainText(/\d+ posts? of theirs/);
@@ -139,6 +159,7 @@ test("a person's page: the header search narrows their accounts, sources and lin
     await notes.fill("");
     await idle(page);
   } finally {
+    for (const id of extra) await request.delete(`/api/links/${id}`, { headers: H });
     await cleanUp(request, made);
   }
 });

@@ -3,7 +3,7 @@
 // from another (#120), and typed edits are never dropped without asking
 // (#125). People, collections and links are made for each test and removed
 // after it.
-import { test, expect, idle, openAddLink, menuItem, openFold } from "./fixtures.js";
+import { test, expect, idle, openAddLink, menuItem, openFold, linkAct } from "./fixtures.js";
 
 const H = { "X-FeedVault": "1" };
 
@@ -101,18 +101,20 @@ test("Links: opening Edit on another link asks before dropping the first one's e
     await idle(page);
     const editing = page.locator(".link-row.is-editing");
     const dialog = page.getByRole("alertdialog");
+    // Edit, from the ⋯ menu of the link's row.
+    const editLink = t => linkAct(page, page.locator(".link-row", { hasText: `Unsaved ${t} ${stamp}` }), "Edit");
 
     // Opened and left as it was: another Edit just moves on.
-    await page.getByRole("button", { name: `Edit Unsaved A ${stamp}` }).click();
-    await page.getByRole("button", { name: `Edit Unsaved B ${stamp}` }).click();
+    await editLink("A");
+    await editLink("B");
     await expect(dialog).toHaveCount(0);
     await expect(editing.getByLabel("Title")).toHaveValue(`Unsaved B ${stamp}`);
     await editing.getByRole("button", { name: "Cancel" }).click();
 
     // Changed: asked first. Keep editing keeps A open with the change.
-    await page.getByRole("button", { name: `Edit Unsaved A ${stamp}` }).click();
+    await editLink("A");
     await editing.getByLabel("Title").fill(`Unsaved A ${stamp} edited`);
-    await page.getByRole("button", { name: `Edit Unsaved B ${stamp}` }).click();
+    await editLink("B");
     await expect(dialog).toContainText("not saved");
     await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeFocused();
     await dialog.getByRole("button", { name: "Keep editing" }).click();
@@ -121,7 +123,7 @@ test("Links: opening Edit on another link asks before dropping the first one's e
     await expect(editing.getByLabel("Title")).toHaveValue(`Unsaved A ${stamp} edited`);
 
     // Discard: B opens, A is as saved.
-    await page.getByRole("button", { name: `Edit Unsaved B ${stamp}` }).click();
+    await editLink("B");
     await dialog.getByRole("button", { name: "Discard" }).click();
     await expect(editing.getByLabel("Title")).toHaveValue(`Unsaved B ${stamp}`);
     await expect(page.locator(".link-row-title", { hasText: `Unsaved A ${stamp}` })).toHaveText(`Unsaved A ${stamp}`);
@@ -187,9 +189,10 @@ test("a person's page asks before dropping unsaved notes (#125)", async ({ page,
   }
 });
 
-// #132: a tag's new name, and the add forms (a new link on the Links page
-// and on a person's page, a new source on a person's page and on Creators).
-// Each asks only once something is typed, and never after it went through.
+// #132: a tag's new name, and the add forms (a new link on a person's
+// page, a new source there and on Creators). Each asks only once something
+// is typed, and never after it went through. (The Links page adds through
+// the quick-add dialog since #236: nothing of it is left in the page.)
 const nav = (page, path) => page.locator(`#main-nav a.side-link[href="${path}"]`).click();
 // On the page ``title`` and settled: the page left is gone, its question
 // with it, before Back.
@@ -280,55 +283,6 @@ test("Tags: another rename or leaving asks before dropping a typed name (#132)",
     await idle(page);
   } finally {
     for (const name of [a, b, `${a}-renamed`]) await request.post("/api/tags/delete", { headers: H, data: { name } });
-  }
-});
-
-test("Links: a half-filled new link is asked about before it goes (#132)", async ({ page, request }) => {
-  const stamp = Date.now();
-  try {
-    await page.goto("/links");
-    const url = page.locator("#links-add-url");
-    const dialog = page.getByRole("alertdialog");
-    await expect(url).toHaveValue("");
-    await idle(page);
-
-    // Untouched: the app goes on.
-    await nav(page, "/tags");
-    await expect(page).toHaveURL(/\/tags$/);
-    await expect(dialog).toHaveCount(0);
-    await page.goBack();
-
-    // Typed: leaving asks; Keep editing keeps it. A filter leaves the form be.
-    await url.fill(`https://e2e-${stamp}.example/new`);
-    await nav(page, "/tags");
-    await expect(dialog).toContainText("The new link is not saved.");
-    await expect(dialog.getByRole("button", { name: "Keep editing" })).toBeFocused();
-    await dialog.getByRole("button", { name: "Keep editing" }).click();
-    await expect(page).toHaveURL(/\/links$/);
-    await expect(url).toHaveValue(`https://e2e-${stamp}.example/new`);
-    await page.locator(".links-filters select").first().selectOption("social");
-    await expect(page).toHaveURL(/\/links\?kind=social$/);
-    await expect(dialog).toHaveCount(0);
-    await expect(url).toHaveValue(`https://e2e-${stamp}.example/new`);
-
-    // Discard: the app goes on, and the form is empty on the way back.
-    await nav(page, "/tags");
-    await dialog.getByRole("button", { name: "Discard" }).click();
-    await expect(page).toHaveURL(/\/tags$/);
-    await arrived(page, "Tags");
-    await page.goBack();
-    await expect(url).toHaveValue("");
-
-    // Added: nothing left to ask about.
-    await url.fill(`https://e2e-${stamp}.example/added`);
-    await page.locator(".links-add").getByRole("button", { name: "Add link" }).click();
-    await expect(url).toHaveValue("");
-    await nav(page, "/tags");
-    await expect(page).toHaveURL(/\/tags$/);
-    await expect(dialog).toHaveCount(0);
-    await idle(page);
-  } finally {
-    await removeLinks(request, stamp);
   }
 });
 

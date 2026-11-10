@@ -54,6 +54,14 @@ export const STRESS_LINKS = [
     title: "", notes: "Notes over several lines.\n" + "Words that go on and on about the interview. ".repeat(12) },
 ];
 
+// The stress person's downloads (Links' own category, to download with
+// another app): one still to do, its title long; one downloaded.
+export const STRESS_DOWNLOADS = [
+  { url: "https://files.example/" + "a-set-with-an-unbroken-name-".repeat(8),
+    title: "A set to download, its title long enough to need cutting short in the row, ".repeat(2).trim() },
+  { url: "https://files.example/done/" + "x".repeat(70), title: "", notes: "Downloaded with another app.", downloaded: true },
+];
+
 export async function seedStress(base) {
   for (const n of [...STRESS_TAGS, STRESS_COLLECTION, STRESS_PERSON, ...STRESS_ABOUT.labels]) {
     if (n.length > MAX_NAME) throw new Error(`e2e stress: name longer than ${MAX_NAME}: ${n}`);
@@ -69,6 +77,10 @@ export async function seedStress(base) {
   const { person } = await call(base, "POST", "/api/people",
     { name: STRESS_PERSON, accounts: [{ platform: STRESS_POST.platform, id: post.author.id }] });
   for (const l of STRESS_LINKS) await call(base, "POST", "/api/links", { ...l, person: person.id });
+  for (const { downloaded, ...l } of STRESS_DOWNLOADS) {
+    const { link } = await call(base, "POST", "/api/links", { ...l, person: person.id, download: true });
+    if (downloaded) await call(base, "POST", `/api/links/${link.id}`, { downloaded: true });
+  }
   await call(base, "POST", `/api/people/${person.id}`, STRESS_ABOUT);
   const trashed = await call(base, "POST", "/api/delete", { posts: [STRESS_TRASHED] });
   if (!trashed.posts?.includes(STRESS_TRASHED)) throw new Error(`e2e stress: ${STRESS_TRASHED} was not trashed`);

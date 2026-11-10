@@ -183,6 +183,41 @@ export async function menuItem(page, scope, label, name) {
   return menu.getByRole("menuitem", { name, exact: true });
 }
 
+/* ── Link rows (LinkRow): Copy, one button, and a ⋯ menu ────── */
+
+// A link row's ⋯ menu, opened (``row``: its .link-row).
+export async function openLinkMenu(page, row) {
+  await row.locator(".link-menu .action-menu-btn").click();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+// The entry ``name`` of a link row's ⋯ menu, clicked: Edit, Delete, Move
+// up, Move to Downloads… (what the row had a button for before #236).
+export async function linkAct(page, row, name) {
+  const menu = await openLinkMenu(page, row);
+  await menu.getByRole("menuitem", { name, exact: true }).click();
+}
+
+// The Links page's "+ Add link": the app's quick-add dialog, opened.
+export async function openLinksAdd(page) {
+  await page.locator(".links-add-open").click();
+  const dialog = page.getByRole("dialog", { name: "Add a link" });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+// The Links page's select mode, on (its rows' checkboxes and the selection
+// bar come with the head's Select); what it returns is the bar.
+export async function selectLinks(page) {
+  const toggle = page.locator(".page-head .select-toggle");
+  if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
+  const bar = page.getByRole("toolbar", { name: "Selection" });
+  await expect(bar).toBeVisible();
+  return bar;
+}
+
 /* ── Toasts (#121) ──────────────────────────────────────────── */
 
 // Keep and its undo (POST /api/review) answer ok and change nothing.
