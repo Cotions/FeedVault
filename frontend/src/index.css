@@ -3990,13 +3990,16 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 @media (max-width: 640px) { .links-tab { padding: 5px 9px; } }
 .links-tabs.is-small .links-tab { min-height: 28px; padding: 3px 12px; font-size: var(--fs-sm); }
 /* A row's checkbox (select mode), where the link icon is otherwise: the label is the 24px target. */
-.link-check { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; margin-left: -4px; cursor: pointer; user-select: none; }
+.link-check { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; margin: 0 -4px; cursor: pointer; user-select: none; }
 .link-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--glow); cursor: pointer; }
 .link-row.is-selected { border-color: rgba(var(--glow-rgb), 0.55); background: rgba(var(--accent-rgb), 0.07); }
 .link-assign { padding: 5px 10px; font-size: var(--fs-sm); margin-right: 4px; }
 .link-assign .icon { color: var(--accent-hover); }
-/* The row's picker opens under it, full width, inside the row: nothing overlaps the rows below. */
-.link-row.is-assigning { flex-wrap: wrap; border-color: rgba(var(--glow-rgb), 0.45); }
+/* The card's picker opens at its foot, inside the card, which grows: nothing
+   overlaps the cards below, and the others stay where they are. */
+.link-row.is-assigning { border-color: rgba(var(--glow-rgb), 0.45); }
+.link-row > .link-assign-pick { grid-column: 1 / -1; padding: 8px 4px 4px 0; }
+.link-row .link-assign-esc { display: none; }
 .link-assign-pick { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 4px 0 2px 34px; }
 .link-assign-pick .person-pick-input { width: 100%; max-width: 420px; padding: 7px 11px; height: 34px; }
 .link-assign-pick .person-pick-list { max-width: 420px; max-height: 196px; }
@@ -4012,34 +4015,46 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 .source-person-new label { flex: none; }
 .source-person-new input[type="text"] { flex: 1 1 auto; min-width: 0; padding: 7px 11px; height: 34px; font-family: var(--body); }
 .source-person-new .btn-secondary { flex: none; }
-.link-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+/* A list of links is a grid of cards, several to a line: 3 at 1440 wide,
+   2 at 1280, 4 at 1920, 1 on a phone. auto-fill keeps the columns a short
+   list leaves empty, so one or two links stay a card wide. Each card is as
+   tall as what it holds (a note, a foot, an open picker): its line's
+   others keep their own height. */
+.link-list {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); align-items: start; gap: 8px;
+}
+/* What takes a whole line of the grid: a windowed list's spacer, a site's
+   heading, the form of a link being edited. */
+.link-list > :is(.win-gap, .link-site-head, .link-row.is-editing) { grid-column: 1 / -1; }
+/* The card: icon, title, buttons on its first line; the address, the
+   notes and the foot under the title, each only when there. */
 .link-row {
-  display: flex; align-items: center; gap: 10px; padding: 9px 8px 9px 12px; min-width: 0;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 1px 10px;
+  padding: 7px 8px 8px 12px; min-width: 0;
   background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 10px;
   transition: border-color 0.18s, box-shadow 0.3s;
 }
 .link-row:hover { border-color: var(--border); }
 .link-row.is-flash { border-color: rgba(var(--glow-rgb), 0.7); box-shadow: 0 0 0 3px rgba(var(--glow-rgb), 0.18); }
-.link-row-icon { color: var(--accent-hover); display: inline-flex; flex-shrink: 0; }
-.link-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.link-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.link-row-title { display: inline-block; line-height: 24px; min-width: 0; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The icon and the select mode's checkbox take the same room: the title does not move. */
+.link-row-icon { color: var(--accent-hover); display: inline-flex; justify-content: center; width: 16px; flex-shrink: 0; }
+/* As wide as its text, not its cell: a click beside it is not a click on the link. */
+.link-row-title { display: block; justify-self: start; max-width: 100%; line-height: 28px; min-width: 0; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline; }
+.link-row > :is(.link-url, .link-notes, .link-row-foot) { grid-column: 2 / -1; margin-right: 4px; }
 .link-kind { flex-shrink: 0; }
 .link-kind.is-social { color: var(--accent-text); border-color: rgba(var(--glow-rgb), 0.35); background: rgba(var(--accent-rgb), 0.12); }
-.link-row-sub { display: flex; gap: 8px; min-width: 0; }
-.link-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.link-url { min-width: 0; line-height: 1.5; }
 .link-notes {
-  font-size: var(--fs-sm); color: var(--text-dim); white-space: pre-line; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden;
+  margin-top: 4px; font-size: var(--fs-sm); line-height: 1.45; color: var(--text-dim); white-space: pre-line; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
 }
-/* Its people (#215: a band's account, the band's and each member's): they
-   wrap, right-aligned, in a column of their own beside the text. */
-.link-people {
-  display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px;
-  flex-shrink: 1; min-width: 0; max-width: 260px;
-}
-.link-person { flex-shrink: 1; min-width: 0; max-width: 220px; gap: 4px; }
+/* The foot: its kind, its download mark, its people (#215: a band's
+   account, the band's and each member's), from the left, wrapping. */
+.link-row-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; margin-top: 6px; }
+.link-people { display: contents; }
+.link-person { flex-shrink: 1; min-width: 0; max-width: 180px; gap: 4px; }
 .link-person svg { flex-shrink: 0; }
 .link-row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 /* The row's ⋯ menu button: the size and look of its other icon buttons
@@ -4058,13 +4073,13 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 .link-dl-mark .icon { color: var(--blue); }
 .link-dl-mark.is-done { color: var(--text-dim); border-color: var(--border); background: transparent; }
 .link-dl-mark.is-done .icon { color: var(--glow); }
-.link-row.is-downloaded :is(.link-row-title, .link-row-icon, .link-row-sub, .link-notes) { opacity: 0.6; }
+.link-row.is-downloaded :is(.link-row-title, .link-row-icon, .link-url, .link-notes) { opacity: 0.6; }
 .link-done.is-on { color: var(--glow); background: rgba(var(--glow-rgb), 0.12); }
 .link-done.is-on:hover { color: var(--text); background: rgba(var(--glow-rgb), 0.2); }
 /* A section's quiet Copy URLs (a person's Links and Downloads). */
 .person-links-copy { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
 .person-downloads-section .person-section-head .card-title { flex: 0 1 auto; margin-right: auto; }
-/* Sorted by site: a heading over each site's links, a row of the list. */
+/* Sorted by site: a heading over each site's links, a line of the grid. */
 .link-site-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 10px 4px 0; }
 .link-site-head:first-child { padding-top: 0; }
 .link-site-name { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
@@ -4081,9 +4096,6 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
 }
 @media (max-width: 640px), (max-height: 500px) and (pointer: coarse) {
   .link-form, .link-form:not(:has(.link-form-person)) { grid-template-columns: minmax(0, 1fr); }
-  .link-row { flex-wrap: wrap; }
-  .link-row-main { flex-basis: calc(100% - 40px); }
-  .link-row-actions { margin-left: auto; }
 }
 @media (max-width: 760px) {
   .person-account { flex-wrap: wrap; }
@@ -4514,12 +4526,12 @@ a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline;
   .page-head-actions :is(.btn-secondary, .btn-danger-soft) { padding-inline: 10px; }
 }
 
-/* A Tags or Links row's own actions wait for the pointer (or focus) on a
-   desktop: the names and counts read first. Always shown on touch. */
+/* A Tags row's own actions wait for the pointer (or focus) on a desktop:
+   the names and counts read first. Always shown on touch. (A link's card
+   keeps its buttons in sight.) */
 @media (hover: hover) {
-  .tag-row .tag-row-actions, .link-row .link-row-actions .btn-ghost { opacity: 0; transition: opacity 0.12s; }
-  .tag-row:is(:hover, :focus-within) .tag-row-actions,
-  .link-row:is(:hover, :focus-within) .link-row-actions .btn-ghost { opacity: 1; }
+  .tag-row .tag-row-actions { opacity: 0; transition: opacity 0.12s; }
+  .tag-row:is(:hover, :focus-within) .tag-row-actions { opacity: 1; }
 }
 /* Review on a desktop: the panel with Keep and Trash is on the right, so a
    toast sits at the left of the post instead of over the buttons. */

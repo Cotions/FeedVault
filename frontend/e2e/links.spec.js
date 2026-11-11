@@ -30,7 +30,9 @@ test("Links page: add, edit and delete a link", async ({ page }) => {
   await expect(add).toBeHidden();
   const row = page.locator(".link-row", { hasText: "E2E link" });
   await expect(row).toHaveCount(1);
-  await expect(row.locator(".link-url")).toHaveText(url);     // the site once: in the address under the title
+  // The site once: in the address under the title, short (the whole one is its title).
+  await expect(row.locator(".link-url")).toHaveText(url.replace("https://", ""));
+  await expect(row.locator(".link-url")).toHaveAttribute("title", url);
   await expect(row.locator(".link-kind")).toHaveText("Other");
   await expectSafeAnchor(row, url);
   // A row: Copy and one ⋯ menu, nothing else.
@@ -193,7 +195,8 @@ test("Link labels: a rule names the untitled links of its site", async ({ page }
     await page.goto(`/links?q=e2e-label-${stamp}`);
     await expect(titles).toHaveText([`Titled ${stamp}`, `Patreon ${stamp}`]);
     const named = rows.filter({ hasText: `Patreon ${stamp}` });
-    await expect(named.locator(".link-url")).toHaveText(`https://www.patreon.com/e2e-label-${stamp}`);
+    await expect(named.locator(".link-url")).toHaveText(`patreon.com/e2e-label-${stamp}`);
+    await expect(named.locator(".link-url")).toHaveAttribute("title", `https://www.patreon.com/e2e-label-${stamp}`);
     await expect(named.getByRole("button", { name: `More for www.patreon.com/e2e-label-${stamp}` })).toBeVisible();
     // A search finds it by the label it shows.
     await page.goto(`/links?q=${encodeURIComponent(`patreon ${stamp}`)}`);
@@ -1624,6 +1627,99 @@ test("Links: sort by site shows a heading per site; oldest first; the sort stays
     await page.getByRole("button", { name: "Clear filters" }).click();
     await expect(page).toHaveURL(/\/links\?sort=site$/);
     await expect(heads.first()).toBeVisible();
+    await idle(page);
+  } finally {
+    await cleanUp(request, tag, null);
+  }
+});
+
+// Where each of ``loc``'s elements is on the page.
+const boxes = loc => loc.evaluateAll(els => els.map(e => {
+  const r = e.getBoundingClientRect();
+  return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), right: Math.round(r.right) };
+}));
+
+// The list is a grid of cards: three to a line at 1440, each a card wide
+// however few there are; a site's heading and the form of a link being
+// edited take the whole line. A card's address is short (its title has the
+// whole one), and Copy, always in sight, copies the whole one.
+test("Links: cards sit three to a line; a heading and an edited link take the whole line; Copy gives the whole address", async ({ page, request }) => {
+  const stamp = Date.now();
+  const tag = `grid-${stamp}`;
+  const [a, b] = [`a-${tag}.example`, `b-${tag}.example`];
+  const long = `https://www.${b}/some/path?x=1`;
+  await stubClipboardWrites(page);
+  try {
+    for (const [url, title] of [[`https://${a}/1`, "Card A1"], [`https://${a}/2`, "Card A2"], [`https://${b}/1`, "Card B1"],
+      [`https://${b}/2`, "Card B2"], [long, "Card B3"]]) {
+      expect((await request.post("/api/links", { headers: H, data: { url, title } })).ok()).toBe(true);
+    }
+    await page.goto(`/links?q=${tag}`);
+    const list = page.locator(".link-list");
+    const cards = list.locator("> .link-row");
+    await expect(cards.locator(".link-row-title")).toHaveText(["Card B3", "Card B2", "Card B1", "Card A2", "Card A1"]);
+    await idle(page);
+    const [whole] = await boxes(list);
+    let at = await boxes(cards);
+    // Three on the first line, left to right in the list's order; the fourth starts the next, under the first.
+    expect(at.slice(0, 3).map(c => c.y)).toEqual([at[0].y, at[0].y, at[0].y]);
+    expect(at[0].x).toBe(whole.x);
+    expect(at[1].x).toBeGreaterThan(at[0].right);
+    expect(at[2].x).toBeGreaterThan(at[1].right);
+    expect(at[2].right).toBeLessThanOrEqual(whole.right);
+    expect(at[3].y).toBeGreaterThan(at[0].y);
+    expect(at[3].x).toBe(at[0].x);
+    expect(at[4].y).toBe(at[3].y);
+    for (const c of at) expect(c.width).toBeLessThanOrEqual(560);
+
+    // The address: short, the whole one in its title; Copy (in sight with
+    // the pointer away) copies the whole one.
+    const card = cards.filter({ hasText: "Card B3" });
+    await expect(card.locator(".link-url")).toHaveText(`${b}/some/path?x=1`);
+    await expect(card.locator(".link-url")).toHaveAttribute("title", long);
+    await page.mouse.move(2, 2);
+    const copy = card.getByRole("button", { name: "Copy the address of Card B3" });
+    await expect(copy).toBeVisible();
+    expect(await copy.evaluate(e => getComputedStyle(e).opacity)).toBe("1");
+    await copy.click();
+    expect(await copied(page)).toEqual([long]);
+
+    // Edited: its form takes the whole line; the cards before and after keep theirs.
+    await linkAct(page, cards.filter({ hasText: "Card B2" }), "Edit");
+    const editing = list.locator("> .link-row.is-editing");
+    await expect(editing.getByLabel("Address")).toHaveValue(`https://${b}/2`);
+    const [form] = await boxes(editing);
+    expect([form.x, form.width]).toEqual([whole.x, whole.width]);
+    at = await boxes(list.locator("> .link-row:not(.is-editing)"));
+    expect(at[0].y).toBeLessThan(form.y);                          // Card B3, alone on the line before
+    expect(at.slice(1).map(c => c.y)).toEqual([at[1].y, at[1].y, at[1].y]);
+    expect(at[1].y).toBeGreaterThan(form.y);
+    expect(at[1].x).toBe(whole.x);
+    for (const c of at) expect(c.width).toBeLessThanOrEqual(560);
+    await editing.getByRole("button", { name: "Cancel" }).click();
+    await expect(editing).toHaveCount(0);
+
+    // One link alone is still a card wide, not the list's width.
+    await page.goto(`/links?q=${encodeURIComponent(`www.${b}`)}`);
+    await expect(cards).toHaveCount(1);
+    const [alone] = await boxes(cards);
+    expect(alone.x).toBe(whole.x);
+    expect(alone.width).toBeLessThanOrEqual(560);
+
+    // By site: each heading takes the whole line, its site's cards on the lines under it.
+    await page.goto(`/links?q=${tag}&sort=site`);
+    const heads = list.locator("> .link-site-head");
+    await expect(heads.locator(".link-site-name")).toHaveText([a, b]);
+    await idle(page);
+    const lines = await boxes(heads);
+    for (const h of lines) expect([h.x, h.width]).toEqual([whole.x, whole.width]);
+    at = await boxes(cards);
+    expect(at.slice(0, 2).map(c => c.y)).toEqual([at[0].y, at[0].y]);            // a's two
+    expect(at[0].y).toBeGreaterThan(lines[0].y);
+    expect(at[0].y).toBeLessThan(lines[1].y);
+    expect(at.slice(2).map(c => c.y)).toEqual([at[2].y, at[2].y, at[2].y]);      // b's three
+    expect(at[2].y).toBeGreaterThan(lines[1].y);
+    expect(at[2].x).toBe(whole.x);
     await idle(page);
   } finally {
     await cleanUp(request, tag, null);

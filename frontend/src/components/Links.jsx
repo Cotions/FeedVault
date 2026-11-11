@@ -5,7 +5,7 @@ import { getRecentLinkPeople, openLink } from "../lib/api";
 import { plural, safeUrl } from "../lib/fmt";
 import { personPath } from "../lib/people";
 import {
-  KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, copyUrl, downloadState, linkLabel, linkName, namesText, withScheme,
+  KIND_LABEL, MAX_NOTES, MAX_TITLE, MAX_URL, copyUrl, downloadState, linkLabel, linkName, namesText, shortUrl, withScheme,
 } from "../lib/links";
 import { focusLost, restoreFocus, trapTab } from "../lib/layout";
 import { choiceLabel, isPlainClick, openChoices, sameChoice } from "../lib/openIn";
@@ -198,15 +198,20 @@ export function CopyAddress({ url, label }) {
   );
 }
 
-/* One link: its title (else its site's label, else its address) opening
-   the site in a new tab, the address under it when the title is not it
-   (so the site is read once, #236), its people (``showPerson``; on a
-   person's page ``here``, their id, leaves them out: the others it is
-   shared with) and notes. Only an http(s) address is ever a link
-   (safeUrl); anything else is text.
+/* One link, a card of its list's grid (several to a line). Its first line:
+   its title (else its site's label, else its address) opening the site in
+   a new tab, and its buttons at the right. Under it, each line only when
+   it has something: the address when the title is not it (so the site is
+   read once, #236), short (lib/links.js shortUrl; the whole one is its
+   ``title``, and what Copy copies), its notes (two lines at most), and a
+   foot with its kind, its download mark and its people (``showPerson``;
+   on a person's page ``here``, their id, leaves them out: the others it
+   is shared with). Only an http(s) address is ever a link (safeUrl);
+   anything else is text.
 
-   Then, in sight: Copy (its address on the clipboard, a toast says so),
-   at most one button, and one "⋯" menu with everything else.
+   The buttons, always in sight: Copy (its address on the clipboard, a
+   toast says so), at most one button, and one "⋯" menu with everything
+   else.
    The one button: ``assign`` (the Links page's Unsorted) puts "Assign…"
    on a link of no one; otherwise a download link gets its done toggle
    (``onDone``): a check that marks it downloaded, lit once it is (a click
@@ -232,7 +237,7 @@ export function CopyAddress({ url, label }) {
 
    On the Links page: ``select`` ({ checked, onClick(event) }, in select
    mode) puts a checkbox first (shift-click for a range), and ``children``
-   (the open assign picker) go under the row.
+   (the open assign picker) go at the card's foot.
 
    Where it opens (docs/API.md "Opening a link elsewhere"): with a default
    set in Settings (Open links in), a plain left click on the title (Enter
@@ -286,6 +291,11 @@ export function LinkRow({
   ] : [];
   const assignHere = assign && !!onAssign && people.length === 0;
   const doneHere = !assignHere && !!onDone && state !== "none";
+  // The card's foot, there only when one of these is.
+  const kindHere = showKind && state === "none";
+  const todoHere = state === "todo" && mixed;
+  const peopleHere = showPerson && others.length > 0;
+  const foot = kindHere || state === "done" || todoHere || peopleHere;
   const acts = [
     onEdit && { label: "Edit", icon: "pencil", disabled: busy, onSelect: () => onEdit(l) },
     onAssign && people.length === 0 && { label: "Assign…", icon: "users", disabled: busy, onSelect: () => onAssign(l), title: "Give it to a person" },
@@ -327,47 +337,12 @@ export function LinkRow({
                  aria-label={`Select ${label}`} />
         </label>
       ) : <span className="link-row-icon" aria-hidden="true"><Icon name={state === "none" ? "link" : "download"} size={15} /></span>}
-      <span className="link-row-main">
-        <span className="link-row-head">
-          {href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="link-row-title" onClick={onTitleClick}
-               title={`${named ? `${shown}\n${l.url}` : l.url}${dflt ? `\nOpens in ${choiceLabel(dflt, browsers)} (Ctrl-click: a tab here)` : ""}`}>
-              {shown}
-            </a>
-          ) : <span className="link-row-title">{shown}</span>}
-          {showKind && state === "none" && (
-            <span className={`chip link-kind is-${l.kind}`} title={l.kind === "social" ? "A social or creator platform" : "Any other site"}>
-              {KIND_LABEL[l.kind] || l.kind}
-            </span>
-          )}
-          {state === "done" && (
-            <span className="chip link-dl-mark is-done" title="Downloaded, with another app">
-              <Icon name="check" size={11} />Downloaded
-            </span>
-          )}
-          {state === "todo" && mixed && (
-            <span className="chip link-dl-mark" title="To download, with another app: FeedVault never downloads it">
-              <Icon name="download" size={11} />To download
-            </span>
-          )}
-        </span>
-        {named && (
-          <span className="link-row-sub creator-sub">
-            <span className="link-url" title={l.url}>{l.url}</span>
-          </span>
-        )}
-        {l.notes && <span className="link-notes" title={l.notes}>{l.notes}</span>}
-      </span>
-      {showPerson && others.length > 0 && (
-        <span className="link-people" aria-label={here != null ? "Also theirs" : "Its people"}>
-          {others.map(p => (
-            <Link key={p.id} to={personPath(p.id)} className="chip person-chip link-person"
-                  title={here != null ? `Also ${p.name}'s` : `Person: ${p.name}`}>
-              <Icon name="users" size={11} /><span className="chip-text">{p.name}</span>
-            </Link>
-          ))}
-        </span>
-      )}
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="link-row-title" onClick={onTitleClick}
+           title={`${named ? `${shown}\n${l.url}` : l.url}${dflt ? `\nOpens in ${choiceLabel(dflt, browsers)} (Ctrl-click: a tab here)` : ""}`}>
+          {shown}
+        </a>
+      ) : <span className="link-row-title" title={named ? `${shown}\n${l.url}` : l.url}>{shown}</span>}
       <span className="link-row-actions">
         <CopyAddress url={l.url} label={label} />
         {assignHere && (
@@ -386,6 +361,37 @@ export function LinkRow({
         )}
         {menu && <ActionMenu className="link-menu" label={`More for ${label}`} items={menu} />}
       </span>
+      {named && <span className="link-url creator-sub" title={l.url}>{shortUrl(l.url)}</span>}
+      {l.notes && <span className="link-notes" title={l.notes}>{l.notes}</span>}
+      {foot && (
+        <span className="link-row-foot">
+          {kindHere && (
+            <span className={`chip link-kind is-${l.kind}`} title={l.kind === "social" ? "A social or creator platform" : "Any other site"}>
+              {KIND_LABEL[l.kind] || l.kind}
+            </span>
+          )}
+          {state === "done" && (
+            <span className="chip link-dl-mark is-done" title="Downloaded, with another app">
+              <Icon name="check" size={11} />Downloaded
+            </span>
+          )}
+          {todoHere && (
+            <span className="chip link-dl-mark" title="To download, with another app: FeedVault never downloads it">
+              <Icon name="download" size={11} />To download
+            </span>
+          )}
+          {peopleHere && (
+            <span className="link-people" aria-label={here != null ? "Also theirs" : "Its people"}>
+              {others.map(p => (
+                <Link key={p.id} to={personPath(p.id)} className="chip person-chip link-person"
+                      title={here != null ? `Also ${p.name}'s` : `Person: ${p.name}`}>
+                  <Icon name="users" size={11} /><span className="chip-text">{p.name}</span>
+                </Link>
+              ))}
+            </span>
+          )}
+        </span>
+      )}
       {children}
     </li>
   );
@@ -411,7 +417,10 @@ export function AssignPicker({ people, label, onPick, onCancel, busy = false }) 
       <PersonPicker people={people} recent={recent} active={active} onActive={setActive} label={label} none={false} autoFocus
                     onPick={o => { if (!busy && o?.person) onPick(o.person); }} />
       <div className="link-assign-foot">
-        <span className="quick-add-hint dim"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> assign · <kbd>Esc</kbd> cancel</span>
+        {/* A card is too narrow for all of it: there, Cancel beside it says the last part. */}
+        <span className="quick-add-hint dim">
+          <kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> assign<span className="link-assign-esc"> · <kbd>Esc</kbd> cancel</span>
+        </span>
         <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>
       </div>
     </div>

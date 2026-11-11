@@ -440,6 +440,12 @@ What a windowed list keeps:
   dialog keeps the row: the dialog gives focus back (`restoreFocus`).
 - **Unsaved edits.** The link being edited on Links is always rendered:
   its form holds the edits `lib/unsaved.js` guards.
+- **A grid's whole-line rows.** Links is a grid of cards (three to a line
+  at 1440 wide) in which a site's heading and the form of the link being
+  edited take a whole line. The window works out which line each row is
+  on (`rowLines`: a whole-line row is a line of its own, the cards
+  between fill lines of the column count), so headings, an open form and
+  the spacers land where the browser lays them out.
 - **Links to one row.** Links' "saved already" and Creators' `?source=`
   (a failed sync's notification) scroll to their row with
   `scrollTo(index)`: straight to about where it is, then centred once it
@@ -531,9 +537,13 @@ last row is reached by scrolling, the search finds any row, sorting covers
 them all, Tab walks past the first viewport, focus stays on a row scrolled
 away, an edit in progress survives scrolling, and a 409 or `?source=`
 brings a row that was never rendered into view, lit. On `main` each test
-fails at its first count. `frontend/scripts/windowing.test.js` (`npm
-test`) checks the window's arithmetic: which lines render for a scroll
-position, and that the spacers add up to the rows they stand for.
+fails at its first count. On Links it also checks the grid: what is
+rendered far down starts a line of three cards, a spacer, a form opened
+there and each site's heading take the whole line.
+`frontend/scripts/windowing.test.js` (`npm test`) checks the window's
+arithmetic: which lines render for a scroll position, that the spacers
+add up to the rows they stand for, and which line each row of a grid is
+on when some rows take a whole line.
 
 ## CI
 

@@ -582,10 +582,15 @@ when the page changes or goes. Import again later and only what is new is
 added; nothing you saved or edited is replaced or removed. See [docs/API.md](docs/API.md#links).
 
 **+ Add link** at the top of the page (or Alt+L, or a link dropped on any
-page) saves an address, to a person or to no one. Each row shows the link,
-a **Copy** button for its address and one **⋯** menu with everything else:
-Open, Open in (another browser), Edit, Assign… or Also link to…, Move to
-Downloads, and Delete. **Select** brings the checkboxes and a bar to copy
+page) saves an address, to a person or to no one. The links are compact
+cards, several to a line (three on a 1440-wide window, more on a wider
+one, one on a phone), here and on a creator's page. Each card shows the
+link's title, a **Copy** button for its address and one **⋯** menu with
+everything else: Open, Open in (another browser), Edit, Assign… or Also
+link to…, Move to Downloads, and Delete. Under the title, when there is
+something to show: the address in short (no `https://`, no `www.`; hover
+it for the whole one, which is also what Copy copies), the notes, and the
+link's kind, download state and people. **Select** brings the checkboxes and a bar to copy
 the addresses of many links, assign them, move them or delete them at once.
 Kind, Site and Person fold behind **Filters**; **Sort** orders any tab
 newest first (the default), oldest first, or by site, A to Z, under a
