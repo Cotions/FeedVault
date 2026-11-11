@@ -17,6 +17,18 @@ export const linkLabel = l => l.title || l.label || bareUrl(l.url);
 // A link's address without its scheme, as a row shows it.
 export const bareUrl = url => url.replace(/^https?:\/\//, "");
 
+/* A link's address as its card shows it under the title: host and path,
+   without the scheme, a leading "www." and a lone trailing slash
+   ("https://www.patreon.com/x" is "patreon.com/x"). To read, not to use:
+   Copy and the link itself keep the whole address. Text that is not an
+   http(s) address comes back as it is, never an error. */
+export function shortUrl(url) {
+  if (typeof url !== "string") return url == null ? "" : String(url);
+  const m = /^https?:\/\/(?:www\.(?=[^/?#]*\.))?([^/?#]+)([^]*)$/i.exec(url.trim());
+  if (!m) return url;
+  return m[1] + (m[2] === "/" ? "" : m[2]);
+}
+
 // A link in the names of its row's buttons and fields ("Edit …"): its title,
 // else its address, which tells two links of one site apart (they share its label).
 export const linkName = l => l.title || bareUrl(l.url);
