@@ -152,6 +152,9 @@ export function useWindow(count, { estimate = 48, grid = false, full = null, pin
     return lineOffsets(pitches);
   }, [lines, estimate, meas]);
   const offsetsRef = useRef(offsets);
+  // The lines as last rendered, for scrollTo: it stays the same function
+  // when they change (an edit opened), so an effect that calls it does not run again.
+  const mapRef = useRef(map);
   // Passes since the last frame, and the frame a deferred one waits for.
   const passes = useRef({ n: 0, reset: 0, later: 0 });
   useEffect(() => () => {
@@ -188,6 +191,7 @@ export function useWindow(count, { estimate = 48, grid = false, full = null, pin
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     offsetsRef.current = offsets;
+    mapRef.current = map;
     const el = listRef.current;
     if (!on || !el) return;
     const style = getComputedStyle(el);
@@ -268,12 +272,12 @@ export function useWindow(count, { estimate = 48, grid = false, full = null, pin
       return;
     }
     const o = offsetsRef.current;
-    const l = Math.min(map.lineOf(i), o.length - 2);
+    const l = Math.min(mapRef.current.lineOf(i), o.length - 2);
     const top = el.getBoundingClientRect().top + window.scrollY + o[l] - (window.innerHeight - (o[l + 1] - o[l])) / 2;
     window.scrollTo({ top: Math.max(0, top), behavior: "instant" });
     setWanted(i);
     update();
-  }, [on, map, update]);
+  }, [on, update]);
 
   const render = (row, gap) => {
     if (!on) return Array.from({ length: count }, (_, i) => row(i));
