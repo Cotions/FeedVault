@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DOWNLOADS_PATH, MAX_TITLE, UNSORTED_PATH, copyUrl, downloadState, droppedUrl, externalUrl, importedParts, inLinksView, linkLabel,
-  linkName, linkSite, mayCarryUrl, namesText, peopleKey, savedPlace, sharedTitle, splitDownloads, urlLines, urlProblem, withScheme,
+  linkName, linkSite, mayCarryUrl, namesText, peopleKey, savedPlace, sharedTitle, shortUrl, splitDownloads, urlLines, urlProblem,
+  withScheme,
 } from "../src/lib/links.js";
 import { NO_PERSON, personOptions } from "../src/lib/people.js";
 
@@ -207,6 +208,28 @@ test("a link is shown by its title, else its site's label, else its address", ()
   assert.equal(linkLabel({ url, title: "", label: "Patreon.com" }), "Patreon.com");
   assert.equal(linkLabel({ url: "https://instagram.com/someone", title: "", label: null }), "instagram.com/someone");
   assert.equal(linkLabel({ url: "http://example.org/x", title: "" }), "example.org/x");   // an answer with no label
+});
+
+test("a card's address: host and path, no scheme, no www., and never an error", () => {
+  assert.equal(shortUrl("https://www.patreon.com/someone"), "patreon.com/someone");
+  assert.equal(shortUrl("http://example.org/a/b?x=1#top"), "example.org/a/b?x=1#top");
+  assert.equal(shortUrl("https://example.org/"), "example.org");          // a lone slash says nothing
+  assert.equal(shortUrl("https://example.org"), "example.org");
+  assert.equal(shortUrl("https://example.org/a/"), "example.org/a/");     // a path's own slash stays
+  assert.equal(shortUrl("HTTPS://WWW.Example.org/X"), "Example.org/X");   // as typed: only the prefix goes
+  assert.equal(shortUrl("https://sub.www.example.org/x"), "sub.www.example.org/x");
+  assert.equal(shortUrl("https://www.com/x"), "www.com/x");               // "www" is the site's name here
+  assert.equal(shortUrl("https://example.org:8080/x"), "example.org:8080/x");
+  assert.equal(shortUrl("https://example.org?q=1"), "example.org?q=1");
+  assert.equal(shortUrl("  https://www.example.org/x  "), "example.org/x");
+  // Not an http(s) address: the text as it is.
+  for (const raw of ["", "not a url", "mailto:a@example.org", "ftp://example.org/x", "https://", "https:///x", "javascript:alert(1)", "www.example.org/x"]) {
+    assert.equal(shortUrl(raw), raw);
+  }
+  assert.equal(shortUrl("https://%zz[::bad/x y"), "%zz[::bad/x y");       // malformed: still no error
+  assert.equal(shortUrl(null), "");
+  assert.equal(shortUrl(undefined), "");
+  assert.equal(shortUrl(42), "42");
 });
 
 test("a link's buttons are named by its title or address, never the label two links share", () => {

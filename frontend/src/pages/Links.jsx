@@ -50,8 +50,10 @@ import { Gap } from "../components/WinGap";
      row's check marks it downloaded: in To download it leaves the list,
      with an Undo.
 
-   A row is its title, Copy and one ⋯ menu (LinkRow), with the tab's one
-   button (Assign…, or the done check). A change that takes a link out of
+   The list is a grid of cards, several to a line. A card is its title,
+   Copy and one ⋯ menu (LinkRow), with the tab's one button (Assign…, or
+   the done check). A site's heading and the link being edited (its form)
+   take a whole line of the grid. A change that takes a link out of
    the list shown (assigned from Unsorted, moved to Downloads from All
    links, marked downloaded in To download) removes its row at once, and a
    toast offers Undo.
@@ -71,7 +73,8 @@ import { Gap } from "../components/WinGap";
    none: newest first) stays in sight: oldest first, or by site (A to Z,
    the newest first within each, as the server orders them) under a heading
    per site with its count. The headings are rows of the rendered sequence
-   (``rows``), so the windowed list measures and skips them as any row; the
+   (``rows``), so the windowed list measures and skips them as any row
+   (``wholeLine``: which rows are a line of the grid by themselves); the
    selection and its shift ranges count links only (``at``, a link's place
    in ``links``). It is a way to read the list, not a filter: Clear filters
    keeps it, and the tab. */
@@ -171,7 +174,12 @@ export default function Links() {
   // sees the rendered rows only: the search box searches them all.
   const editingAt = edit.editing == null ? -1 : rowOf.get(edit.editing) ?? -1;
   const assigningAt = assigning == null ? -1 : rowOf.get(assigning) ?? -1;
-  const { listRef, focusProps, render, scrollTo } = useWindow(rows.length, { estimate: 58, pins: [editingAt, assigningAt] });
+  // A heading and the form of the link being edited take a whole line of
+  // the grid (.link-site-head, .link-row.is-editing); the cards fill the rest.
+  const wholeLine = useCallback(i => !rows[i]?.link || i === editingAt, [rows, editingAt]);
+  const { listRef, focusProps, render, scrollTo } = useWindow(rows.length, {
+    estimate: 96, grid: true, full: wholeLine, pins: [editingAt, assigningAt],
+  });
 
   // A new filter shows other links: a selection of links out of sight is
   // dropped. A new sort shows the same ones: it is kept.

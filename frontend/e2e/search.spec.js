@@ -53,7 +53,7 @@ test("Creators: the header search stays on the page, creators, accounts and link
     await expect(section("Creators").getByRole("link", { name: new RegExp(`Search ${made.account.handle} ${stamp}`) })).toBeVisible();
     await expect(section("Accounts").getByRole("link", { name: new RegExp(`@${made.account.handle}`) }).first()).toBeVisible();
     // The link opens its site; its person is one click away.
-    const row = section("Links").locator(".link-row", { hasText: made.link.url });
+    const row = section("Links").locator(".link-row", { has: page.locator(`a[href="${made.link.url}"]`) });
     await expect(row.locator("a.link-row-title")).toHaveAttribute("href", made.link.url);
     await expect(row.locator("a.link-person")).toHaveAttribute("href", `/people/${made.person.id}`);
     // Read only: its Copy, and no menu (no other browser to open it in here).

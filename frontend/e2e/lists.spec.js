@@ -207,6 +207,80 @@ test.describe("Links, 2,000 links", () => {
     expect(await rows.count()).toBeLessThan(MAX_ROWS);
     await idle(page);
   });
+
+  // The windowed list is a grid of cards: the rows it renders are whole
+  // lines of three, its spacers and the form of a link edited far down take
+  // the whole line, and sorted by site every heading is a line of its own.
+  test("windows a grid: lines of three cards; a spacer, an edited link and a site's heading across it", async ({ page }) => {
+    await openPage(page, { name: "Links", path: "/links" });
+    const list = page.locator(".link-list");
+    const rows = list.locator("> li:not(.win-gap)");
+    await expect(rows.first()).toContainText("Big link 0");
+    const place = loc => loc.evaluateAll(els => els.map(e => {
+      const r = e.getBoundingClientRect();
+      return { i: Number(e.dataset.index), x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width) };
+    }));
+    const [whole] = await place(list);
+
+    // Far down: what is rendered starts a line, three to a line, under a spacer as wide as the list.
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight / 2));
+    await expect.poll(async () => (await place(rows))[0]?.i).toBeGreaterThan(300);
+    await idle(page);
+    let at = await place(rows);
+    expect(await rows.count()).toBeLessThan(MAX_ROWS);
+    expect(at[0].i % 3).toBe(0);
+    expect(at.slice(0, 4).map(r => r.i)).toEqual([at[0].i, at[0].i + 1, at[0].i + 2, at[0].i + 3]);
+    expect(at.slice(0, 3).map(r => r.y)).toEqual([at[0].y, at[0].y, at[0].y]);
+    expect([at[0].x, at[3].x]).toEqual([whole.x, whole.x]);
+    expect(at[3].y).toBeGreaterThan(at[0].y);
+    const [gap] = await place(list.locator("> .win-gap").first());
+    expect([gap.x, gap.width]).toEqual([whole.x, whole.width]);
+
+    // The middle card of a line in view, edited: its form takes the whole
+    // line, the card before it stays on its line, the one after starts the next.
+    const mid = await rows.evaluateAll(els => {
+      const e = els.find(x => Number(x.dataset.index) % 3 === 1 && x.getBoundingClientRect().y > 200);
+      return Number(e.dataset.index);
+    });
+    const card = i => list.locator(`> li[data-index="${i}"]`);
+    await linkAct(page, card(mid), "Edit");
+    await expect(card(mid)).toHaveClass(/is-editing/);
+    await idle(page);
+    const [before] = await place(card(mid - 1)), [form] = await place(card(mid)), [after] = await place(card(mid + 1));
+    expect([form.x, form.width]).toEqual([whole.x, whole.width]);
+    expect(before.x).toBe(whole.x);
+    expect(before.y).toBeLessThan(form.y);
+    expect(after.x).toBe(whole.x);
+    expect(after.y).toBeGreaterThan(form.y);
+    expect((await place(card(mid + 3)))[0].y).toBe(after.y);       // three to a line again after it
+    expect(await rows.count()).toBeLessThan(MAX_ROWS);
+    // It stays as the list scrolls to its end and back to its start.
+    await page.getByRole("textbox", { name: "Search links" }).focus();
+    await scrollToBottom(page);
+    await expect(rows.last()).toBeInViewport();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(rows.first()).toContainText("Big link 0");
+    await expect(card(mid).getByLabel("Title")).toHaveValue(`Big link ${mid}`);
+    expect(await rows.count()).toBeLessThan(MAX_ROWS);
+    await card(mid).getByRole("button", { name: "Cancel" }).click();
+    await expect(list.locator("> .is-editing")).toHaveCount(0);
+
+    // By site (each of the 2,000 its own site): a heading a line, its card under it, to the end.
+    await page.locator(".links-filters").getByLabel(/^Sort/).selectOption("site");
+    await expect(rows.first()).toHaveClass(/link-site-head/);
+    await idle(page);
+    at = await place(rows);
+    expect(at.slice(0, 4).map(r => r.x)).toEqual([whole.x, whole.x, whole.x, whole.x]);
+    expect(at[0].width).toBe(whole.width);
+    expect(at[1].width).toBeLessThan(whole.width / 2);
+    expect(at[1].y).toBeGreaterThan(at[0].y);
+    expect(at[2].y).toBeGreaterThan(at[1].y);
+    expect(await rows.count()).toBeLessThan(MAX_ROWS);
+    await scrollToBottom(page);
+    await expect(rows.last()).toBeInViewport();
+    expect(await rows.count()).toBeLessThan(MAX_ROWS);
+    await idle(page);
+  });
 });
 
 test.describe("Creators, 1,500 more accounts", () => {

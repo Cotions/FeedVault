@@ -8,8 +8,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
    Rows are grouped in lines: one row a line in a table or a list, a grid's
    row of cards in a grid (``grid: true``, its column count read from the
-   CSS). Each line's height is measured once rendered; a line not yet
-   rendered is taken as the average of those measured.
+   CSS). A grid may hold rows that take a whole line (``full``: a heading,
+   a form open in place of a card): each is a line of its own, and the
+   cards between them fill their lines from the first column (rowLines).
+   Each line's height is measured once rendered; a line not yet rendered is
+   taken as the average of those measured.
 
    What stays as a full list had it:
    - keyboard: the line holding focus is always rendered, so focus never
@@ -80,6 +83,36 @@ export function segments(lines, [first, end], pins, offsets, gap = 0) {
   return out;
 }
 
+/* Which line each row is on, in a grid of ``cols`` columns: ``lines``,
+   ``lineOf(i)`` (row i's line) and ``rowsOf(l)`` (line l's rows, as
+   [first, end)). Without ``full`` every row is one cell and the lines are
+   plain arithmetic. With ``full(i)`` (true: row i takes a whole line, as
+   ``grid-column: 1 / -1`` does), a full row is a line of its own, and the
+   line before it ends there, however few cells it holds. */
+export function rowLines(count, cols, full = null) {
+  const n = Math.max(1, cols);
+  if (!full) {
+    return {
+      lines: Math.ceil(count / n),
+      lineOf: i => Math.floor(i / n),
+      rowsOf: l => [l * n, Math.min(count, (l + 1) * n)],
+    };
+  }
+  const of = new Array(count), starts = [];
+  let used = n;                                 // cells taken on the current line; n: the next row starts one
+  for (let i = 0; i < count; i++) {
+    const whole = !!full(i);
+    if (whole || used >= n) { starts.push(i); used = 0; }
+    of[i] = starts.length - 1;
+    used = whole ? n : used + 1;
+  }
+  return {
+    lines: starts.length,
+    lineOf: i => of[i] ?? Math.max(0, starts.length - 1),
+    rowsOf: l => [starts[l] ?? count, starts[l + 1] ?? count],
+  };
+}
+
 /* The hook. ``count`` rows; ``estimate``: a row's height before any is
    measured. Put ``listRef`` and ``focusProps`` on the element whose
    children are the rows (a <tbody>, <ul> or grid), ``data-index={i}`` on
@@ -87,12 +120,15 @@ export function segments(lines, [first, end], pins, offsets, gap = 0) {
    each row to show, gap(height, key) for a spacer element of that height.
    ``settled`` turns true once the list scrolled: rows mounted from then on
    should not play an entry animation (they would blink in while
-   scrolling). */
-export function useWindow(count, { estimate = 48, grid = false, pins = [], from = WINDOW_FROM } = {}) {
+   scrolling). ``full`` (a grid's rows that take a whole line, rowLines):
+   memoized by the caller, as the lines are worked out again when it
+   changes. */
+export function useWindow(count, { estimate = 48, grid = false, full = null, pins = [], from = WINDOW_FROM } = {}) {
   const on = count >= from;
   const listRef = useRef(null);
   const [cols, setCols] = useState(1);
-  const lines = on ? Math.ceil(count / cols) : 0;
+  const map = useMemo(() => rowLines(on ? count : 0, cols, grid ? full : null), [on, count, cols, grid, full]);
+  const lines = map.lines;
   // Each measured line's pitch (its height and the gap after it), and the gap.
   const [meas, setMeas] = useState(() => ({ gap: 0, pitch: new Map() }));
   // A new estimate is a new layout of the rows (Creators' Portraits and
@@ -116,6 +152,9 @@ export function useWindow(count, { estimate = 48, grid = false, pins = [], from 
     return lineOffsets(pitches);
   }, [lines, estimate, meas]);
   const offsetsRef = useRef(offsets);
+  // The lines as last rendered, for scrollTo: it stays the same function
+  // when they change (an edit opened), so an effect that calls it does not run again.
+  const mapRef = useRef(map);
   // Passes since the last frame, and the frame a deferred one waits for.
   const passes = useRef({ n: 0, reset: 0, later: 0 });
   useEffect(() => () => {
@@ -152,6 +191,7 @@ export function useWindow(count, { estimate = 48, grid = false, pins = [], from 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     offsetsRef.current = offsets;
+    mapRef.current = map;
     const el = listRef.current;
     if (!on || !el) return;
     const style = getComputedStyle(el);
@@ -168,7 +208,7 @@ export function useWindow(count, { estimate = 48, grid = false, pins = [], from 
     for (const child of el.children) {
       const i = child.dataset.index;
       if (i == null) continue;
-      const l = Math.floor(Number(i) / cols);
+      const l = map.lineOf(Number(i));
       heights.set(l, Math.max(heights.get(l) || 0, child.getBoundingClientRect().height));
     }
     let pitch = null;                          // a new map, once a measure changed
@@ -232,21 +272,22 @@ export function useWindow(count, { estimate = 48, grid = false, pins = [], from 
       return;
     }
     const o = offsetsRef.current;
-    const l = Math.min(Math.floor(i / cols), o.length - 2);
+    const l = Math.min(mapRef.current.lineOf(i), o.length - 2);
     const top = el.getBoundingClientRect().top + window.scrollY + o[l] - (window.innerHeight - (o[l + 1] - o[l])) / 2;
     window.scrollTo({ top: Math.max(0, top), behavior: "instant" });
     setWanted(i);
     update();
-  }, [on, cols, update]);
+  }, [on, update]);
 
   const render = (row, gap) => {
     if (!on) return Array.from({ length: count }, (_, i) => row(i));
     const pinned = [...pins, focusRow, wanted ?? -1]
-      .filter(i => i >= 0 && i < count).map(i => Math.floor(i / cols));
+      .filter(i => i >= 0 && i < count).map(map.lineOf);
     const out = [];
     for (const s of segments(lines, range, pinned, offsets, meas.gap)) {
       if (s.gap != null) { out.push(gap(s.gap, s.key)); continue; }
-      for (let i = s.line * cols; i < Math.min(count, (s.line + 1) * cols); i++) out.push(row(i));
+      const [first, end] = map.rowsOf(s.line);
+      for (let i = first; i < end; i++) out.push(row(i));
     }
     return out;
   };
