@@ -3998,7 +3998,7 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 /* The card's picker opens at its foot, inside the card, which grows: nothing
    overlaps the cards below, and the others stay where they are. */
 .link-row.is-assigning { border-color: rgba(var(--glow-rgb), 0.45); }
-.link-row > .link-assign-pick { grid-column: 1 / -1; padding: 8px 4px 4px 0; }
+.link-row > .link-assign-pick { grid-column: 1 / -1; grid-row: 4; padding: 8px 4px 4px 0; }
 .link-row .link-assign-esc { display: none; }
 .link-assign-pick { flex-basis: 100%; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 4px 0 2px 34px; }
 .link-assign-pick .person-pick-input { width: 100%; max-width: 420px; padding: 7px 11px; height: 34px; }
@@ -4017,9 +4017,10 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 .source-person-new .btn-secondary { flex: none; }
 /* A list of links is a grid of cards, several to a line: 3 at 1440 wide,
    2 at 1280, 4 at 1920, 1 on a phone. auto-fill keeps the columns a short
-   list leaves empty, so one or two links stay a card wide. Each card is as
-   tall as what it holds (a note, a foot, an open picker): its line's
-   others keep their own height. */
+   list leaves empty, so one or two links stay a card wide. Every card is
+   the same size: three lines (title, address, foot), each kept when it
+   has nothing to say. Only an open picker makes its card taller; its
+   line's others keep their height. */
 .link-list {
   list-style: none; margin: 0; padding: 0;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); align-items: start; gap: 8px;
@@ -4031,6 +4032,7 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
    notes and the foot under the title, each only when there. */
 .link-row {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 1px 10px;
+  grid-template-rows: 28px minmax(20px, auto) minmax(28px, auto);
   padding: 7px 8px 8px 12px; min-width: 0;
   background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 10px;
   transition: border-color 0.18s, box-shadow 0.3s;
@@ -4042,19 +4044,23 @@ button.side-add:hover, a.side-unsorted:hover { background: rgba(var(--accent-rgb
 /* As wide as its text, not its cell: a click beside it is not a click on the link. */
 .link-row-title { display: block; justify-self: start; max-width: 100%; line-height: 28px; min-width: 0; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 a.link-row-title:hover { color: var(--accent-hover); text-decoration: underline; }
-.link-row > :is(.link-url, .link-notes, .link-row-foot) { grid-column: 2 / -1; margin-right: 4px; }
+.link-row > :is(.link-url, .link-row-foot) { grid-column: 2 / -1; margin-right: 4px; }
+.link-row > .link-url { grid-row: 2; }
+.link-row > .link-row-foot { grid-row: 3; align-self: end; }
 .link-kind { flex-shrink: 0; }
 .link-kind.is-social { color: var(--accent-text); border-color: rgba(var(--glow-rgb), 0.35); background: rgba(var(--accent-rgb), 0.12); }
 .link-url { min-width: 0; line-height: 1.5; }
-.link-notes {
-  margin-top: 4px; font-size: var(--fs-sm); line-height: 1.45; color: var(--text-dim); white-space: pre-line; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
-}
-/* The foot: its kind, its download mark, its people (#215: a band's
-   account, the band's and each member's), from the left, wrapping. */
-.link-row-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; margin-top: 6px; }
+/* The foot, one line: its kind, its download mark, its people (#215: a
+   band's account, the band's and each member's; two shown, the rest
+   counted), then its notes in the room left (whole in their title). */
+.link-row-foot { display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: 6px; min-height: 22px; }
 .link-people { display: contents; }
-.link-person { flex-shrink: 1; min-width: 0; max-width: 180px; gap: 4px; }
+.link-person { flex: 0 1 auto; min-width: 28px; max-width: 150px; gap: 4px; }
+.link-people-more { flex-shrink: 0; color: var(--text-dim); }
+.link-notes {
+  flex: 1 1 4em; min-width: 0; margin-left: 4px; font-size: var(--fs-sm); color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .link-person svg { flex-shrink: 0; }
 .link-row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 /* The row's ⋯ menu button: the size and look of its other icon buttons

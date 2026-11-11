@@ -198,16 +198,20 @@ export function CopyAddress({ url, label }) {
   );
 }
 
+// How many of its people a card names on its one foot line: the rest are counted ("+2").
+const PEOPLE_SHOWN = 2;
+
 /* One link, a card of its list's grid (several to a line). Its first line:
    its title (else its site's label, else its address) opening the site in
-   a new tab, and its buttons at the right. Under it, each line only when
-   it has something: the address when the title is not it (so the site is
-   read once, #236), short (lib/links.js shortUrl; the whole one is its
-   ``title``, and what Copy copies), its notes (two lines at most), and a
-   foot with its kind, its download mark and its people (``showPerson``;
-   on a person's page ``here``, their id, leaves them out: the others it
-   is shared with). Only an http(s) address is ever a link (safeUrl);
-   anything else is text.
+   a new tab, and its buttons at the right. Under it two lines, their room
+   kept when empty, so every card is the same size: the address when the
+   title is not it (so the site is read once, #236), short (lib/links.js
+   shortUrl; the whole one is its ``title``, and what Copy copies), and a
+   foot of one line with its kind, its download mark, its people
+   (``showPerson``; on a person's page ``here``, their id, leaves them
+   out: the others it is shared with; PEOPLE_SHOWN of them, the rest
+   counted) and its notes in the room left (whole in their ``title``).
+   Only an http(s) address is ever a link (safeUrl); anything else is text.
 
    The buttons, always in sight: Copy (its address on the clipboard, a
    toast says so), at most one button, and one "⋯" menu with everything
@@ -362,8 +366,7 @@ export function LinkRow({
         {menu && <ActionMenu className="link-menu" label={`More for ${label}`} items={menu} />}
       </span>
       {named && <span className="link-url creator-sub" title={l.url}>{shortUrl(l.url)}</span>}
-      {l.notes && <span className="link-notes" title={l.notes}>{l.notes}</span>}
-      {foot && (
+      {(foot || l.notes) && (
         <span className="link-row-foot">
           {kindHere && (
             <span className={`chip link-kind is-${l.kind}`} title={l.kind === "social" ? "A social or creator platform" : "Any other site"}>
@@ -382,14 +385,20 @@ export function LinkRow({
           )}
           {peopleHere && (
             <span className="link-people" aria-label={here != null ? "Also theirs" : "Its people"}>
-              {others.map(p => (
+              {others.slice(0, PEOPLE_SHOWN).map(p => (
                 <Link key={p.id} to={personPath(p.id)} className="chip person-chip link-person"
                       title={here != null ? `Also ${p.name}'s` : `Person: ${p.name}`}>
                   <Icon name="users" size={11} /><span className="chip-text">{p.name}</span>
                 </Link>
               ))}
+              {others.length > PEOPLE_SHOWN && (
+                <span className="chip link-people-more" title={others.slice(PEOPLE_SHOWN).map(p => p.name).join("\n")}>
+                  +{others.length - PEOPLE_SHOWN}
+                </span>
+              )}
             </span>
           )}
+          {l.notes && <span className="link-notes" title={l.notes}>{l.notes}</span>}
         </span>
       )}
       {children}

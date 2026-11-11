@@ -1636,7 +1636,7 @@ test("Links: sort by site shows a heading per site; oldest first; the sort stays
 // Where each of ``loc``'s elements is on the page.
 const boxes = loc => loc.evaluateAll(els => els.map(e => {
   const r = e.getBoundingClientRect();
-  return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), right: Math.round(r.right) };
+  return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height), right: Math.round(r.right) };
 }));
 
 // The list is a grid of cards: three to a line at 1440, each a card wide
@@ -1652,7 +1652,9 @@ test("Links: cards sit three to a line; a heading and an edited link take the wh
   try {
     for (const [url, title] of [[`https://${a}/1`, "Card A1"], [`https://${a}/2`, "Card A2"], [`https://${b}/1`, "Card B1"],
       [`https://${b}/2`, "Card B2"], [long, "Card B3"]]) {
-      expect((await request.post("/api/links", { headers: H, data: { url, title } })).ok()).toBe(true);
+      // One has notes over several lines: its card is no taller for it.
+      const notes = title === "Card A2" ? "A note.\nIts second line, long enough to be cut short where the card ends, and then some more." : undefined;
+      expect((await request.post("/api/links", { headers: H, data: { url, title, notes } })).ok()).toBe(true);
     }
     await page.goto(`/links?q=${tag}`);
     const list = page.locator(".link-list");
@@ -1671,6 +1673,8 @@ test("Links: cards sit three to a line; a heading and an edited link take the wh
     expect(at[3].x).toBe(at[0].x);
     expect(at[4].y).toBe(at[3].y);
     for (const c of at) expect(c.width).toBeLessThanOrEqual(560);
+    // Every card is the same size, whatever it holds.
+    for (const c of at) expect([c.width, c.height]).toEqual([at[0].width, at[0].height]);
 
     // The address: short, the whole one in its title; Copy (in sight with
     // the pointer away) copies the whole one.
